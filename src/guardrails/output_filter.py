@@ -24,7 +24,7 @@ REDACTION_PATTERNS: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"(xox[baprs]-[a-zA-Z0-9\-]{10,})"), "SLACK_TOKEN", "[REDACTED:SLACK_TOKEN]"),
     (re.compile(r"(nvapi-[a-zA-Z0-9]{48,})"), "NVIDIA_KEY", "[REDACTED:NVIDIA_KEY]"),
     # Database URLs with passwords
-    (re.compile(r"(postgres|mysql|mongodb)://[^:]+:[^@]+@[^\s]+"), "DB_CONNECTION_STRING", "[REDACTED:DB_URL]"),
+    (re.compile(r"(postgres|postgresql|mysql|mongodb|redis)://\S+@\S+"), "DB_CONNECTION_STRING", "[REDACTED:DB_URL]"),
     # Private keys
     (re.compile(r"-----BEGIN\s+(RSA|EC|DSA|OPENSSH)?\s*PRIVATE KEY-----"), "PRIVATE_KEY", "[REDACTED:PRIVATE_KEY]"),
     # JWT secrets (common patterns)
