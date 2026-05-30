@@ -100,7 +100,7 @@ TOOL_ABUSE_PATTERNS: list[Pattern] = [
         "Reverse shell pattern",
     ),
     Pattern(
-        re.compile(r"(rm\s+-rf\s+/|:(){ :\|:& };:|fork\s*bomb|dd\s+if=/dev/(zero|random)\s+of=/dev/sd)", re.I),
+        re.compile(r"(rm\s+-rf\s+/|:\(\)\{\s*:\|:&\s*\};:|fork\s*bomb|dd\s+if=/dev/(zero|random)\s+of=/dev/sd)", re.I),
         ThreatCategory.TOOL_ABUSE,
         "critical",
         "Destructive command pattern",
