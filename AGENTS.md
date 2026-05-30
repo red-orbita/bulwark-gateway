@@ -59,3 +59,9 @@ Use the `skill` tool to load detailed instructions:
 - `run-tests` — Run and fix tests
 - `audit-patterns` — Audit detection patterns for false positives/negatives
 - `add-ioc-feed` — Add a new threat intel feed integration
+- `security-architecture` — Design/review guardrail architecture with trade-offs
+- `threat-modeling` — Update threat matrix (STRIDE + OWASP LLM Top 10)
+- `secure-design-review` — Static security review of FastAPI code
+- `incident-response` — Post-incident containment, forensics, and remediation
+- `compliance-audit` — OWASP LLM, GDPR, SOC2 compliance validation
+- `performance-hardening` — Hot path profiling, regex optimization, tuning
