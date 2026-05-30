@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.schema.json",
+  "context": {
+    "files": ["AGENTS.md", "CONTEXT.md"]
+  }
+}
