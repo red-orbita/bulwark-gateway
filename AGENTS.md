@@ -65,3 +65,11 @@ Use the `skill` tool to load detailed instructions:
 - `incident-response` — Post-incident containment, forensics, and remediation
 - `compliance-audit` — OWASP LLM, GDPR, SOC2 compliance validation
 - `performance-hardening` — Hot path profiling, regex optimization, tuning
+
+### Red Team Skills (offensive testing)
+- `redteam-prompt-injection` — Adversarial prompt injection variants against input guardrail
+- `redteam-tool-hijack` — Tool call manipulation: path traversal, command injection, SSRF
+- `redteam-exfiltration` — Context leak testing: secrets, PII, system prompts, encoding evasion
+- `redteam-dos-abuse` — Resource exhaustion: oversized payloads, rate limit saturation, ReDoS
+- `redteam-policy-bypass` — RBAC evasion: tenant hopping, JWT manipulation, privilege escalation
+- `redteam-llm-fuzzing` — Evasion fuzzing: base64, Unicode smuggling, leetspeak, multilingual
