@@ -1,0 +1,19 @@
+{
+  "domains": [
+    "giftshop.club",
+    "evil.com",
+    "malware-c2.xyz",
+    "data-exfil.io",
+    "hookbin.com",
+    "requestbin.net"
+  ],
+  "ips": [
+    "185.220.101.1",
+    "91.215.85.0"
+  ],
+  "urls": [
+    "http://giftshop.club/agent-implant",
+    "https://evil.com/payload.sh"
+  ],
+  "hashes": []
+}

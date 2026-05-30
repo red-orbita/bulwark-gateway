@@ -1,0 +1,41 @@
+services:
+  sentinel-gateway:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - SENTINEL_BACKEND_URL=http://ollama:11434
+      - SENTINEL_JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - SENTINEL_LOG_FORMAT=json
+      - SENTINEL_FAIL_MODE=closed
+      - SENTINEL_REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      - redis
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  # Example: local Ollama as backend
+  # ollama:
+  #   image: ollama/ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+
+volumes:
+  redis-data:
+  # ollama-data:
