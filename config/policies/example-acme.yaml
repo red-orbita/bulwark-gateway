@@ -1,0 +1,75 @@
+# Example policy: Support chatbot
+# This agent can only search docs and read knowledge base — no code execution
+tenant: acme-corp
+
+agents:
+  - id: support-bot
+    sandbox_level: strict
+    allowed_tools:
+      - web_search
+      - read_knowledge_base
+      - get_ticket_info
+      - create_ticket
+    denied_tools:
+      - run_command
+      - execute
+      - bash
+      - write_file
+      - delete_file
+      - read_file
+    allow_command_execution: false
+    allow_file_write: false
+    allow_network_access: true
+    max_tool_calls: 10
+    tool_policies:
+      - name: web_search
+        max_calls: 5
+        denied_arguments:
+          query:
+            - "site:pastebin.com"
+            - "filetype:env"
+            - "inurl:admin"
+      - name: create_ticket
+        required_arguments:
+          - title
+          - description
+
+  - id: code-assistant
+    sandbox_level: standard
+    allowed_tools:
+      - read_file
+      - write_file
+      - run_command
+      - web_search
+    denied_tools:
+      - delete_file
+    allow_command_execution: true
+    allow_file_write: true
+    max_tool_calls: 30
+    tool_policies:
+      - name: run_command
+        max_calls: 10
+        denied_arguments:
+          command:
+            - "rm -rf /"
+            - "curl|bash"
+            - "wget|sh"
+            - "/dev/tcp/"
+            - "nc -e"
+            - "mkfifo"
+        argument_patterns:
+          command: "^[a-zA-Z0-9_./ -]+$"  # Only basic commands
+      - name: read_file
+        denied_arguments:
+          filepath:
+            - ".env"
+            - "/etc/shadow"
+            - ".aws/credentials"
+            - ".ssh/id_rsa"
+      - name: write_file
+        denied_arguments:
+          filepath:
+            - "/etc/"
+            - "/usr/"
+            - "/bin/"
+            - ".ssh/"
