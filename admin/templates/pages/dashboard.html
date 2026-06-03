@@ -1,0 +1,464 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Dashboard{% endblock %}
+{% block content %}
+<div x-data="dashboardPage()" x-init="init()" class="space-y-6">
+
+    <!-- Page header with period selector -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Security Dashboard</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Real-time overview of guardrail operations</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <template x-for="p in periods" :key="p.value">
+                <button @click="period = p.value" :class="period === p.value ? 'bg-brand-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" x-text="p.label"></button>
+            </template>
+        </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- Latency -->
+        <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(16,185,129,0.4);">
+            <div class="flex items-center justify-between mb-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05)); box-shadow: 0 0 12px rgba(16,185,129,0.1);">
+                    <i data-lucide="activity" class="w-[18px] h-[18px] text-emerald-400"></i>
+                </div>
+                <span class="sg-badge sg-badge-success">
+                    <i data-lucide="trending-down" class="w-3 h-3"></i> On target
+                </span>
+            </div>
+            <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Latency P95</p>
+            <div class="flex items-baseline gap-2 mt-1">
+                <span class="text-2xl font-semibold font-mono text-white" data-metric="latency_p95_ms">—</span>
+                <span class="text-xs text-gray-600">ms</span>
+            </div>
+            <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-latency">
+                <template x-for="v in sparklines.latency" :key="$index">
+                    <div class="flex-1 rounded-sm transition-all duration-300" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(16,185,129,0.5), rgba(16,185,129,0.15));`"></div>
+                </template>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-1.5">Target ≤ 40ms</p>
+        </div>
+
+        <!-- Requests/sec -->
+        <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(59,130,246,0.4);">
+            <div class="flex items-center justify-between mb-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05)); box-shadow: 0 0 12px rgba(59,130,246,0.1);">
+                    <i data-lucide="bar-chart-3" class="w-[18px] h-[18px] text-blue-400"></i>
+                </div>
+                <span class="sg-badge sg-badge-brand">
+                    <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 pulse-live"></span> Live
+                </span>
+            </div>
+            <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Requests / sec</p>
+            <div class="flex items-baseline gap-2 mt-1">
+                <span class="text-2xl font-semibold font-mono text-white" data-metric="requests_per_second">—</span>
+                <span class="text-xs text-gray-600">rps</span>
+            </div>
+            <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-rps">
+                <template x-for="v in sparklines.rps" :key="$index">
+                    <div class="flex-1 rounded-sm transition-all duration-300" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(59,130,246,0.5), rgba(59,130,246,0.15));`"></div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Blocked -->
+        <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(239,68,68,0.4);">
+            <div class="flex items-center justify-between mb-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05)); box-shadow: 0 0 12px rgba(239,68,68,0.1);">
+                    <i data-lucide="shield-off" class="w-[18px] h-[18px] text-red-400"></i>
+                </div>
+                <span class="sg-badge sg-badge-danger" x-show="blockedDelta > 0">
+                    <i data-lucide="trending-up" class="w-3 h-3"></i> +<span x-text="blockedDelta"></span>
+                </span>
+            </div>
+            <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Blocked</p>
+            <div class="flex items-baseline gap-2 mt-1">
+                <span class="text-2xl font-semibold font-mono text-white" data-metric="events_blocked">—</span>
+                <span class="text-xs text-gray-600">threats</span>
+            </div>
+            <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-blocked">
+                <template x-for="v in sparklines.blocked" :key="$index">
+                    <div class="flex-1 rounded-sm transition-all duration-300" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(239,68,68,0.5), rgba(239,68,68,0.15));`"></div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Queue Depth -->
+        <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(245,158,11,0.4);">
+            <div class="flex items-center justify-between mb-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(245,158,11,0.15), rgba(245,158,11,0.05)); box-shadow: 0 0 12px rgba(245,158,11,0.1);">
+                    <i data-lucide="layers" class="w-[18px] h-[18px] text-amber-400"></i>
+                </div>
+                <span class="sg-badge" :class="queueHealthy ? 'sg-badge-success' : 'sg-badge-warning'" x-text="queueHealthy ? 'Healthy' : 'Backpressure'"></span>
+            </div>
+            <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Queue Depth</p>
+            <div class="flex items-baseline gap-2 mt-1">
+                <span class="text-2xl font-semibold font-mono text-white" data-metric="queue_depth_memory">—</span>
+                <span class="text-xs text-gray-600">events</span>
+            </div>
+            <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-queue">
+                <template x-for="v in sparklines.queue" :key="$index">
+                    <div class="flex-1 rounded-sm transition-all duration-300" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(245,158,11,0.5), rgba(245,158,11,0.15));`"></div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Row -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="sg-card">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(168,85,247,0.05));">
+                    <i data-lucide="eye-off" class="w-4 h-4 text-purple-400"></i>
+                </div>
+                <div>
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wider font-medium">Bypass Rate</p>
+                    <div class="flex items-baseline gap-1.5">
+                        <span class="text-lg font-semibold font-mono text-white" data-metric="bypass_rate" x-text="Number(bypassRate).toFixed(1)">0.0</span>
+                        <span class="text-xs text-gray-600">%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-3 w-full rounded-full h-1.5" style="background: rgba(255,255,255,0.04);">
+                <div class="h-1.5 rounded-full transition-all duration-500" :class="bypassRate <= 3 ? 'bg-emerald-500' : 'bg-red-500'" :style="`width: ${Math.max(bypassRate, 0.5)}%; box-shadow: 0 0 8px ${bypassRate <= 3 ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)'};`"></div>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-1.5">Target ≤ 3%</p>
+        </div>
+
+        <div class="sg-card">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(249,115,22,0.15), rgba(249,115,22,0.05));">
+                    <i data-lucide="alert-triangle" class="w-4 h-4 text-orange-400"></i>
+                </div>
+                <div>
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wider font-medium">False Positive Rate</p>
+                    <div class="flex items-baseline gap-1.5">
+                        <span class="text-lg font-semibold font-mono text-white" data-metric="false_positive_rate">0.0</span>
+                        <span class="text-xs text-gray-600">%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-3 w-full rounded-full h-1.5" style="background: rgba(255,255,255,0.04);">
+                <div class="h-1.5 rounded-full transition-all duration-500" :class="fpRate <= 1.5 ? 'bg-emerald-500' : 'bg-amber-500'" :style="`width: ${Math.min(fpRate * 20, 100)}%; box-shadow: 0 0 8px ${fpRate <= 1.5 ? 'rgba(16,185,129,0.4)' : 'rgba(245,158,11,0.4)'};`"></div>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-1.5">Target ≤ 1.5%</p>
+        </div>
+
+        <div class="sg-card">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" :style="circuitState === 'closed' ? 'background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));' : 'background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05));'">
+                    <i data-lucide="radio-tower" class="w-4 h-4" :class="circuitState === 'closed' ? 'text-emerald-400' : 'text-red-400'"></i>
+                </div>
+                <div>
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wider font-medium">SIEM Circuit Breaker</p>
+                    <div class="flex items-center gap-2">
+                        <span class="sg-dot" :class="circuitState === 'closed' ? 'sg-dot-success' : 'sg-dot-danger'"></span>
+                        <span class="text-lg font-semibold text-white capitalize" data-metric="circuit_breaker_state">closed</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Two columns: Recent Blocks + Sandbox -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Recent Blocked Attacks -->
+        <div class="sg-card">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="shield-alert" class="w-4 h-4 text-red-400"></i>
+                    <h3 class="text-sm font-semibold text-white">Recent Blocked Attacks</h3>
+                </div>
+                <button @click="loadBlocks()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+
+            <!-- Loading skeleton -->
+            <div x-show="blocksLoading" class="space-y-2">
+                <div class="sg-skeleton h-10 w-full"></div>
+                <div class="sg-skeleton h-10 w-full"></div>
+                <div class="sg-skeleton h-10 w-full"></div>
+            </div>
+
+            <!-- Empty state -->
+            <div x-show="!blocksLoading && blocks.length === 0" class="sg-empty py-8">
+                <i data-lucide="shield-check" class="sg-empty-icon"></i>
+                <p class="sg-empty-title">All clear</p>
+                <p class="sg-empty-desc">No blocked attacks in the selected period</p>
+            </div>
+
+            <!-- Blocks list -->
+            <div x-show="!blocksLoading && blocks.length > 0" class="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                <template x-for="b in blocks" :key="b.ts">
+                    <div class="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-gray-800/50 hover:bg-gray-800 transition-colors group">
+                        <span class="sg-dot sg-dot-danger flex-shrink-0"></span>
+                        <span class="text-[11px] text-gray-500 font-mono w-14 flex-shrink-0" x-text="new Date(b.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})"></span>
+                        <span class="sg-badge sg-badge-neutral text-[10px]" x-text="b.tenant"></span>
+                        <span class="sg-badge text-[10px]" :class="{'sg-badge-danger': b.severity==='critical', 'sg-badge-warning': b.severity==='high', 'sg-badge-neutral': b.severity==='medium'}" x-text="b.category"></span>
+                        <span class="text-xs text-gray-300 truncate flex-1" x-text="b.description"></span>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Error state -->
+            <div x-show="blocksError" class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
+                <i data-lucide="alert-circle" class="w-4 h-4 text-red-400"></i>
+                <span class="text-xs text-red-300" x-text="blocksError"></span>
+                <button @click="loadBlocks()" class="ml-auto text-xs text-red-400 hover:text-red-300 underline">Retry</button>
+            </div>
+        </div>
+
+        <!-- Guardrail Sandbox -->
+        <div class="sg-card" x-data="sandboxWidget()">
+            <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="flask-conical" class="w-4 h-4 text-brand-400"></i>
+                <h3 class="text-sm font-semibold text-white">Guardrail Sandbox</h3>
+            </div>
+            <textarea x-model="payload" class="sg-input font-mono text-xs" rows="3" placeholder="Enter payload to test against guardrails..."></textarea>
+            <div class="flex gap-2 mt-3">
+                <button @click="test('input')" :disabled="loading || !payload.trim()" class="sg-btn sg-btn-primary sg-btn-sm flex-1">
+                    <i data-lucide="shield" class="w-3.5 h-3.5"></i> Test Input
+                </button>
+                <button @click="test('output')" :disabled="loading || !payload.trim()" class="sg-btn sg-btn-secondary sg-btn-sm flex-1">
+                    <i data-lucide="filter" class="w-3.5 h-3.5"></i> Test Output
+                </button>
+            </div>
+            <!-- Result -->
+            <div x-show="result" x-cloak x-transition class="mt-4 rounded-xl p-4 border" :class="{
+                'bg-red-500/5 border-red-500/20': result?.verdict === 'block',
+                'bg-amber-500/5 border-amber-500/20': result?.verdict === 'warn',
+                'bg-emerald-500/5 border-emerald-500/20': result?.verdict === 'allow' || result?.verdict === 'pass'
+            }">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="sg-badge" :class="{
+                        'sg-badge-danger': result?.verdict === 'block',
+                        'sg-badge-warning': result?.verdict === 'warn',
+                        'sg-badge-success': result?.verdict === 'allow' || result?.verdict === 'pass'
+                    }" x-text="result?.verdict?.toUpperCase()"></span>
+                    <span class="text-[10px] font-mono text-gray-500" x-text="result?.latency_ms?.toFixed(2) + 'ms'"></span>
+                </div>
+                <template x-if="result?.matched_patterns?.length > 0">
+                    <div class="space-y-1.5 mt-2">
+                        <p class="text-[10px] text-gray-400 font-medium uppercase">Matched Patterns</p>
+                        <template x-for="mp in result.matched_patterns" :key="mp.id">
+                            <div class="flex items-center gap-2 text-xs">
+                                <span class="sg-badge sg-badge-danger text-[9px]" x-text="mp.category || mp.id"></span>
+                                <span class="text-gray-300" x-text="mp.description"></span>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <template x-if="result?.events?.length > 0 && !result?.matched_patterns?.length">
+                    <ul class="mt-2 space-y-1">
+                        <template x-for="e in result.events"><li class="text-xs text-gray-300" x-text="e.description"></li></template>
+                    </ul>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- Orchestrator Quick Actions -->
+    <div class="sg-card">
+        <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="cpu" class="w-4 h-4 text-purple-400"></i>
+            <h3 class="text-sm font-semibold text-white">Orchestrator Actions</h3>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <button @click="triggerTask('qa-validation')" class="sg-btn sg-btn-success sg-btn-sm">
+                <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i> QA Validation
+            </button>
+            <button @click="triggerTask('redteam-audit')" class="sg-btn sg-btn-danger sg-btn-sm">
+                <i data-lucide="sword" class="w-3.5 h-3.5"></i> Red Team Audit
+            </button>
+            <button @click="triggerTask('performance-benchmark')" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <i data-lucide="gauge" class="w-3.5 h-3.5"></i> Benchmark
+            </button>
+        </div>
+        <div x-show="taskId" x-cloak class="mt-3 p-3 rounded-lg bg-gray-800/50">
+            <div class="flex items-center gap-2">
+                <span class="text-[11px] text-gray-400">Task:</span>
+                <code class="text-[11px] font-mono text-brand-400" x-text="taskId"></code>
+                <button @click="checkTask()" class="sg-btn sg-btn-ghost sg-btn-sm ml-auto">
+                    <i data-lucide="refresh-cw" class="w-3 h-3"></i> Check
+                </button>
+            </div>
+            <pre x-show="taskOutput" x-cloak class="mt-2 p-3 bg-gray-900 rounded-lg text-[11px] font-mono text-gray-300 max-h-40 overflow-auto" x-text="taskOutput"></pre>
+        </div>
+    </div>
+</div>
+
+<script>
+function dashboardPage() {
+    return {
+        period: '1h',
+        periods: [
+            { label: '1h', value: '1h' },
+            { label: '24h', value: '24h' },
+            { label: '7d', value: '7d' },
+            { label: '30d', value: '30d' },
+        ],
+        sparklines: { latency: Array(20).fill(0), rps: Array(20).fill(0), blocked: Array(20).fill(0), queue: Array(20).fill(0) },
+        blocks: [],
+        blocksLoading: true,
+        blocksError: null,
+        blockedDelta: 0,
+        queueHealthy: true,
+        bypassRate: 0,
+        fpRate: 0,
+        circuitState: 'closed',
+        taskId: null,
+        taskOutput: null,
+
+        init() {
+            this.loadBlocks();
+            this.loadPersistedBypassRate();
+            this._sparkIdx = 0;
+            this.connectSSE();
+        },
+
+        async loadPersistedBypassRate() {
+            try {
+                const resp = await fetch('/admin/health/redteam-bypass-rate');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.bypass_rate !== undefined) {
+                        this.bypassRate = data.bypass_rate;
+                        const el = document.querySelector('[data-metric="bypass_rate"]');
+                        if (el) el.textContent = data.bypass_rate.toFixed(1);
+                    }
+                }
+            } catch (e) { /* ignore */ }
+        },
+
+        async connectSSE() {
+            // Get short-lived SSE token
+            try {
+                const tokenResp = await fetch('/admin/health/sse-token');
+                if (!tokenResp.ok) return;
+                const { token } = await tokenResp.json();
+
+                const es = new EventSource(`/admin/health/stream?token=${token}`);
+                es.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.updateMetrics(data);
+                    } catch(e) {}
+                };
+                es.onerror = () => {
+                    es.close();
+                    // Reconnect after 10s
+                    setTimeout(() => this.connectSSE(), 10000);
+                };
+                // Refresh SSE token every 50s (token lives 60s)
+                setTimeout(() => { es.close(); this.connectSSE(); }, 50000);
+            } catch(e) {
+                setTimeout(() => this.connectSSE(), 10000);
+            }
+        },
+
+        updateMetrics(data) {
+            // Update KPI cards
+            const metricEls = document.querySelectorAll('[data-metric]');
+            metricEls.forEach(el => {
+                const key = el.dataset.metric;
+                if (data[key] !== undefined) {
+                    const val = data[key];
+                    el.textContent = typeof val === 'number' ? (val % 1 === 0 ? val : val.toFixed(1)) : val;
+                }
+            });
+
+            // Update sparklines
+            const idx = this._sparkIdx % 20;
+            if (data.latency_p95_ms !== undefined) {
+                const pct = Math.min(100, (data.latency_p95_ms / 60) * 100);
+                this.sparklines.latency[idx] = pct;
+            }
+            if (data.requests_per_second !== undefined) {
+                const pct = Math.min(100, (data.requests_per_second / 50) * 100);
+                this.sparklines.rps[idx] = pct;
+            }
+            if (data.events_blocked !== undefined) {
+                this.sparklines.blocked[idx] = Math.min(100, data.events_blocked * 5);
+            }
+            if (data.queue_depth_memory !== undefined) {
+                this.sparklines.queue[idx] = Math.min(100, (data.queue_depth_memory / 1000) * 100);
+            }
+            this._sparkIdx++;
+
+            // Update bypass/FP rates — only override persisted value if proxy has real traffic
+            const total = (data.events_blocked || 0) + (data.events_warned || 0) + (data.events_allowed || 0);
+            if (total > 0) {
+                this.bypassRate = ((data.events_allowed || 0) / total * 100).toFixed(1);
+            }
+
+            // Update circuit state
+            this.circuitState = data.circuit_state || 'closed';
+        },
+
+        async loadBlocks() {
+            this.blocksLoading = true;
+            this.blocksError = null;
+            try {
+                const r = await fetch('/admin/health/recent-blocks?limit=10');
+                if (!r.ok) throw new Error('Failed to load');
+                this.blocks = await r.json();
+            } catch(e) {
+                this.blocksError = e.message;
+            }
+            this.blocksLoading = false;
+        },
+
+        async triggerTask(task) {
+            try {
+                const r = await fetch(`/admin/validate/trigger/${task}`, { method: 'POST' });
+                const d = await r.json();
+                this.taskId = d.task_id;
+                this.taskOutput = null;
+                showToast(`Task ${task} started`, 'success');
+            } catch(e) {
+                showToast('Failed to start task', 'error');
+            }
+        },
+
+        async checkTask() {
+            if (!this.taskId) return;
+            try {
+                const r = await fetch(`/admin/validate/task/${this.taskId}`);
+                const d = await r.json();
+                this.taskOutput = d.output || JSON.stringify(d, null, 2);
+            } catch(e) {
+                showToast('Failed to check task', 'error');
+            }
+        }
+    };
+}
+
+function sandboxWidget() {
+    return {
+        payload: '',
+        result: null,
+        loading: false,
+        async test(layer) {
+            if (!this.payload.trim()) return;
+            this.loading = true;
+            try {
+                const r = await fetch('/admin/guardrails/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ payload: this.payload, layer })
+                });
+                this.result = await r.json();
+            } catch(e) {
+                this.result = { verdict: 'error', events: [{ description: e.message }], latency_ms: 0 };
+            }
+            this.loading = false;
+        }
+    };
+}
+</script>
+{% endblock %}
