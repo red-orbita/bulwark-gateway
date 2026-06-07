@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0f172a">
+    <title>Sign In — Sentinel Gateway</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%230891b2'/><path d='M16 6l2 8h8l-6.5 4.5L22 27l-6-4.5L10 27l2.5-8.5L6 14h8z' fill='%23f0fdfa'/></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/tailwind.min.css">
+    <script src="/static/js/vendor/alpine.min.js" defer></script>
+    <script src="/static/js/vendor/lucide.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+        .float-animation { animation: float 6s ease-in-out infinite; }
+        @keyframes gradient-shift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        .gradient-bg { background: linear-gradient(-45deg, #0f172a, #164e63, #0f172a, #1e1b4b); background-size: 400% 400%; animation: gradient-shift 15s ease infinite; }
+    </style>
+</head>
+<body class="font-sans antialiased gradient-bg min-h-screen flex" x-data="loginForm()" x-cloak x-init="$nextTick(() => lucide.createIcons())">
+
+    <!-- Left panel - Branding (hidden on mobile) -->
+    <div class="hidden lg:flex lg:w-1/2 flex-col items-center justify-center p-12 relative overflow-hidden">
+        <!-- Abstract decorative elements -->
+        <div class="absolute top-20 left-20 w-72 h-72 bg-cyan-500/5 rounded-full blur-3xl"></div>
+        <div class="absolute bottom-20 right-20 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl"></div>
+
+        <div class="relative z-10 text-center max-w-md">
+            <!-- Logo -->
+            <div class="float-animation mb-8 inline-flex">
+                <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-cyan-500 to-cyan-700 flex items-center justify-center shadow-2xl shadow-cyan-500/20">
+                    <i data-lucide="shield-check" class="w-10 h-10 text-white"></i>
+                </div>
+            </div>
+
+            <h1 class="text-3xl font-bold text-white mb-3">Sentinel Gateway</h1>
+            <p class="text-gray-400 text-base leading-relaxed mb-8">Enterprise-grade security guardrails for AI agents. Protect your LLM integrations from prompt injection, data exfiltration, and tool abuse.</p>
+
+            <!-- Feature highlights -->
+            <div class="space-y-3 text-left">
+                <div class="flex items-center gap-3 text-sm text-gray-300">
+                    <div class="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
+                        <i data-lucide="zap" class="w-4 h-4 text-emerald-400"></i>
+                    </div>
+                    <span>Sub-50ms inspection latency on every request</span>
+                </div>
+                <div class="flex items-center gap-3 text-sm text-gray-300">
+                    <div class="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center flex-shrink-0">
+                        <i data-lucide="shield-alert" class="w-4 h-4 text-amber-400"></i>
+                    </div>
+                    <span>100+ guardrail patterns across 10 attack categories</span>
+                </div>
+                <div class="flex items-center gap-3 text-sm text-gray-300">
+                    <div class="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center flex-shrink-0">
+                        <i data-lucide="building-2" class="w-4 h-4 text-cyan-400"></i>
+                    </div>
+                    <span>Multi-tenant RBAC with per-agent tool policies</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Version -->
+        <p class="absolute bottom-6 text-[11px] text-gray-600">v0.2.0 — Security Guardrail Proxy</p>
+    </div>
+
+    <!-- Right panel - Login form -->
+    <div class="flex-1 flex items-center justify-center p-6 lg:p-12">
+        <div class="w-full max-w-sm">
+            <!-- Mobile logo -->
+            <div class="lg:hidden text-center mb-8">
+                <div class="inline-flex w-14 h-14 rounded-xl bg-gradient-to-br from-cyan-500 to-cyan-700 items-center justify-center shadow-lg shadow-cyan-500/20 mb-4">
+                    <i data-lucide="shield-check" class="w-7 h-7 text-white"></i>
+                </div>
+                <h1 class="text-xl font-bold text-white">Sentinel Gateway</h1>
+            </div>
+
+            <!-- Card -->
+            <div class="bg-gray-900/80 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-8 shadow-2xl">
+                <!-- Login header -->
+                <div x-show="!showChangePassword && !showMfa && !showForgotPassword" class="mb-6">
+                    <h2 class="text-lg font-semibold text-white">Welcome back</h2>
+                    <p class="text-sm text-gray-400 mt-1">Sign in to your admin account</p>
+                </div>
+
+                <!-- Login form -->
+                <form x-show="!showChangePassword && !showMfa && !showForgotPassword" @submit.prevent="doLogin()">
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+                            <div class="relative">
+                                <i data-lucide="user" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"></i>
+                                <input x-model="username" type="text" autocomplete="username"
+                                       class="w-full pl-10 pr-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
+                                       placeholder="Enter username" required autofocus>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
+                            <div class="relative">
+                                <i data-lucide="lock" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"></i>
+                                <input x-model="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
+                                       class="w-full pl-10 pr-10 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
+                                       placeholder="Enter password" required>
+                                <button type="button" @click="showPass = !showPass" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
+                                    <i x-show="!showPass" data-lucide="eye" class="w-4 h-4"></i>
+                                    <i x-show="showPass" data-lucide="eye-off" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Error -->
+                        <div x-show="error" x-cloak x-transition class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
+                            <i data-lucide="alert-circle" class="w-4 h-4 text-red-400 flex-shrink-0"></i>
+                            <span class="text-xs text-red-300" x-text="error"></span>
+                        </div>
+
+                        <button type="submit" :disabled="loading"
+                                class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                            <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <span x-show="!loading">Sign In</span>
+                            <span x-show="loading">Authenticating...</span>
+                        </button>
+
+                        <!-- Forgot password link -->
+                        <div class="text-center pt-2">
+                            <button type="button" @click="showForgotPassword = true" class="text-xs text-gray-500 hover:text-cyan-400 transition-colors">
+                                Forgot your password?
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Forgot password info -->
+                <div x-show="showForgotPassword && !showChangePassword && !showMfa" x-cloak x-transition>
+                    <div class="mb-6">
+                        <h2 class="text-lg font-semibold text-white">Reset Password</h2>
+                        <p class="text-sm text-gray-400 mt-1">Contact your administrator to reset your credentials</p>
+                    </div>
+                    <div class="flex items-start gap-3 px-4 py-3 rounded-lg bg-cyan-500/5 border border-cyan-500/20">
+                        <i data-lucide="info" class="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5"></i>
+                        <div class="text-xs text-gray-300 leading-relaxed">
+                            <p>For security reasons, password resets must be performed by an administrator through the <strong class="text-white">Access Control</strong> panel.</p>
+                            <p class="mt-2 text-gray-500">Contact your security team or system administrator.</p>
+                        </div>
+                    </div>
+                    <button type="button" @click="showForgotPassword = false" class="w-full mt-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">
+                        <i data-lucide="arrow-left" class="w-3.5 h-3.5 inline mr-1"></i>Back to login
+                    </button>
+                </div>
+
+                <!-- MFA form -->
+                <form x-show="showMfa" x-cloak @submit.prevent="doMfaLogin()">
+                    <div class="space-y-4">
+                        <div class="mb-6">
+                            <h2 class="text-lg font-semibold text-white">Two-Factor Authentication</h2>
+                            <p class="text-sm text-gray-400 mt-1">Enter the 6-digit code from your authenticator app</p>
+                        </div>
+                        <div>
+                            <input x-model="mfaCode" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"
+                                   class="w-full px-3 py-3 bg-gray-800 border border-gray-700 rounded-lg text-center text-xl tracking-[0.5em] font-mono text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
+                                   placeholder="000000" required autofocus>
+                        </div>
+                        <div x-show="error" x-cloak x-transition class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
+                            <i data-lucide="alert-circle" class="w-4 h-4 text-red-400 flex-shrink-0"></i>
+                            <span class="text-xs text-red-300" x-text="error"></span>
+                        </div>
+                        <button type="submit" :disabled="loading || mfaCode.length !== 6"
+                                class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                            <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <span x-show="!loading">Verify Code</span>
+                            <span x-show="loading">Verifying...</span>
+                        </button>
+                        <button type="button" @click="showMfa = false; mfaCode = ''; error = '';" class="w-full py-2 text-gray-400 hover:text-white text-sm transition-colors">
+                            <i data-lucide="arrow-left" class="w-3.5 h-3.5 inline mr-1"></i>Back to login
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Change password form -->
+                <form x-show="showChangePassword" x-cloak @submit.prevent="doChangePassword()">
+                    <div class="space-y-4">
+                        <div class="mb-6">
+                            <h2 class="text-lg font-semibold text-white">Change Password</h2>
+                            <p class="text-sm text-gray-400 mt-1">You must set a new password before first access</p>
+                        </div>
+                        <div class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                            <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 flex-shrink-0"></i>
+                            <span class="text-xs text-amber-300">Minimum 12 characters required</span>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-400 mb-1.5">New Password</label>
+                            <input x-model="newPassword" type="password" autocomplete="new-password"
+                                   class="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
+                                   required minlength="12">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-400 mb-1.5">Confirm Password</label>
+                            <input x-model="confirmPassword" type="password" autocomplete="new-password"
+                                   class="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
+                                   required minlength="12">
+                        </div>
+                        <!-- Password strength indicator -->
+                        <div class="flex gap-1">
+                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 4 ? 'bg-red-500' : 'bg-gray-700'"></div>
+                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 8 ? 'bg-amber-500' : 'bg-gray-700'"></div>
+                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 12 ? 'bg-emerald-500' : 'bg-gray-700'"></div>
+                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 16 && /[A-Z]/.test(newPassword) && /[0-9]/.test(newPassword) ? 'bg-cyan-500' : 'bg-gray-700'"></div>
+                        </div>
+                        <div x-show="error" x-cloak x-transition class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
+                            <i data-lucide="alert-circle" class="w-4 h-4 text-red-400 flex-shrink-0"></i>
+                            <span class="text-xs text-red-300" x-text="error"></span>
+                        </div>
+                        <button type="submit" :disabled="loading"
+                                class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                            <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <span x-show="!loading">Set Password & Continue</span>
+                            <span x-show="loading">Updating...</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Footer -->
+            <p class="text-center text-[11px] text-gray-600 mt-6">Protected by Sentinel Gateway security controls</p>
+        </div>
+    </div>
+
+    <script>
+    function loginForm() {
+        return {
+            username: '', password: '', mfaCode: '', newPassword: '', confirmPassword: '',
+            error: '', success: '', loading: false, showPass: false,
+            showChangePassword: false, showMfa: false, showForgotPassword: false,
+            async doLogin() {
+                this.error = '';
+                this.loading = true;
+                try {
+                    const resp = await fetch('/admin/auth/login', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ username: this.username, password: this.password })
+                    });
+                    if (!resp.ok) {
+                        const data = await resp.json().catch(() => ({}));
+                        this.error = data.detail || 'Invalid credentials';
+                        this.loading = false; return;
+                    }
+                    const data = await resp.json();
+                    if (data.mfa_required) { this.showMfa = true; this.loading = false; return; }
+                    if (data.force_password_change) { this.showChangePassword = true; this.loading = false; return; }
+                    this._completeLogin(data);
+                } catch(e) { this.error = 'Connection error'; this.loading = false; }
+            },
+            async doMfaLogin() {
+                this.error = '';
+                this.loading = true;
+                try {
+                    const resp = await fetch('/admin/auth/login', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ username: this.username, password: this.password, mfa_code: this.mfaCode })
+                    });
+                    if (!resp.ok) { const d = await resp.json().catch(()=>({})); this.error = d.detail || 'Invalid code'; this.mfaCode = ''; this.loading = false; return; }
+                    const data = await resp.json();
+                    if (data.force_password_change) { this.showMfa = false; this.showChangePassword = true; this.loading = false; return; }
+                    this._completeLogin(data);
+                } catch(e) { this.error = 'Connection error'; this.loading = false; }
+            },
+            _completeLogin(data) {
+                localStorage.setItem('sentinel_token', data.access_token);
+                localStorage.setItem('sentinel_user', data.username);
+                localStorage.setItem('sentinel_role', data.role);
+                window.location.href = '/';
+            },
+            async doChangePassword() {
+                this.error = '';
+                if (this.newPassword !== this.confirmPassword) { this.error = 'Passwords do not match'; return; }
+                if (this.newPassword.length < 12) { this.error = 'Minimum 12 characters required'; return; }
+                this.loading = true;
+                try {
+                    const resp = await fetch('/admin/auth/force-change-password', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ username: this.username, current_password: this.password, new_password: this.newPassword })
+                    });
+                    if (!resp.ok) { const d = await resp.json().catch(()=>({})); this.error = d.detail || 'Failed'; this.loading = false; return; }
+                    this.password = this.newPassword;
+                    this.showChangePassword = false;
+                    await this.doLogin();
+                } catch(e) { this.error = 'Connection error'; this.loading = false; }
+            }
+        };
+    }
+    </script>
+</body>
+</html>

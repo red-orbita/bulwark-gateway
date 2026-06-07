@@ -1,0 +1,98 @@
+# Sentinel Gateway — Production Environment Values
+#
+# This file is used by CI/CD pipelines for production deployments.
+# Copy and customize for your environment.
+#
+# IMPORTANT: Sensitive values MUST be injected via CI/CD secrets.
+# Never commit passwords, tokens, or keys to this file.
+# Use --set overrides for: backend.ip, externalRedis.password, secrets.*
+
+# Backend — production LLM endpoint
+backend:
+  type: ip
+  ip: ""  # Set via CI/CD: --set backend.ip=<PROD_BACKEND_IP>
+  port: 11434
+
+# Proxy — production-scale
+proxy:
+  replicas: 3
+  logLevel: "WARNING"
+  failMode: "closed"
+  rateLimit: 60
+  workers: 4
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: "1"
+    requests:
+      memory: 256Mi
+      cpu: 250m
+
+# Admin
+admin:
+  replicas: 2
+  resources:
+    limits:
+      memory: 256Mi
+      cpu: 500m
+    requests:
+      memory: 128Mi
+      cpu: 100m
+
+# Redis — external managed instance for production
+redis:
+  enabled: false
+
+externalRedis:
+  host: ""  # Set via CI/CD: --set externalRedis.host=<REDIS_HOST>
+  port: 6380
+  tls: true
+  db: 0
+  # Password via existing secret (managed by External Secrets Operator or Vault)
+  existingSecret: "sentinel-redis-credentials"
+  existingSecretKey: "password"
+
+# Ingress
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  tls:
+    enabled: true
+    secretName: "sentinel-prod-tls"
+  hosts:
+    proxy: "api.sentinel-gateway.mycompany.com"
+    admin: "admin.sentinel-gateway.mycompany.com"
+
+# Telemetry
+telemetry:
+  enabled: true
+  batchSize: 100
+  flushInterval: 1.0
+
+# SIEM
+siem:
+  enabled: true
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+  grafana:
+    enabled: true
+    adminPassword: ""  # Set via CI/CD secret
+
+# Notifications
+notifications:
+  enabled: true
+
+# Wazuh
+wazuh:
+  enabled: true
+
+# Persistence
+persistence:
+  storageClass: "managed-premium"  # Azure: managed-premium, AWS: gp3, GCP: standard-rwo

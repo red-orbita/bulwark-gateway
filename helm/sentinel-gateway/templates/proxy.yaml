@@ -1,0 +1,227 @@
+---
+# Proxy ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-proxy
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.proxy.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+# Proxy Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.proxy.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.proxy.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/health/metrics"
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 8 }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum | trunc 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: sentinel-proxy
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-policies
+          image: {{ include "sentinel-gateway.proxy.image" . }}
+          imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
+          command: ["sh", "-c", "cp -rn /app/config/policies/* /policies/ 2>/dev/null || true"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: policies
+              mountPath: /policies
+      containers:
+        - name: proxy
+          image: {{ include "sentinel-gateway.proxy.image" . }}
+          imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: proxy-config
+          resources:
+            {{- toYaml .Values.proxy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            {{- if and (not .Values.redis.enabled) .Values.externalRedis.existingSecret }}
+            - name: redis-external-secret
+              mountPath: /run/secrets/redis-password
+              subPath: {{ include "sentinel-gateway.redis.secretKey" . }}
+              readOnly: true
+            {{- end }}
+            - name: policies
+              mountPath: /app/config/policies
+              readOnly: true
+            - name: notifications-data
+              mountPath: /app/shared/notifications
+              readOnly: true
+            - name: admin-data
+              mountPath: /app/shared/admin
+              readOnly: true
+            - name: telemetry-data
+              mountPath: /app/data
+            - name: siem-stats
+              mountPath: /app/shared/siem
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: secrets
+          secret:
+            secretName: sentinel-proxy-secrets
+        {{- if and (not .Values.redis.enabled) .Values.externalRedis.existingSecret }}
+        - name: redis-external-secret
+          secret:
+            secretName: {{ .Values.externalRedis.existingSecret }}
+        {{- end }}
+        - name: policies
+          persistentVolumeClaim:
+            claimName: policies
+        - name: notifications-data
+          persistentVolumeClaim:
+            claimName: notifications-data
+        - name: admin-data
+          persistentVolumeClaim:
+            claimName: admin-data
+        - name: telemetry-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+        - name: siem-stats
+          persistentVolumeClaim:
+            claimName: siem-stats
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+---
+# Proxy Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.proxy.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 4 }}
+{{- if .Values.proxy.autoscaling.enabled }}
+---
+# Proxy HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: proxy
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.proxy.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: proxy
+  minReplicas: {{ .Values.proxy.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.proxy.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.proxy.autoscaling.targetCPUUtilization }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.proxy.autoscaling.targetMemoryUtilization }}
+{{- end }}
+{{- if .Values.proxy.pdb.enabled }}
+---
+# Proxy PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: proxy-pdb
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.proxy.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.proxy.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 6 }}
+{{- end }}

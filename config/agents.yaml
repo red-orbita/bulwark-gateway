@@ -1,0 +1,42 @@
+defaults:
+  backend_url: ${SENTINEL_BACKEND_URL:-http://ollama:11434}
+  timeout: 120.0
+  auth_header: null
+  health_endpoint: /health
+tenants:
+  default-corp:
+    agents:
+      support-bot:
+        path_prefix: /v1
+        timeout: 30.0
+        model: tinyllama
+        health_endpoint: /
+        description: Ollama local LLM for support
+        status: active
+      code-assistant:
+        path_prefix: /v1
+        timeout: 120.0
+        model: tinyllama
+        health_endpoint: /
+        description: Ollama for code generation
+        status: active
+    _meta:
+      status: active
+  healthcare-corp:
+    agents:
+      patient-assistant:
+        path_prefix: /v1
+        timeout: 30.0
+        model: tinyllama
+        health_endpoint: /
+        description: Patient-facing healthcare assistant
+        status: active
+      medical-researcher:
+        path_prefix: /v1
+        timeout: 60.0
+        model: tinyllama
+        health_endpoint: /
+        description: Medical research assistant
+        status: active
+    _meta:
+      status: active

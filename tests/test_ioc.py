@@ -1,4 +1,5 @@
 """Tests for IOC manager."""
+
 import pytest
 import json
 import tempfile

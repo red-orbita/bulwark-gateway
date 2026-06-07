@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% block title %}SIEM Export — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}SIEM Integration{% endblock %}
+{% block content %}
+<div x-data="siemManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">SIEM / Syslog Integration</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Configure event export transports to your SIEM platform</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="modalTestResult = null; showCreate = true" class="sg-btn sg-btn-primary sg-btn-sm">
+                <i data-lucide="plus" class="w-4 h-4"></i> Add Transport
+            </button>
+        </div>
+    </div>
+
+    <!-- Telemetry Stats -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="sg-card text-center">
+            <p class="text-xs text-gray-400 uppercase">Events Exported</p>
+            <p class="text-2xl font-mono text-green-400 mt-1" x-text="stats.events_exported || 0"></p>
+        </div>
+        <div class="sg-card text-center">
+            <p class="text-xs text-gray-400 uppercase">Batches Sent</p>
+            <p class="text-2xl font-mono text-blue-400 mt-1" x-text="stats.batches_sent || 0"></p>
+        </div>
+        <div class="sg-card text-center">
+            <p class="text-xs text-gray-400 uppercase">Queue (Memory)</p>
+            <p class="text-2xl font-mono text-yellow-400 mt-1" x-text="stats.queue_memory_depth || 0"></p>
+        </div>
+        <div class="sg-card text-center">
+            <p class="text-xs text-gray-400 uppercase">Export Errors</p>
+            <p class="text-2xl font-mono text-red-400 mt-1" x-text="stats.export_errors || 0"></p>
+        </div>
+    </div>
+
+    <!-- Active Transports -->
+    <div class="sg-card !p-0">
+        <div class="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-white">Configured Transports</h3>
+        </div>
+        <div class="divide-y divide-gray-700/50">
+            <template x-for="transport in transports" :key="transport.id">
+                <div class="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-mono text-sm text-cyan-400" x-text="transport.platform"></span>
+                            <span class="sg-badge sg-badge-neutral" x-text="transport.transport_type"></span>
+                            <span class="sg-badge" :class="transport.enabled ? 'sg-badge-success' : 'sg-badge-danger'" x-text="transport.enabled ? 'Active' : 'Disabled'"></span>
+                            <span class="sg-badge" :class="transport.circuit_state === 'closed' ? 'sg-badge-success' : transport.circuit_state === 'half_open' ? 'sg-badge-warning' : 'sg-badge-danger'" x-text="'CB: ' + transport.circuit_state"></span>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-1">
+                            <template x-if="transport.platform === 'wazuh'">
+                                <span>File: <span x-text="transport.endpoint"></span> | API: <span x-text="transport.wazuh_api_url || 'not configured'"></span></span>
+                            </template>
+                            <template x-if="transport.platform !== 'wazuh'">
+                                <span>Endpoint: <span x-text="transport.endpoint"></span>:<span x-text="transport.port"></span> |
+                                Batch: <span x-text="transport.batch_size"></span> |
+                                Flush: <span x-text="transport.flush_interval"></span>s</span>
+                            </template>
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button @click="testExistingTransport(transport)" class="sg-btn sg-btn-warning sg-btn-sm">
+                            <i data-lucide="plug" class="w-3.5 h-3.5"></i> Test
+                        </button>
+                        <button @click="toggleTransport(transport)" class="sg-btn sg-btn-sm" :class="transport.enabled ? 'sg-btn-danger' : 'sg-btn-success'" x-text="transport.enabled ? 'Disable' : 'Enable'"></button>
+                        <button @click="editTransport(transport)" class="sg-btn sg-btn-secondary sg-btn-sm">
+                            <i data-lucide="pencil" class="w-3.5 h-3.5"></i> Edit
+                        </button>
+                        <button @click="deleteTransport(transport)" class="sg-btn sg-btn-danger sg-btn-sm">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <!-- Empty state -->
+        <div x-show="transports.length === 0" class="sg-empty">
+            <div class="sg-empty-icon">
+                <i data-lucide="radio-tower" class="w-8 h-8"></i>
+            </div>
+            <p class="sg-empty-title">No transports configured</p>
+            <p class="sg-empty-desc">Click "Add Transport" to configure your first SIEM export</p>
+        </div>
+    </div>
+
+    <!-- Connection Test Result (main page — for existing transports Test button) -->
+    <div x-show="pageTestResult" x-cloak class="sg-card">
+        <h3 class="text-sm font-semibold text-white mb-2">Connection Test Result</h3>
+        <div class="p-3 rounded-lg text-sm" :class="pageTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
+            <p x-text="pageTestResult?.success ? '✓ Connection successful' : '✗ ' + (pageTestResult?.error || 'Connection failed')"></p>
+            <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (pageTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (pageTestResult?.platform || '-')"></p>
+        </div>
+    </div>
+
+    <!-- Create/Edit Modal -->
+    <div x-show="showCreate || editingTransport" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+             x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white" x-text="editingTransport ? 'Edit Transport' : 'Add Transport'"></h3>
+                <button @click="showCreate=false; editingTransport=null" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Platform</label>
+                        <select x-model="form.platform" @change="onPlatformChange()" class="sg-select w-full">
+                            <option value="splunk">Splunk</option>
+                            <option value="elastic">Elastic/ELK</option>
+                            <option value="datadog">Datadog</option>
+                            <option value="sentinel">Azure Sentinel</option>
+                            <option value="qradar">IBM QRadar</option>
+                            <option value="arcsight">ArcSight</option>
+                            <option value="wazuh">Wazuh</option>
+                            <option value="graylog">Graylog</option>
+                            <option value="custom_syslog">Custom Syslog</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="sg-label">Transport Type</label>
+                        <select x-model="form.transport_type" class="sg-select w-full">
+                            <option value="http_rest">HTTP REST</option>
+                            <option value="syslog_udp">Syslog UDP</option>
+                            <option value="syslog_tcp">Syslog TCP</option>
+                            <option value="syslog_tls">Syslog TLS</option>
+                            <option value="tcp_tls">TCP/TLS (CEF/LEEF)</option>
+                            <option value="file">File/Logshipper</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label" x-text="form.platform === 'wazuh' ? 'Log File Path' : 'Endpoint'"></label>
+                        <input type="text" x-model="form.endpoint" class="sg-input w-full" :placeholder="form.platform === 'wazuh' ? '/var/log/sentinel-gateway/events.ndjson' : 'siem.company.com'">
+                    </div>
+                    <div x-show="form.platform !== 'wazuh'">
+                        <label class="sg-label">Port</label>
+                        <input type="number" x-model="form.port" class="sg-input w-full" placeholder="514">
+                    </div>
+                </div>
+                <!-- Wazuh-specific: API URL for connection test -->
+                <div x-show="form.platform === 'wazuh'" class="sg-card !bg-gray-900/50 !border-purple-800/30">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="shield-check" class="w-4 h-4 text-purple-400"></i>
+                        <h4 class="text-sm font-semibold text-purple-300">Wazuh Integration</h4>
+                    </div>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="sg-label">Wazuh API URL</label>
+                            <input type="text" x-model="form.wazuh_api_url" class="sg-input w-full" placeholder="https://wazuh-manager:55000">
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="sg-label">API User</label>
+                                <input type="text" x-model="form.wazuh_user" class="sg-input w-full" placeholder="wazuh-wui">
+                            </div>
+                            <div>
+                                <label class="sg-label">API Password</label>
+                                <input type="password" x-model="form.wazuh_password" class="sg-input w-full" placeholder="wazuh-wui">
+                            </div>
+                        </div>
+                        <p class="text-[11px] text-gray-500">
+                            Transport: File shipper writes NDJSON to <code class="text-cyan-400">events.ndjson</code>. 
+                            Wazuh logcollector reads it. Test verifies Wazuh API is reachable and analysisd is running.
+                        </p>
+                    </div>
+                </div>
+                <div x-show="form.platform !== 'wazuh'" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Auth Type</label>
+                        <select x-model="form.auth_type" class="sg-select w-full">
+                            <option value="none">None</option>
+                            <option value="api_key">API Key</option>
+                            <option value="hmac">HMAC</option>
+                            <option value="mtls">mTLS</option>
+                            <option value="oauth2">OAuth2</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="sg-label">Auth Value / Key</label>
+                        <input type="password" x-model="form.auth_value" class="sg-input w-full" placeholder="API key or token">
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                        <label class="sg-label">Batch Size</label>
+                        <input type="number" x-model="form.batch_size" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="sg-label">Flush Interval (s)</label>
+                        <input type="number" step="0.1" x-model="form.flush_interval" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="sg-label">Format</label>
+                        <select x-model="form.format" class="sg-select w-full">
+                            <option value="ecs_json">ECS JSON</option>
+                            <option value="cef">CEF</option>
+                            <option value="leef">LEEF</option>
+                            <option value="custom_json">Custom JSON</option>
+                        </select>
+                    </div>
+                </div>
+                <!-- Test result INSIDE the modal -->
+                <div x-show="modalTestResult" class="p-3 rounded-lg text-sm" :class="modalTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
+                    <p x-text="modalTestResult?.success ? '✓ Connection successful' : '✗ ' + (modalTestResult?.error || 'Connection failed')"></p>
+                    <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (modalTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (modalTestResult?.platform || '-')"></p>
+                </div>
+                <!-- Buttons -->
+                <div class="flex justify-end gap-3 pt-2 border-t border-gray-700">
+                    <button @click="testModalConnection()" class="sg-btn sg-btn-warning sg-btn-sm">
+                        <i data-lucide="plug" class="w-4 h-4"></i> Test Connection
+                    </button>
+                    <button @click="saveTransport()" class="sg-btn sg-btn-success sg-btn-sm">
+                        <i data-lucide="check" class="w-4 h-4"></i> Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function siemManager() {
+    return {
+        transports: [],
+        stats: {},
+        showCreate: false,
+        editingTransport: null,
+        pageTestResult: null,
+        modalTestResult: null,
+        form: { platform: 'splunk', transport_type: 'http_rest', endpoint: '', port: 8088, auth_type: 'api_key', auth_value: '', batch_size: 100, flush_interval: 1.0, format: 'ecs_json', wazuh_api_url: '', wazuh_user: 'wazuh-wui', wazuh_password: '' },
+        onPlatformChange() {
+            if (this.form.platform === 'wazuh') {
+                this.form.transport_type = 'file';
+                this.form.endpoint = '/var/log/sentinel-gateway/events.ndjson';
+                this.form.port = 55000;
+                this.form.format = 'ecs_json';
+                this.form.auth_type = 'none';
+                this.form.batch_size = 100;
+                this.form.flush_interval = 1.0;
+                if (!this.form.wazuh_api_url) this.form.wazuh_api_url = 'https://localhost:55000';
+            }
+        },
+        async init() {
+            const resp = await fetch('/admin/siem/config');
+            if (resp.ok) this.transports = (await resp.json()).transports || [];
+            const sr = await fetch('/admin/siem/status');
+            if (sr.ok) this.stats = await sr.json();
+        },
+        async toggleTransport(t) {
+            const resp = await fetch(`/admin/siem/transport/${t.id}/toggle`, { method: 'POST' });
+            if (resp.ok) t.enabled = !t.enabled;
+        },
+        async testExistingTransport(t) {
+            this.pageTestResult = null;
+            try {
+                const resp = await fetch('/admin/siem/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(t) });
+                if (resp.ok) {
+                    this.pageTestResult = await resp.json();
+                } else {
+                    const text = await resp.text();
+                    this.pageTestResult = { success: false, platform: t.platform, transport: t.transport_type, latency_ms: 0, error: `HTTP ${resp.status}: ${text}` };
+                }
+            } catch (e) {
+                this.pageTestResult = { success: false, platform: t.platform, transport: t.transport_type, latency_ms: 0, error: `Network error: ${e.message}` };
+            }
+        },
+        async testModalConnection() {
+            this.modalTestResult = null;
+            try {
+                const resp = await fetch('/admin/siem/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.form) });
+                if (resp.ok) {
+                    this.modalTestResult = await resp.json();
+                } else {
+                    const text = await resp.text();
+                    this.modalTestResult = { success: false, platform: this.form.platform, transport: this.form.transport_type, latency_ms: 0, error: `HTTP ${resp.status}: ${text}` };
+                }
+            } catch (e) {
+                this.modalTestResult = { success: false, platform: this.form.platform, transport: this.form.transport_type, latency_ms: 0, error: `Network error: ${e.message}` };
+            }
+        },
+        editTransport(t) { this.modalTestResult = null; this.editingTransport = t; this.form = { ...t }; },
+        async deleteTransport(t) {
+            if (!confirm(`Delete transport "${t.platform}" (${t.endpoint})?`)) return;
+            const resp = await fetch(`/admin/siem/transport/${t.id}`, { method: 'DELETE' });
+            if (resp.ok) await this.init();
+        },
+        async saveTransport() {
+            const method = this.editingTransport ? 'PUT' : 'POST';
+            const url = this.editingTransport ? `/admin/siem/transport/${this.editingTransport.id}` : '/admin/siem/transport';
+            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.form) });
+            if (resp.ok) { this.showCreate = false; this.editingTransport = null; await this.init(); }
+        }
+    };
+}
+</script>
+{% endblock %}

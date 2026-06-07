@@ -1,0 +1,12 @@
+---
+# Separate namespace for Wazuh — not restricted PSS
+# Wazuh requires privileged containers (syslog listener, file writes to /var/ossec)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentinel-siem
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

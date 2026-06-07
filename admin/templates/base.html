@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0f172a">
+    <title>{% block title %}Sentinel Gateway Admin{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%230891b2'/><path d='M16 6l2 8h8l-6.5 4.5L22 27l-6-4.5L10 27l2.5-8.5L6 14h8z' fill='%23f0fdfa'/></svg>">
+
+    <!-- Fonts: Inter (UI) + JetBrains Mono (data/code) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS (pre-built) -->
+    <link rel="stylesheet" href="/static/css/tailwind.min.css" integrity="sha384-Fv9EC4uc+frCf/yXI/LeGT6nxwFBDrHRn14eYw7SuTQMuB5n9zPN21j9Tyv0gCgK" crossorigin="anonymous">
+
+    <!-- Alpine.js (vendored) -->
+    <script src="/static/js/vendor/alpine-collapse.min.js" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n" crossorigin="anonymous" defer></script>
+    <script src="/static/js/vendor/alpine.min.js" integrity="sha384-iZD2X8o1Zdq0HR5H/7oa8W30WS4No+zWCKUPD7fHRay9I1Gf+C4F8sVmw7zec1wW" crossorigin="anonymous" defer></script>
+
+    <!-- HTMX + SSE extension (vendored) -->
+    <script src="/static/js/vendor/htmx.min.js" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
+    <script src="/static/js/vendor/htmx-sse.js" integrity="sha384-OZrRw8/Zvv0VFGJJF6TN3gABVZvvO60Xz7RWkQKAmoRe+t1dc5J/ySJvXbpL+N+Q" crossorigin="anonymous"></script>
+
+    <!-- Lucide Icons (vendored) -->
+    <script src="/static/js/vendor/lucide.min.js" integrity="sha384-O/J9XimWDzX+sA0CHYO5BQAzH+kjn+SSQNgTR9s6Ho+Dx7B1H/V69lFbt8jXff0j" crossorigin="anonymous"></script>
+
+    <style>
+        [x-cloak] { display: none !important; }
+        .pulse-live { animation: pulse-live 2s ease-in-out infinite; }
+        @keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .sidebar-transition { transition: width 200ms cubic-bezier(0.4, 0, 0.2, 1), transform 200ms cubic-bezier(0.4, 0, 0.2, 1); }
+        @keyframes slide-in-right { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .toast-enter { animation: slide-in-right 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        body { background: #030712; color: #f3f4f6; }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(6, 182, 212, 0.03), transparent),
+                        radial-gradient(ellipse 60% 40% at 80% 50%, rgba(99, 102, 241, 0.02), transparent);
+            pointer-events: none;
+            z-index: 0;
+        }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body class="font-sans min-h-screen antialiased relative"
+      x-data="appShell()" x-cloak>
+
+    <!-- Mobile overlay -->
+    <div x-show="sidebarOpen && isMobile" @click="sidebarOpen = false"
+         x-transition:enter="transition-opacity duration-200"
+         x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition-opacity duration-200"
+         x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+         class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 lg:hidden"></div>
+
+    <!-- Sidebar -->
+    <aside :class="sidebarOpen ? 'w-64 translate-x-0' : (isMobile ? '-translate-x-full w-64' : 'w-16')"
+           class="fixed left-0 top-0 h-full sidebar-gradient sidebar-border z-50 sidebar-transition flex flex-col overflow-hidden">
+
+        <!-- Logo -->
+        <div class="p-4 flex items-center gap-3 min-h-[64px]" style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style="background: linear-gradient(135deg, #0891b2, #06b6d4); box-shadow: 0 0 20px rgba(6,182,212,0.3);">
+                <i data-lucide="shield-check" class="w-5 h-5 text-white"></i>
+            </div>
+            <div x-show="sidebarOpen" x-transition class="overflow-hidden whitespace-nowrap">
+                <h1 class="text-sm font-bold text-white tracking-tight">Sentinel Gateway</h1>
+                <p class="text-[10px] text-gray-500 font-medium">Security Guardrail Proxy</p>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="flex-1 py-3 overflow-y-auto" id="main-nav">
+            <!-- Operations -->
+            <div class="px-3 mb-1" x-show="sidebarOpen">
+                <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Operations</span>
+            </div>
+            <a href="/" class="nav-item" data-page="dashboard">
+                <i data-lucide="layout-dashboard" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Dashboard</span>
+            </a>
+            <a href="/policies" class="nav-item" data-page="policies">
+                <i data-lucide="file-shield" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Policies</span>
+            </a>
+            <a href="/guardrails" class="nav-item" data-page="guardrails">
+                <i data-lucide="shield-alert" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Guardrails</span>
+            </a>
+            <a href="/siem" class="nav-item" data-page="siem">
+                <i data-lucide="radio-tower" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">SIEM Export</span>
+            </a>
+            <a href="/notifications" class="nav-item" data-page="notifications">
+                <i data-lucide="bell-ring" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Notifications</span>
+            </a>
+            <a href="/audit" class="nav-item" data-page="audit">
+                <i data-lucide="scroll-text" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Audit Log</span>
+            </a>
+
+            <!-- Intelligence -->
+            <div class="px-3 mt-4 mb-1" x-show="sidebarOpen">
+                <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Intelligence</span>
+            </div>
+            <a href="/orchestrator" class="nav-item" data-page="orchestrator">
+                <i data-lucide="cpu" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Orchestrator</span>
+            </a>
+            <a href="/coverage" class="nav-item" data-page="coverage">
+                <i data-lucide="grid-3x3" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Coverage Matrix</span>
+            </a>
+            <a href="/iocs" class="nav-item" data-page="iocs">
+                <i data-lucide="bug" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">IOCs</span>
+            </a>
+
+            <!-- Management -->
+            <div class="px-3 mt-4 mb-1" x-show="sidebarOpen">
+                <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Management</span>
+            </div>
+            <a href="/tenants" class="nav-item" data-page="tenants">
+                <i data-lucide="building-2" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Tenants</span>
+            </a>
+            <a href="/agents" class="nav-item" data-page="agents">
+                <i data-lucide="bot" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Agents</span>
+            </a>
+            <a href="/rbac" class="nav-item" data-page="rbac">
+                <i data-lucide="users" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Access Control</span>
+            </a>
+            <a href="/settings" class="nav-item" data-page="settings">
+                <i data-lucide="settings" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Settings</span>
+            </a>
+            <a href="/status" class="nav-item" data-page="status">
+                <i data-lucide="heart-pulse" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Status</span>
+            </a>
+        </nav>
+
+        <!-- User footer -->
+        <div class="p-3" style="border-top: 1px solid rgba(255,255,255,0.04);">
+            <div class="flex items-center gap-3" x-show="sidebarOpen">
+                <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 cursor-pointer" style="background: linear-gradient(135deg, rgba(6,182,212,0.15), rgba(6,182,212,0.05)); box-shadow: inset 0 0 0 1px rgba(6,182,212,0.2);" @click="showProfile = true; loadProfile()">
+                    <span class="text-xs font-semibold text-cyan-300" x-text="(localStorage.getItem('sentinel_user') || 'U')[0].toUpperCase()"></span>
+                </div>
+                <div class="flex-1 min-w-0 cursor-pointer" @click="showProfile = true; loadProfile()">
+                    <p class="text-xs font-medium text-gray-200 truncate" x-text="localStorage.getItem('sentinel_user') || ''"></p>
+                    <p class="text-[10px] text-gray-500 capitalize" x-text="localStorage.getItem('sentinel_role') || ''"></p>
+                </div>
+                <button @click="showProfile = true; loadProfile()" class="p-1.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors" title="Profile Settings">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                </button>
+                <button @click="logout()" class="p-1.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors" title="Logout">
+                    <i data-lucide="log-out" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <button x-show="!sidebarOpen && !isMobile" @click="showProfile = true; loadProfile()" class="p-1.5 rounded-md hover:bg-gray-700/50 text-gray-400 hover:text-gray-200 transition-colors mx-auto block mb-1" title="Profile">
+                <i data-lucide="settings" class="w-4 h-4"></i>
+            </button>
+            <button x-show="!sidebarOpen && !isMobile" @click="logout()" class="p-1.5 rounded-md hover:bg-gray-700/50 text-gray-400 hover:text-red-400 transition-colors mx-auto block" title="Logout">
+                <i data-lucide="log-out" class="w-4 h-4"></i>
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main content -->
+    <div :class="sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'" class="min-h-screen transition-all duration-200">
+        <!-- Top bar -->
+        <header class="sticky top-0 z-30 header-glass">
+            <div class="flex items-center justify-between h-14 px-4 lg:px-6">
+                <div class="flex items-center gap-3">
+                    <!-- Sidebar toggle -->
+                    <button @click="sidebarOpen = !sidebarOpen" class="p-2 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors">
+                        <i data-lucide="panel-left" class="w-5 h-5"></i>
+                    </button>
+                    <!-- Breadcrumb -->
+                    <nav class="hidden sm:flex items-center gap-1.5 text-sm">
+                        <span class="text-gray-600">/</span>
+                        <span class="text-gray-100 font-medium">{% block breadcrumb %}Dashboard{% endblock %}</span>
+                    </nav>
+                </div>
+                <div class="flex items-center gap-1">
+                    <!-- Command palette trigger -->
+                    <button @click="$dispatch('open-command-palette')"
+                            class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors" style="border: 1px solid rgba(255,255,255,0.06);">
+                        <i data-lucide="search" class="w-3.5 h-3.5"></i>
+                        <span>Search...</span>
+                        <kbd class="px-1.5 py-0.5 rounded text-[10px] font-mono text-gray-600 ml-2" style="background: rgba(255,255,255,0.04);">⌘K</kbd>
+                    </button>
+                    <!-- Notifications -->
+                    <button class="relative p-2 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors" id="notification-btn">
+                        <i data-lucide="bell" class="w-[18px] h-[18px]"></i>
+                        <span id="notification-badge" class="hidden absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" style="box-shadow: 0 0 6px rgba(239,68,68,0.5);"></span>
+                    </button>
+                    <!-- SSE Status -->
+                    <div id="sse-status" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium ml-1" style="display:none;">
+                        <span class="w-1.5 h-1.5 rounded-full" id="sse-dot"></span>
+                        <span id="sse-text">Live</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Page content -->
+        <main class="p-4 lg:p-6 max-w-[1600px] relative z-10">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed top-16 right-4 z-[100] space-y-2 max-w-sm w-full pointer-events-none"></div>
+
+    <!-- Command Palette -->
+    <div x-data="commandPalette()" x-show="open" @open-command-palette.window="openPalette()"
+         @keydown.window.meta.k.prevent="openPalette()" @keydown.window.ctrl.k.prevent="openPalette()"
+         x-cloak class="fixed inset-0 z-[200]">
+        <div class="fixed inset-0 bg-black/70 backdrop-blur-md" @click="open = false"
+             x-transition:enter="transition-opacity duration-150" x-transition:enter-start="opacity-0"></div>
+        <div class="fixed top-[20%] left-1/2 -translate-x-1/2 w-full max-w-lg"
+             x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0 scale-95">
+            <div class="sg-card !p-0 overflow-hidden" style="box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8), 0 0 60px rgba(6,182,212,0.05);">
+                <div class="flex items-center gap-3 px-4 py-3" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <i data-lucide="search" class="w-5 h-5 text-gray-500"></i>
+                    <input type="text" x-model="query" @keydown.escape="open = false" @keydown.enter="executeFirst()"
+                           @keydown.arrow-down.prevent="next()" @keydown.arrow-up.prevent="prev()"
+                           x-ref="searchInput" placeholder="Type a command or search..."
+                           class="flex-1 bg-transparent border-none outline-none text-sm text-gray-100 placeholder-gray-500">
+                    <kbd class="px-1.5 py-0.5 rounded text-[10px] text-gray-500 font-mono" style="background: rgba(255,255,255,0.05);">ESC</kbd>
+                </div>
+                <div class="max-h-72 overflow-y-auto py-2">
+                    <template x-for="(item, idx) in filtered" :key="item.id">
+                        <a :href="item.href" :class="idx === selected ? 'bg-cyan-500/10 text-cyan-300' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'"
+                           class="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors cursor-pointer">
+                            <i :data-lucide="item.icon" class="w-4 h-4 opacity-60"></i>
+                            <span x-text="item.label"></span>
+                            <span class="ml-auto text-[10px] text-gray-600" x-text="item.section"></span>
+                        </a>
+                    </template>
+                    <div x-show="filtered.length === 0" class="px-4 py-6 text-center text-sm text-gray-500">
+                        No results found
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Global Confirm Modal -->
+    <div id="global-confirm" class="fixed inset-0 bg-black/70 backdrop-blur-md z-[90] flex items-center justify-center hidden"
+         x-transition>
+        <div class="sg-card w-full max-w-sm" style="box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8);">
+            <div class="pb-4" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+                <h3 id="confirm-title" class="text-base font-semibold text-white"></h3>
+            </div>
+            <div class="py-4">
+                <p id="confirm-message" class="text-sm text-gray-300 leading-relaxed"></p>
+            </div>
+            <div class="pt-4 flex justify-end gap-3" style="border-top: 1px solid rgba(255,255,255,0.06);">
+                <button id="confirm-cancel" class="sg-btn sg-btn-ghost">Cancel</button>
+                <button id="confirm-ok" class="sg-btn sg-btn-danger">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile Settings Slide-over -->
+    <div x-show="showProfile" x-cloak class="fixed inset-0 z-[80]"
+         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0" x-transition:leave="transition duration-150" x-transition:leave-end="opacity-0">
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="showProfile = false"></div>
+        <div class="fixed right-0 top-0 h-full w-full max-w-md overflow-y-auto"
+             style="background: linear-gradient(180deg, #0f172a, #030712); border-left: 1px solid rgba(255,255,255,0.06); box-shadow: -10px 0 40px rgba(0,0,0,0.5);"
+             x-transition:enter="transition transform duration-200" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+             x-transition:leave="transition transform duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full">
+            <!-- Header -->
+            <div class="flex items-center justify-between p-5" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+                <h2 class="text-base font-semibold text-white">Profile Settings</h2>
+                <button @click="showProfile = false" class="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <!-- Avatar + username -->
+            <div class="p-5 flex items-center gap-4" style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                <div class="w-14 h-14 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(6,182,212,0.2), rgba(6,182,212,0.05)); box-shadow: inset 0 0 0 1px rgba(6,182,212,0.3);">
+                    <span class="text-xl font-bold text-cyan-300" x-text="(profile.first_name || profile.username || 'U')[0].toUpperCase()"></span>
+                </div>
+                <div>
+                    <p class="text-sm font-medium text-white" x-text="profile.username"></p>
+                    <p class="text-xs text-gray-500 capitalize" x-text="profile.role"></p>
+                </div>
+            </div>
+            <!-- Form -->
+            <div class="p-5 space-y-5">
+                <div class="space-y-4">
+                    <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Personal Information</h3>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">First Name</label>
+                            <input type="text" x-model="profile.first_name" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="John">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Last Name</label>
+                            <input type="text" x-model="profile.last_name" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="Doe">
+                        </div>
+                    </div>
+                </div>
+                <div class="space-y-4">
+                    <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Contact</h3>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Email</label>
+                        <input type="email" x-model="profile.email" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="user@company.com">
+                        <p class="text-[10px] text-gray-600 mt-1">Used for password reset notifications</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Phone</label>
+                        <input type="tel" x-model="profile.phone" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="+1 555-123-4567">
+                        <p class="text-[10px] text-gray-600 mt-1">For future SMS-based MFA verification</p>
+                    </div>
+                </div>
+                <div class="space-y-3" style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 1.25rem;">
+                    <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Account</h3>
+                    <div class="flex items-center justify-between py-2">
+                        <div>
+                            <p class="text-sm text-gray-200">Username</p>
+                            <p class="text-xs text-gray-500">Cannot be changed</p>
+                        </div>
+                        <span class="text-sm font-mono text-cyan-400" x-text="profile.username"></span>
+                    </div>
+                    <div class="flex items-center justify-between py-2">
+                        <div>
+                            <p class="text-sm text-gray-200">Role</p>
+                            <p class="text-xs text-gray-500">Assigned by admin</p>
+                        </div>
+                        <span class="sg-badge sg-badge-brand capitalize" x-text="profile.role"></span>
+                    </div>
+                </div>
+                <!-- Success/error message -->
+                <p x-show="profileMsg" class="text-xs text-green-400" x-text="profileMsg"></p>
+                <!-- Save button -->
+                <div class="flex gap-3 pt-2">
+                    <button @click="showProfile = false" class="sg-btn sg-btn-ghost flex-1">Cancel</button>
+                    <button @click="saveProfile()" class="sg-btn sg-btn-primary flex-1" :disabled="profileSaving">
+                        <span x-show="!profileSaving">Save Changes</span>
+                        <span x-show="profileSaving">Saving...</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Component Styles now in compiled tailwind.min.css -->
+
+    <script>
+        // === App Shell ===
+        function appShell() {
+            return {
+                sidebarOpen: window.innerWidth >= 1024,
+                isMobile: window.innerWidth < 1024,
+                showProfile: false,
+                profile: { username: '', role: '', email: '', phone: '', first_name: '', last_name: '' },
+                profileSaving: false,
+                profileMsg: '',
+                init() {
+                    // Handle resize
+                    window.addEventListener('resize', () => {
+                        this.isMobile = window.innerWidth < 1024;
+                        if (!this.isMobile && !this.sidebarOpen) this.sidebarOpen = true;
+                    });
+                    // Set active nav
+                    this.setActiveNav();
+                    // Initialize Lucide icons
+                    if (window.lucide) lucide.createIcons();
+                },
+                setActiveNav() {
+                    const path = window.location.pathname;
+                    document.querySelectorAll('.nav-item').forEach(item => {
+                        const page = item.dataset.page;
+                        const isActive = (path === '/' && page === 'dashboard') ||
+                                        (path === '/' + page) ||
+                                        (path.startsWith('/' + page + '/'));
+                        item.classList.toggle('active', isActive);
+                    });
+                },
+                async loadProfile() {
+                    try {
+                        const resp = await fetch('/admin/profile');
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            this.profile = { username: data.username, role: data.role, email: data.email || '', phone: data.phone || '', first_name: data.first_name || '', last_name: data.last_name || '' };
+                        }
+                    } catch(e) { console.error('Failed to load profile', e); }
+                },
+                async saveProfile() {
+                    this.profileSaving = true;
+                    this.profileMsg = '';
+                    try {
+                        const resp = await fetch('/admin/profile', {
+                            method: 'PUT',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ email: this.profile.email || null, phone: this.profile.phone || null, first_name: this.profile.first_name || null, last_name: this.profile.last_name || null })
+                        });
+                        if (resp.ok) {
+                            this.profileMsg = 'Profile saved successfully';
+                            showToast('Profile updated', 'success');
+                        } else {
+                            const err = await resp.json();
+                            this.profileMsg = err.detail || 'Failed to save';
+                            showToast(err.detail || 'Failed to save profile', 'error');
+                        }
+                    } catch(e) { this.profileMsg = 'Network error'; }
+                    this.profileSaving = false;
+                },
+                logout() {
+                    localStorage.removeItem('sentinel_token');
+                    localStorage.removeItem('sentinel_user');
+                    localStorage.removeItem('sentinel_role');
+                    window.location.href = '/login';
+                }
+            };
+        }
+
+        // === Command Palette ===
+        function commandPalette() {
+            return {
+                open: false,
+                query: '',
+                selected: 0,
+                items: [
+                    { id: 1, label: 'Dashboard', href: '/', icon: 'layout-dashboard', section: 'Navigation' },
+                    { id: 2, label: 'Policies', href: '/policies', icon: 'file-shield', section: 'Navigation' },
+                    { id: 3, label: 'Guardrails', href: '/guardrails', icon: 'shield-alert', section: 'Navigation' },
+                    { id: 4, label: 'SIEM Export', href: '/siem', icon: 'radio-tower', section: 'Navigation' },
+                    { id: 5, label: 'Audit Log', href: '/audit', icon: 'scroll-text', section: 'Navigation' },
+                    { id: 6, label: 'Orchestrator', href: '/orchestrator', icon: 'cpu', section: 'Navigation' },
+                    { id: 7, label: 'Coverage Matrix', href: '/coverage', icon: 'grid-3x3', section: 'Navigation' },
+                    { id: 8, label: 'IOCs', href: '/iocs', icon: 'bug', section: 'Navigation' },
+                    { id: 9, label: 'Tenants', href: '/tenants', icon: 'building-2', section: 'Navigation' },
+                    { id: 10, label: 'Agents', href: '/agents', icon: 'bot', section: 'Navigation' },
+                    { id: 11, label: 'Access Control', href: '/rbac', icon: 'users', section: 'Navigation' },
+                    { id: 12, label: 'Settings', href: '/settings', icon: 'settings', section: 'Navigation' },
+                    { id: 13, label: 'Notifications', href: '/notifications', icon: 'bell-ring', section: 'Navigation' },
+                ],
+                get filtered() {
+                    if (!this.query) return this.items;
+                    const q = this.query.toLowerCase();
+                    return this.items.filter(i => i.label.toLowerCase().includes(q));
+                },
+                openPalette() {
+                    this.open = true;
+                    this.query = '';
+                    this.selected = 0;
+                    this.$nextTick(() => this.$refs.searchInput?.focus());
+                },
+                next() { this.selected = Math.min(this.selected + 1, this.filtered.length - 1); },
+                prev() { this.selected = Math.max(this.selected - 1, 0); },
+                executeFirst() {
+                    const item = this.filtered[this.selected];
+                    if (item) window.location.href = item.href;
+                }
+            };
+        }
+
+        // === Toast System ===
+        function showToast(message, type = 'info', duration = 4000) {
+            const container = document.getElementById('toast-container');
+            const icons = { success: 'check-circle-2', error: 'x-circle', info: 'info', warn: 'alert-triangle' };
+            const styles = {
+                success: 'border-color: rgba(16,185,129,0.2); background: rgba(16,185,129,0.08); box-shadow: 0 0 20px rgba(16,185,129,0.05);',
+                error: 'border-color: rgba(239,68,68,0.2); background: rgba(239,68,68,0.08); box-shadow: 0 0 20px rgba(239,68,68,0.05);',
+                info: 'border-color: rgba(6,182,212,0.2); background: rgba(6,182,212,0.08); box-shadow: 0 0 20px rgba(6,182,212,0.05);',
+                warn: 'border-color: rgba(245,158,11,0.2); background: rgba(245,158,11,0.08); box-shadow: 0 0 20px rgba(245,158,11,0.05);'
+            };
+            const textColors = { success: 'text-emerald-300', error: 'text-red-300', info: 'text-cyan-300', warn: 'text-amber-300' };
+
+            const el = document.createElement('div');
+            el.className = 'pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl border backdrop-blur-xl toast-enter';
+            el.style.cssText = styles[type] || styles.info;
+            el.innerHTML = `
+                <i data-lucide="${icons[type] || icons.info}" class="w-5 h-5 ${textColors[type] || textColors.info} flex-shrink-0"></i>
+                <span class="text-sm text-gray-200 flex-1">${message}</span>
+                <button onclick="this.parentElement.remove()" class="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-gray-200">
+                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                </button>
+            `;
+            container.appendChild(el);
+            if (window.lucide) lucide.createIcons({ nodes: [el] });
+            setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(20px)'; el.style.transition = 'all 0.3s'; setTimeout(() => el.remove(), 300); }, duration);
+        }
+
+        // === Confirm Dialog ===
+        function showConfirm(title, message, btnText = 'Confirm') {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('global-confirm');
+                document.getElementById('confirm-title').textContent = title;
+                document.getElementById('confirm-message').textContent = message;
+                const okBtn = document.getElementById('confirm-ok');
+                okBtn.textContent = btnText;
+                modal.classList.remove('hidden');
+                const cancel = () => { modal.classList.add('hidden'); cleanup(); resolve(false); };
+                const ok = () => { modal.classList.add('hidden'); cleanup(); resolve(true); };
+                const cleanup = () => { okBtn.removeEventListener('click', ok); document.getElementById('confirm-cancel').removeEventListener('click', cancel); };
+                okBtn.addEventListener('click', ok);
+                document.getElementById('confirm-cancel').addEventListener('click', cancel);
+            });
+        }
+
+        // === Auth ===
+        window._rawFetch = window.fetch.bind(window);
+        window._authToken = localStorage.getItem('sentinel_token');
+        window._authReady = Promise.resolve();
+
+        window.fetch = async function(url, opts = {}) {
+            if (typeof url === 'string' && url.startsWith('/admin/') && !url.includes('/auth/login') && window._authToken) {
+                opts.headers = opts.headers || {};
+                if (opts.headers instanceof Headers) {
+                    if (!opts.headers.has('Authorization')) opts.headers.set('Authorization', 'Bearer ' + window._authToken);
+                } else {
+                    if (!opts.headers['Authorization']) opts.headers['Authorization'] = 'Bearer ' + window._authToken;
+                }
+            }
+            // Ensure cookies are always sent (fallback auth)
+            if (typeof url === 'string' && url.startsWith('/admin/')) {
+                opts.credentials = opts.credentials || 'include';
+            }
+            const resp = await window._rawFetch(url, opts);
+            if (resp.status === 401 && typeof url === 'string' && url.startsWith('/admin/') && !url.includes('/auth/login')) {
+                localStorage.removeItem('sentinel_token');
+                window._authToken = null;
+                if (window.location.pathname !== '/login') window.location.href = '/login';
+            }
+            return resp;
+        };
+
+        // Auth fallback: if localStorage is empty but cookie exists, try to refresh token
+        // The server-side middleware protects pages via HttpOnly cookie — no JS redirect needed
+        if (!window._authToken && window.location.pathname !== '/login') {
+            // Attempt silent token refresh from cookie-based session
+            (async () => {
+                try {
+                    const resp = await window._rawFetch('/admin/auth/me');
+                    if (resp.ok) {
+                        // Cookie is valid — page can function without localStorage token
+                        // API calls will use cookie fallback in get_current_user()
+                    } else {
+                        window.location.href = '/login';
+                    }
+                } catch (e) {
+                    window.location.href = '/login';
+                }
+            })();
+        }
+
+        // === SSE with auto-reconnect ===
+        if (window._authToken) {
+            let sseRetryDelay = 1000;
+            function showSseStatus(connected) {
+                const el = document.getElementById('sse-status');
+                const dot = document.getElementById('sse-dot');
+                const text = document.getElementById('sse-text');
+                if (connected) {
+                    el.style.display = 'flex';
+                    el.className = 'flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400';
+                    dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-live';
+                    text.textContent = 'Live';
+                    setTimeout(() => { if (el.style.display !== 'none') el.style.opacity = '0.6'; }, 3000);
+                } else {
+                    el.style.display = 'flex';
+                    el.style.opacity = '1';
+                    el.className = 'flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400';
+                    dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 pulse-live';
+                    text.textContent = 'Reconnecting...';
+                }
+            }
+            function connectSSE() {
+                const evtSource = new EventSource('/admin/health/stream?token=' + window._authToken);
+                evtSource.onopen = function() { sseRetryDelay = 1000; showSseStatus(true); };
+                evtSource.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        document.querySelectorAll('[data-metric]').forEach(el => {
+                            const key = el.dataset.metric;
+                            if (data[key] !== undefined) {
+                                el.textContent = typeof data[key] === 'number' ? data[key].toFixed(1) : data[key];
+                            }
+                        });
+                    } catch(e) {}
+                };
+                evtSource.onerror = function() {
+                    evtSource.close();
+                    showSseStatus(false);
+                    setTimeout(connectSSE, Math.min(sseRetryDelay, 30000));
+                    sseRetryDelay *= 2;
+                };
+            }
+            connectSSE();
+        }
+
+        // Re-initialize Lucide after HTMX swaps
+        document.addEventListener('htmx:afterSwap', () => { if (window.lucide) lucide.createIcons(); });
+
+        // Re-initialize Lucide when Alpine renders dynamic content (x-for, x-if)
+        if (window.lucide) {
+            let _lucideTimer = null;
+            let _lucideRunning = false;
+            const observer = new MutationObserver((mutations) => {
+                if (_lucideRunning) return;
+                // Only trigger if new i[data-lucide] elements were added
+                const hasNewIcons = mutations.some(m => 
+                    Array.from(m.addedNodes).some(n => 
+                        n.nodeType === 1 && (n.matches?.('i[data-lucide]') || n.querySelector?.('i[data-lucide]'))
+                    )
+                );
+                if (!hasNewIcons) return;
+                clearTimeout(_lucideTimer);
+                _lucideTimer = setTimeout(() => {
+                    _lucideRunning = true;
+                    lucide.createIcons();
+                    _lucideRunning = false;
+                }, 100);
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+    </script>
+</body>
+</html>

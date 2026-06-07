@@ -1,0 +1,43 @@
+# Microsoft Sentinel — Azure Log Analytics Data Collector API
+# Sentinel Gateway SIEM Integration Template
+---
+transport: http_rest
+platform: microsoft_sentinel
+
+connection:
+  url: "https://${SENTINEL_AZURE_WORKSPACE_ID}.ods.opinsights.azure.com/api/logs?api-version=2016-04-01"
+  auth_method: hmac
+  workspace_id: "${SENTINEL_AZURE_WORKSPACE_ID}"
+  shared_key: "${SENTINEL_AZURE_SHARED_KEY}"
+  log_type: "SentinelGateway"  # Creates SentinelGateway_CL table
+  verify_ssl: true
+  timeout_seconds: 15
+
+batching:
+  batch_size: 100
+  flush_interval_seconds: 2.0
+  compress: false
+
+format: json
+field_mapping:
+  # Azure auto-creates _CL suffix columns
+  # ECS fields map directly:
+  #   event_category_s → event.category
+  #   sentinel_verdict_s → sentinel.verdict
+  #   sentinel_rule_id_s → sentinel.rule_id
+  #   tenant_id_s → tenant.id
+  time_generated_field: "@timestamp"
+
+# KQL query example for Sentinel workbook:
+# SentinelGateway_CL
+# | where sentinel_verdict_s == "block"
+# | summarize count() by sentinel_threat_category_s, bin(TimeGenerated, 1h)
+
+retry:
+  max_retries: 3
+  backoff_base_seconds: 2.0
+  backoff_max_seconds: 60.0
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_seconds: 60

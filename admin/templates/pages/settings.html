@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Settings — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Settings{% endblock %}
+{% block content %}
+<div x-data="settingsManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Settings</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Configure proxy, security, logging, and rate limiting parameters</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="validateAll()" class="sg-btn sg-btn-warning sg-btn-sm">
+                <i data-lucide="check-circle" class="w-4 h-4"></i> Validate Config
+            </button>
+        </div>
+    </div>
+
+    <!-- Validation result -->
+    <div x-show="validationResult !== null" x-cloak class="sg-card !py-3"
+        :class="validationResult?.valid ? '!border-green-700 bg-green-900/10' : '!border-red-700 bg-red-900/10'">
+        <div class="flex items-center gap-2">
+            <i :data-lucide="validationResult?.valid ? 'check-circle' : 'x-circle'" class="w-4 h-4" :class="validationResult?.valid ? 'text-green-400' : 'text-red-400'"></i>
+            <span class="text-sm" :class="validationResult?.valid ? 'text-green-300' : 'text-red-300'" x-text="validationResult?.valid ? 'Configuration valid' : (validationResult?.errors || []).join(', ')"></span>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="border-b border-gray-700">
+        <nav class="flex gap-1">
+            <template x-for="tab in tabs" :key="tab">
+                <button @click="activeTab = tab; loadSection(tab)" class="px-4 py-2 text-sm rounded-t-lg border border-b-0 transition-colors"
+                    :class="activeTab === tab ? 'bg-gray-800 border-gray-700 text-cyan-400 font-medium' : 'bg-transparent border-transparent text-gray-400 hover:text-white'"
+                    x-text="tab.charAt(0).toUpperCase() + tab.slice(1).replace('_', ' ')"></button>
+            </template>
+        </nav>
+    </div>
+
+    <!-- Settings Form -->
+    <div class="sg-card">
+        <!-- Loading -->
+        <div x-show="loading" class="space-y-4 py-4">
+            <div class="sg-skeleton h-4 w-full"></div>
+            <div class="sg-skeleton h-4 w-3/4"></div>
+            <div class="sg-skeleton h-4 w-full"></div>
+            <div class="sg-skeleton h-4 w-5/6"></div>
+        </div>
+
+        <div x-show="!loading" class="space-y-4">
+            <template x-for="(value, key) in sectionData" :key="key">
+                <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                    <label class="sm:w-48 text-sm text-gray-400 flex items-center gap-1 shrink-0">
+                        <span x-text="key"></span>
+                        <span x-show="requiresRestart.includes(key)" class="sg-badge sg-badge-warning text-[10px]">restart</span>
+                    </label>
+                    <div class="flex-1 relative">
+                        <!-- Boolean -->
+                        <template x-if="typeof value === 'boolean'">
+                            <label class="sg-toggle">
+                                <input type="checkbox" :checked="sectionData[key]" @change="sectionData[key] = $event.target.checked">
+                                <span class="sg-toggle-thumb"></span>
+                            </label>
+                        </template>
+                        <!-- Number -->
+                        <template x-if="typeof value === 'number'">
+                            <input type="number" :value="sectionData[key]" @input="sectionData[key] = Number($event.target.value)" class="sg-input w-full">
+                        </template>
+                        <!-- Array (comma-separated) -->
+                        <template x-if="Array.isArray(value)">
+                            <input type="text" :value="(sectionData[key] || []).join(', ')" @input="sectionData[key] = $event.target.value.split(',').map(s=>s.trim()).filter(Boolean)" class="sg-input w-full" placeholder="comma-separated values">
+                        </template>
+                        <!-- Sensitive string -->
+                        <template x-if="typeof value === 'string' && sensitiveFields.includes(key)">
+                            <div class="flex gap-2">
+                                <input :type="revealed.includes(key) ? 'text' : 'password'" :value="sectionData[key]" @input="sectionData[key] = $event.target.value" class="sg-input w-full font-mono">
+                                <button @click="revealed.includes(key) ? revealed = revealed.filter(r=>r!==key) : revealed.push(key)" class="sg-btn sg-btn-ghost sg-btn-sm">
+                                    <i :data-lucide="revealed.includes(key) ? 'eye-off' : 'eye'" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </template>
+                        <!-- Regular string -->
+                        <template x-if="typeof value === 'string' && !sensitiveFields.includes(key)">
+                            <input type="text" :value="sectionData[key]" @input="sectionData[key] = $event.target.value" class="sg-input w-full">
+                        </template>
+                    </div>
+                </div>
+            </template>
+
+            <!-- Empty state -->
+            <div x-show="Object.keys(sectionData).length === 0 && !loading" class="sg-empty">
+                <div class="sg-empty-icon">
+                    <i data-lucide="settings" class="w-8 h-8"></i>
+                </div>
+                <p class="sg-empty-title">No settings available</p>
+                <p class="sg-empty-desc">This section has no configurable parameters</p>
+            </div>
+        </div>
+
+        <!-- Save button -->
+        <div x-show="!loading && Object.keys(sectionData).length > 0" class="mt-6 flex justify-end">
+            <button @click="saveSection()" class="sg-btn sg-btn-success">
+                <i data-lucide="save" class="w-4 h-4"></i>
+                Save <span x-text="activeTab.charAt(0).toUpperCase() + activeTab.slice(1)"></span> Settings
+            </button>
+        </div>
+
+        <!-- Save result -->
+        <div x-show="saveResult" x-cloak class="mt-3 p-3 rounded-lg text-sm" :class="saveResult === 'ok' ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-red-900/30 border border-red-700 text-red-300'" x-text="saveResult === 'ok' ? 'Settings saved successfully' : saveResult"></div>
+    </div>
+</div>
+
+<script>
+function settingsManager() {
+    return {
+        tabs: ['proxy', 'security', 'logging', 'rate_limiting'],
+        activeTab: 'proxy',
+        sectionData: {},
+        loading: false,
+        validationResult: null,
+        saveResult: null,
+        revealed: [],
+        sensitiveFields: ['jwt_secret', 'api_keys', 'redis_url'],
+        requiresRestart: ['jwt_secret', 'host', 'port', 'workers', 'redis_url'],
+        async init() {
+            await this.loadSection('proxy');
+        },
+        async loadSection(section) {
+            this.loading = true;
+            this.saveResult = null;
+            try {
+                const resp = await fetch(`/admin/config/${section}`);
+                if (resp.ok) {
+                    this.sectionData = await resp.json();
+                } else {
+                    const err = await resp.json().catch(() => ({detail: 'Request failed'}));
+                    this.sectionData = {};
+                    this.saveResult = err.detail || `Error ${resp.status}`;
+                }
+            } catch (e) {
+                this.sectionData = {};
+                this.saveResult = 'Network error: ' + e.message;
+            }
+            this.loading = false;
+        },
+        async saveSection() {
+            this.saveResult = null;
+            const resp = await fetch(`/admin/config/${this.activeTab}`, {
+                method: 'PUT',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(this.sectionData)
+            });
+            if (resp.ok) this.saveResult = 'ok';
+            else { const err = await resp.json(); this.saveResult = err.detail || JSON.stringify(err); }
+        },
+        async validateAll() {
+            this.validationResult = null;
+            const resp = await fetch('/admin/config/validate', { method: 'POST' });
+            this.validationResult = resp.ok ? await resp.json() : { valid: false, errors: ['Request failed'] };
+        }
+    };
+}
+</script>
+{% endblock %}

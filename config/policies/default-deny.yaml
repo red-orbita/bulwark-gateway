@@ -1,0 +1,33 @@
+# Default-Deny Policy — Applied to tenants without a specific policy
+# This is the fail-closed baseline: everything is blocked unless explicitly allowed.
+#
+# Tenants must have their own policy YAML to operate. This catch-all ensures
+# that unconfigured tenants cannot execute dangerous operations.
+
+tenant_id: "__default__"
+description: "Default deny-all policy for unconfigured tenants"
+version: "1.0.0"
+
+# Global settings
+settings:
+  default_action: deny
+  max_tool_calls_per_request: 3
+  require_explicit_tool_allowlist: true
+  log_all_requests: true
+
+# No agents are allowed by default
+agents: {}
+
+# Default agent template (applied if an unknown agent_id is used)
+default_agent:
+  sandbox: strict
+  description: "Unconfigured agent — all tool calls blocked"
+  allowed_tools: []
+  allow_execution: false
+  allow_file_write: false
+  allow_file_read: false
+  allow_network_access: false
+  max_tool_calls: 0
+  constraints:
+    - type: deny_all
+      description: "No tools permitted for unconfigured tenants"

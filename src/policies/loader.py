@@ -1,21 +1,28 @@
 """
 Policy Loader — Loads YAML policy files into the tool policy engine.
+Supports hot-reload via polling (no external dependencies).
 """
-import yaml
-import structlog
+
+import asyncio
 from pathlib import Path
+
+import structlog
+import yaml
+
 from src.guardrails.tool_policy import AgentPolicy, ToolPolicy, ToolPolicyEngine
 
 logger = structlog.get_logger()
 
 
 class PolicyLoader:
-    """Loads and manages agent policies from YAML files."""
+    """Loads and manages agent policies from YAML files with hot-reload."""
 
     def __init__(self, policies_dir: Path):
         self.policies_dir = policies_dir
         self.engine = ToolPolicyEngine()
         self._policies: list[AgentPolicy] = []
+        self._file_mtimes: dict[str, float] = {}
+        self._reload_task: asyncio.Task | None = None
 
     @property
     def count(self) -> int:
@@ -30,6 +37,7 @@ class PolicyLoader:
         for policy_file in self.policies_dir.glob("*.yaml"):
             try:
                 await self._load_file(policy_file)
+                self._file_mtimes[str(policy_file)] = policy_file.stat().st_mtime
             except Exception as e:
                 await logger.aerror("policy_load_error", file=str(policy_file), error=str(e))
 
@@ -82,9 +90,74 @@ class PolicyLoader:
             sandbox_level=data.get("sandbox_level", "standard"),
         )
 
-    def reload(self):
+    async def reload(self):
         """Hot-reload policies without restart."""
-        self.engine = ToolPolicyEngine()
-        self._policies = []
-        import asyncio
-        asyncio.create_task(self.load_all())
+        await logger.ainfo("policy_reload_start")
+        new_engine = ToolPolicyEngine()
+        new_policies: list[AgentPolicy] = []
+
+        if not self.policies_dir.exists():
+            return
+
+        for policy_file in self.policies_dir.glob("*.yaml"):
+            try:
+                with open(policy_file) as f:
+                    data = yaml.safe_load(f)
+                if not data or "agents" not in data:
+                    continue
+                tenant_id = data.get("tenant", "default")
+                for agent_data in data["agents"]:
+                    policy = self._parse_agent_policy(tenant_id, agent_data)
+                    new_engine.register_policy(policy)
+                    new_policies.append(policy)
+                self._file_mtimes[str(policy_file)] = policy_file.stat().st_mtime
+            except Exception as e:
+                await logger.aerror("policy_reload_error", file=str(policy_file), error=str(e))
+
+        # Atomic swap
+        self.engine = new_engine
+        self._policies = new_policies
+        await logger.ainfo("policy_reload_complete", count=len(new_policies))
+
+    async def start_hot_reload(self, interval_seconds: int = 5):
+        """Start background polling for policy file changes."""
+        self._reload_task = asyncio.create_task(self._poll_changes(interval_seconds))
+
+    async def stop_hot_reload(self):
+        """Stop the hot-reload polling task."""
+        if self._reload_task:
+            self._reload_task.cancel()
+            try:
+                await self._reload_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _poll_changes(self, interval: int):
+        """Poll for file changes and reload if modified."""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                changed = False
+                if not self.policies_dir.exists():
+                    continue
+
+                current_files = set(str(p) for p in self.policies_dir.glob("*.yaml"))
+                known_files = set(self._file_mtimes.keys())
+
+                # New or removed files
+                if current_files != known_files:
+                    changed = True
+                else:
+                    # Check mtimes
+                    for fpath in current_files:
+                        mtime = Path(fpath).stat().st_mtime
+                        if self._file_mtimes.get(fpath) != mtime:
+                            changed = True
+                            break
+
+                if changed:
+                    await self.reload()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                await logger.aerror("policy_poll_error", error=str(e))

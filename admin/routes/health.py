@@ -55,6 +55,29 @@ async def health_check():
     return {"status": "healthy"}
 
 
+def _check_redis_health() -> dict:
+    """Check Redis connectivity and return status info."""
+    import time as _time
+    try:
+        from ..services.redis_sync import get_redis_client
+        r = get_redis_client(timeout=2.0)
+        if r is None:
+            return {"status": "not_configured"}
+        start = _time.perf_counter()
+        r.ping()
+        latency = round((_time.perf_counter() - start) * 1000, 1)
+        info = r.info(section="server")
+        memory = r.info(section="memory")
+        return {
+            "status": "connected",
+            "latency_ms": latency,
+            "version": info.get("redis_version", "unknown"),
+            "memory": memory.get("used_memory_human", "unknown"),
+        }
+    except Exception as e:
+        return {"status": "disconnected", "error": str(e)}
+
+
 @router.get("/detailed")
 async def health_detailed(_user: TokenPayload = Depends(require_permission("admin:read"))):
     """Detailed health with metrics — requires authentication."""
@@ -62,6 +85,10 @@ async def health_detailed(_user: TokenPayload = Depends(require_permission("admi
     s = metrics.snapshot()
     # Also try to fetch proxy stats
     proxy_stats = await _fetch_proxy_telemetry()
+
+    # Redis health check
+    redis_info = _check_redis_health()
+
     return {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -71,6 +98,10 @@ async def health_detailed(_user: TokenPayload = Depends(require_permission("admi
         "queue_depth": s.queue_depth_memory,
         "circuit_breaker": s.circuit_breaker_state,
         "proxy": proxy_stats,
+        "redis": redis_info.get("status", "disconnected"),
+        "redis_latency_ms": redis_info.get("latency_ms"),
+        "redis_version": redis_info.get("version"),
+        "redis_memory": redis_info.get("memory"),
     }
 
 
@@ -121,30 +152,48 @@ async def metrics_stream(request: Request, token: Optional[str] = Query(None)):
 
             # Merge proxy stats
             proxy_stats = await _fetch_proxy_telemetry()
+            redis_counters = _fetch_redis_global_counters()
             if proxy_stats:
-                data["requests_total"] = proxy_stats.get("requests_total", 0)
+                # Rate/latency metrics from in-memory (current pod)
                 data["requests_per_second"] = proxy_stats.get("requests_per_second", 0)
-                data["queue_depth_memory"] = proxy_stats.get("requests_total", 0)  # reuse for display
-                data["events_blocked"] = proxy_stats.get("blocked", 0)
-                data["events_warned"] = proxy_stats.get("warned", 0)
-                data["events_allowed"] = proxy_stats.get("allowed", 0)
                 data["latency_p50_ms"] = proxy_stats.get("latency_p50_ms", 0)
                 data["latency_p95_ms"] = proxy_stats.get("latency_p95_ms", 0)
                 data["latency_p99_ms"] = proxy_stats.get("latency_p99_ms", 0)
-                # Bypass rate: allowed / total (only set if there's real traffic)
-                total = proxy_stats.get("requests_total", 0)
-                allowed = proxy_stats.get("allowed", 0)
-                if total > 0:
-                    data["bypass_rate"] = round((allowed / total) * 100, 1)
-                else:
-                    # Don't override — let frontend use persisted red team value
-                    data.pop("bypass_rate", None)
+                # Cumulative counters: use Redis (persists across restarts),
+                # fall back to in-memory if Redis unavailable
+                blocked = redis_counters.get("blocked", 0) or proxy_stats.get("blocked", 0)
+                warned = redis_counters.get("warned", 0) or proxy_stats.get("warned", 0)
+                allowed = redis_counters.get("allowed", 0) or proxy_stats.get("allowed", 0)
+                total = redis_counters.get("requests_total", 0) or proxy_stats.get("requests_total", 0)
+                data["requests_total"] = total
+                data["queue_depth_memory"] = total  # reuse for display
+                data["events_blocked"] = blocked
+                data["events_warned"] = warned
+                data["events_allowed"] = allowed
+                # Bypass rate: ONLY from red-team testing (persisted).
+                # Live allowed/total is NOT a bypass rate — legit requests are
+                # correctly allowed, not "bypasses".  Remove field so frontend
+                # keeps the persisted red-team value loaded at init.
+                data.pop("bypass_rate", None)
+                # Detection rate: (blocked + warned) / total — shows guardrail trigger %
+                data["detection_rate"] = round(((blocked + warned) / total) * 100, 1) if total > 0 else 0.0
                 # False positive rate: approximated as warned / (blocked + warned)
-                blocked = proxy_stats.get("blocked", 0)
-                warned = proxy_stats.get("warned", 0)
                 data["false_positive_rate"] = round((warned / (blocked + warned)) * 100, 1) if (blocked + warned) > 0 else 0.0
+            elif redis_counters:
+                # Proxy unreachable but Redis has persistent counters
+                blocked = redis_counters.get("blocked", 0)
+                warned = redis_counters.get("warned", 0)
+                allowed = redis_counters.get("allowed", 0)
+                total = redis_counters.get("requests_total", 0)
+                data["requests_total"] = total
+                data["events_blocked"] = blocked
+                data["events_warned"] = warned
+                data["events_allowed"] = allowed
+                data["detection_rate"] = round(((blocked + warned) / total) * 100, 1) if total > 0 else 0.0
+                data["false_positive_rate"] = round((warned / (blocked + warned)) * 100, 1) if (blocked + warned) > 0 else 0.0
+                data.pop("bypass_rate", None)
             else:
-                # No proxy stats — remove bypass_rate so frontend keeps persisted value
+                # No proxy stats, no Redis — remove bypass_rate so frontend keeps persisted value
                 data.pop("bypass_rate", None)
 
             yield f"data: {json.dumps(data, default=str)}\n\n"
@@ -173,6 +222,23 @@ async def _fetch_proxy_telemetry() -> dict:
     return {}
 
 
+def _fetch_redis_global_counters() -> dict:
+    """Fetch persistent global counters from Redis (survive pod restarts)."""
+    try:
+        from ..services.redis_sync import get_redis_client
+        r = get_redis_client(timeout=1.0)
+        if r is None:
+            return {}
+        return {
+            "requests_total": int(r.get("sentinel:global:requests_total") or 0),
+            "blocked": int(r.get("sentinel:global:block") or 0),
+            "warned": int(r.get("sentinel:global:warn") or 0),
+            "allowed": int(r.get("sentinel:global:allow") or 0),
+        }
+    except Exception:
+        return {}
+
+
 @router.get("/recent-blocks")
 async def recent_blocks(
     limit: int = Query(10, ge=1, le=50),
@@ -180,18 +246,10 @@ async def recent_blocks(
 ):
     """Get recent blocked attacks from Redis."""
     try:
-        import redis as _redis
-        redis_url = os.getenv("SENTINEL_REDIS_URL", "")
-        if not redis_url:
+        from ..services.redis_sync import get_redis_client
+        r = get_redis_client(timeout=1.0)
+        if r is None:
             return []
-        pw_file = os.getenv("SENTINEL_REDIS_PASSWORD_FILE", "")
-        password = None
-        if pw_file:
-            try:
-                password = open(pw_file).read().strip()
-            except Exception:
-                pass
-        r = _redis.from_url(redis_url, password=password, decode_responses=True, socket_timeout=1.0)
         raw = r.lrange("sentinel:recent_blocks", 0, limit - 1)
         return [json.loads(item) for item in raw]
     except Exception:
@@ -240,18 +298,10 @@ async def tenant_usage(
 ):
     """Get per-tenant usage stats from Redis."""
     try:
-        import redis as _redis
-        redis_url = os.getenv("SENTINEL_REDIS_URL", "")
-        if not redis_url:
+        from ..services.redis_sync import get_redis_client
+        r = get_redis_client(timeout=1.0)
+        if r is None:
             return {}
-        pw_file = os.getenv("SENTINEL_REDIS_PASSWORD_FILE", "")
-        password = None
-        if pw_file:
-            try:
-                password = open(pw_file).read().strip()
-            except Exception:
-                pass
-        r = _redis.from_url(redis_url, password=password, decode_responses=True, socket_timeout=1.0)
         total = r.hgetall("sentinel:usage:total") or {}
         blocked = r.hgetall("sentinel:usage:block") or {}
         allowed = r.hgetall("sentinel:usage:allow") or {}

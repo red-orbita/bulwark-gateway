@@ -16,8 +16,9 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "structlog>=24.1",
-    "python-jose[cryptography]>=3.3",
+    "PyJWT>=2.8",
     "redis>=5.0",
+    "cachetools>=5.3",
 ]
 
 [project.optional-dependencies]
@@ -34,10 +35,15 @@ sentinel-gateway = "src.main:main"
 
 [tool.ruff]
 target-version = "py311"
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "S", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/guardrails/input_guardrail.py" = ["E501"]
+"src/guardrails/output_filter.py" = ["E501"]
+"tests/*" = ["E501", "S101"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

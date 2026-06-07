@@ -1,0 +1,61 @@
+# Wazuh / Graylog / Security Onion — Syslog + Filebeat forwarding
+# Sentinel Gateway SIEM Integration Template
+---
+transport: file_shipper  # Primary: write to file, Filebeat/Fluentd picks up
+platform: wazuh_graylog_security_onion
+
+# Option A: File shipper (recommended — decoupled, resilient)
+file_shipper:
+  path: "/var/log/sentinel-gateway/events.ndjson"
+  max_size_bytes: 104857600  # 100MB
+  rotate_count: 5
+  format: ndjson
+
+# Option B: Direct syslog (alternative)
+# transport: syslog
+# connection:
+#   host: "${SENTINEL_SYSLOG_HOST}"
+#   port: 514
+#   protocol: udp  # Wazuh/Graylog accept UDP syslog
+#   format: json   # Graylog GELF-compatible JSON
+
+# Filebeat configuration (filebeat.yml):
+# filebeat.inputs:
+# - type: log
+#   paths: ["/var/log/sentinel-gateway/events.ndjson"]
+#   json.keys_under_root: true
+#   json.add_error_key: true
+#   fields:
+#     source: sentinel-gateway
+#     type: security
+#
+# output.logstash:  # or output.elasticsearch
+#   hosts: ["logstash:5044"]
+
+# Wazuh integration:
+# Add to /var/ossec/etc/ossec.conf:
+# <localfile>
+#   <log_format>json</log_format>
+#   <location>/var/log/sentinel-gateway/events.ndjson</location>
+# </localfile>
+
+# Graylog:
+# Create Beats input on port 5044, or Syslog UDP input on 1514
+# Content pack: import sentinel-gateway field extractors
+
+# Security Onion:
+# Forward via Filebeat to Logstash on SO manager node
+# Events appear in Kibana under sentinel-gateway-* index
+
+batching:
+  batch_size: 100
+  flush_interval_seconds: 1.0
+
+retry:
+  max_retries: 3
+  backoff_base_seconds: 1.0
+  backoff_max_seconds: 30.0
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_seconds: 30

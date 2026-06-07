@@ -1,0 +1,111 @@
+# Sentinel Gateway — Notification Channels Configuration
+# 
+# This file defines alert notification channels managed via GitOps.
+# Channels defined here are merged with those managed via the Admin UI.
+# Admin UI channels are stored in shared/notifications/channels.json
+#
+# Supported types: slack, teams, discord, pagerduty, opsgenie, telegram, google_chat, email, generic
+#
+# Routing options:
+#   min_severity: low | medium | high | critical (only alert at this level or above)
+#   verdicts: [block, warn, redact] (which verdicts trigger notification)
+#   tenants: [] (empty = all tenants, or list specific tenant IDs)
+#   dedup_window_seconds: 300 (suppress duplicate alerts within this window)
+
+channels: []
+  # --- Example: Slack ---
+  # - id: slack-security
+  #   name: "#security-alerts"
+  #   type: slack
+  #   enabled: true
+  #   url: "https://hooks.slack.example.com/services/TXXXXXXXX/BXXXXXXXX/placeholder-not-real"
+  #   min_severity: high
+  #   verdicts: [block, warn]
+  #   tenants: []  # all tenants
+  #   dedup_window_seconds: 300
+
+  # --- Example: Microsoft Teams ---
+  # - id: teams-soc
+  #   name: "SOC Channel"
+  #   type: teams
+  #   enabled: true
+  #   url: "https://outlook.office.com/webhook/xxx/IncomingWebhook/yyy/zzz"
+  #   min_severity: high
+  #   verdicts: [block]
+
+  # --- Example: Discord ---
+  # - id: discord-alerts
+  #   name: "Discord Alerts"
+  #   type: discord
+  #   enabled: true
+  #   url: "https://discord.com/api/webhooks/000000000000000000/xxxxxxxxxxxx"
+  #   min_severity: critical
+  #   verdicts: [block]
+
+  # --- Example: PagerDuty ---
+  # - id: pagerduty-oncall
+  #   name: "On-Call Escalation"
+  #   type: pagerduty
+  #   enabled: true
+  #   routing_key: "your-pagerduty-integration-key"
+  #   min_severity: critical
+  #   verdicts: [block]
+
+  # --- Example: Opsgenie ---
+  # - id: opsgenie-team
+  #   name: "Security Team"
+  #   type: opsgenie
+  #   enabled: true
+  #   api_key: "your-opsgenie-api-key"
+  #   min_severity: high
+  #   verdicts: [block, warn]
+
+  # --- Example: Telegram ---
+  # - id: telegram-admin
+  #   name: "Admin Bot"
+  #   type: telegram
+  #   enabled: true
+  #   bot_token: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
+  #   chat_id: "-1001234567890"
+  #   min_severity: high
+  #   verdicts: [block]
+
+  # --- Example: Google Chat ---
+  # - id: gchat-security
+  #   name: "Security Space"
+  #   type: google_chat
+  #   enabled: true
+  #   url: "https://chat.googleapis.com/v1/spaces/SPACE_ID/messages?key=KEY&token=TOKEN"
+  #   min_severity: high
+  #   verdicts: [block, warn]
+
+  # --- Example: Email (SMTP) ---
+  # - id: email-soc
+  #   name: "SOC Team Email"
+  #   type: email
+  #   enabled: true
+  #   smtp_host: "smtp.gmail.com"          # or smtp.office365.com, smtp.sendgrid.net
+  #   smtp_port: 587
+  #   smtp_user: "sentinel-alerts@company.com"
+  #   smtp_password: "app-password-here"    # Use app password, not account password
+  #   smtp_from: "sentinel-alerts@company.com"
+  #   smtp_to:
+  #     - "soc-team@company.com"
+  #     - "security-lead@company.com"
+  #   smtp_tls: starttls                    # starttls (587), ssl (465), none (25)
+  #   min_severity: critical
+  #   verdicts: [block]
+  #   dedup_window_seconds: 600             # Don't spam email - 10min window
+
+  # --- Example: Generic Webhook (custom SIEM/SOAR) ---
+  # - id: webhook-soar
+  #   name: "SOAR Platform"
+  #   type: generic
+  #   enabled: true
+  #   url: "https://soar.company.com/api/v1/incidents"
+  #   headers:
+  #     X-Custom-Header: "sentinel-gateway"
+  #   auth_type: bearer                     # none, bearer, basic, api_key
+  #   auth_value: "your-bearer-token"
+  #   min_severity: medium
+  #   verdicts: [block, warn, redact]

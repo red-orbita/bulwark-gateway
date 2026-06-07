@@ -1,0 +1,18 @@
+apiVersion: v2
+name: sentinel-gateway
+description: Security guardrail proxy for AI agents in cloud environments
+type: application
+version: 0.5.0
+appVersion: "0.4.3"
+home: https://github.com/anomalyco/sentinel-gateway
+keywords:
+  - security
+  - ai
+  - llm
+  - guardrail
+  - proxy
+  - siem
+maintainers:
+  - name: sentinel-gateway
+sources:
+  - https://github.com/anomalyco/sentinel-gateway

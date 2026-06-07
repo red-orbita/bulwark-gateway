@@ -1,0 +1,54 @@
+<!-- Sentinel Gateway custom rules for Wazuh
+     Chain from Suricata rule 86600 (JSON decoder with event_type+timestamp)
+     to avoid being silenced by level 0 catch-all.
+-->
+<group name="sentinel-gateway,">
+
+  <!-- Base: any JSON event with a verdict field (Sentinel signature) -->
+  <rule id="100100" level="3">
+    <if_sid>86600</if_sid>
+    <field name="verdict">block|warn|redact|allow</field>
+    <description>Sentinel Gateway security event: $(event_type)</description>
+  </rule>
+
+  <!-- Blocked threat -->
+  <rule id="100101" level="10">
+    <if_sid>100100</if_sid>
+    <field name="verdict">block</field>
+    <description>Sentinel Gateway: Threat BLOCKED — $(event_type)</description>
+    <group>attack,</group>
+  </rule>
+
+  <!-- Warning (suspicious but allowed) -->
+  <rule id="100102" level="7">
+    <if_sid>100100</if_sid>
+    <field name="verdict">warn</field>
+    <description>Sentinel Gateway: Suspicious activity WARNING — $(event_type)</description>
+    <group>suspicious,</group>
+  </rule>
+
+  <!-- Redacted output -->
+  <rule id="100103" level="5">
+    <if_sid>100100</if_sid>
+    <field name="verdict">redact</field>
+    <description>Sentinel Gateway: Output REDACTED — $(event_type)</description>
+    <group>data_protection,</group>
+  </rule>
+
+  <!-- Prompt injection attempt -->
+  <rule id="100110" level="12">
+    <if_sid>100101</if_sid>
+    <field name="event_type">prompt_injection</field>
+    <description>Sentinel Gateway: Prompt injection BLOCKED</description>
+    <group>injection,</group>
+  </rule>
+
+  <!-- Tool policy violation -->
+  <rule id="100111" level="11">
+    <if_sid>100101</if_sid>
+    <field name="event_type">tool_policy_violation</field>
+    <description>Sentinel Gateway: Unauthorized tool call BLOCKED</description>
+    <group>policy_violation,</group>
+  </rule>
+
+</group>

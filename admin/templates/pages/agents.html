@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% block title %}Agents — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Agents{% endblock %}
+{% block content %}
+<div x-data="agentsManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Agent Management</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Configure and monitor AI agent backends and health status</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="openCreate()" class="sg-btn sg-btn-primary sg-btn-sm">
+                <i data-lucide="plus" class="w-4 h-4"></i> New Agent
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="flex flex-col sm:flex-row gap-3">
+        <select x-model="filterTenant" @change="loadAgents()" class="sg-select">
+            <option value="">All Tenants</option>
+            <template x-for="t in tenantList" :key="t"><option :value="t" x-text="t"></option></template>
+        </select>
+        <select x-model="filterStatus" @change="loadAgents()" class="sg-select">
+            <option value="">All Statuses</option>
+            <option value="active">Active</option>
+            <option value="paused">Paused</option>
+        </select>
+    </div>
+
+    <!-- Agent Table -->
+    <div class="sg-card !p-0">
+        <div class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr>
+                        <th>Agent ID</th>
+                        <th>Tenant</th>
+                        <th>Backend URL</th>
+                        <th>Model</th>
+                        <th>Description</th>
+                        <th>Status</th>
+                        <th>Health</th>
+                        <th class="text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="agent in agents" :key="agent.tenant_id + '/' + agent.agent_id">
+                        <tr>
+                            <td class="font-mono text-cyan-400 text-xs" x-text="agent.agent_id"></td>
+                            <td x-text="agent.tenant_id"></td>
+                            <td class="text-gray-300 text-xs font-mono max-w-[200px] truncate" x-text="agent.backend_url"></td>
+                            <td x-text="agent.model || '—'"></td>
+                            <td class="text-gray-400 text-xs max-w-[150px] truncate" x-text="agent.description || '—'"></td>
+                            <td>
+                                <span class="sg-badge"
+                                    :class="agent.status === 'active' ? 'sg-badge-success' : 'sg-badge-warning'"
+                                    x-text="agent.status"></span>
+                            </td>
+                            <td>
+                                <div class="flex items-center gap-1">
+                                    <span class="sg-dot" :class="agent.health_status === 'healthy' ? 'sg-dot-success' : agent.health_status === 'unhealthy' ? 'sg-dot-danger' : 'sg-dot-neutral'"></span>
+                                    <span class="text-xs" :class="agent.health_status === 'healthy' ? 'text-green-400' : agent.health_status === 'unhealthy' ? 'text-red-400' : 'text-gray-500'" x-text="agent.health_status || 'unknown'"></span>
+                                    <span x-show="agent.latency_ms" class="text-xs text-gray-500 ml-1" x-text="agent.latency_ms ? agent.latency_ms + 'ms' : ''"></span>
+                                </div>
+                            </td>
+                            <td class="text-right">
+                                <div class="flex items-center justify-end gap-1">
+                                    <button @click="healthCheck(agent)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Health check">
+                                        <i data-lucide="heart-pulse" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                     <button @click="editAgent(agent)" class="sg-btn sg-btn-secondary sg-btn-sm">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                                        <span>Edit</span>
+                                    </button>
+                                    <button @click="togglePause(agent)" class="sg-btn sg-btn-sm"
+                                        :class="agent.status === 'paused' ? 'sg-btn-success' : 'sg-btn-warning'">
+                                        <svg x-show="agent.status !== 'paused'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                        <svg x-show="agent.status === 'paused'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                        <span x-text="agent.status === 'paused' ? 'Unpause' : 'Pause'"></span>
+                                    </button>
+                                    <button @click="deleteAgent(agent)" class="sg-btn sg-btn-danger sg-btn-sm">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                                        <span>Delete</span>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <!-- Empty state -->
+        <div x-show="agents.length === 0" class="sg-empty">
+            <div class="sg-empty-icon">
+                <i data-lucide="bot" class="w-8 h-8"></i>
+            </div>
+            <p class="sg-empty-title">No agents found</p>
+            <p class="sg-empty-desc">Create an agent or adjust your filters</p>
+        </div>
+    </div>
+
+    <!-- Create/Edit Modal -->
+    <div x-show="showModal" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg"
+             x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white" x-text="editing ? 'Edit Agent' : 'Create Agent'"></h3>
+                <button @click="showModal = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Agent ID</label>
+                        <input type="text" x-model="form.agent_id" class="sg-input w-full" :disabled="editing">
+                    </div>
+                    <div>
+                        <label class="sg-label">Tenant ID</label>
+                        <input type="text" x-model="form.tenant_id" class="sg-input w-full" :disabled="editing">
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Backend URL</label>
+                    <input type="text" x-model="form.backend_url" class="sg-input w-full font-mono" placeholder="https://api.openai.com/v1">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Model</label>
+                        <input type="text" x-model="form.model" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="sg-label">Timeout (s)</label>
+                        <input type="number" x-model="form.timeout" class="sg-input w-full">
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Health Endpoint</label>
+                        <input type="text" x-model="form.health_endpoint" class="sg-input w-full" placeholder="/health">
+                    </div>
+                    <div>
+                        <label class="sg-label">Path Prefix</label>
+                        <input type="text" x-model="form.path_prefix" class="sg-input w-full" placeholder="/v1">
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showModal = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="saveAgent()" class="sg-btn sg-btn-success sg-btn-sm">
+                    <i data-lucide="check" class="w-4 h-4"></i> Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div x-show="showDeleteConfirm" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="bg-gray-800 rounded-xl border border-red-700 w-full max-w-md"
+             x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
+            <div class="px-6 py-4 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-red-400 flex items-center gap-2">
+                    <i data-lucide="alert-triangle" class="w-5 h-5"></i> Delete Agent
+                </h3>
+            </div>
+            <div class="p-6">
+                <p class="text-gray-300">Are you sure you want to delete agent
+                    <span class="font-mono text-cyan-400" x-text="pendingDelete?.agent_id"></span>
+                    from tenant
+                    <span class="font-mono text-yellow-400" x-text="pendingDelete?.tenant_id"></span>?
+                </p>
+                <p class="text-sm text-red-400 mt-2">This action cannot be undone.</p>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showDeleteConfirm = false; pendingDelete = null" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="confirmDelete()" class="sg-btn sg-btn-danger sg-btn-sm">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i> Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function agentsManager() {
+    return {
+        agents: [],
+        tenantList: [],
+        filterTenant: '',
+        filterStatus: '',
+        showModal: false,
+        showDeleteConfirm: false,
+        pendingDelete: null,
+        editing: false,
+        form: { agent_id: '', tenant_id: '', backend_url: '', model: '', timeout: 30, health_endpoint: '/health', path_prefix: '/v1' },
+        async init() {
+            await this.loadAgents();
+            const tr = await fetch('/admin/tenants');
+            if (tr.ok) this.tenantList = (await tr.json()).map(t => t.id);
+        },
+        async loadAgents() {
+            let url = '/admin/agents?';
+            if (this.filterTenant) url += `tenant_id=${this.filterTenant}&`;
+            if (this.filterStatus) url += `status=${this.filterStatus}&`;
+            const resp = await fetch(url);
+            if (resp.ok) this.agents = await resp.json();
+        },
+        openCreate() {
+            this.editing = false;
+            this.form = { agent_id: '', tenant_id: '', backend_url: '', model: '', timeout: 30, health_endpoint: '/health', path_prefix: '/v1' };
+            this.showModal = true;
+        },
+        editAgent(a) {
+            this.editing = true;
+            this.form = { ...a };
+            this.showModal = true;
+        },
+        async saveAgent() {
+            const method = this.editing ? 'PUT' : 'POST';
+            const url = this.editing ? `/admin/agents/${this.form.tenant_id}/${this.form.agent_id}` : '/admin/agents';
+            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.form) });
+            if (resp.ok) { this.showModal = false; await this.loadAgents(); }
+            else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
+        },
+        async togglePause(a) {
+            await fetch(`/admin/agents/${a.tenant_id}/${a.agent_id}/pause`, { method: 'PATCH' });
+            await this.loadAgents();
+        },
+        async healthCheck(a) {
+            a.health_status = 'checking';
+            const resp = await fetch(`/admin/agents/${a.tenant_id}/${a.agent_id}/health-check`, { method: 'POST' });
+            if (resp.ok) {
+                const data = await resp.json();
+                a.health_status = data.status === 'healthy' ? 'healthy' : 'unhealthy';
+                a.latency_ms = data.latency_ms ? Math.round(data.latency_ms) : null;
+            } else {
+                a.health_status = 'unhealthy';
+            }
+        },
+        async deleteAgent(a) {
+            this.pendingDelete = a;
+            this.showDeleteConfirm = true;
+        },
+        async confirmDelete() {
+            const a = this.pendingDelete;
+            this.showDeleteConfirm = false;
+            this.pendingDelete = null;
+            const resp = await fetch(`/admin/agents/${a.tenant_id}/${a.agent_id}`, { method: 'DELETE' });
+            if (resp.ok || resp.status === 204) {
+                showToast(`Agent "${a.agent_id}" deleted`, 'success');
+                await this.loadAgents();
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to delete agent', 'error');
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+{% block title %}Setup Wizard — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Setup{% endblock %}
+{% block content %}
+<div x-data="onboardingWizard()" x-init="init()" class="min-h-[80vh] flex items-center justify-center">
+    <div class="w-full max-w-2xl">
+        <!-- Progress bar -->
+        <div class="mb-8">
+            <div class="flex items-center justify-between mb-2">
+                <template x-for="(step, idx) in steps" :key="idx">
+                    <div class="flex items-center" :class="idx < steps.length - 1 ? 'flex-1' : ''">
+                        <div class="flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold transition-all duration-300"
+                             :class="idx < currentStep ? 'bg-brand-500 text-white' : idx === currentStep ? 'bg-brand-500/20 text-brand-400 ring-2 ring-brand-500' : 'bg-gray-700 text-gray-400'">
+                            <template x-if="idx < currentStep">
+                                <i data-lucide="check" class="w-4 h-4"></i>
+                            </template>
+                            <template x-if="idx >= currentStep">
+                                <span x-text="idx + 1"></span>
+                            </template>
+                        </div>
+                        <div x-show="idx < steps.length - 1" class="flex-1 h-0.5 mx-2 transition-all duration-300"
+                             :class="idx < currentStep ? 'bg-brand-500' : 'bg-gray-700'"></div>
+                    </div>
+                </template>
+            </div>
+            <p class="text-xs text-gray-400 text-center" x-text="steps[currentStep]?.label"></p>
+        </div>
+
+        <!-- Wizard card -->
+        <div class="sg-card">
+            <!-- Step 1: Welcome & Password -->
+            <div x-show="currentStep === 0" x-transition>
+                <div class="text-center mb-6">
+                    <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-brand-500/10 mb-4">
+                        <i data-lucide="shield-check" class="w-8 h-8 text-brand-400"></i>
+                    </div>
+                    <h2 class="text-xl font-semibold text-white">Welcome to Sentinel Gateway</h2>
+                    <p class="text-sm text-gray-400 mt-1">Let's configure your security proxy in a few steps.</p>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="sg-label">Admin Password</label>
+                        <p class="text-xs text-gray-500 mb-1">Change the default admin password to something strong.</p>
+                        <div class="relative">
+                            <input :type="showPassword ? 'text' : 'password'" x-model="config.admin_password" class="sg-input pr-10" placeholder="New admin password">
+                            <button @click="showPassword = !showPassword" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">
+                                <i :data-lucide="showPassword ? 'eye-off' : 'eye'" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        <!-- Strength indicator -->
+                        <div class="mt-2 flex gap-1">
+                            <template x-for="i in 4" :key="i">
+                                <div class="h-1 flex-1 rounded-full transition-colors" :class="passwordStrength >= i ? (passwordStrength >= 3 ? 'bg-green-500' : 'bg-yellow-500') : 'bg-gray-700'"></div>
+                            </template>
+                        </div>
+                        <p class="text-xs mt-1" :class="passwordStrength >= 3 ? 'text-green-400' : 'text-yellow-400'" x-show="config.admin_password" x-text="passwordStrength >= 3 ? 'Strong password' : 'Use 12+ chars with mixed case, numbers, symbols'"></p>
+                    </div>
+
+                    <div>
+                        <label class="sg-label">Confirm Password</label>
+                        <input type="password" x-model="config.admin_password_confirm" class="sg-input" placeholder="Confirm password">
+                        <p class="text-xs text-red-400 mt-1" x-show="config.admin_password_confirm && config.admin_password !== config.admin_password_confirm">Passwords do not match</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2: Backend Configuration -->
+            <div x-show="currentStep === 1" x-transition>
+                <div class="mb-6">
+                    <h2 class="text-lg font-semibold text-white">Backend Configuration</h2>
+                    <p class="text-sm text-gray-400 mt-0.5">Configure the upstream LLM/Agent API that Sentinel will protect.</p>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="sg-label">Backend URL</label>
+                        <input type="url" x-model="config.backend_url" class="sg-input" placeholder="http://localhost:8000">
+                        <p class="text-xs text-gray-500 mt-1">The upstream API endpoint your agents connect to.</p>
+                    </div>
+
+                    <div>
+                        <label class="sg-label">Fail Mode</label>
+                        <select x-model="config.fail_mode" class="sg-select">
+                            <option value="closed">Closed (Block on failure — recommended)</option>
+                            <option value="open">Open (Allow on failure — less secure)</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Determines behavior when the proxy encounters an internal error.</p>
+                    </div>
+
+                    <div>
+                        <label class="sg-label">Rate Limit (requests/min)</label>
+                        <input type="number" x-model.number="config.rate_limit" class="sg-input" min="1" max="10000">
+                    </div>
+
+                    <div class="flex items-center justify-between p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                        <div>
+                            <p class="text-sm text-white">Enable Telemetry</p>
+                            <p class="text-xs text-gray-400">Collect metrics for dashboard and monitoring.</p>
+                        </div>
+                        <button @click="config.telemetry = !config.telemetry" class="sg-toggle" :class="config.telemetry && 'active'">
+                            <span class="sg-toggle-thumb"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Guardrail Modules -->
+            <div x-show="currentStep === 2" x-transition>
+                <div class="mb-6">
+                    <h2 class="text-lg font-semibold text-white">Security Modules</h2>
+                    <p class="text-sm text-gray-400 mt-0.5">Enable the guardrail modules for your deployment.</p>
+                </div>
+
+                <div class="space-y-3">
+                    <template x-for="mod in modules" :key="mod.id">
+                        <div class="flex items-center justify-between p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-lg flex items-center justify-center" :class="mod.color">
+                                    <i :data-lucide="mod.icon" class="w-4 h-4"></i>
+                                </div>
+                                <div>
+                                    <p class="text-sm text-white" x-text="mod.name"></p>
+                                    <p class="text-xs text-gray-400" x-text="mod.desc"></p>
+                                </div>
+                            </div>
+                            <button @click="mod.enabled = !mod.enabled" class="sg-toggle" :class="mod.enabled && 'active'">
+                                <span class="sg-toggle-thumb"></span>
+                            </button>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Step 4: SIEM Integration (optional) -->
+            <div x-show="currentStep === 3" x-transition>
+                <div class="mb-6">
+                    <h2 class="text-lg font-semibold text-white">SIEM Integration</h2>
+                    <p class="text-sm text-gray-400 mt-0.5">Optional — forward security events to your SIEM.</p>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="sg-label">Transport</label>
+                        <select x-model="config.siem_transport" class="sg-select">
+                            <option value="none">None (skip)</option>
+                            <option value="syslog">Syslog (TCP/UDP)</option>
+                            <option value="webhook">Webhook (HTTP POST)</option>
+                            <option value="file">File (JSON lines)</option>
+                        </select>
+                    </div>
+
+                    <div x-show="config.siem_transport === 'syslog'" class="space-y-3">
+                        <div>
+                            <label class="sg-label">Syslog Host</label>
+                            <input type="text" x-model="config.siem_host" class="sg-input" placeholder="siem.company.com">
+                        </div>
+                        <div>
+                            <label class="sg-label">Syslog Port</label>
+                            <input type="number" x-model.number="config.siem_port" class="sg-input" placeholder="514">
+                        </div>
+                    </div>
+
+                    <div x-show="config.siem_transport === 'webhook'" class="space-y-3">
+                        <div>
+                            <label class="sg-label">Webhook URL</label>
+                            <input type="url" x-model="config.siem_webhook_url" class="sg-input" placeholder="https://hooks.slack.com/...">
+                        </div>
+                    </div>
+
+                    <div x-show="config.siem_transport === 'file'">
+                        <label class="sg-label">Output Path</label>
+                        <input type="text" x-model="config.siem_file_path" class="sg-input" placeholder="/var/log/sentinel/events.jsonl">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 5: Review & Apply -->
+            <div x-show="currentStep === 4" x-transition>
+                <div class="mb-6">
+                    <h2 class="text-lg font-semibold text-white">Review Configuration</h2>
+                    <p class="text-sm text-gray-400 mt-0.5">Confirm your settings before applying.</p>
+                </div>
+
+                <div class="space-y-3 text-sm">
+                    <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                        <p class="text-xs text-gray-400 uppercase mb-1">Backend</p>
+                        <p class="text-white font-mono text-xs" x-text="config.backend_url"></p>
+                        <div class="flex gap-3 mt-1">
+                            <span class="text-xs text-gray-400">Fail mode: <span class="text-white" x-text="config.fail_mode"></span></span>
+                            <span class="text-xs text-gray-400">Rate limit: <span class="text-white" x-text="config.rate_limit + '/min'"></span></span>
+                        </div>
+                    </div>
+
+                    <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                        <p class="text-xs text-gray-400 uppercase mb-1">Guardrail Modules</p>
+                        <div class="flex flex-wrap gap-1.5 mt-1">
+                            <template x-for="mod in modules.filter(m => m.enabled)" :key="mod.id">
+                                <span class="sg-badge sg-badge-success" x-text="mod.name"></span>
+                            </template>
+                            <template x-for="mod in modules.filter(m => !m.enabled)" :key="mod.id">
+                                <span class="sg-badge sg-badge-neutral" x-text="mod.name"></span>
+                            </template>
+                        </div>
+                    </div>
+
+                    <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                        <p class="text-xs text-gray-400 uppercase mb-1">SIEM</p>
+                        <p class="text-white text-xs" x-text="config.siem_transport === 'none' ? 'Not configured' : config.siem_transport + ' → ' + (config.siem_host || config.siem_webhook_url || config.siem_file_path)"></p>
+                    </div>
+
+                    <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                        <p class="text-xs text-gray-400 uppercase mb-1">Security</p>
+                        <div class="flex gap-2">
+                            <span class="sg-badge sg-badge-success">Password changed</span>
+                            <span class="sg-badge" :class="config.telemetry ? 'sg-badge-brand' : 'sg-badge-neutral'" x-text="config.telemetry ? 'Telemetry ON' : 'Telemetry OFF'"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Navigation buttons -->
+            <div class="flex items-center justify-between mt-8 pt-6 border-t border-gray-700">
+                <button @click="prev()" x-show="currentStep > 0" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="arrow-left" class="w-4 h-4 mr-1"></i> Back
+                </button>
+                <div x-show="currentStep === 0"></div>
+
+                <div class="flex items-center gap-2">
+                    <button x-show="currentStep === 3" @click="next()" class="sg-btn sg-btn-ghost sg-btn-sm">Skip</button>
+                    <button x-show="currentStep < steps.length - 1" @click="next()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!canProceed()">
+                        Next <i data-lucide="arrow-right" class="w-4 h-4 ml-1"></i>
+                    </button>
+                    <button x-show="currentStep === steps.length - 1" @click="apply()" class="sg-btn sg-btn-success sg-btn-sm" :disabled="applying">
+                        <i data-lucide="rocket" class="w-4 h-4 mr-1"></i>
+                        <span x-text="applying ? 'Applying...' : 'Apply & Launch'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function onboardingWizard() {
+    return {
+        currentStep: 0,
+        showPassword: false,
+        applying: false,
+        steps: [
+            { label: 'Security' },
+            { label: 'Backend' },
+            { label: 'Guardrails' },
+            { label: 'SIEM' },
+            { label: 'Review' }
+        ],
+        config: {
+            admin_password: '',
+            admin_password_confirm: '',
+            backend_url: 'http://host.docker.internal:8000',
+            fail_mode: 'closed',
+            rate_limit: 60,
+            telemetry: true,
+            siem_transport: 'none',
+            siem_host: '',
+            siem_port: 514,
+            siem_webhook_url: '',
+            siem_file_path: '/var/log/sentinel/events.jsonl'
+        },
+        modules: [
+            { id: 'prompt_injection', name: 'Prompt Injection', desc: 'Detect injection attacks in prompts', icon: 'syringe', color: 'bg-red-500/10 text-red-400', enabled: true },
+            { id: 'data_exfiltration', name: 'Data Exfiltration', desc: 'Block sensitive data leakage', icon: 'database', color: 'bg-orange-500/10 text-orange-400', enabled: true },
+            { id: 'encoding_evasion', name: 'Encoding Evasion', desc: 'Detect base64/hex/unicode obfuscation', icon: 'binary', color: 'bg-yellow-500/10 text-yellow-400', enabled: true },
+            { id: 'tool_policy', name: 'Tool Policy', desc: 'Enforce allowed/denied tool usage', icon: 'wrench', color: 'bg-blue-500/10 text-blue-400', enabled: true },
+            { id: 'output_filter', name: 'Output Filter', desc: 'Redact PII and secrets from responses', icon: 'filter', color: 'bg-purple-500/10 text-purple-400', enabled: true },
+            { id: 'ioc_detection', name: 'IOC Detection', desc: 'Match against threat intelligence feeds', icon: 'radar', color: 'bg-cyan-500/10 text-cyan-400', enabled: true },
+            { id: 'rate_limiting', name: 'Rate Limiting', desc: 'Distributed sliding window per tenant', icon: 'gauge', color: 'bg-green-500/10 text-green-400', enabled: true }
+        ],
+
+        get passwordStrength() {
+            const p = this.config.admin_password;
+            if (!p) return 0;
+            let s = 0;
+            if (p.length >= 8) s++;
+            if (p.length >= 12) s++;
+            if (/[A-Z]/.test(p) && /[a-z]/.test(p)) s++;
+            if (/[0-9]/.test(p) && /[^a-zA-Z0-9]/.test(p)) s++;
+            return s;
+        },
+
+        init() {
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        canProceed() {
+            if (this.currentStep === 0) {
+                return this.config.admin_password.length >= 8 &&
+                       this.config.admin_password === this.config.admin_password_confirm &&
+                       this.passwordStrength >= 2;
+            }
+            if (this.currentStep === 1) {
+                return this.config.backend_url.length > 0;
+            }
+            return true;
+        },
+
+        next() {
+            if (this.currentStep < this.steps.length - 1) {
+                this.currentStep++;
+                this.$nextTick(() => lucide.createIcons());
+            }
+        },
+
+        prev() {
+            if (this.currentStep > 0) {
+                this.currentStep--;
+                this.$nextTick(() => lucide.createIcons());
+            }
+        },
+
+        async apply() {
+            this.applying = true;
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+
+                // 1. Change password
+                await fetch('/admin/auth/change-password', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ new_password: this.config.admin_password })
+                });
+
+                // 2. Apply settings
+                await fetch('/admin/config/settings', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({
+                        backend_url: this.config.backend_url,
+                        fail_mode: this.config.fail_mode,
+                        rate_limit_rpm: this.config.rate_limit,
+                        telemetry_enabled: this.config.telemetry
+                    })
+                });
+
+                // 3. Toggle guardrail modules
+                const disabledModules = this.modules.filter(m => !m.enabled).map(m => m.id);
+                if (disabledModules.length > 0) {
+                    await fetch('/admin/guardrails/bulk-toggle', {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({ disable: disabledModules })
+                    });
+                }
+
+                // 4. SIEM config (if not none)
+                if (this.config.siem_transport !== 'none') {
+                    await fetch('/admin/siem/config', {
+                        method: 'PUT',
+                        headers,
+                        body: JSON.stringify({
+                            transport: this.config.siem_transport,
+                            host: this.config.siem_host,
+                            port: this.config.siem_port,
+                            webhook_url: this.config.siem_webhook_url,
+                            file_path: this.config.siem_file_path
+                        })
+                    });
+                }
+
+                // 5. Mark onboarding complete
+                await fetch('/admin/config/onboarding-complete', {
+                    method: 'POST',
+                    headers
+                });
+
+                // Redirect to dashboard
+                window.$toast?.('Setup complete! Redirecting...', 'success');
+                setTimeout(() => window.location.href = '/', 1500);
+            } catch (e) {
+                window.$toast?.('Setup failed: ' + e.message, 'error');
+            } finally {
+                this.applying = false;
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

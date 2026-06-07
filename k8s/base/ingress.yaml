@@ -1,0 +1,65 @@
+---
+# Ingress — Exposes proxy (8080) and admin (8090) via path-based routing
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sentinel-gateway
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "10"
+    nginx.ingress.kubernetes.io/rate-limit-rps: "30"
+    # M-08: HSTS via annotation (supported natively by ingress-nginx)
+    nginx.ingress.kubernetes.io/enable-hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - sentinel-gateway.local
+        - admin.sentinel-gateway.local
+      secretName: sentinel-gateway-tls
+  rules:
+    - host: sentinel-gateway.local
+      http:
+        paths:
+          # Proxy API (main guardrail path)
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: proxy
+                port:
+                  number: 8080
+          # Health check (public)
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: proxy
+                port:
+                  number: 8080
+          # Grafana dashboards
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
+    # Admin portal — dedicated subdomain (serves web GUI at /)
+    - host: admin.sentinel-gateway.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin
+                port:
+                  number: 8090

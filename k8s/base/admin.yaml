@@ -1,0 +1,145 @@
+---
+# Sentinel Gateway Admin — Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: admin
+    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/component: admin
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: admin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: admin
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: admin
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/admin/health/metrics"
+    spec:
+      serviceAccountName: sentinel-admin
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admin
+          image: sentinel-gateway-admin:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: admin-config
+          resources:
+            limits:
+              memory: 256Mi
+              cpu: "500m"
+            requests:
+              memory: 128Mi
+              cpu: "100m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: policies
+              mountPath: /app/config/policies
+            - name: admin-data
+              mountPath: /app/data
+            - name: notifications-data
+              mountPath: /app/shared/notifications
+            - name: siem-stats
+              mountPath: /app/shared/siem
+            - name: reports
+              mountPath: /app/reports
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /admin/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /admin/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+      volumes:
+        - name: secrets
+          secret:
+            secretName: sentinel-admin-secrets
+        - name: policies
+          persistentVolumeClaim:
+            claimName: policies
+        - name: admin-data
+          persistentVolumeClaim:
+            claimName: admin-data
+        - name: notifications-data
+          persistentVolumeClaim:
+            claimName: notifications-data
+        - name: siem-stats
+          persistentVolumeClaim:
+            claimName: siem-stats
+        - name: reports
+          persistentVolumeClaim:
+            claimName: reports
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+---
+# Admin Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: admin
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: admin
+---
+# Admin ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-admin
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: admin
+    app.kubernetes.io/part-of: sentinel-gateway
+automountServiceAccountToken: false

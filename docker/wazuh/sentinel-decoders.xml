@@ -1,0 +1,5 @@
+<!-- Sentinel Gateway custom decoders -->
+<decoder name="sentinel-gateway">
+  <prematch>^{"event_type":</prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>

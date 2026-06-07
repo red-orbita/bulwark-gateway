@@ -1,11 +1,14 @@
 """Data models for requests, responses, and security events."""
-from pydantic import BaseModel, Field
-from typing import Any
+
+from datetime import datetime, timezone
 from enum import Enum
-from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 # === Security Verdicts ===
+
 
 class Verdict(str, Enum):
     ALLOW = "allow"
@@ -25,11 +28,23 @@ class ThreatCategory(str, Enum):
     PII_LEAK = "pii_leak"
     POLICY_VIOLATION = "policy_violation"
     RATE_LIMIT = "rate_limit"
+    # OWASP LLM Top 10 additions
+    INSECURE_OUTPUT = "insecure_output"  # LLM02
+    DENIAL_OF_SERVICE = "denial_of_service"  # LLM04
+    EXCESSIVE_AGENCY = "excessive_agency"  # LLM08/LLM09
+    MODEL_THEFT = "model_theft"  # LLM10
+    # Adversarial ML
+    PRIVACY_ATTACK = "privacy_attack"  # Model inversion / Membership inference
+    # Agentic attacks
+    PLAN_CORRUPTION = "plan_corruption"  # CoT/reasoning manipulation
+    CROSS_AGENT_INJECTION = "cross_agent_injection"  # Inter-agent propagation
+    MEMORY_MANIPULATION = "memory_manipulation"  # RAG/vector store poisoning
 
 
 class SecurityEvent(BaseModel):
     """Structured security event for logging/SIEM."""
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tenant_id: str
     agent_id: str
     verdict: Verdict
@@ -45,8 +60,10 @@ class SecurityEvent(BaseModel):
 
 # === Tool Call Models ===
 
+
 class ToolCall(BaseModel):
     """Represents a single tool call from the agent."""
+
     id: str | None = None
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -54,12 +71,14 @@ class ToolCall(BaseModel):
 
 class ToolCallResult(BaseModel):
     """Result of a tool call execution."""
+
     tool_call_id: str | None = None
     content: str
     is_error: bool = False
 
 
 # === Proxy Request/Response ===
+
 
 class Message(BaseModel):
     role: str
@@ -70,6 +89,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     """OpenAI-compatible chat completion request."""
+
     model: str
     messages: list[Message]
     tools: list[dict[str, Any]] | None = None
@@ -81,6 +101,7 @@ class ChatRequest(BaseModel):
 
 class GuardrailResult(BaseModel):
     """Result of a guardrail check."""
+
     verdict: Verdict
     events: list[SecurityEvent] = Field(default_factory=list)
     modified_content: str | None = None  # For redaction

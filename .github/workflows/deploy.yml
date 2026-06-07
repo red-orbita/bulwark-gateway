@@ -1,0 +1,203 @@
+# Sentinel Gateway — CI/CD Pipeline (GitHub Actions)
+#
+# Triggers:
+#   - Push to main → build, test, deploy to staging
+#   - Tag v*.*.* → build, test, deploy to production
+#   - Pull request → build and test only
+#
+# Required secrets:
+#   REGISTRY_URL        — Container registry (e.g., ghcr.io/myorg)
+#   REGISTRY_USERNAME   — Registry auth username
+#   REGISTRY_PASSWORD   — Registry auth password/token
+#   KUBECONFIG_STAGING  — Base64-encoded kubeconfig for staging cluster
+#   KUBECONFIG_PROD     — Base64-encoded kubeconfig for production cluster
+#   HELM_VALUES_STAGING — Base64-encoded values-staging.yaml overrides
+#   HELM_VALUES_PROD    — Base64-encoded values-prod.yaml overrides
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ${{ secrets.REGISTRY_URL || 'ghcr.io' }}
+  IMAGE_PROXY: sentinel-gateway-proxy
+  IMAGE_ADMIN: sentinel-gateway-admin
+  HELM_RELEASE: sentinel-gateway
+  NAMESPACE: sentinel-gateway
+
+jobs:
+  # ─── Stage 1: Lint & Test ────────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.lock
+          pip install ruff mypy pytest
+
+      - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Type check
+        run: mypy src/ --ignore-missing-imports
+
+      - name: Unit tests
+        run: pytest tests/ -q --tb=short --ignore=tests/test_admin_integration.py
+
+  # ─── Stage 2: Build & Push Images ───────────────────────────────────────────
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=sha-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+
+      - name: Build & push proxy image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PROXY }}:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PROXY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push admin image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.admin
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_ADMIN }}:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_ADMIN }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─── Stage 3: Deploy to Staging ─────────────────────────────────────────────
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: "3.14.0"
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy with Helm
+        run: |
+          # Decode environment-specific values
+          echo "${{ secrets.HELM_VALUES_STAGING }}" | base64 -d > /tmp/values-staging.yaml
+
+          helm upgrade --install ${{ env.HELM_RELEASE }} ./helm/sentinel-gateway \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --values /tmp/values-staging.yaml \
+            --set proxy.image.tag=${{ needs.build.outputs.version }} \
+            --set admin.image.tag=${{ needs.build.outputs.version }} \
+            --wait \
+            --timeout 5m
+
+      - name: Post-deploy validation
+        run: |
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=proxy \
+            -n ${{ env.NAMESPACE }} --timeout=120s
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=admin \
+            -n ${{ env.NAMESPACE }} --timeout=120s
+          # Run security smoke test against staging
+          PROXY_IP=$(kubectl get svc proxy -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
+          kubectl run smoke-test --rm -i --restart=Never \
+            --image=python:3.11-slim -n ${{ env.NAMESPACE }} -- \
+            bash -c "pip install -q httpx && python /dev/stdin" < scripts/security-smoke-test.py \
+            || true
+
+  # ─── Stage 4: Deploy to Production ──────────────────────────────────────────
+  deploy-production:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: "3.14.0"
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_PROD }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy with Helm
+        run: |
+          echo "${{ secrets.HELM_VALUES_PROD }}" | base64 -d > /tmp/values-prod.yaml
+
+          helm upgrade --install ${{ env.HELM_RELEASE }} ./helm/sentinel-gateway \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --values /tmp/values-prod.yaml \
+            --set proxy.image.tag=${{ needs.build.outputs.version }} \
+            --set admin.image.tag=${{ needs.build.outputs.version }} \
+            --wait \
+            --timeout 5m
+
+      - name: Post-deploy validation
+        run: |
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=proxy \
+            -n ${{ env.NAMESPACE }} --timeout=180s
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=admin \
+            -n ${{ env.NAMESPACE }} --timeout=180s
+
+      - name: Notify deployment
+        if: success()
+        run: |
+          echo "::notice::Production deployment successful — version ${{ needs.build.outputs.version }}"

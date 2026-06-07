@@ -1,0 +1,82 @@
+---
+# ConfigMaps for non-secret configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-config
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: proxy
+    app.kubernetes.io/part-of: sentinel-gateway
+data:
+  # SENTINEL_BACKEND_URL: omitted — agents.yaml default uses k8s Service DNS (ollama:11434)
+  # Override per-agent in agents.yaml for multi-cloud backends
+  SENTINEL_AGENTS_FILE: "/app/shared/admin/agents.yaml"
+  SENTINEL_FAIL_MODE: "closed"
+  SENTINEL_LOG_FORMAT: "json"
+  SENTINEL_LOG_LEVEL: "INFO"
+  SENTINEL_RATE_LIMIT_RPM: "60"
+  SENTINEL_WORKERS: "1"
+  SENTINEL_TELEMETRY_ENABLED: "true"
+  SENTINEL_TELEMETRY_BATCH_SIZE: "100"
+  SENTINEL_TELEMETRY_FLUSH_INTERVAL: "1.0"
+  SENTINEL_SIEM_STATS_FILE: "/app/shared/siem/siem_stats.json"
+  SENTINEL_SIEM_TRANSPORTS_FILE: "/app/shared/siem/siem_transports.json"
+  SENTINEL_REDIS_URL: "redis://redis.sentinel-gateway.svc.cluster.local:6379/0"
+  # External Redis: change the above URL to point to your managed Redis instance.
+  # Use rediss:// scheme for TLS (Azure, AWS, GCP managed Redis).
+  # Examples:
+  #   Azure:   "rediss://<name>.redis.cache.windows.net:6380/0"
+  #   AWS:     "rediss://<endpoint>.cache.amazonaws.com:6379/0"
+  #   GCP:     "redis://<private-ip>:6379/0"  (or rediss:// with in-transit encryption)
+  #   On-prem: "redis://redis.internal.mycompany.com:6379/0"
+  # Set SENTINEL_REDIS_TLS_INSECURE to "true" only for self-signed certificates.
+  # SENTINEL_REDIS_TLS_INSECURE: "false"
+  # File paths for secrets mounted as volumes
+  SENTINEL_JWT_SECRET_FILE: "/run/secrets/jwt-secret"
+  SENTINEL_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  SENTINEL_API_KEYS_FILE: "/run/secrets/api-keys"
+  SENTINEL_URLHAUS_KEY_FILE: "/run/secrets/urlhaus-key"
+  SENTINEL_THREATFOX_KEY_FILE: "/run/secrets/threatfox-key"
+  SENTINEL_OTX_KEY_FILE: "/run/secrets/otx-key"
+  SENTINEL_ABUSEIPDB_KEY_FILE: "/run/secrets/abuseipdb-key"
+  SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: admin-config
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: admin
+    app.kubernetes.io/part-of: sentinel-gateway
+data:
+  ADMIN_JWT_EXPIRY_HOURS: "8"
+  ADMIN_CORS_ORIGINS: ""
+  SENTINEL_TELEMETRY_ENABLED: "true"
+  SENTINEL_REDIS_URL: "redis://redis.sentinel-gateway.svc.cluster.local:6379/0"
+  # External Redis: same URL as proxy-config (see above for examples)
+  # File paths for secrets mounted as volumes
+  SENTINEL_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  ADMIN_JWT_SECRET_FILE: "/run/secrets/admin-jwt-secret"
+  ADMIN_PASSWORD_FILE: "/run/secrets/admin-password"
+  SECURITY_PASSWORD_FILE: "/run/secrets/security-password"
+  AUDITOR_PASSWORD_FILE: "/run/secrets/auditor-password"
+  DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
+  SENTINEL_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
+  SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+---
+# Static config files (iocs, agents, siem)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-static-config
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+data: {}
+# NOTE: For large config files (iocs.json, agents.yaml), use:
+#   kubectl create configmap sentinel-static-config \
+#     --from-file=iocs.json=config/iocs.json \
+#     --from-file=agents.yaml=config/agents.yaml \
+#     -n sentinel-gateway --dry-run=client -o yaml | kubectl apply -f -

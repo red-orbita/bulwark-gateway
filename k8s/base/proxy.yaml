@@ -1,0 +1,204 @@
+---
+# Sentinel Gateway Proxy — Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: proxy
+    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: proxy
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/health/metrics"
+    spec:
+      serviceAccountName: sentinel-proxy
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-policies
+          image: sentinel-gateway-proxy:latest
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "cp -rn /app/config/policies/* /policies/ 2>/dev/null || true"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: policies
+              mountPath: /policies
+      containers:
+        - name: proxy
+          image: sentinel-gateway-proxy:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: proxy-config
+          resources:
+            limits:
+              memory: 512Mi
+              cpu: "1"
+            requests:
+              memory: 128Mi
+              cpu: "250m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: policies
+              mountPath: /app/config/policies
+              readOnly: true  # C-03: Proxy must NOT write policies
+            - name: notifications-data
+              mountPath: /app/shared/notifications
+              readOnly: true  # Proxy reads channels, admin writes them
+            - name: admin-data
+              mountPath: /app/shared/admin
+              readOnly: true  # Proxy reads agents.yaml, admin writes it
+            - name: telemetry-data
+              mountPath: /app/data
+            - name: siem-stats
+              mountPath: /app/shared/siem
+              # Proxy writes: siem_stats.json + events.ndjson
+              # Proxy reads: siem_transports.json (admin-managed)
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: secrets
+          secret:
+            secretName: sentinel-proxy-secrets
+        - name: policies
+          persistentVolumeClaim:
+            claimName: policies
+        - name: notifications-data
+          persistentVolumeClaim:
+            claimName: notifications-data
+        - name: admin-data
+          persistentVolumeClaim:
+            claimName: admin-data
+        - name: telemetry-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi  # M-04: Volatile fallback — no persistent SQLite on disk
+        - name: siem-stats
+          persistentVolumeClaim:
+            claimName: siem-stats
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+---
+# Proxy Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: proxy
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: proxy
+---
+# Proxy HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: proxy
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: proxy
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: proxy
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# Proxy ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-proxy
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: proxy
+    app.kubernetes.io/part-of: sentinel-gateway
+automountServiceAccountToken: false

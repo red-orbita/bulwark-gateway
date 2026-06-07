@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Orchestrator — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Orchestrator{% endblock %}
+{% block content %}
+<div x-data="orchestratorManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Orchestrator</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Run validation, red team audits, and performance benchmarks</p>
+        </div>
+        <div x-show="running" class="flex items-center gap-2">
+            <span class="sg-dot sg-dot-brand animate-pulse"></span>
+            <span class="text-xs text-blue-400">Task running...</span>
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="sg-card">
+            <div class="flex items-center gap-2 mb-2">
+                <i data-lucide="shield-check" class="w-5 h-5 text-green-400"></i>
+                <h3 class="font-medium text-green-400">QA Validation</h3>
+            </div>
+            <p class="text-xs text-gray-400 mb-4">Run guardrail validation with known-good and malicious payloads (18 test cases)</p>
+            <button @click="trigger('qa-validation')" class="sg-btn sg-btn-success w-full" :disabled="running" :class="running && 'opacity-50 cursor-not-allowed'">
+                <i data-lucide="play" class="w-4 h-4"></i> Run QA
+            </button>
+        </div>
+        <div class="sg-card">
+            <div class="flex items-center gap-2 mb-2">
+                <i data-lucide="swords" class="w-5 h-5 text-red-400"></i>
+                <h3 class="font-medium text-red-400">Red Team Audit</h3>
+            </div>
+            <p class="text-xs text-gray-400 mb-4">Execute 18 adversarial payloads: encoding evasion, multi-language, agentic attacks</p>
+            <button @click="trigger('redteam-audit')" class="sg-btn sg-btn-danger w-full" :disabled="running" :class="running && 'opacity-50 cursor-not-allowed'">
+                <i data-lucide="play" class="w-4 h-4"></i> Run Red Team
+            </button>
+        </div>
+        <div class="sg-card">
+            <div class="flex items-center gap-2 mb-2">
+                <i data-lucide="gauge" class="w-5 h-5 text-blue-400"></i>
+                <h3 class="font-medium text-blue-400">Performance Benchmark</h3>
+            </div>
+            <p class="text-xs text-gray-400 mb-4">Measure input guardrail latency (120 iterations, target p95 &lt; 40ms)</p>
+            <button @click="trigger('performance-benchmark')" class="sg-btn sg-btn-primary w-full" :disabled="running" :class="running && 'opacity-50 cursor-not-allowed'">
+                <i data-lucide="play" class="w-4 h-4"></i> Run Benchmark
+            </button>
+        </div>
+    </div>
+
+    <!-- Task History -->
+    <div class="sg-card !p-0">
+        <div class="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-white">Task History</h3>
+        </div>
+        <div class="divide-y divide-gray-700/50">
+            <template x-for="task in tasks" :key="task.id">
+                <div class="px-5 py-4">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <span class="sg-badge"
+                                :class="task.status === 'completed' ? 'sg-badge-success' : task.status === 'running' ? 'sg-badge-brand animate-pulse' : task.status === 'failed' ? 'sg-badge-danger' : 'sg-badge-neutral'"
+                                x-text="task.status"></span>
+                            <span class="text-sm font-mono text-white" x-text="task.skill"></span>
+                            <template x-if="task.details && task.details.passed !== undefined">
+                                <span class="text-xs text-gray-400" x-text="task.details.passed + '/' + task.details.total + ' passed'"></span>
+                            </template>
+                            <template x-if="task.details && task.details.blocked !== undefined">
+                                <span class="text-xs text-gray-400" x-text="task.details.blocked + '/' + task.details.total + ' blocked'"></span>
+                            </template>
+                            <template x-if="task.details && task.details.p95_ms !== undefined">
+                                <span class="text-xs text-gray-400" x-text="'p95=' + task.details.p95_ms + 'ms'"></span>
+                            </template>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-500" x-text="new Date(task.started_at).toLocaleTimeString()"></span>
+                            <button @click="toggleOutput(task)" class="sg-btn sg-btn-ghost sg-btn-sm" x-text="task.showOutput ? 'Hide' : 'Output'"></button>
+                        </div>
+                    </div>
+                    <pre x-show="task.showOutput" x-cloak class="mt-3 p-3 bg-gray-900 rounded-lg text-xs font-mono max-h-48 overflow-auto text-gray-300 whitespace-pre-wrap border border-gray-700" x-text="task.output || 'No output yet'"></pre>
+                </div>
+            </template>
+        </div>
+        <!-- Empty state -->
+        <div x-show="tasks.length === 0" class="sg-empty">
+            <div class="sg-empty-icon">
+                <i data-lucide="list-checks" class="w-8 h-8"></i>
+            </div>
+            <p class="sg-empty-title">No tasks yet</p>
+            <p class="sg-empty-desc">Trigger an action above to start a validation task</p>
+        </div>
+    </div>
+</div>
+
+<script>
+function orchestratorManager() {
+    return {
+        tasks: [],
+        running: false,
+        _pollInterval: null,
+        async init() {},
+        async trigger(skill) {
+            const resp = await fetch('/admin/validate/trigger/' + skill, { method: 'POST' });
+            if (!resp.ok) { showToast('Failed to trigger ' + skill, 'error'); return; }
+            const data = await resp.json();
+            this.tasks.unshift({ id: data.task_id, skill, status: 'running', started_at: new Date().toISOString(), output: null, details: {}, showOutput: false });
+            this.running = true;
+            this._startPolling();
+            showToast(skill + ' triggered', 'info');
+        },
+        _startPolling() {
+            if (this._pollInterval) return;
+            this._pollInterval = setInterval(() => this._pollTasks(), 3000);
+        },
+        async _pollTasks() {
+            let anyRunning = false;
+            for (const task of this.tasks) {
+                if (task.status === 'running') {
+                    anyRunning = true;
+                    await this._refreshTask(task);
+                }
+            }
+            if (!anyRunning) {
+                clearInterval(this._pollInterval);
+                this._pollInterval = null;
+                this.running = false;
+            }
+        },
+        async _refreshTask(task) {
+            const resp = await fetch('/admin/validate/task/' + task.id);
+            if (resp.ok) {
+                const data = await resp.json();
+                task.status = data.status;
+                task.output = data.output;
+                task.details = data.details || {};
+                if (data.status !== 'running') {
+                    task.showOutput = true;
+                    showToast(task.skill + ': ' + data.status, data.status === 'completed' ? 'success' : 'warn');
+                }
+            }
+        },
+        toggleOutput(task) {
+            task.showOutput = !task.showOutput;
+        }
+    };
+}
+</script>
+{% endblock %}

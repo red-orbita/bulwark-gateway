@@ -1,0 +1,59 @@
+# ============================================================
+# Sentinel Gateway — .dockerignore
+# Excludes files not needed inside container images.
+# ============================================================
+
+# --- Version control ---
+.git
+.gitignore
+
+# --- Python cache / build ---
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.pytest_cache
+.ruff_cache
+*.egg-info
+dist
+build
+
+# --- Tests and docs (not needed at runtime) ---
+tests/
+docs/
+*.md
+
+# --- Infrastructure / deployment (not needed in container) ---
+helm/
+k8s/
+ci/
+.github/
+scripts/
+docker-compose.*
+Dockerfile
+docker/
+
+# --- Secrets (injected at runtime via mounts) ---
+secrets/
+.env
+.env.*
+
+# --- Runtime data dirs (mounted at runtime) ---
+data/
+reports/
+shared/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- Agent tooling ---
+.opencode/
+
+# --- OS artifacts ---
+.DS_Store
+Thumbs.db

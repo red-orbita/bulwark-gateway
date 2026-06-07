@@ -1,63 +1,155 @@
 """
-Rate limiting middleware — per-tenant request throttling.
+Rate limiting middleware — per-tenant request throttling with Redis backend.
+
+Uses Redis sliding window counter for distributed rate limiting across replicas.
+Falls back to in-memory token bucket if Redis is unavailable.
 """
+
 import time
-from collections import defaultdict
+
+from typing import Optional
+
+import redis
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+
 from src.config import settings
 
 
-class TokenBucket:
-    """Simple in-memory token bucket for rate limiting."""
+class RedisRateLimiter:
+    """Distributed sliding window rate limiter using Redis."""
 
-    def __init__(self, rate: float, burst: int):
-        self.rate = rate  # tokens per second
+    def __init__(self, rate_rpm: int, redis_url: Optional[str] = None):
+        self.rate_rpm = rate_rpm
+        self._redis: Optional[redis.Redis] = None
+        if redis_url:
+            try:
+                kwargs = {"decode_responses": True, "socket_timeout": 0.5}
+                # Support TLS connections (rediss:// scheme) with optional cert skip
+                if redis_url.startswith("rediss://") and settings.redis_tls_insecure:
+                    import ssl
+                    kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+                self._redis = redis.from_url(redis_url, **kwargs)
+                self._redis.ping()
+            except Exception:
+                self._redis = None
+
+    @property
+    def available(self) -> bool:
+        return self._redis is not None
+
+    def consume(self, key: str) -> bool:
+        """Check rate limit using Redis sliding window. Returns True if allowed."""
+        if not self._redis:
+            return True  # Fallback handled by caller
+
+        redis_key = f"sentinel:ratelimit:{key}"
+        now = time.time()
+        window_start = now - 60.0  # 1-minute sliding window
+
+        try:
+            pipe = self._redis.pipeline()
+            # Remove expired entries
+            pipe.zremrangebyscore(redis_key, 0, window_start)
+            # Count current window
+            pipe.zcard(redis_key)
+            # Add current request
+            pipe.zadd(redis_key, {f"{now}": now})
+            # Set TTL to auto-cleanup
+            pipe.expire(redis_key, 120)
+            results = pipe.execute()
+
+            count = results[1]  # zcard result
+            return count < self.rate_rpm
+        except Exception:
+            return False  # Fail-CLOSED on Redis error (C-05)
+
+
+class InMemoryTokenBucket:
+    """Fallback in-memory token bucket for single-instance deployments.
+
+    Uses TTLCache to auto-evict inactive keys, preventing unbounded memory growth.
+    """
+
+    def __init__(self, rate: float, burst: int, max_keys: int = 10000, ttl: int = 300):
+        self.rate = rate
         self.burst = burst
-        self.tokens: dict[str, float] = defaultdict(lambda: float(burst))
-        self.last_time: dict[str, float] = defaultdict(time.time)
+        from cachetools import TTLCache
+        self.tokens: TTLCache = TTLCache(maxsize=max_keys, ttl=ttl)
+        self.last_time: TTLCache = TTLCache(maxsize=max_keys, ttl=ttl)
 
     def consume(self, key: str) -> bool:
         now = time.time()
-        elapsed = now - self.last_time[key]
+        last = self.last_time.get(key, now)
+        elapsed = now - last
         self.last_time[key] = now
-
-        # Refill tokens
-        self.tokens[key] = min(
-            self.burst, self.tokens[key] + elapsed * self.rate
-        )
-
-        if self.tokens[key] >= 1.0:
-            self.tokens[key] -= 1.0
+        current = self.tokens.get(key, float(self.burst))
+        current = min(self.burst, current + elapsed * self.rate)
+        if current >= 1.0:
+            self.tokens[key] = current - 1.0
             return True
+        self.tokens[key] = current
         return False
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
-        # Convert RPM to tokens/second
         rate = settings.rate_limit_rpm / 60.0
-        self.bucket = TokenBucket(rate=rate, burst=settings.rate_limit_rpm_burst)
+        self._redis_limiter = RedisRateLimiter(
+            rate_rpm=settings.rate_limit_rpm,
+            redis_url=getattr(settings, "redis_url", None),
+        )
+        self._fallback = InMemoryTokenBucket(rate=rate, burst=settings.rate_limit_rpm_burst)
 
     async def dispatch(self, request: Request, call_next):
         if not settings.rate_limit_enabled:
             return await call_next(request)
 
         # Skip health checks
-        if request.url.path in ("/health", "/ready"):
+        if request.url.path in ("/health", "/health/live", "/ready"):
             return await call_next(request)
 
-        # Rate limit by tenant
-        tenant_id = request.headers.get("X-Tenant-ID", "default")
-        if not self.bucket.consume(tenant_id):
+        # Red team mode flag (informational only — does NOT bypass rate limiting)
+        request.state.redteam_mode = request.headers.get("X-Redteam-Mode") == "true"
+
+        # C-02: Rate limit by authenticated tenant_id (from request.state, set by AuthMiddleware)
+        # Falls back to source IP if not authenticated yet (global per-IP limit)
+        tenant_id = getattr(request.state, "tenant_id", None)
+        source_ip = request.client.host if request.client else "unknown"
+
+        # Per-IP global rate limit (first layer — prevents header spoofing bypass)
+        ip_key = f"ip:{source_ip}"
+        if self._redis_limiter.available:
+            ip_allowed = self._redis_limiter.consume(ip_key)
+        else:
+            ip_allowed = self._fallback.consume(ip_key)
+
+        if not ip_allowed:
             return JSONResponse(
                 status_code=429,
                 content={
                     "error": "Rate limit exceeded",
-                    "detail": f"Max {settings.rate_limit_rpm} requests/minute",
+                    "detail": f"Max {settings.rate_limit_rpm} requests/minute per IP",
                 },
             )
+
+        # Per-tenant rate limit (second layer — uses authenticated identity)
+        if tenant_id:
+            tenant_key = f"tenant:{tenant_id}"
+            if self._redis_limiter.available:
+                allowed = self._redis_limiter.consume(tenant_key)
+            else:
+                allowed = self._fallback.consume(tenant_key)
+
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "error": "Rate limit exceeded",
+                        "detail": f"Max {settings.rate_limit_rpm} requests/minute",
+                    },
+                )
 
         return await call_next(request)

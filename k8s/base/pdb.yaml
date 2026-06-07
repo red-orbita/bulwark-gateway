@@ -1,0 +1,30 @@
+---
+# PodDisruptionBudget — Proxy must maintain availability during node maintenance
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: proxy-pdb
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: proxy
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proxy
+---
+# PodDisruptionBudget — Redis (single instance, allow disruption for maintenance)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-pdb
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis

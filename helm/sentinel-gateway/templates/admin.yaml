@@ -1,0 +1,153 @@
+---
+# Admin ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentinel-admin
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.admin.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+# Admin Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.admin.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.admin.replicas }}
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "sentinel-gateway.admin.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel-gateway.admin.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: admin
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/admin/health/metrics"
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 8 }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum | trunc 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: sentinel-admin
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admin
+          image: {{ include "sentinel-gateway.admin.image" . }}
+          imagePullPolicy: {{ .Values.admin.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: admin-config
+          resources:
+            {{- toYaml .Values.admin.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            {{- if and (not .Values.redis.enabled) .Values.externalRedis.existingSecret }}
+            - name: redis-external-secret
+              mountPath: /run/secrets/redis-password
+              subPath: {{ include "sentinel-gateway.redis.secretKey" . }}
+              readOnly: true
+            {{- end }}
+            - name: policies
+              mountPath: /app/config/policies
+            - name: admin-data
+              mountPath: /app/data
+            - name: notifications-data
+              mountPath: /app/shared/notifications
+            - name: siem-stats
+              mountPath: /app/shared/siem
+            - name: reports
+              mountPath: /app/reports
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /admin/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /admin/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+      volumes:
+        - name: secrets
+          secret:
+            secretName: sentinel-admin-secrets
+        {{- if and (not .Values.redis.enabled) .Values.externalRedis.existingSecret }}
+        - name: redis-external-secret
+          secret:
+            secretName: {{ .Values.externalRedis.existingSecret }}
+        {{- end }}
+        - name: policies
+          persistentVolumeClaim:
+            claimName: policies
+        - name: admin-data
+          persistentVolumeClaim:
+            claimName: admin-data
+        - name: notifications-data
+          persistentVolumeClaim:
+            claimName: notifications-data
+        - name: siem-stats
+          persistentVolumeClaim:
+            claimName: siem-stats
+        - name: reports
+          persistentVolumeClaim:
+            claimName: reports
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+---
+# Admin Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.admin.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "sentinel-gateway.admin.selectorLabels" . | nindent 4 }}

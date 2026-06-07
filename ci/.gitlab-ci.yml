@@ -1,0 +1,149 @@
+# Sentinel Gateway — GitLab CI/CD Pipeline
+#
+# Prerequisites:
+#   - CI/CD Variables (Settings > CI/CD > Variables):
+#     * REGISTRY_URL       — Container registry (e.g., registry.gitlab.com/myorg)
+#     * REGISTRY_USER      — Registry username
+#     * REGISTRY_PASSWORD  — Registry password/token
+#     * KUBECONFIG_STAGING — Base64-encoded kubeconfig (staging)
+#     * KUBECONFIG_PROD    — Base64-encoded kubeconfig (production, protected)
+#   - Secure files:
+#     * values-staging.yaml
+#     * values-production.yaml
+#
+# Trigger:
+#   - Push to main → staging
+#   - Tag v*.*.* → production (manual gate)
+
+stages:
+  - test
+  - build
+  - deploy-staging
+  - deploy-production
+
+variables:
+  IMAGE_PROXY: sentinel-gateway-proxy
+  IMAGE_ADMIN: sentinel-gateway-admin
+  HELM_RELEASE: sentinel-gateway
+  NAMESPACE: sentinel-gateway
+  HELM_VERSION: "3.14.0"
+
+# ─── Stage 1: Test ────────────────────────────────────────────────────────────
+lint:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - pip install -q -r requirements.lock ruff mypy pytest
+    - ruff check src/ tests/
+    - mypy src/ --ignore-missing-imports
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+unit-tests:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - pip install -q -r requirements.lock pytest
+    - pytest tests/ -q --tb=short --ignore=tests/test_admin_integration.py --junitxml=report.xml
+  artifacts:
+    reports:
+      junit: report.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ─── Stage 2: Build ───────────────────────────────────────────────────────────
+.build-template: &build-template
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - docker login -u "$REGISTRY_USER" -p "$REGISTRY_PASSWORD" "$REGISTRY_URL"
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export VERSION="${CI_COMMIT_TAG#v}"
+      else
+        export VERSION="sha-${CI_COMMIT_SHORT_SHA}"
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+build-proxy:
+  <<: *build-template
+  script:
+    - docker build -t "$REGISTRY_URL/$IMAGE_PROXY:$VERSION" -f Dockerfile .
+    - docker push "$REGISTRY_URL/$IMAGE_PROXY:$VERSION"
+
+build-admin:
+  <<: *build-template
+  script:
+    - docker build -t "$REGISTRY_URL/$IMAGE_ADMIN:$VERSION" -f docker/Dockerfile.admin .
+    - docker push "$REGISTRY_URL/$IMAGE_ADMIN:$VERSION"
+
+# ─── Stage 3: Deploy Staging ──────────────────────────────────────────────────
+deploy-staging:
+  stage: deploy-staging
+  image: alpine/helm:3.14.0
+  environment:
+    name: staging
+    url: https://staging.sentinel-gateway.mycompany.com
+  before_script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        export VERSION="${CI_COMMIT_TAG#v}"
+      else
+        export VERSION="sha-${CI_COMMIT_SHORT_SHA}"
+      fi
+    - mkdir -p ~/.kube
+    - echo "$KUBECONFIG_STAGING" | base64 -d > ~/.kube/config
+    - chmod 600 ~/.kube/config
+  script:
+    - |
+      helm upgrade --install $HELM_RELEASE ./helm/sentinel-gateway \
+        --namespace $NAMESPACE \
+        --create-namespace \
+        --values ci/values-staging.yaml \
+        --set proxy.image.repository=$REGISTRY_URL/$IMAGE_PROXY \
+        --set proxy.image.tag=$VERSION \
+        --set admin.image.repository=$REGISTRY_URL/$IMAGE_ADMIN \
+        --set admin.image.tag=$VERSION \
+        --wait \
+        --timeout 5m
+    - kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=proxy -n $NAMESPACE --timeout=120s
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ─── Stage 4: Deploy Production ───────────────────────────────────────────────
+deploy-production:
+  stage: deploy-production
+  image: alpine/helm:3.14.0
+  environment:
+    name: production
+    url: https://sentinel-gateway.mycompany.com
+  when: manual  # Requires manual approval
+  before_script:
+    - export VERSION="${CI_COMMIT_TAG#v}"
+    - mkdir -p ~/.kube
+    - echo "$KUBECONFIG_PROD" | base64 -d > ~/.kube/config
+    - chmod 600 ~/.kube/config
+  script:
+    - |
+      helm upgrade --install $HELM_RELEASE ./helm/sentinel-gateway \
+        --namespace $NAMESPACE \
+        --create-namespace \
+        --values ci/values-production.yaml \
+        --set proxy.image.repository=$REGISTRY_URL/$IMAGE_PROXY \
+        --set proxy.image.tag=$VERSION \
+        --set admin.image.repository=$REGISTRY_URL/$IMAGE_ADMIN \
+        --set admin.image.tag=$VERSION \
+        --wait \
+        --timeout 5m
+    - kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=proxy -n $NAMESPACE --timeout=180s
+    - kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=admin -n $NAMESPACE --timeout=180s
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/

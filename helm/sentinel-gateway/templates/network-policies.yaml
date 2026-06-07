@@ -1,0 +1,274 @@
+{{- if .Values.networkPolicies.enabled }}
+---
+# Default deny egress — all pods must explicitly allow outbound
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress: []
+---
+# Default deny ingress — all pods must explicitly allow inbound
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress: []
+---
+{{- if .Values.redis.enabled }}
+# NetworkPolicy: Redis — only proxy and admin can access (internal Redis only)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-access
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin
+      ports:
+        - port: 6379
+          protocol: TCP
+  egress: []  # Redis needs no outbound
+{{- end }}
+---
+# NetworkPolicy: Proxy — ingress from Ingress controller, egress to Redis + external backends
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: proxy-access
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: proxy
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # Redis
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- else }}
+    # External Redis — allow egress to any destination on configured port
+    - to: []
+      ports:
+        - port: {{ .Values.externalRedis.port | default 6379 }}
+          protocol: TCP
+    {{- end }}
+    # DNS
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # External backends (HTTPS + custom ports)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 8000
+          protocol: TCP
+---
+# NetworkPolicy: Admin — ingress from Ingress controller ONLY, egress to Redis + Wazuh
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: admin-access
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: admin
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - port: 8090
+          protocol: TCP
+  egress:
+    # Redis
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- else }}
+    # External Redis — allow egress to any destination on configured port
+    - to: []
+      ports:
+        - port: {{ .Values.externalRedis.port | default 6379 }}
+          protocol: TCP
+    {{- end }}
+    # Wazuh API
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: wazuh
+      ports:
+        - port: 55000
+          protocol: TCP
+    # DNS
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- if .Values.monitoring.prometheus.enabled }}
+---
+# NetworkPolicy: Prometheus — can scrape proxy and admin
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-access
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+      ports:
+        - port: 9090
+          protocol: TCP
+  egress:
+    # Scrape proxy
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Scrape admin
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin
+      ports:
+        - port: 8090
+          protocol: TCP
+    # DNS (restricted to kube-system)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+{{- end }}
+{{- if .Values.monitoring.grafana.enabled }}
+---
+# NetworkPolicy: Grafana — only reach Prometheus, no external/DNS egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-access
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 3000
+          protocol: TCP
+  egress:
+    # Prometheus only
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
+    # DNS (restricted to kube-system)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+{{- end }}
+{{- end }}
