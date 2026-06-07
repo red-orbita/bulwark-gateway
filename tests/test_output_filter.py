@@ -1,4 +1,5 @@
 """Tests for output filter."""
+
 import pytest
 from src.guardrails.output_filter import OutputFilter
 from src.models import Verdict

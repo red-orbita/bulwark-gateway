@@ -1,0 +1,51 @@
+# Elastic / ELK Stack — Direct Elasticsearch or Logstash HTTP input
+# Sentinel Gateway SIEM Integration Template
+---
+transport: http_rest
+platform: elastic_elk
+
+connection:
+  # Option A: Direct to Elasticsearch
+  url: "https://elasticsearch.example.com:9200/sentinel-gateway-events/_bulk"
+  # Option B: Via Logstash HTTP input
+  # url: "http://logstash.example.com:8080"
+  auth_method: basic
+  username: "${SENTINEL_ELASTIC_USER}"
+  password: "${SENTINEL_ELASTIC_PASSWORD}"
+  verify_ssl: true
+  timeout_seconds: 10
+
+batching:
+  batch_size: 200
+  flush_interval_seconds: 1.0
+  compress: true  # gzip for bulk API
+
+format: ndjson  # Elasticsearch _bulk API format
+field_mapping:
+  # ECS native — fields map 1:1
+  # Index lifecycle management (ILM):
+  index_pattern: "sentinel-gateway-events-{now/d}"
+  ilm_policy: "sentinel-gateway-ilm"
+  # Recommended ILM: hot(7d) → warm(30d) → cold(90d) → delete
+
+# Index template (PUT _index_template/sentinel-gateway):
+# {
+#   "index_patterns": ["sentinel-gateway-events-*"],
+#   "template": {
+#     "settings": {"number_of_shards": 1, "number_of_replicas": 1},
+#     "mappings": {"properties": {"@timestamp": {"type": "date"}, "event.severity": {"type": "integer"}}}
+#   }
+# }
+
+retry:
+  max_retries: 3
+  backoff_base_seconds: 1.0
+  backoff_max_seconds: 30.0
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_seconds: 30
+
+# Docker example:
+# docker run -d -p 9200:9200 -e "discovery.type=single-node" \
+#   -e "ELASTIC_PASSWORD=changeme" docker.elastic.co/elasticsearch/elasticsearch:8.12.0

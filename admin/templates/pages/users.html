@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block title %}Users — Sentinel Gateway Admin{% endblock %}
+{% block content %}
+<div class="space-y-6" x-data="usersManager()">
+    <div class="flex justify-between items-center">
+        <h2 class="text-2xl font-bold">User Management</h2>
+        <button @click="openCreate()" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded text-sm font-medium">+ New User</button>
+    </div>
+
+    <!-- Users Table -->
+    <div class="bg-gray-800 rounded-lg border border-gray-700">
+        <table class="w-full text-sm">
+            <thead class="border-b border-gray-700">
+                <tr class="text-left text-gray-400">
+                    <th class="px-4 py-3">Username</th>
+                    <th class="px-4 py-3">Name</th>
+                    <th class="px-4 py-3">Email</th>
+                    <th class="px-4 py-3">Role</th>
+                    <th class="px-4 py-3">Active</th>
+                    <th class="px-4 py-3">MFA</th>
+                    <th class="px-4 py-3">Last Login</th>
+                    <th class="px-4 py-3 text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-700">
+                <template x-for="user in users" :key="user.id">
+                    <tr>
+                        <td class="px-4 py-3 font-mono text-cyan-400" x-text="user.username"></td>
+                        <td class="px-4 py-3 text-gray-300 text-sm" x-text="[user.first_name, user.last_name].filter(Boolean).join(' ') || '—'"></td>
+                        <td class="px-4 py-3 text-gray-400 text-xs" x-text="user.email || '—'"></td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-0.5 rounded text-xs"
+                                :class="user.role === 'admin' ? 'bg-purple-900 text-purple-300' : user.role === 'security' ? 'bg-blue-900 text-blue-300' : user.role === 'auditor' ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-700 text-gray-300'"
+                                x-text="user.role"></span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span :class="user.active ? 'text-green-400' : 'text-red-400'" x-text="user.active ? 'Yes' : 'No'"></span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span :class="user.mfa_enabled ? 'text-green-400' : 'text-gray-500'" x-text="user.mfa_enabled ? 'Enabled' : 'Off'"></span>
+                        </td>
+                        <td class="px-4 py-3 text-gray-400 text-xs" x-text="user.last_login ? new Date(user.last_login).toLocaleString() : '—'"></td>
+                        <td class="px-4 py-3 text-right space-x-1">
+                            <button @click="editUser(user)" class="px-2 py-1 bg-blue-700 hover:bg-blue-600 text-xs rounded">Edit</button>
+                            <button @click="resetPassword(user)" class="px-2 py-1 bg-yellow-700 hover:bg-yellow-600 text-xs rounded">Reset PW</button>
+                            <button @click="toggleMfa(user)" class="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-xs rounded" x-text="user.mfa_enabled ? 'Disable MFA' : 'Setup MFA'"></button>
+                            <button @click="viewSessions(user)" class="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-xs rounded">Sessions</button>
+                            <button @click="deleteUser(user)" class="px-2 py-1 bg-red-700 hover:bg-red-600 text-xs rounded">Delete</button>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+        <div x-show="users.length === 0" class="p-8 text-center text-gray-500">No users found.</div>
+    </div>
+
+    <!-- Sessions Panel -->
+    <div x-show="sessionsUser" x-cloak class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+        <div class="flex justify-between items-center mb-3">
+            <h3 class="text-sm font-semibold">Sessions for <span class="text-cyan-400" x-text="sessionsUser?.username"></span></h3>
+            <button @click="sessionsUser = null" class="text-gray-400 hover:text-white text-xs">&times; Close</button>
+        </div>
+        <table class="w-full text-xs">
+            <thead><tr class="text-gray-400"><th class="text-left py-1">Session ID</th><th class="text-left py-1">Created</th><th class="text-left py-1">IP</th><th class="text-right py-1">Action</th></tr></thead>
+            <tbody class="divide-y divide-gray-700">
+                <template x-for="s in sessions" :key="s.id">
+                    <tr>
+                        <td class="py-1 font-mono" x-text="s.id.substring(0,12) + '...'"></td>
+                        <td class="py-1 text-gray-400" x-text="new Date(s.created_at).toLocaleString()"></td>
+                        <td class="py-1 text-gray-400" x-text="s.ip || '—'"></td>
+                        <td class="py-1 text-right"><button @click="revokeSession(s)" class="px-2 py-0.5 bg-red-700 hover:bg-red-600 rounded">Revoke</button></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+        <div x-show="sessions.length === 0" class="text-gray-500 text-xs mt-2">No active sessions.</div>
+    </div>
+
+    <!-- Create/Edit Modal -->
+    <div x-show="showModal" x-cloak class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold" x-text="editing ? 'Edit User' : 'Create User'"></h3>
+                <button @click="showModal = false" class="text-gray-400 hover:text-white">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <!-- Account section -->
+                <div class="border-b border-gray-700 pb-4 mb-4">
+                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Account</h4>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="col-span-2">
+                            <label class="block text-xs text-gray-400 mb-1">Username</label>
+                            <input type="text" x-model="form.username" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm" :disabled="editing">
+                        </div>
+                        <div x-show="!editing" class="col-span-2">
+                            <label class="block text-xs text-gray-400 mb-1">Password</label>
+                            <input type="password" x-model="form.password" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Role</label>
+                            <select x-model="form.role" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm">
+                                <option value="admin">Admin</option>
+                                <option value="security">Security</option>
+                                <option value="auditor">Auditor</option>
+                                <option value="viewer">Viewer</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Tenant Scope</label>
+                            <input type="text" x-model="form.tenant_scope" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="* for all">
+                        </div>
+                        <div x-show="editing" class="col-span-2 flex items-center gap-2">
+                            <input type="checkbox" x-model="form.active" id="active-toggle" class="rounded">
+                            <label for="active-toggle" class="text-sm text-gray-300">Active</label>
+                        </div>
+                    </div>
+                </div>
+                <!-- Personal info section -->
+                <div>
+                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Personal Information</h4>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">First Name</label>
+                            <input type="text" x-model="form.first_name" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="John">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Last Name</label>
+                            <input type="text" x-model="form.last_name" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="Doe">
+                        </div>
+                        <div class="col-span-2">
+                            <label class="block text-xs text-gray-400 mb-1">Email</label>
+                            <input type="email" x-model="form.email" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="user@company.com">
+                        </div>
+                        <div class="col-span-2">
+                            <label class="block text-xs text-gray-400 mb-1">Phone</label>
+                            <input type="tel" x-model="form.phone" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="+1 555-123-4567">
+                            <p class="text-[10px] text-gray-500 mt-1">For future SMS-based MFA</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="p-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showModal = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Cancel</button>
+                <button @click="saveUser()" class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reset Password Modal -->
+    <div x-show="showResetPw" x-cloak class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-sm">
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="text-lg font-semibold">Reset Password</h3>
+                <p class="text-xs text-gray-400 mt-1">User: <span class="text-cyan-400" x-text="resetPwUser?.username"></span></p>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">New Password</label>
+                    <input type="password" x-model="resetPwValue" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="Min 8 characters">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Confirm Password</label>
+                    <input type="password" x-model="resetPwConfirm" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm">
+                </div>
+                <p x-show="resetPwError" class="text-red-400 text-xs" x-text="resetPwError"></p>
+            </div>
+            <div class="p-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showResetPw = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Cancel</button>
+                <button @click="confirmResetPassword()" class="px-4 py-2 bg-yellow-700 hover:bg-yellow-600 rounded text-sm">Reset</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirm Modal -->
+    <div x-show="showDeleteConfirm" x-cloak class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-sm">
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-red-400">Delete User</h3>
+            </div>
+            <div class="p-6">
+                <p class="text-sm text-gray-300">Are you sure you want to delete user <span class="font-mono text-cyan-400" x-text="deleteTarget?.username"></span>?</p>
+                <p class="text-xs text-gray-500 mt-2">This action cannot be undone.</p>
+            </div>
+            <div class="p-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showDeleteConfirm = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Cancel</button>
+                <button @click="confirmDelete()" class="px-4 py-2 bg-red-700 hover:bg-red-600 rounded text-sm">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MFA Modal -->
+    <div x-show="mfaUri" x-cloak class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 w-full max-w-sm p-6 text-center">
+            <h3 class="text-lg font-semibold mb-4">MFA Setup</h3>
+            <p class="text-sm text-gray-400 mb-4">Scan this QR code with your authenticator app<br>(Google Authenticator, Microsoft Authenticator, Authy, etc.)</p>
+            <div class="flex justify-center mb-4">
+                <div id="mfa-qr" class="bg-white p-3 rounded inline-block"></div>
+            </div>
+            <details class="text-left mb-4">
+                <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-300">Manual entry (click to show)</summary>
+                <div class="mt-2 bg-gray-900 border border-gray-600 rounded p-3 text-xs font-mono break-all text-cyan-400" x-text="mfaSecret"></div>
+            </details>
+            <button @click="mfaUri = null; mfaSecret = null;" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded text-sm">Done</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+function usersManager() {
+    return {
+        users: [],
+        showModal: false,
+        editing: false,
+        form: { username: '', password: '', role: 'viewer', tenant_scope: '*', active: true, email: '', phone: '', first_name: '', last_name: '' },
+        sessionsUser: null,
+        sessions: [],
+        mfaUri: null,
+        mfaSecret: null,
+        showResetPw: false,
+        resetPwUser: null,
+        resetPwValue: '',
+        resetPwConfirm: '',
+        resetPwError: '',
+        showDeleteConfirm: false,
+        deleteTarget: null,
+        async init() {
+            const resp = await fetch('/admin/users');
+            if (resp.ok) this.users = await resp.json();
+        },
+        openCreate() {
+            this.editing = false;
+            this.form = { username: '', password: '', role: 'viewer', tenant_scope: '*', active: true, email: '', phone: '', first_name: '', last_name: '' };
+            this.showModal = true;
+        },
+        editUser(u) {
+            this.editing = true;
+            this._editId = u.id;
+            this.form = { username: u.username, role: u.role, tenant_scope: u.tenant_scope || '*', active: u.active, email: u.email || '', phone: u.phone || '', first_name: u.first_name || '', last_name: u.last_name || '' };
+            this.showModal = true;
+        },
+        async saveUser() {
+            const method = this.editing ? 'PUT' : 'POST';
+            const url = this.editing ? `/admin/users/${this._editId}` : '/admin/users';
+            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.form) });
+            if (resp.ok) { this.showModal = false; await this.init(); showToast('User saved', 'success'); }
+            else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
+        },
+        deleteUser(u) {
+            this.deleteTarget = u;
+            this.showDeleteConfirm = true;
+        },
+        async confirmDelete() {
+            const resp = await fetch(`/admin/users/${this.deleteTarget.id}`, { method: 'DELETE' });
+            this.showDeleteConfirm = false;
+            if (resp.ok) { await this.init(); showToast('User deleted', 'success'); }
+            else { const err = await resp.json(); showToast(err.detail || 'Failed', 'error'); }
+        },
+        resetPassword(u) {
+            this.resetPwUser = u;
+            this.resetPwValue = '';
+            this.resetPwConfirm = '';
+            this.resetPwError = '';
+            this.showResetPw = true;
+        },
+        async confirmResetPassword() {
+            if (this.resetPwValue.length < 8) { this.resetPwError = 'Password must be at least 8 characters'; return; }
+            if (this.resetPwValue !== this.resetPwConfirm) { this.resetPwError = 'Passwords do not match'; return; }
+            const resp = await fetch(`/admin/users/${this.resetPwUser.id}/reset-password`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ new_password: this.resetPwValue })
+            });
+            if (resp.ok) { this.showResetPw = false; }
+            else { const err = await resp.json(); this.resetPwError = err.detail || 'Failed'; }
+        },
+        async toggleMfa(u) {
+            if (u.mfa_enabled) {
+                const ok = await showConfirm('Disable MFA', `Disable MFA for ${u.username}?`, 'Disable');
+                if (!ok) return;
+                await fetch(`/admin/users/${u.id}/mfa`, { method: 'DELETE' });
+                await this.init();
+                showToast('MFA disabled', 'success');
+            } else {
+                const resp = await fetch(`/admin/users/${u.id}/mfa/setup`, { method: 'POST' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.mfaUri = data.provisioning_uri || data.uri;
+                    this.mfaSecret = data.secret || '';
+                    // Render QR code after DOM update
+                    this.$nextTick(() => {
+                        const container = document.getElementById('mfa-qr');
+                        if (container) {
+                            container.innerHTML = '';
+                            new QRCode(container, {
+                                text: this.mfaUri,
+                                width: 200,
+                                height: 200,
+                                colorDark: '#000000',
+                                colorLight: '#ffffff',
+                                correctLevel: QRCode.CorrectLevel.M
+                            });
+                        }
+                    });
+                } else {
+                    const err = await resp.json();
+                    showToast(err.detail || 'MFA setup failed', 'error');
+                }
+            }
+        },
+        async viewSessions(u) {
+            this.sessionsUser = u;
+            const resp = await fetch(`/admin/users/${u.id}/sessions`);
+            this.sessions = resp.ok ? await resp.json() : [];
+        },
+        async revokeSession(s) {
+            await fetch(`/admin/users/${this.sessionsUser.id}/sessions/${s.id}`, { method: 'DELETE' });
+            await this.viewSessions(this.sessionsUser);
+        }
+    };
+}
+</script>
+{% endblock %}

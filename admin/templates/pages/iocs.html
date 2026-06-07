@@ -1,0 +1,494 @@
+{% extends "base.html" %}
+{% block title %}IOCs — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}IOCs{% endblock %}
+{% block content %}
+<div x-data="iocsManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Indicators of Compromise</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Manage threat intelligence IOCs and automated feed sources</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="showBulk = true" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <i data-lucide="upload" class="w-4 h-4"></i> Bulk Import
+            </button>
+            <div class="relative" x-data="{ open: false }">
+                <button @click="open = !open" class="sg-btn sg-btn-secondary sg-btn-sm">
+                    <i data-lucide="download" class="w-4 h-4"></i> Export
+                    <i data-lucide="chevron-down" class="w-3 h-3"></i>
+                </button>
+                <div x-show="open" @click.away="open = false" class="absolute right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-10 py-1 min-w-[120px]">
+                    <a :href="'/admin/iocs/export?format=json'" class="block px-4 py-2 text-sm hover:bg-gray-700 text-gray-300">JSON</a>
+                    <a :href="'/admin/iocs/export?format=csv'" class="block px-4 py-2 text-sm hover:bg-gray-700 text-gray-300">CSV</a>
+                </div>
+            </div>
+            <button @click="openCreate()" class="sg-btn sg-btn-primary sg-btn-sm">
+                <i data-lucide="plus" class="w-4 h-4"></i> Add IOC
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="flex flex-col sm:flex-row gap-3 flex-wrap">
+        <select x-model="filters.type" @change="loadIocs()" class="sg-select">
+            <option value="">All Types</option>
+            <option value="ip">IP</option>
+            <option value="domain">Domain</option>
+            <option value="hash">Hash</option>
+            <option value="url">URL</option>
+            <option value="email">Email</option>
+        </select>
+        <select x-model="filters.severity" @change="loadIocs()" class="sg-select">
+            <option value="">All Severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+        </select>
+        <select x-model="filters.source" @change="loadIocs()" class="sg-select">
+            <option value="">All Sources</option>
+            <template x-for="s in sources" :key="s"><option :value="s" x-text="s"></option></template>
+        </select>
+        <input type="text" x-model="filters.search" @input.debounce.300ms="loadIocs()" placeholder="Search values..." class="sg-input flex-1 min-w-[200px]">
+    </div>
+
+    <!-- IOC Table -->
+    <div class="sg-card !p-0">
+        <div class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Value</th>
+                        <th>Source</th>
+                        <th>Severity</th>
+                        <th>Confidence</th>
+                        <th>First Seen</th>
+                        <th>Active</th>
+                        <th class="text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="ioc in iocs" :key="ioc.id">
+                        <tr>
+                            <td>
+                                <span class="sg-badge sg-badge-neutral" x-text="ioc.type"></span>
+                            </td>
+                            <td class="font-mono text-xs text-cyan-400 max-w-[200px] truncate" x-text="ioc.value"></td>
+                            <td class="text-gray-400 text-xs" x-text="ioc.source"></td>
+                            <td>
+                                <span class="sg-badge"
+                                    :class="ioc.severity === 'critical' ? 'sg-badge-danger' : ioc.severity === 'high' ? 'sg-badge-warning' : ioc.severity === 'medium' ? 'sg-badge-brand' : 'sg-badge-neutral'"
+                                    x-text="ioc.severity"></span>
+                            </td>
+                            <td class="text-gray-300" x-text="ioc.confidence + '%'"></td>
+                            <td class="text-gray-400 text-xs" x-text="ioc.first_seen ? new Date(ioc.first_seen).toLocaleDateString() : '—'"></td>
+                            <td>
+                                <button @click="toggleActive(ioc)" class="flex items-center gap-1">
+                                    <span class="sg-dot" :class="ioc.active ? 'sg-dot-success' : 'sg-dot-danger'"></span>
+                                    <span class="text-xs" :class="ioc.active ? 'text-green-400' : 'text-red-400'" x-text="ioc.active ? 'Active' : 'Inactive'"></span>
+                                </button>
+                            </td>
+                            <td class="text-right">
+                                <div class="flex items-center justify-end gap-1">
+                                    <button @click="editIoc(ioc)" class="sg-btn sg-btn-secondary sg-btn-sm">
+                                        <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <button @click="deleteIoc(ioc)" class="sg-btn sg-btn-danger sg-btn-sm">
+                                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <!-- Empty state -->
+        <div x-show="iocs.length === 0" class="sg-empty">
+            <div class="sg-empty-icon">
+                <i data-lucide="shield-x" class="w-8 h-8"></i>
+            </div>
+            <p class="sg-empty-title">No IOCs found</p>
+            <p class="sg-empty-desc">Add indicators manually or configure a feed source</p>
+        </div>
+        <!-- Pagination -->
+        <div x-show="iocs.length > 0" class="px-5 py-3 border-t border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-gray-400">
+            <span>Page <span x-text="page"></span> of <span x-text="totalPages"></span> (<span x-text="total"></span> total)</span>
+            <div class="flex gap-2">
+                <button @click="page > 1 && (page--, loadIocs())" :disabled="page <= 1" class="sg-btn sg-btn-secondary sg-btn-sm" :class="page <= 1 && 'opacity-50'">
+                    <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i> Prev
+                </button>
+                <button @click="page < totalPages && (page++, loadIocs())" :disabled="page >= totalPages" class="sg-btn sg-btn-secondary sg-btn-sm" :class="page >= totalPages && 'opacity-50'">
+                    Next <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feed Management -->
+    <div class="sg-card !p-0">
+        <div class="px-5 py-4 border-b border-gray-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                <i data-lucide="rss" class="w-4 h-4 text-cyan-400"></i> Feed Sources
+            </h3>
+            <div class="flex items-center gap-2">
+                <button @click="triggerAllFeeds()" class="sg-btn sg-btn-primary sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Update All
+                </button>
+                <button @click="openFeedCreate()" class="sg-btn sg-btn-success sg-btn-sm">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Feed
+                </button>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Type</th><th>Status</th>
+                        <th>Interval</th><th>Last Run</th><th>IOCs</th>
+                        <th>API Key</th><th class="text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="feed in feeds" :key="feed.id">
+                        <tr>
+                            <td class="font-medium text-cyan-400 text-xs" x-text="feed.name"></td>
+                            <td><span class="sg-badge sg-badge-neutral" x-text="feed.feed_type"></span></td>
+                            <td>
+                                <button @click="toggleFeed(feed)" class="sg-badge" :class="feed.enabled ? 'sg-badge-success' : 'sg-badge-danger'" x-text="feed.enabled ? 'Enabled' : 'Disabled'"></button>
+                            </td>
+                            <td class="text-gray-400 text-xs" x-text="feed.interval_minutes >= 60 ? Math.round(feed.interval_minutes/60) + 'h' : feed.interval_minutes + 'min'"></td>
+                            <td class="text-xs" :class="feed.last_error ? 'text-red-400' : 'text-gray-400'" x-text="feed.last_run ? new Date(feed.last_run).toLocaleString() : 'Never'"></td>
+                            <td class="text-gray-300 text-xs" x-text="feed.last_count"></td>
+                            <td>
+                                <span class="sg-badge" :class="feed.api_key_configured ? 'sg-badge-success' : 'sg-badge-warning'" x-text="feed.api_key_configured ? 'Configured' : 'Missing'"></span>
+                            </td>
+                            <td class="text-right">
+                                <div class="flex items-center justify-end gap-1">
+                                    <button @click="triggerFeed(feed)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Run now">
+                                        <i data-lucide="play" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <button @click="editFeed(feed)" class="sg-btn sg-btn-secondary sg-btn-sm">
+                                        <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <button @click="deleteFeed(feed)" class="sg-btn sg-btn-danger sg-btn-sm">
+                                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <div x-show="feeds.length === 0" class="sg-empty">
+            <div class="sg-empty-icon">
+                <i data-lucide="rss" class="w-8 h-8"></i>
+            </div>
+            <p class="sg-empty-title">No feeds configured</p>
+            <p class="sg-empty-desc">Add a threat intelligence feed to auto-import IOCs</p>
+        </div>
+    </div>
+
+    <!-- Feed Create/Edit Modal -->
+    <div x-show="showFeedModal" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg"
+             x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white" x-text="editingFeed ? 'Edit Feed' : 'Add Feed Source'"></h3>
+                <button @click="showFeedModal = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Name</label>
+                        <input type="text" x-model="feedForm.name" class="sg-input w-full" placeholder="My MISP Instance">
+                    </div>
+                    <div>
+                        <label class="sg-label">Provider Type</label>
+                        <select x-model="feedForm.feed_type" class="sg-select w-full">
+                            <option value="urlhaus">URLhaus</option>
+                            <option value="threatfox">ThreatFox</option>
+                            <option value="otx">AlienVault OTX</option>
+                            <option value="abuseipdb">AbuseIPDB</option>
+                            <option value="misp">MISP</option>
+                            <option value="opencti">OpenCTI</option>
+                            <option value="virustotal">VirusTotal</option>
+                            <option value="shodan">Shodan</option>
+                            <option value="circl">CIRCL</option>
+                            <option value="custom">Custom (URL/JSON)</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Feed URL</label>
+                    <input type="url" x-model="feedForm.url" class="sg-input w-full font-mono" placeholder="https://...">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">API Key</label>
+                        <input type="password" x-model="feedForm.api_key" class="sg-input w-full" :placeholder="editingFeed ? '(unchanged if empty)' : 'Optional'">
+                    </div>
+                    <div>
+                        <label class="sg-label">Auth Header Name</label>
+                        <input type="text" x-model="feedForm.auth_header" class="sg-input w-full" placeholder="Authorization">
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                        <label class="sg-label">Interval (minutes)</label>
+                        <input type="number" x-model.number="feedForm.interval_minutes" min="5" max="44640" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="sg-label">Min Confidence</label>
+                        <input type="number" x-model.number="feedForm.min_confidence" min="0" max="1" step="0.1" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="sg-label">Enabled</label>
+                        <select x-model="feedForm.enabled" class="sg-select w-full">
+                            <option :value="true">Yes</option>
+                            <option :value="false">No</option>
+                        </select>
+                    </div>
+                </div>
+                <div x-show="feedForm.last_error" class="bg-red-900/30 border border-red-700 rounded-lg p-2 text-xs text-red-300" x-text="feedForm.last_error"></div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showFeedModal = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="saveFeed()" class="sg-btn sg-btn-success sg-btn-sm">
+                    <i data-lucide="check" class="w-4 h-4"></i> Save Feed
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit IOC Modal -->
+    <div x-show="showModal" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md"
+             x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white" x-text="editingIoc ? 'Edit IOC' : 'Add IOC'"></h3>
+                <button @click="showModal = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Type</label>
+                        <select x-model="form.type" class="sg-select w-full">
+                            <option value="ip">IP</option>
+                            <option value="domain">Domain</option>
+                            <option value="hash">Hash</option>
+                            <option value="url">URL</option>
+                            <option value="email">Email</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="sg-label">Severity</label>
+                        <select x-model="form.severity" class="sg-select w-full">
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Value</label>
+                    <input type="text" x-model="form.value" class="sg-input w-full font-mono">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Confidence (%)</label>
+                        <input type="number" x-model="form.confidence" min="0" max="100" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="sg-label">Tags (comma-sep)</label>
+                        <input type="text" x-model="form.tags_str" class="sg-input w-full">
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Notes</label>
+                    <textarea x-model="form.notes" rows="2" class="sg-input w-full"></textarea>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showModal = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="saveIoc()" class="sg-btn sg-btn-success sg-btn-sm">
+                    <i data-lucide="check" class="w-4 h-4"></i> Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Import Modal -->
+    <div x-show="showBulk" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg"
+             x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white">Bulk Import IOCs</h3>
+                <button @click="showBulk = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+            </div>
+            <div class="p-6">
+                <label class="sg-label">JSON Array of IOCs</label>
+                <textarea x-model="bulkJson" rows="10" class="sg-input w-full font-mono" placeholder='[{"type":"ip","value":"1.2.3.4","severity":"high","confidence":90}]'></textarea>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showBulk = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="bulkImport()" class="sg-btn sg-btn-success sg-btn-sm">
+                    <i data-lucide="upload" class="w-4 h-4"></i> Import
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function iocsManager() {
+    return {
+        iocs: [],
+        feeds: [],
+        sources: [],
+        filters: { type: '', severity: '', source: '', search: '' },
+        page: 1,
+        perPage: 25,
+        total: 0,
+        totalPages: 1,
+        showModal: false,
+        showBulk: false,
+        showFeedModal: false,
+        editingIoc: null,
+        editingFeed: null,
+        bulkJson: '',
+        form: { type: 'ip', value: '', severity: 'medium', confidence: 80, notes: '', tags_str: '' },
+        feedForm: { name: '', feed_type: 'misp', url: '', api_key: '', auth_header: '', enabled: true, interval_minutes: 1440, min_confidence: 0.7, last_error: '' },
+        async init() {
+            await this.loadIocs();
+            await this.loadFeeds();
+        },
+        async loadIocs() {
+            let url = `/admin/iocs?page=${this.page}&per_page=${this.perPage}`;
+            if (this.filters.type) url += `&type=${this.filters.type}`;
+            if (this.filters.severity) url += `&severity=${this.filters.severity}`;
+            if (this.filters.source) url += `&source=${this.filters.source}`;
+            if (this.filters.search) url += `&search=${encodeURIComponent(this.filters.search)}`;
+            const resp = await fetch(url);
+            if (resp.ok) {
+                const data = await resp.json();
+                this.iocs = data.items || data;
+                this.total = data.total || this.iocs.length;
+                this.totalPages = Math.ceil(this.total / this.perPage) || 1;
+                const s = new Set(this.iocs.map(i => i.source).filter(Boolean));
+                if (this.sources.length === 0) this.sources = [...s];
+            }
+        },
+        async loadFeeds() {
+            const resp = await fetch('/admin/iocs/feeds');
+            if (resp.ok) this.feeds = await resp.json();
+        },
+        openCreate() {
+            this.editingIoc = null;
+            this.form = { type: 'ip', value: '', severity: 'medium', confidence: 80, notes: '', tags_str: '' };
+            this.showModal = true;
+        },
+        editIoc(ioc) {
+            this.editingIoc = ioc;
+            this.form = { ...ioc, tags_str: (ioc.tags || []).join(', ') };
+            this.showModal = true;
+        },
+        async saveIoc() {
+            const payload = { ...this.form, tags: (this.form.tags_str || '').split(',').map(t => t.trim()).filter(Boolean) };
+            delete payload.tags_str;
+            const method = this.editingIoc ? 'PUT' : 'POST';
+            const url = this.editingIoc ? `/admin/iocs/${this.editingIoc.id}` : '/admin/iocs';
+            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            if (resp.ok) { this.showModal = false; await this.loadIocs(); showToast('IOC saved', 'success'); }
+            else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
+        },
+        async deleteIoc(ioc) {
+            const ok = await showConfirm('Delete IOC', `Delete IOC "${ioc.value}"?`, 'Delete');
+            if (!ok) return;
+            await fetch(`/admin/iocs/${ioc.id}`, { method: 'DELETE' });
+            await this.loadIocs();
+            showToast('IOC deleted', 'success');
+        },
+        async toggleActive(ioc) {
+            await fetch(`/admin/iocs/${ioc.id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ...ioc, active: !ioc.active }) });
+            ioc.active = !ioc.active;
+        },
+        async bulkImport() {
+            try {
+                const data = JSON.parse(this.bulkJson);
+                const resp = await fetch('/admin/iocs/bulk', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+                if (resp.ok) { this.showBulk = false; this.bulkJson = ''; await this.loadIocs(); showToast('Import successful', 'success'); }
+                else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
+            } catch(e) { showToast('Invalid JSON: ' + e.message, 'error'); }
+        },
+        openFeedCreate() {
+            this.editingFeed = null;
+            this.feedForm = { name: '', feed_type: 'misp', url: '', api_key: '', auth_header: '', enabled: true, interval_minutes: 1440, min_confidence: 0.7, last_error: '' };
+            this.showFeedModal = true;
+        },
+        editFeed(feed) {
+            this.editingFeed = feed;
+            this.feedForm = { ...feed, api_key: '' };
+            this.showFeedModal = true;
+        },
+        async saveFeed() {
+            const payload = { ...this.feedForm };
+            if (this.editingFeed && !payload.api_key) delete payload.api_key;
+            delete payload.last_error;
+            delete payload.last_run;
+            delete payload.last_count;
+            delete payload.api_key_configured;
+            delete payload.created_at;
+            delete payload.id;
+
+            const method = this.editingFeed ? 'PUT' : 'POST';
+            const url = this.editingFeed ? `/admin/iocs/feeds/${this.editingFeed.id}` : '/admin/iocs/feeds';
+            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            if (resp.ok) { this.showFeedModal = false; await this.loadFeeds(); showToast('Feed saved', 'success'); }
+            else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
+        },
+        async deleteFeed(feed) {
+            const ok = await showConfirm('Delete Feed', `Delete feed "${feed.name}"? This will not remove already imported IOCs.`, 'Delete');
+            if (!ok) return;
+            await fetch(`/admin/iocs/feeds/${feed.id}`, { method: 'DELETE' });
+            await this.loadFeeds();
+            showToast('Feed deleted', 'success');
+        },
+        async toggleFeed(feed) {
+            await fetch(`/admin/iocs/feeds/${feed.id}/toggle`, { method: 'PATCH' });
+            feed.enabled = !feed.enabled;
+        },
+        async triggerFeed(feed) {
+            showToast(`Updating ${feed.name}...`, 'info');
+            const resp = await fetch(`/admin/iocs/feeds/update?feed_id=${feed.id}`, { method: 'POST' });
+            if (resp.ok) {
+                const data = await resp.json();
+                const result = data.feeds[feed.id];
+                if (result?.status === 'ok') showToast(`${feed.name}: ${result.count} IOCs added`, 'success');
+                else showToast(`${feed.name}: ${result?.error || 'error'}`, 'error');
+            } else showToast('Feed update failed', 'error');
+            await this.loadFeeds();
+        },
+        async triggerAllFeeds() {
+            showToast('Updating all feeds...', 'info');
+            const resp = await fetch('/admin/iocs/feeds/update', { method: 'POST' });
+            if (resp.ok) {
+                const data = await resp.json();
+                showToast(`Feed update complete: ${data.total_added} IOCs added`, 'success');
+            } else showToast('Feed update failed', 'error');
+            await this.loadFeeds();
+        }
+    };
+}
+</script>
+{% endblock %}

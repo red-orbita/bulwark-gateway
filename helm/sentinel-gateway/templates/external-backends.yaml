@@ -1,0 +1,59 @@
+{{- if ne .Values.backend.type "none" }}
+{{- if eq .Values.backend.type "ip" }}
+---
+# External Backend Service (headless) — {{ .Values.backend.serviceName }}
+# Provides stable DNS: {{ .Values.backend.serviceName }}.{{ include "sentinel-gateway.namespace" . }}.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.backend.serviceName }}
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external-backend
+    app.kubernetes.io/name: {{ .Values.backend.serviceName }}
+spec:
+  clusterIP: None
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: {{ .Values.backend.port }}
+      protocol: TCP
+---
+# External Backend Endpoints — routes to {{ .Values.backend.ip }}:{{ .Values.backend.port }}
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: {{ .Values.backend.serviceName }}
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external-backend
+subsets:
+  - addresses:
+      - ip: {{ .Values.backend.ip | quote }}
+    ports:
+      - name: http
+        port: {{ .Values.backend.port }}
+        protocol: TCP
+{{- else if eq .Values.backend.type "externalName" }}
+---
+# External Backend Service (ExternalName) — {{ .Values.backend.serviceName }}
+# DNS alias: {{ .Values.backend.serviceName }}.{{ include "sentinel-gateway.namespace" . }}.svc → {{ .Values.backend.externalName }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.backend.serviceName }}
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external-backend
+    app.kubernetes.io/name: {{ .Values.backend.serviceName }}
+spec:
+  type: ExternalName
+  externalName: {{ .Values.backend.externalName }}
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,60 @@
+# ============================================================
+# Sentinel Gateway — Admin Portal
+# Separate service, zero impact on proxy hot path
+# ============================================================
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+# Install build deps for pysqlcipher3
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libsqlcipher-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY requirements-admin.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements-admin.lock && \
+    pip install --no-cache-dir PyJWT==2.13.0 redis==8.0.0
+
+# ============================================================
+FROM python:3.12-slim AS runtime
+
+LABEL org.opencontainers.image.title="sentinel-gateway-admin"
+LABEL org.opencontainers.image.description="Admin portal for Sentinel Gateway"
+LABEL org.opencontainers.image.version="0.2.0"
+
+# Runtime deps for SQLCipher
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsqlcipher-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r sentinel && useradd -r -g sentinel -s /bin/false sentinel
+
+WORKDIR /app
+
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application code
+COPY src/ src/
+COPY admin/ admin/
+COPY config/ config/
+
+# Create writable directories for audit DB and backups
+# Remove pip to reduce post-exploitation surface
+RUN mkdir -p data reports config/policies/.backup && \
+    chown -R sentinel:sentinel /app && \
+    rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
+
+USER sentinel
+
+EXPOSE 8090
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/admin/health')"
+
+CMD ["python", "-m", "uvicorn", "admin.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8090", \
+     "--log-level", "info", \
+     "--no-server-header"]

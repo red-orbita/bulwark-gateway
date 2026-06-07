@@ -1,0 +1,93 @@
+{{- /* Validate required values */ -}}
+{{- include "sentinel-gateway.validateValues" . }}
+---
+# Proxy ConfigMap — environment variables for the proxy container
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-config
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.proxy.labels" . | nindent 4 }}
+data:
+  SENTINEL_AGENTS_FILE: "/app/shared/admin/agents.yaml"
+  SENTINEL_FAIL_MODE: {{ .Values.proxy.failMode | quote }}
+  SENTINEL_LOG_FORMAT: "json"
+  SENTINEL_LOG_LEVEL: {{ .Values.proxy.logLevel | quote }}
+  SENTINEL_RATE_LIMIT_RPM: {{ .Values.proxy.rateLimit | quote }}
+  SENTINEL_WORKERS: {{ .Values.proxy.workers | quote }}
+  SENTINEL_TELEMETRY_ENABLED: {{ .Values.telemetry.enabled | quote }}
+  SENTINEL_TELEMETRY_BATCH_SIZE: {{ .Values.telemetry.batchSize | quote }}
+  SENTINEL_TELEMETRY_FLUSH_INTERVAL: {{ .Values.telemetry.flushInterval | quote }}
+  SENTINEL_SIEM_STATS_FILE: "/app/shared/siem/siem_stats.json"
+  SENTINEL_SIEM_TRANSPORTS_FILE: "/app/shared/siem/siem_transports.json"
+  SENTINEL_REDIS_URL: {{ include "sentinel-gateway.redis.url" . | quote }}
+  {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls .Values.externalRedis.tlsInsecure }}
+  SENTINEL_REDIS_TLS_INSECURE: "true"
+  {{- end }}
+  # File paths for secrets mounted as volumes
+  SENTINEL_JWT_SECRET_FILE: "/run/secrets/jwt-secret"
+  SENTINEL_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  SENTINEL_API_KEYS_FILE: "/run/secrets/api-keys"
+  SENTINEL_URLHAUS_KEY_FILE: "/run/secrets/urlhaus-key"
+  SENTINEL_THREATFOX_KEY_FILE: "/run/secrets/threatfox-key"
+  SENTINEL_OTX_KEY_FILE: "/run/secrets/otx-key"
+  SENTINEL_ABUSEIPDB_KEY_FILE: "/run/secrets/abuseipdb-key"
+  SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+---
+# Admin ConfigMap — environment variables for the admin container
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: admin-config
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.admin.labels" . | nindent 4 }}
+data:
+  ADMIN_JWT_EXPIRY_HOURS: {{ .Values.admin.jwtExpiryHours | quote }}
+  ADMIN_CORS_ORIGINS: {{ .Values.admin.corsOrigins | quote }}
+  SENTINEL_TELEMETRY_ENABLED: {{ .Values.telemetry.enabled | quote }}
+  SENTINEL_REDIS_URL: {{ include "sentinel-gateway.redis.url" . | quote }}
+  {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls .Values.externalRedis.tlsInsecure }}
+  SENTINEL_REDIS_TLS_INSECURE: "true"
+  {{- end }}
+  # File paths for secrets mounted as volumes
+  SENTINEL_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  ADMIN_JWT_SECRET_FILE: "/run/secrets/admin-jwt-secret"
+  ADMIN_PASSWORD_FILE: "/run/secrets/admin-password"
+  SECURITY_PASSWORD_FILE: "/run/secrets/security-password"
+  AUDITOR_PASSWORD_FILE: "/run/secrets/auditor-password"
+  DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
+  SENTINEL_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
+  SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+{{- if .Values.redis.enabled }}
+---
+# Redis ConfigMap — hardened redis.conf
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+data:
+  redis.conf: |
+    maxmemory {{ .Values.redis.maxMemory }}
+    maxmemory-policy allkeys-lru
+    save 60 1000
+    appendonly yes
+    protected-mode yes
+    # Block dangerous commands entirely
+    rename-command FLUSHALL ""
+    rename-command FLUSHDB ""
+    rename-command CONFIG ""
+    rename-command DEBUG ""
+    rename-command KEYS ""
+    rename-command SHUTDOWN ""
+    rename-command SLAVEOF ""
+    rename-command REPLICAOF ""
+    rename-command MODULE ""
+    rename-command SCRIPT ""
+    rename-command EVAL ""
+    rename-command EVALSHA ""
+{{- end }}

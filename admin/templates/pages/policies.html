@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block title %}Policies — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Policies{% endblock %}
+{% block content %}
+<div class="space-y-6" x-data="policiesManager()" x-init="init()">
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Policy Management</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Configure tool access, rate limits, and sandbox levels per tenant/agent</p>
+        </div>
+        <button @click="showCreate = true; resetForm()" class="sg-btn sg-btn-primary">
+            <i data-lucide="plus" class="w-4 h-4"></i> New Policy
+        </button>
+    </div>
+
+    <!-- Search & Filters -->
+    <div class="sg-card !p-3">
+        <div class="flex flex-col sm:flex-row gap-3">
+            <div class="relative flex-1">
+                <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"></i>
+                <input type="text" x-model="search" placeholder="Search policies by name or tenant..."
+                       class="sg-input pl-10">
+            </div>
+            <select x-model="filterStatus" class="sg-select w-auto sm:w-36">
+                <option value="all">All Status</option>
+                <option value="active">Active</option>
+                <option value="disabled">Disabled</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Policy List -->
+    <div class="sg-card !p-0 overflow-hidden">
+        <!-- Loading -->
+        <div x-show="loading" class="p-6 space-y-3">
+            <div class="sg-skeleton h-14 w-full"></div>
+            <div class="sg-skeleton h-14 w-full"></div>
+            <div class="sg-skeleton h-14 w-full"></div>
+        </div>
+
+        <!-- Empty -->
+        <div x-show="!loading && filteredPolicies.length === 0" class="sg-empty">
+            <i data-lucide="file-shield" class="sg-empty-icon"></i>
+            <p class="sg-empty-title">No policies found</p>
+            <p class="sg-empty-desc">Create your first policy to start controlling tool access for your agents</p>
+            <button @click="showCreate = true; resetForm()" class="sg-btn sg-btn-primary sg-btn-sm mt-4">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create Policy
+            </button>
+        </div>
+
+        <!-- Policy rows -->
+        <div x-show="!loading && filteredPolicies.length > 0" class="divide-y divide-gray-800">
+            <template x-for="policy in filteredPolicies" :key="policy.name">
+                <div class="px-5 py-4 hover:bg-gray-800/30 transition-colors flex items-center gap-4">
+                    <!-- Icon + Info -->
+                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
+                         :class="policy.active ? 'bg-emerald-500/10' : 'bg-gray-700/50'">
+                        <i data-lucide="file-shield" class="w-5 h-5" :class="policy.active ? 'text-emerald-400' : 'text-gray-500'"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="font-mono text-sm text-white font-medium" x-text="policy.name"></span>
+                            <span class="sg-badge" :class="policy.active ? 'sg-badge-success' : 'sg-badge-neutral'"
+                                  x-text="policy.active ? 'Active' : 'Disabled'"></span>
+                            <span class="sg-badge sg-badge-brand" x-text="policy.sandbox_level || 'strict'"></span>
+                        </div>
+                        <div class="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
+                            <span class="flex items-center gap-1"><i data-lucide="building-2" class="w-3 h-3"></i> <span x-text="policy.tenant"></span></span>
+                            <span class="flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> <span x-text="(policy.agents||[]).join(', ') || 'all'"></span></span>
+                            <span class="flex items-center gap-1"><i data-lucide="calendar" class="w-3 h-3"></i> <span x-text="policy.last_modified ? new Date(policy.last_modified).toLocaleDateString() : '—'"></span></span>
+                        </div>
+                    </div>
+                    <!-- Actions -->
+                    <div class="flex items-center gap-1.5">
+                        <button @click="togglePolicy(policy)" class="sg-btn sg-btn-ghost sg-btn-sm" :title="policy.active ? 'Disable' : 'Enable'">
+                            <i :data-lucide="policy.active ? 'pause' : 'play'" class="w-4 h-4"></i>
+                        </button>
+                        <button @click="editPolicy(policy)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Edit">
+                            <i data-lucide="pencil" class="w-4 h-4"></i>
+                        </button>
+                        <button @click="viewVersions(policy)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Version history">
+                            <i data-lucide="history" class="w-4 h-4"></i>
+                        </button>
+                        <button @click="deletePolicy(policy)" class="sg-btn sg-btn-ghost sg-btn-sm text-red-400 hover:text-red-300" title="Delete">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Footer count -->
+        <div x-show="!loading && filteredPolicies.length > 0" class="px-5 py-3 border-t border-gray-800 text-[11px] text-gray-500">
+            Showing <span x-text="filteredPolicies.length"></span> of <span x-text="policies.length"></span> policies
+        </div>
+    </div>
+
+    <!-- Create/Edit Modal -->
+    <div x-show="showCreate || editingPolicy" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
+         x-transition:leave="transition duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="showCreate=false; editingPolicy=null"></div>
+        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+             x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0 scale-95">
+            <!-- Modal header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700/50">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center">
+                        <i data-lucide="file-shield" class="w-4 h-4 text-brand-400"></i>
+                    </div>
+                    <h3 class="text-base font-semibold text-white" x-text="editingPolicy ? 'Edit Policy' : 'Create Policy'"></h3>
+                </div>
+                <button @click="showCreate=false; editingPolicy=null" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <!-- Modal body -->
+            <div class="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Policy Name</label>
+                        <input type="text" x-model="form.name" class="sg-input font-mono" :disabled="editingPolicy" placeholder="corp-prod">
+                    </div>
+                    <div>
+                        <label class="sg-label">Tenant ID</label>
+                        <input type="text" x-model="form.tenant_id" class="sg-input" placeholder="example-corp">
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Agent ID <span class="text-gray-600">(optional)</span></label>
+                        <input type="text" x-model="form.agent_id" class="sg-input" placeholder="support-bot">
+                    </div>
+                    <div>
+                        <label class="sg-label">Sandbox Level</label>
+                        <select x-model="form.sandbox_level" class="sg-select">
+                            <option value="strict">Strict — Block all unknown tools</option>
+                            <option value="moderate">Moderate — Allow read tools</option>
+                            <option value="permissive">Permissive — Allow most tools</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Allowed Tools <span class="text-gray-600">(comma-separated)</span></label>
+                    <input type="text" x-model="form.allowed_tools_str" class="sg-input font-mono text-xs" placeholder="read_file, list_dir, search_code">
+                </div>
+                <div>
+                    <label class="sg-label">Denied Tools <span class="text-gray-600">(comma-separated)</span></label>
+                    <input type="text" x-model="form.denied_tools_str" class="sg-input font-mono text-xs" placeholder="execute_command, delete_file, write_file">
+                </div>
+                <div class="grid grid-cols-3 gap-4">
+                    <div>
+                        <label class="sg-label">Max Tool Calls</label>
+                        <input type="number" x-model="form.max_tool_calls" class="sg-input">
+                    </div>
+                    <div>
+                        <label class="sg-label">Rate Limit (req/min)</label>
+                        <input type="number" x-model="form.rate_limit" class="sg-input">
+                    </div>
+                    <div>
+                        <label class="sg-label">Token Budget</label>
+                        <input type="number" x-model="form.token_budget" class="sg-input">
+                    </div>
+                </div>
+                <!-- YAML Preview -->
+                <div>
+                    <label class="sg-label">YAML Preview</label>
+                    <pre class="bg-gray-800 border border-gray-700 rounded-lg p-4 text-[11px] font-mono text-gray-300 max-h-36 overflow-auto leading-relaxed" x-text="yamlPreview"></pre>
+                </div>
+                <!-- Validation -->
+                <div x-show="validationResult" x-cloak x-transition class="flex items-center gap-2 px-4 py-3 rounded-lg border"
+                     :class="validationResult?.valid ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'">
+                    <i :data-lucide="validationResult?.valid ? 'check-circle-2' : 'x-circle'" class="w-4 h-4" :class="validationResult?.valid ? 'text-emerald-400' : 'text-red-400'"></i>
+                    <span class="text-xs" :class="validationResult?.valid ? 'text-emerald-300' : 'text-red-300'" x-text="validationResult?.valid ? 'Policy is valid' : (validationResult?.errors || []).join(', ')"></span>
+                </div>
+            </div>
+            <!-- Modal footer -->
+            <div class="px-6 py-4 border-t border-gray-700/50 flex justify-end gap-2">
+                <button @click="showCreate=false; editingPolicy=null" class="sg-btn sg-btn-ghost">Cancel</button>
+                <button @click="dryRun()" class="sg-btn sg-btn-warning sg-btn-sm">
+                    <i data-lucide="flask-conical" class="w-3.5 h-3.5"></i> Validate
+                </button>
+                <button @click="savePolicy()" class="sg-btn sg-btn-primary">
+                    <i data-lucide="save" class="w-4 h-4"></i> Save & Apply
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function policiesManager() {
+    return {
+        policies: [],
+        search: '',
+        filterStatus: 'all',
+        showCreate: false,
+        editingPolicy: null,
+        validationResult: null,
+        loading: true,
+        form: { name: '', tenant_id: 'default', agent_id: '', sandbox_level: 'strict', allowed_tools_str: '', denied_tools_str: '', max_tool_calls: 50, rate_limit: 60, token_budget: 100000 },
+
+        get filteredPolicies() {
+            let result = this.policies;
+            if (this.search) {
+                const s = this.search.toLowerCase();
+                result = result.filter(p => p.name.toLowerCase().includes(s) || (p.tenant||'').toLowerCase().includes(s));
+            }
+            if (this.filterStatus !== 'all') {
+                result = result.filter(p => this.filterStatus === 'active' ? p.active : !p.active);
+            }
+            return result;
+        },
+
+        get yamlPreview() {
+            const allowed = (this.form.allowed_tools_str||'').split(',').filter(t=>t.trim()).map(t=>'  - '+t.trim()).join('\n');
+            const denied = (this.form.denied_tools_str||'').split(',').filter(t=>t.trim()).map(t=>'  - '+t.trim()).join('\n');
+            return `name: ${this.form.name}\ntenant_id: ${this.form.tenant_id}\nagent_id: ${this.form.agent_id || '*'}\nsandbox_level: ${this.form.sandbox_level}\nallowed_tools:\n${allowed || '  []'}\ndenied_tools:\n${denied || '  []'}\nmax_tool_calls: ${this.form.max_tool_calls}\nrate_limit: ${this.form.rate_limit}\ntoken_budget: ${this.form.token_budget}`;
+        },
+
+        async init() {
+            this.loading = true;
+            try {
+                const resp = await fetch('/admin/policies/');
+                if (resp.ok) this.policies = await resp.json();
+            } catch(e) { showToast('Failed to load policies', 'error'); }
+            this.loading = false;
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        resetForm() {
+            this.form = { name: '', tenant_id: 'default', agent_id: '', sandbox_level: 'strict', allowed_tools_str: '', denied_tools_str: '', max_tool_calls: 50, rate_limit: 60, token_budget: 100000 };
+            this.validationResult = null;
+        },
+
+        async togglePolicy(policy) {
+            const resp = await fetch(`/admin/policies/${policy.name}/toggle`, { method: 'POST' });
+            if (resp.ok) { policy.active = !policy.active; showToast(`Policy ${policy.active ? 'enabled' : 'disabled'}`, 'success'); }
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        editPolicy(policy) {
+            this.editingPolicy = policy;
+            this.form = { ...policy, allowed_tools_str: (policy.allowed_tools||[]).join(', '), denied_tools_str: (policy.denied_tools||[]).join(', ') };
+            this.validationResult = null;
+        },
+
+        async deletePolicy(policy) {
+            const ok = await showConfirm('Delete Policy', `Are you sure you want to delete "${policy.name}"? This action cannot be undone.`, 'Delete');
+            if (!ok) return;
+            const resp = await fetch(`/admin/policies/${policy.name}`, { method: 'DELETE' });
+            if (resp.ok) { await this.init(); showToast('Policy deleted', 'success'); }
+            else showToast('Failed to delete', 'error');
+        },
+
+        async viewVersions(policy) {
+            const resp = await fetch(`/admin/policies/${policy.name}/versions`);
+            if (resp.ok) { const data = await resp.json(); showToast(`${data.length} version(s) available`, 'info'); }
+        },
+
+        async dryRun() {
+            this.validationResult = null;
+            const body = this.buildPayload();
+            try {
+                const resp = await fetch('/admin/validate/dry-run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ type: 'policy', content: body }) });
+                this.validationResult = await resp.json();
+            } catch(e) { this.validationResult = { valid: false, errors: [e.message] }; }
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        async savePolicy() {
+            const body = this.buildPayload();
+            const method = this.editingPolicy ? 'PUT' : 'POST';
+            const url = this.editingPolicy ? `/admin/policies/${this.form.name}` : '/admin/policies/';
+            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+            if (resp.ok) { this.showCreate = false; this.editingPolicy = null; await this.init(); showToast('Policy saved successfully', 'success'); }
+            else { const err = await resp.json().catch(()=>({})); showToast(err.detail || 'Failed to save', 'error'); }
+        },
+
+        buildPayload() {
+            return {
+                name: this.form.name,
+                tenant_id: this.form.tenant_id,
+                agent_id: this.form.agent_id || '*',
+                sandbox_level: this.form.sandbox_level,
+                allowed_tools: (this.form.allowed_tools_str||'').split(',').map(t=>t.trim()).filter(Boolean),
+                denied_tools: (this.form.denied_tools_str||'').split(',').map(t=>t.trim()).filter(Boolean),
+                max_tool_calls: parseInt(this.form.max_tool_calls) || 50,
+                rate_limit: parseInt(this.form.rate_limit) || 60,
+                token_budget: parseInt(this.form.token_budget) || 100000,
+                enabled: true,
+            };
+        }
+    };
+}
+</script>
+{% endblock %}

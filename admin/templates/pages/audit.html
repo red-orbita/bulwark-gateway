@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Audit Log — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Audit Log{% endblock %}
+{% block content %}
+<div x-data="auditManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Audit Log</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Track all administrative actions and configuration changes</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="exportCSV()" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <i data-lucide="download" class="w-4 h-4"></i> Export CSV
+            </button>
+            <button @click="exportJSON()" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <i data-lucide="file-json" class="w-4 h-4"></i> Export JSON
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="sg-card">
+        <div class="flex flex-col sm:flex-row gap-3">
+            <div class="flex-1">
+                <input type="text" x-model="filters.search" @input.debounce.300ms="loadEntries()" placeholder="Search..." class="sg-input w-full">
+            </div>
+            <select x-model="filters.action" @change="loadEntries()" class="sg-select">
+                <option value="">All Actions</option>
+                <option value="policy_create">Policy Create</option>
+                <option value="policy_update">Policy Update</option>
+                <option value="policy_delete">Policy Delete</option>
+                <option value="policy_toggle">Policy Toggle</option>
+                <option value="guardrail_update">Guardrail Update</option>
+                <option value="siem_update">SIEM Update</option>
+                <option value="config_apply">Config Apply</option>
+                <option value="config_rollback">Config Rollback</option>
+                <option value="login">Login</option>
+            </select>
+            <select x-model="filters.user" @change="loadEntries()" class="sg-select">
+                <option value="">All Users</option>
+                <option value="admin">admin</option>
+                <option value="security">security</option>
+                <option value="auditor">auditor</option>
+            </select>
+            <input type="date" x-model="filters.date_from" @change="loadEntries()" class="sg-input">
+        </div>
+    </div>
+
+    <!-- Loading skeleton -->
+    <div x-show="loading" class="sg-card !p-0">
+        <div class="p-4 space-y-3">
+            <div class="sg-skeleton h-4 w-full"></div>
+            <div class="sg-skeleton h-4 w-full"></div>
+            <div class="sg-skeleton h-4 w-3/4"></div>
+            <div class="sg-skeleton h-4 w-full"></div>
+            <div class="sg-skeleton h-4 w-5/6"></div>
+        </div>
+    </div>
+
+    <!-- Entries Table -->
+    <div x-show="!loading" class="sg-card !p-0">
+        <div class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>User</th>
+                        <th>Action</th>
+                        <th>Target</th>
+                        <th>Status</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="entry in entries" :key="entry.id">
+                        <tr>
+                            <td class="font-mono text-xs text-gray-400" x-text="entry.timestamp"></td>
+                            <td x-text="entry.user"></td>
+                            <td>
+                                <span class="sg-badge" :class="entry.action.includes('delete') ? 'sg-badge-danger' : entry.action.includes('create') ? 'sg-badge-success' : 'sg-badge-brand'" x-text="entry.action"></span>
+                            </td>
+                            <td class="font-mono text-xs" x-text="entry.target"></td>
+                            <td>
+                                <span class="sg-badge" :class="entry.status === 'success' ? 'sg-badge-success' : 'sg-badge-danger'" x-text="entry.status"></span>
+                            </td>
+                            <td class="text-gray-400 max-w-xs truncate" x-text="entry.details"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Empty state -->
+        <div x-show="entries.length === 0 && !loading" class="sg-empty">
+            <div class="sg-empty-icon">
+                <i data-lucide="scroll-text" class="w-8 h-8"></i>
+            </div>
+            <p class="sg-empty-title">No audit entries found</p>
+            <p class="sg-empty-desc">Try adjusting your filters or date range</p>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    <div x-show="entries.length > 0" class="flex flex-col sm:flex-row justify-between items-center gap-3 text-sm text-gray-400">
+        <span x-text="'Showing ' + entries.length + ' of ' + total + ' entries'"></span>
+        <div class="flex items-center gap-2">
+            <button @click="page = Math.max(1, page-1); loadEntries()" :disabled="page <= 1" class="sg-btn sg-btn-secondary sg-btn-sm" :class="page <= 1 && 'opacity-50 cursor-not-allowed'">
+                <i data-lucide="chevron-left" class="w-4 h-4"></i> Prev
+            </button>
+            <span x-text="'Page ' + page"></span>
+            <button @click="page++; loadEntries()" class="sg-btn sg-btn-secondary sg-btn-sm">
+                Next <i data-lucide="chevron-right" class="w-4 h-4"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+function auditManager() {
+    return {
+        entries: [],
+        total: 0,
+        page: 1,
+        loading: false,
+        filters: { search: '', action: '', user: '', date_from: '' },
+        async init() { await this.loadEntries(); },
+        async loadEntries() {
+            this.loading = true;
+            const params = new URLSearchParams({ limit: 50, offset: (this.page - 1) * 50 });
+            if (this.filters.action) params.set('action', this.filters.action);
+            if (this.filters.user) params.set('actor', this.filters.user);
+            const resp = await fetch('/admin/audit?' + params);
+            if (resp.ok) {
+                const data = await resp.json();
+                this.entries = (data || []).map(e => ({
+                    id: e.id,
+                    timestamp: e.timestamp ? new Date(e.timestamp).toLocaleString() : '',
+                    user: e.actor,
+                    action: e.action,
+                    target: (e.resource_type || '') + '/' + (e.resource_id || ''),
+                    status: e.result || 'success',
+                    details: e.details || ''
+                }));
+                this.total = this.entries.length;
+            }
+            this.loading = false;
+        },
+        async exportCSV() { window.open('/admin/audit/export?format=csv'); },
+        async exportJSON() { window.open('/admin/audit/export?format=json'); }
+    };
+}
+</script>
+{% endblock %}

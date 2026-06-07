@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+{% block title %}Notifications — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Notification Channels{% endblock %}
+{% block content %}
+<div x-data="notificationManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Notification Channels</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Configure alert destinations for security events (Slack, Teams, Email, PagerDuty, etc.)</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="reloadChannels()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i> Reload
+            </button>
+            <button @click="editingId = null; resetForm(); showCreate = true" class="sg-btn sg-btn-primary sg-btn-sm">
+                <i data-lucide="plus" class="w-4 h-4"></i> Add Channel
+            </button>
+        </div>
+    </div>
+
+    <!-- Channel Cards -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <template x-for="ch in channels" :key="ch.id">
+            <div class="sg-card">
+                <div class="flex items-start justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg flex items-center justify-center text-lg"
+                             :class="typeColor(ch.type)">
+                            <span x-text="typeIcon(ch.type)"></span>
+                        </div>
+                        <div>
+                            <h3 class="font-semibold text-white text-sm" x-text="ch.name"></h3>
+                            <p class="text-xs text-gray-400">
+                                <span class="font-mono" x-text="ch.type"></span>
+                                <span class="mx-1">·</span>
+                                <span x-text="'≥ ' + ch.min_severity"></span>
+                                <span class="mx-1">·</span>
+                                <span x-text="ch.verdicts.join(', ')"></span>
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="sg-badge" :class="ch.enabled ? 'sg-badge-success' : 'sg-badge-danger'"
+                              x-text="ch.enabled ? 'Active' : 'Disabled'"></span>
+                    </div>
+                </div>
+                <div class="mt-3 pt-3 border-t border-gray-700/50 flex items-center gap-2">
+                    <button @click="editChannel(ch)" class="sg-btn sg-btn-ghost sg-btn-xs">
+                        <i data-lucide="pencil" class="w-3 h-3"></i> Edit
+                    </button>
+                    <button @click="toggleChannel(ch.id)" class="sg-btn sg-btn-ghost sg-btn-xs"
+                            x-text="ch.enabled ? 'Disable' : 'Enable'"></button>
+                    <button @click="testChannel(ch.id)" class="sg-btn sg-btn-ghost sg-btn-xs">
+                        <i data-lucide="zap" class="w-3 h-3"></i> Test
+                    </button>
+                    <button @click="deleteChannel(ch.id)" class="sg-btn sg-btn-ghost sg-btn-xs text-red-400">
+                        <i data-lucide="trash-2" class="w-3 h-3"></i> Delete
+                    </button>
+                </div>
+                <!-- Test result -->
+                <template x-if="testResults[ch.id]">
+                    <div class="mt-2 px-3 py-2 rounded text-xs"
+                         :class="testResults[ch.id].success ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'"
+                         x-text="testResults[ch.id].message"></div>
+                </template>
+            </div>
+        </template>
+    </div>
+
+    <!-- Empty state -->
+    <template x-if="channels.length === 0 && !loading">
+        <div class="sg-card text-center py-12">
+            <i data-lucide="bell-off" class="w-12 h-12 mx-auto text-gray-600"></i>
+            <h3 class="mt-4 text-sm font-semibold text-white">No notification channels configured</h3>
+            <p class="text-sm text-gray-400 mt-1">Add a channel to receive alerts when security events occur.</p>
+            <button @click="showCreate = true" class="sg-btn sg-btn-primary sg-btn-sm mt-4">
+                <i data-lucide="plus" class="w-4 h-4"></i> Add Channel
+            </button>
+        </div>
+    </template>
+
+    <!-- Create/Edit Modal -->
+    <template x-if="showCreate">
+        <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showCreate = false; editingId = null;">
+            <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+                <h2 class="text-lg font-semibold text-white mb-4" x-text="editingId ? 'Edit Notification Channel' : 'Add Notification Channel'"></h2>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="sg-label">Name</label>
+                        <input x-model="form.name" class="sg-input" placeholder="e.g. #security-alerts">
+                    </div>
+
+                    <div>
+                        <label class="sg-label">Type</label>
+                        <select x-model="form.type" @change="formTypeChanged()" class="sg-input">
+                            <option value="slack">Slack</option>
+                            <option value="teams">Microsoft Teams</option>
+                            <option value="discord">Discord</option>
+                            <option value="pagerduty">PagerDuty</option>
+                            <option value="opsgenie">Opsgenie</option>
+                            <option value="telegram">Telegram</option>
+                            <option value="google_chat">Google Chat</option>
+                            <option value="email">Email (SMTP)</option>
+                            <option value="generic">Generic Webhook</option>
+                        </select>
+                    </div>
+
+                    <!-- URL-based channels -->
+                    <template x-if="['slack','teams','discord','google_chat','generic'].includes(form.type)">
+                        <div>
+                            <label class="sg-label">Webhook URL</label>
+                            <input x-model="form.url" class="sg-input" placeholder="https://...">
+                        </div>
+                    </template>
+
+                    <!-- PagerDuty -->
+                    <template x-if="form.type === 'pagerduty'">
+                        <div>
+                            <label class="sg-label">Integration/Routing Key</label>
+                            <input x-model="form.routing_key" class="sg-input" placeholder="Your PagerDuty integration key">
+                        </div>
+                    </template>
+
+                    <!-- Opsgenie -->
+                    <template x-if="form.type === 'opsgenie'">
+                        <div>
+                            <label class="sg-label">API Key</label>
+                            <input x-model="form.api_key" class="sg-input" placeholder="Opsgenie API key">
+                        </div>
+                    </template>
+
+                    <!-- Telegram -->
+                    <template x-if="form.type === 'telegram'">
+                        <div class="space-y-3">
+                            <div>
+                                <label class="sg-label">Bot Token</label>
+                                <input x-model="form.bot_token" class="sg-input" placeholder="123456789:ABC...">
+                            </div>
+                            <div>
+                                <label class="sg-label">Chat ID</label>
+                                <input x-model="form.chat_id" class="sg-input" placeholder="-1001234567890">
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Email -->
+                    <template x-if="form.type === 'email'">
+                        <div class="space-y-3">
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="sg-label">SMTP Host</label>
+                                    <input x-model="form.smtp_host" class="sg-input" placeholder="smtp.gmail.com">
+                                </div>
+                                <div>
+                                    <label class="sg-label">Port</label>
+                                    <input x-model.number="form.smtp_port" type="number" class="sg-input" placeholder="587">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="sg-label">Username</label>
+                                    <input x-model="form.smtp_user" class="sg-input" placeholder="user@company.com">
+                                </div>
+                                <div>
+                                    <label class="sg-label">Password</label>
+                                    <input x-model="form.smtp_password" type="password" class="sg-input">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="sg-label">From Address</label>
+                                <input x-model="form.smtp_from" class="sg-input" placeholder="alerts@company.com">
+                            </div>
+                            <div>
+                                <label class="sg-label">To (comma-separated)</label>
+                                <input x-model="form.smtp_to_raw" class="sg-input" placeholder="soc@company.com, lead@company.com">
+                            </div>
+                            <div>
+                                <label class="sg-label">TLS Mode</label>
+                                <select x-model="form.smtp_tls" class="sg-input">
+                                    <option value="starttls">STARTTLS (port 587)</option>
+                                    <option value="ssl">SSL (port 465)</option>
+                                    <option value="none">None (port 25)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Generic auth -->
+                    <template x-if="form.type === 'generic'">
+                        <div class="space-y-3">
+                            <div>
+                                <label class="sg-label">Auth Type</label>
+                                <select x-model="form.auth_type" class="sg-input">
+                                    <option value="none">None</option>
+                                    <option value="bearer">Bearer Token</option>
+                                    <option value="api_key">API Key (X-API-Key header)</option>
+                                </select>
+                            </div>
+                            <template x-if="form.auth_type !== 'none'">
+                                <div>
+                                    <label class="sg-label">Auth Value</label>
+                                    <input x-model="form.auth_value" class="sg-input" placeholder="Token or API key">
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
+                    <!-- Routing (all types) -->
+                    <div class="border-t border-gray-700 pt-4 mt-4">
+                        <h4 class="text-sm font-semibold text-white mb-3">Routing & Filters</h4>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="sg-label">Min Severity</label>
+                                <select x-model="form.min_severity" class="sg-input">
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="critical">Critical</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="sg-label">Dedup (seconds)</label>
+                                <input x-model.number="form.dedup_window_seconds" type="number" class="sg-input">
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <label class="sg-label">Verdicts</label>
+                            <div class="flex gap-3 mt-1">
+                                <label class="flex items-center gap-1 text-sm text-gray-300">
+                                    <input type="checkbox" value="block" x-model="form.verdicts"> Block
+                                </label>
+                                <label class="flex items-center gap-1 text-sm text-gray-300">
+                                    <input type="checkbox" value="warn" x-model="form.verdicts"> Warn
+                                </label>
+                                <label class="flex items-center gap-1 text-sm text-gray-300">
+                                    <input type="checkbox" value="redact" x-model="form.verdicts"> Redact
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <label class="sg-label">Tenants (comma-separated, empty = all)</label>
+                            <input x-model="form.tenants_raw" class="sg-input" placeholder="tenant-a, tenant-b">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-3 mt-6">
+                    <button @click="showCreate = false; editingId = null;" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                    <button @click="saveChannel()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="saving">
+                        <span x-show="!saving" x-text="editingId ? 'Save Changes' : 'Create Channel'"></span>
+                        <span x-show="saving">Saving...</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>
+
+<script>
+function notificationManager() {
+    return {
+        channels: [],
+        loading: true,
+        showCreate: false,
+        saving: false,
+        editingId: null,
+        testResults: {},
+        form: {
+            name: '', type: 'slack', url: '', min_severity: 'high',
+            verdicts: ['block'], tenants_raw: '', dedup_window_seconds: 300,
+            smtp_host: '', smtp_port: 587, smtp_user: '', smtp_password: '',
+            smtp_from: '', smtp_to_raw: '', smtp_tls: 'starttls',
+            routing_key: '', api_key: '', bot_token: '', chat_id: '',
+            auth_type: 'none', auth_value: '',
+        },
+
+        async init() {
+            await this.loadChannels();
+        },
+
+        async loadChannels() {
+            this.loading = true;
+            try {
+                const res = await fetch('/admin/notifications/channels');
+                const data = await res.json();
+                this.channels = data.channels || [];
+            } catch (e) { console.error(e); }
+            this.loading = false;
+        },
+
+        async createChannel() {
+            await this.saveChannel();
+        },
+
+        async toggleChannel(id) {
+            await fetch(`/admin/notifications/channels/${id}/toggle`, {
+                method: 'POST',
+            });
+            await this.loadChannels();
+        },
+
+        async testChannel(id) {
+            this.testResults[id] = { success: null, message: 'Sending...' };
+            try {
+                const res = await fetch(`/admin/notifications/channels/${id}/test`, {
+                    method: 'POST',
+                });
+                this.testResults[id] = await res.json();
+            } catch (e) {
+                this.testResults[id] = { success: false, message: e.message };
+            }
+        },
+
+        async deleteChannel(id) {
+            if (!confirm('Delete this notification channel?')) return;
+            await fetch(`/admin/notifications/channels/${id}`, {
+                method: 'DELETE',
+            });
+            await this.loadChannels();
+        },
+
+        async reloadChannels() {
+            await fetch('/admin/notifications/reload', {
+                method: 'POST',
+            });
+            await this.loadChannels();
+        },
+
+        editChannel(ch) {
+            this.editingId = ch.id;
+            this.form = {
+                name: ch.name || '',
+                type: ch.type || 'slack',
+                url: ch.url || '',
+                min_severity: ch.min_severity || 'high',
+                verdicts: ch.verdicts ? [...ch.verdicts] : ['block'],
+                tenants_raw: (ch.tenants || []).join(', '),
+                dedup_window_seconds: ch.dedup_window_seconds || 300,
+                smtp_host: ch.smtp_host || '',
+                smtp_port: ch.smtp_port || 587,
+                smtp_user: ch.smtp_user || '',
+                smtp_password: ch.smtp_password || '',
+                smtp_from: ch.smtp_from || '',
+                smtp_to_raw: (ch.smtp_to || []).join(', '),
+                smtp_tls: ch.smtp_tls || 'starttls',
+                routing_key: ch.routing_key || '',
+                api_key: ch.api_key || '',
+                bot_token: ch.bot_token || '',
+                chat_id: ch.chat_id || '',
+                auth_type: ch.auth_type || 'none',
+                auth_value: ch.auth_value || '',
+            };
+            this.showCreate = true;
+        },
+
+        async saveChannel() {
+            this.saving = true;
+            const payload = { ...this.form };
+            if (payload.smtp_to_raw) {
+                payload.smtp_to = payload.smtp_to_raw.split(',').map(s => s.trim()).filter(Boolean);
+            }
+            if (payload.tenants_raw) {
+                payload.tenants = payload.tenants_raw.split(',').map(s => s.trim()).filter(Boolean);
+            }
+            delete payload.smtp_to_raw;
+            delete payload.tenants_raw;
+
+            // Don't send masked secrets back on edit (backend keeps existing values)
+            if (this.editingId) {
+                for (const key of ['smtp_password', 'routing_key', 'api_key', 'bot_token', 'auth_value']) {
+                    if (payload[key] === '***') delete payload[key];
+                }
+                if (payload.url && payload.url.endsWith('***')) delete payload.url;
+            }
+
+            try {
+                const url = this.editingId
+                    ? `/admin/notifications/channels/${this.editingId}`
+                    : '/admin/notifications/channels';
+                const method = this.editingId ? 'PUT' : 'POST';
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (res.ok) {
+                    const wasEdit = !!this.editingId;
+                    this.showCreate = false;
+                    this.editingId = null;
+                    this.resetForm();
+                    await this.loadChannels();
+                    showToast(wasEdit ? 'Channel updated' : 'Channel created', 'success');
+                } else {
+                    const err = await res.json().catch(() => ({ detail: 'Server error' }));
+                    showToast(err.detail || 'Operation failed', 'error');
+                }
+            } catch (e) { showToast('Error: ' + e.message, 'error'); }
+            this.saving = false;
+        },
+
+        resetForm() {
+            this.form = {
+                name: '', type: 'slack', url: '', min_severity: 'high',
+                verdicts: ['block'], tenants_raw: '', dedup_window_seconds: 300,
+                smtp_host: '', smtp_port: 587, smtp_user: '', smtp_password: '',
+                smtp_from: '', smtp_to_raw: '', smtp_tls: 'starttls',
+                routing_key: '', api_key: '', bot_token: '', chat_id: '',
+                auth_type: 'none', auth_value: '',
+            };
+        },
+
+        formTypeChanged() { /* Reset type-specific fields if needed */ },
+
+        typeIcon(t) {
+            const icons = { slack: '💬', teams: '🟦', discord: '🎮', pagerduty: '📟',
+                           opsgenie: '🔔', telegram: '✈️', google_chat: '💚', email: '📧', generic: '🔗' };
+            return icons[t] || '🔔';
+        },
+
+        typeColor(t) {
+            const colors = { slack: 'bg-purple-900/50', teams: 'bg-blue-900/50', discord: 'bg-indigo-900/50',
+                            pagerduty: 'bg-green-900/50', opsgenie: 'bg-yellow-900/50', telegram: 'bg-cyan-900/50',
+                            google_chat: 'bg-emerald-900/50', email: 'bg-orange-900/50', generic: 'bg-gray-700/50' };
+            return colors[t] || 'bg-gray-700/50';
+        },
+    };
+}
+</script>
+{% endblock %}

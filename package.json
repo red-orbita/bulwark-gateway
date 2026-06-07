@@ -1,0 +1,13 @@
+{
+  "name": "sentinel-gateway-admin",
+  "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -i admin/static/css/input.css -o admin/static/css/tailwind.min.css --minify",
+    "watch:css": "tailwindcss -i admin/static/css/input.css -o admin/static/css/tailwind.min.css --watch",
+    "build": "bash scripts/build-ui.sh"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.0",
+    "tailwindcss": "^4.3.0"
+  }
+}

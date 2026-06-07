@@ -1,16 +1,77 @@
+# ============================================================
+# Sentinel Gateway — .gitignore
+# ============================================================
+
+# --- Python ---
 __pycache__/
 *.pyc
 *.pyo
-.venv/
-venv/
-.env
 *.egg-info/
 dist/
 build/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-.opencode/
+*.egg
+.venv/
+venv/
+env/
+
+# --- Node (admin UI build tools) ---
+node_modules/
+package-lock.json
+
+# --- Secrets (NEVER commit) ---
+secrets/*.txt
+secrets/*.key
+*.key
+*.pem
+*.cert
+credentials.json
+secrets.yaml
+.env
+.env.local
+.env.production
+
+# --- Runtime data (generated at runtime) ---
+data/
+shared/
+reports/
+*.db
+*.db-shm
+*.db-wal
+
+# --- Logs ---
+*.log
+logs/
+
+# --- IDE / Editors ---
 .vscode/
-AGENTS.md
-CONTEXT.md
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OpenCode / Agent context ---
+.opencode/
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- IOC database (large, auto-generated from feeds) ---
+config/iocs.json
+
+# --- Docker local state ---
+docker-compose.override.yml
+
+# --- Helm packaging artifacts ---
+helm/sentinel-gateway/charts/
+*.tgz
+
+# --- Temporary / test artifacts ---
+htmlcov/
+coverage.xml
+.coverage
+*.prof
+/tmp/

@@ -1,0 +1,49 @@
+# Datadog — HTTP Logs API
+# Sentinel Gateway SIEM Integration Template
+---
+transport: http_rest
+platform: datadog
+
+connection:
+  url: "https://http-intake.logs.datadoghq.com/api/v2/logs"
+  # EU: https://http-intake.logs.datadoghq.eu/api/v2/logs
+  auth_method: api_key
+  api_key_header: "DD-API-KEY"
+  api_key: "${SENTINEL_DATADOG_API_KEY}"
+  verify_ssl: true
+  timeout_seconds: 10
+
+batching:
+  batch_size: 100
+  flush_interval_seconds: 1.0
+  compress: true  # gzip recommended
+
+format: json
+field_mapping:
+  # Datadog standard attributes
+  ddsource: "sentinel-gateway"
+  ddtags: "env:production,service:sentinel-gateway,version:0.2.0"
+  hostname: "${HOSTNAME}"
+  service: "sentinel-gateway"
+  # Facets: sentinel.verdict, sentinel.threat_category, tenant.id
+
+# Datadog Log Pipeline (processing rules):
+# 1. Grok Parser: extract @timestamp from event
+# 2. Category Processor: map sentinel.verdict to status (error=block, warn=warn, info=allow)
+# 3. Remapper: sentinel.latency_ms → duration
+
+retry:
+  max_retries: 3
+  backoff_base_seconds: 1.0
+  backoff_max_seconds: 30.0
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_seconds: 30
+
+# Docker agent alternative (DogStatsD + log collection):
+# docker run -d --name dd-agent \
+#   -v /var/log/sentinel-gateway:/var/log/sentinel-gateway:ro \
+#   -e DD_API_KEY=${SENTINEL_DATADOG_API_KEY} \
+#   -e DD_LOGS_ENABLED=true \
+#   datadog/agent:latest

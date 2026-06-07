@@ -9,20 +9,40 @@ Flow:
   5. Intercept tool calls → tool policy enforcement
   6. Output filter (redact secrets/PII)
   7. Return response
+
+Streaming:
+  When stream=true, responses are forwarded as SSE with chunk-level
+  output filtering. Content is buffered in small windows for pattern
+  matching before being flushed to the client.
 """
+
+import asyncio
+import ipaddress
 import json
+import socket
+import time
+from urllib.parse import urlparse
+
 import httpx
 import structlog
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.config import settings
-from src.models import (
-    ChatRequest, ToolCall, Verdict, ThreatCategory, SecurityEvent, GuardrailResult
-)
+from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
-from src.guardrails.tool_policy import ToolPolicyEngine
+from src.models import (
+    GuardrailResult,
+    SecurityEvent,
+    ThreatCategory,
+    ToolCall,
+    Verdict,
+)
+from src.telemetry.counters import get_counters
+from src.telemetry.queue import get_telemetry_queue
+from src.telemetry.schema import from_security_event
+from src.telemetry.notifications import get_notification_engine, AlertPayload
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -30,18 +50,95 @@ logger = structlog.get_logger()
 input_guardrail = InputGuardrail()
 output_filter = OutputFilter()
 
+# C-01/H-01: Complete CIDR blocklist for SSRF prevention
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),       # Loopback
+    ipaddress.ip_network("10.0.0.0/8"),        # Private Class A
+    ipaddress.ip_network("172.16.0.0/12"),     # Private Class B
+    ipaddress.ip_network("192.168.0.0/16"),    # Private Class C
+    ipaddress.ip_network("169.254.0.0/16"),    # Link-local / AWS metadata
+    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT (shared address space)
+    ipaddress.ip_network("0.0.0.0/8"),         # "This" network
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),          # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+    ipaddress.ip_network("::ffff:127.0.0.0/104"),  # IPv4-mapped loopback
+    ipaddress.ip_network("::ffff:169.254.0.0/112"),  # IPv4-mapped link-local
+    ipaddress.ip_network("::ffff:10.0.0.0/104"),  # IPv4-mapped private
+    ipaddress.ip_network("::ffff:172.16.0.0/108"),  # IPv4-mapped private
+    ipaddress.ip_network("::ffff:192.168.0.0/112"),  # IPv4-mapped private
+]
+
+_BLOCKED_HOSTNAMES = {
+    "metadata.google.internal", "metadata.google.internal.",
+    "metadata", "localhost",
+    "kubernetes.default", "kubernetes.default.svc",
+}
+
+# Cloud metadata IPs (explicit for clarity)
+_BLOCKED_IPS = {
+    "169.254.169.254",   # AWS/GCP/Azure metadata
+    "fd00:ec2::254",     # AWS IPv6 metadata
+    "100.100.100.200",   # Alibaba Cloud metadata
+}
+
+
+def _is_ssrf_target(url: str) -> bool:
+    """Validate URL at request-time to prevent SSRF via DNS rebinding (C-01).
+
+    Resolves hostname to IP and checks against blocked CIDR ranges.
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+
+    # Block known dangerous hostnames
+    if hostname.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
+        return True
+    if hostname.lower().endswith(".internal") or hostname.lower().endswith(".local"):
+        return True
+
+    # Resolve DNS at request time (prevents DNS rebinding)
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError):
+        return True  # Fail-closed: cannot resolve → block
+
+    for addr_info in addr_infos:
+        ip_str = addr_info[4][0]
+        if ip_str in _BLOCKED_IPS:
+            return True
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            for network in _BLOCKED_NETWORKS:
+                if ip in network:
+                    return True
+        except ValueError:
+            return True  # Fail-closed
+
+    return False
+
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request):
     """OpenAI-compatible chat completions with security guardrails."""
+    _req_start = time.perf_counter()
+    _counters = get_counters()
     tenant_id = getattr(request.state, "tenant_id", "default")
     agent_id = getattr(request.state, "agent_id", "default")
+    source_ip = request.client.host if request.client else None
 
     # Parse request body
+    # M-03: Enforce body size limit (10MB max)
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 10 * 1024 * 1024:
+        return JSONResponse(
+            status_code=413,
+            content={"error": {"message": "Request body too large (max 10MB)", "type": "validation_error", "code": "body_too_large"}},
+        )
     try:
         body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
     messages = body.get("messages", [])
 
@@ -49,7 +146,11 @@ async def chat_completions(request: Request):
     input_result = input_guardrail.inspect_messages(messages, tenant_id, agent_id)
 
     if input_result.verdict == Verdict.BLOCK:
-        await _log_events(input_result.events)
+        await _log_events(input_result.events, source_ip)
+        asyncio.create_task(_fire_webhook_alert(input_result.events, tenant_id, agent_id))
+        _push_recent_block(input_result.events, tenant_id, agent_id)
+        _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+        _record_tenant_usage(tenant_id, "block")
         return JSONResponse(
             status_code=403,
             content={
@@ -57,13 +158,12 @@ async def chat_completions(request: Request):
                     "message": "Request blocked by security policy",
                     "type": "security_violation",
                     "code": "input_guardrail_block",
-                    "details": [e.description for e in input_result.events],
                 }
             },
         )
 
     if input_result.verdict == Verdict.WARN:
-        await _log_events(input_result.events)
+        await _log_events(input_result.events, source_ip)
 
     # === PHASE 2: IOC Check ===
     ioc_manager = request.app.state.ioc_manager
@@ -80,7 +180,8 @@ async def chat_completions(request: Request):
                 source="ioc_check",
                 severity="critical",
             )
-            await _log_events([event])
+            await _log_events([event], source_ip)
+            _counters.record("block", (time.perf_counter() - _req_start) * 1000)
             return JSONResponse(
                 status_code=403,
                 content={
@@ -93,31 +194,89 @@ async def chat_completions(request: Request):
             )
 
     # === PHASE 3: Forward to backend ===
+    # Resolve backend dynamically from agent registry (auto-reload on config change)
+    agent_registry = request.app.state.agent_registry
+    if agent_registry._file_changed():
+        await agent_registry.load()
+    backend = agent_registry.resolve(tenant_id, agent_id)
+
+    # M-02: Reject unregistered tenants/agents (fail-closed)
+    if backend is None:
+        return JSONResponse(
+            status_code=403,
+            content={"error": {"message": "Unknown tenant or agent", "type": "authorization_error"}},
+        )
+
+    is_streaming = body.get("stream", False)
+
     try:
-        async with httpx.AsyncClient(timeout=settings.backend_timeout) as client:
-            # Forward with original headers minus auth (re-auth to backend separately)
+        async with httpx.AsyncClient(timeout=backend.timeout) as client:
             backend_headers = {
                 "Content-Type": "application/json",
             }
-            # If backend needs its own auth, add it here
-            backend_auth = request.headers.get("X-Backend-Auth")
-            if backend_auth:
-                backend_headers["Authorization"] = f"Bearer {backend_auth}"
+            # Use agent-specific auth if configured
+            # H-04: Only forward auth from pre-configured backend auth, NOT from client headers
+            if backend.auth_header and backend.auth_token:
+                backend_headers[backend.auth_header] = backend.auth_token
+
+            backend_url = f"{backend.backend_url.rstrip('/')}{backend.path_prefix}/chat/completions"
+
+            # C-01: SSRF check at request-time (prevents DNS rebinding)
+            # Skip for admin-configured backends (agent registry) — these are trusted.
+            # SSRF protection targets user-controlled URLs, not operator-configured backends.
+            if not backend.trusted and _is_ssrf_target(backend_url):
+                logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id)
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": {"message": "Backend URL resolves to blocked address", "type": "security_violation", "code": "ssrf_block"}},
+                )
+
+            if is_streaming:
+                # Streaming path: forward SSE with chunk-level guardrails
+                policy_engine = request.app.state.policy_loader.engine
+                return await _handle_streaming(
+                    client,
+                    backend_url,
+                    body,
+                    backend_headers,
+                    tenant_id,
+                    agent_id,
+                    source_ip,
+                    ioc_manager,
+                    policy_engine,
+                )
 
             resp = await client.post(
-                f"{settings.backend_url}/v1/chat/completions",
+                backend_url,
                 json=body,
                 headers=backend_headers,
             )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Backend timeout")
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail="Backend unreachable")
+    except httpx.TimeoutException as exc:
+        _counters.record_error()
+        _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
+        _record_tenant_usage(tenant_id, "allow")
+        # M-01: Generic error — don't reveal backend architecture
+        raise HTTPException(status_code=504, detail="Request timed out") from exc
+    except httpx.ConnectError as exc:
+        _counters.record_error()
+        _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
+        _record_tenant_usage(tenant_id, "allow")
+        # M-01: Generic error — don't reveal backend architecture
+        raise HTTPException(status_code=502, detail="Service unavailable") from exc
 
     if resp.status_code != 200:
-        return JSONResponse(status_code=resp.status_code, content=resp.json())
+        _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
+        _record_tenant_usage(tenant_id, "allow")
+        try:
+            error_body = resp.json()
+        except Exception:
+            error_body = {"error": resp.text[:500]}
+        return JSONResponse(status_code=resp.status_code, content=error_body)
 
-    response_data = resp.json()
+    try:
+        response_data = resp.json()
+    except Exception:
+        return JSONResponse(status_code=502, content={"error": "Backend returned invalid JSON"})
 
     # === PHASE 4: Tool Call Policy Enforcement ===
     policy_engine = request.app.state.policy_loader.engine
@@ -128,22 +287,28 @@ async def chat_completions(request: Request):
         tool_calls_raw = message.get("tool_calls", [])
 
         if tool_calls_raw:
-            tool_calls = [
-                ToolCall(
-                    id=tc.get("id"),
-                    name=tc.get("function", {}).get("name", ""),
-                    arguments=json.loads(tc.get("function", {}).get("arguments", "{}")),
+            tool_calls = []
+            for tc in tool_calls_raw:
+                try:
+                    args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.get("id"),
+                        name=tc.get("function", {}).get("name", ""),
+                        arguments=args,
+                    )
                 )
-                for tc in tool_calls_raw
-            ]
 
             policy_result = policy_engine.evaluate_tool_calls(tool_calls, tenant_id, agent_id)
 
             if policy_result.verdict == Verdict.BLOCK:
-                await _log_events(policy_result.events)
+                await _log_events(policy_result.events, source_ip)
                 # Remove blocked tool calls from response
                 message["tool_calls"] = [
-                    tc for tc in tool_calls_raw
+                    tc
+                    for tc in tool_calls_raw
                     if tc.get("function", {}).get("name") not in policy_result.blocked_tools
                 ]
                 # If all tools blocked, return a text response instead
@@ -160,8 +325,7 @@ async def chat_completions(request: Request):
                 ioc_matches = ioc_manager.check_content(args_str)
                 if ioc_matches:
                     await logger.awarn(
-                        "ioc_in_tool_call", tool=tc.name,
-                        matches=ioc_matches, tenant=tenant_id
+                        "ioc_in_tool_call", tool=tc.name, matches=ioc_matches, tenant=tenant_id
                     )
 
     # === PHASE 5: Output Filter ===
@@ -172,8 +336,23 @@ async def chat_completions(request: Request):
             filter_result = output_filter.inspect_and_redact(content, tenant_id, agent_id)
             if filter_result.verdict == Verdict.REDACT and filter_result.modified_content:
                 message["content"] = filter_result.modified_content
-                await _log_events(filter_result.events)
+                await _log_events(filter_result.events, source_ip)
 
+    # === PHASE 6: Async Enrichment (fire-and-forget) ===
+    enrichment_mgr = get_enrichment_manager()
+    if enrichment_mgr.enabled:
+        # Collect all user message content for enrichment
+        user_content = " ".join(
+            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+        )
+        if user_content:
+            request_id = f"{tenant_id}:{agent_id}:{int(time.time()*1000)}"
+            asyncio.create_task(
+                _enrich_and_record(user_content, input_result.verdict.value, request_id, tenant_id)
+            )
+
+    _counters.record(input_result.verdict.value, (time.perf_counter() - _req_start) * 1000)
+    _record_tenant_usage(tenant_id, input_result.verdict.value)
     return JSONResponse(content=response_data)
 
 
@@ -208,7 +387,7 @@ async def validate_tool_call(request: Request):
         )
 
     if result.events:
-        await _log_events(result.events)
+        await _log_events(result.events, request.client.host if request.client else None)
 
     return {
         "verdict": result.verdict.value,
@@ -218,8 +397,251 @@ async def validate_tool_call(request: Request):
     }
 
 
-async def _log_events(events: list[SecurityEvent]):
-    """Log security events for SIEM."""
+async def _handle_streaming(
+    client: httpx.AsyncClient,
+    url: str,
+    body: dict,
+    headers: dict,
+    tenant_id: str,
+    agent_id: str,
+    source_ip: str | None,
+    ioc_manager,
+    policy_engine,
+) -> StreamingResponse:
+    """Forward streaming SSE response with chunk-level output guardrails.
+
+    Strategy:
+    - Buffer content tokens in a sliding window (BUFFER_SIZE chars)
+    - Run output filter on each buffer flush
+    - If REDACT verdict: replace content with redacted version
+    - If dangerous output detected: terminate stream with error event
+    - C-01: Tool call chunks are BUFFERED and policy-checked BEFORE yielding to client
+    """
+    BUFFER_SIZE = 256  # chars before flushing to client
+
+    async def stream_generator():
+        content_buffer = ""
+        tool_call_buffer: dict[int, dict] = {}  # index -> {name, arguments}
+        tool_call_lines: list[str] = []  # C-01: Buffer raw SSE lines until policy validated
+        blocked = False
+
+        try:
+            async with client.stream("POST", url, json=body, headers=headers) as resp:
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    yield f"data: {error_body.decode()}\n\n"
+                    return
+
+                async for line in resp.aiter_lines():
+                    if blocked:
+                        break
+
+                    if not line.startswith("data: "):
+                        yield f"{line}\n"
+                        continue
+
+                    data = line[6:]
+                    if data == "[DONE]":
+                        # Flush remaining buffer
+                        if content_buffer:
+                            redacted = _filter_chunk(content_buffer, tenant_id, agent_id, source_ip)
+                            if redacted is None:
+                                # Dangerous content — emit error
+                                yield _make_error_event("Output blocked by security policy")
+                                blocked = True
+                                break
+                            yield _make_content_event(redacted)
+                        yield "data: [DONE]\n\n"
+                        return
+
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        yield f"{line}\n"
+                        continue
+
+                    choices = chunk.get("choices", [])
+                    for choice in choices:
+                        delta = choice.get("delta", {})
+                        finish_reason = choice.get("finish_reason")
+
+                        # C-01: Accumulate tool calls — do NOT yield until policy validated
+                        if "tool_calls" in delta:
+                            for tc_delta in delta["tool_calls"]:
+                                idx = tc_delta.get("index", 0)
+                                if idx not in tool_call_buffer:
+                                    tool_call_buffer[idx] = {"name": "", "arguments": ""}
+                                if "function" in tc_delta:
+                                    fn = tc_delta["function"]
+                                    if "name" in fn:
+                                        tool_call_buffer[idx]["name"] = fn["name"]
+                                    if "arguments" in fn:
+                                        tool_call_buffer[idx]["arguments"] += fn["arguments"]
+                            # Buffer the SSE line — NOT yielded yet
+                            tool_call_lines.append(f"{line}\n\n")
+                            continue
+
+                        # C-01: Tool calls finished — perform policy check BEFORE yielding
+                        if finish_reason == "tool_calls" and tool_call_buffer:
+                            # Build ToolCall objects for policy evaluation
+                            tool_calls_for_policy = []
+                            for idx in sorted(tool_call_buffer.keys()):
+                                tc_data = tool_call_buffer[idx]
+                                try:
+                                    args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
+                                except (json.JSONDecodeError, TypeError):
+                                    args = {}
+                                tool_calls_for_policy.append(
+                                    ToolCall(
+                                        id=f"call_{idx}",
+                                        name=tc_data["name"],
+                                        arguments=args,
+                                    )
+                                )
+
+                            policy_result = policy_engine.evaluate_tool_calls(
+                                tool_calls_for_policy, tenant_id, agent_id
+                            )
+
+                            if policy_result.verdict == Verdict.BLOCK:
+                                # Log security events
+                                await _log_events(policy_result.events, source_ip)
+                                # Emit error instead of tool calls
+                                blocked_names = ", ".join(policy_result.blocked_tools)
+                                yield _make_error_event(
+                                    f"Tool calls blocked by security policy: {blocked_names}"
+                                )
+                                blocked = True
+                                break
+
+                            # Policy ALLOW — now yield all buffered tool call lines
+                            for buffered_line in tool_call_lines:
+                                yield buffered_line
+                            yield f"{line}\n\n"  # yield the finish event
+                            tool_call_lines.clear()
+                            tool_call_buffer.clear()
+                            continue
+
+                    data = line[6:]
+                    if data == "[DONE]":
+                        # Flush remaining buffer
+                        if content_buffer:
+                            redacted = _filter_chunk(content_buffer, tenant_id, agent_id, source_ip)
+                            if redacted is None:
+                                # Dangerous content — emit error
+                                yield _make_error_event("Output blocked by security policy")
+                                blocked = True
+                                break
+                            # Emit final buffered content as a chunk
+                            yield _make_content_event(redacted)
+                        yield "data: [DONE]\n\n"
+                        return
+
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        yield f"{line}\n"
+                        continue
+
+                    choices = chunk.get("choices", [])
+                    for choice in choices:
+                        delta = choice.get("delta", {})
+                        finish_reason = choice.get("finish_reason")
+
+                        # Accumulate tool calls
+                        if "tool_calls" in delta:
+                            for tc_delta in delta["tool_calls"]:
+                                idx = tc_delta.get("index", 0)
+                                if idx not in tool_call_buffer:
+                                    tool_call_buffer[idx] = {"name": "", "arguments": ""}
+                                if "function" in tc_delta:
+                                    fn = tc_delta["function"]
+                                    if "name" in fn:
+                                        tool_call_buffer[idx]["name"] = fn["name"]
+                                    if "arguments" in fn:
+                                        tool_call_buffer[idx]["arguments"] += fn["arguments"]
+                            # Forward tool call deltas as-is (policy checked at end)
+                            yield f"{line}\n\n"
+                            continue
+
+                        # Tool calls finished — policy check
+                        if finish_reason == "tool_calls" and tool_call_buffer:
+                            policy_engine = None  # Will check below
+                            # Defer: forward the finish event and log
+                            yield f"{line}\n\n"
+                            continue
+
+                        # Content token
+                        content_token = delta.get("content")
+                        if content_token:
+                            content_buffer += content_token
+
+                            # Flush when buffer is full
+                            if len(content_buffer) >= BUFFER_SIZE:
+                                redacted = _filter_chunk(
+                                    content_buffer, tenant_id, agent_id, source_ip
+                                )
+                                if redacted is None:
+                                    yield _make_error_event("Output blocked by security policy")
+                                    blocked = True
+                                    break
+                                yield _make_content_event(redacted)
+                                content_buffer = ""
+                            continue
+
+                        # Non-content delta (role, etc) — pass through
+                        yield f"{line}\n\n"
+
+        except httpx.TimeoutException:
+            yield _make_error_event("Request timed out")
+        except httpx.ConnectError:
+            yield _make_error_event("Service unavailable")
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _filter_chunk(content: str, tenant_id: str, agent_id: str, source_ip: str | None) -> str | None:
+    """Run output filter on a content chunk.
+
+    Returns redacted content, or None if content should be blocked entirely.
+    """
+    result = output_filter.inspect_and_redact(content, tenant_id, agent_id)
+    if result.verdict == Verdict.BLOCK:
+        return None
+    if result.verdict == Verdict.REDACT and result.modified_content:
+        return result.modified_content
+    return content
+
+
+def _make_content_event(content: str) -> str:
+    """Create an SSE event with a content delta."""
+    chunk = {"choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]}
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+def _make_error_event(message: str) -> str:
+    """Create an SSE error event and terminate stream."""
+    error = {
+        "error": {
+            "message": message,
+            "type": "security_violation",
+            "code": "output_guardrail_block",
+        }
+    }
+    return f"data: {json.dumps(error)}\n\ndata: [DONE]\n\n"
+
+
+async def _log_events(events: list[SecurityEvent], source_ip: str | None = None):
+    """Log security events for SIEM and enqueue to telemetry pipeline."""
+    queue = get_telemetry_queue()
     for event in events:
         await logger.awarn(
             "security_event",
@@ -232,3 +654,104 @@ async def _log_events(events: list[SecurityEvent]):
             tool=event.tool_name,
             pattern=event.matched_pattern,
         )
+        # Enqueue to telemetry — non-blocking, ≤2ms
+        telemetry_event = from_security_event(
+            verdict=event.verdict.value,
+            rule_id=event.matched_pattern,
+            rule_description=event.description,
+            threat_category=event.category.value if event.category else None,
+            tenant_id=event.tenant_id or "unknown",
+            agent_id=event.agent_id,
+            guardrail_layer=event.source or "unknown",
+            latency_ms=0.0,
+            source_ip=source_ip,
+            confidence=1.0,
+        )
+        queue.enqueue_nowait(telemetry_event)
+
+
+async def _fire_webhook_alert(events: list[SecurityEvent], tenant_id: str, agent_id: str):
+    """Fire notification alerts for block/warn events."""
+    engine = get_notification_engine()
+    if not engine.configured:
+        return
+    for event in events:
+        alert = AlertPayload(
+            verdict=event.verdict.value if event.verdict else "block",
+            severity=event.severity or "high",
+            category=event.category.value if event.category else "unknown",
+            description=event.description,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            matched_patterns=[event.matched_pattern] if event.matched_pattern else [],
+        )
+        try:
+            await engine.send_alert(alert)
+        except Exception as e:
+            logger.error(f"notification_error: {type(e).__name__}: {e}")
+
+
+def _push_recent_block(events: list[SecurityEvent], tenant_id: str, agent_id: str):
+    """Push block event to Redis recent-blocks list (non-blocking, best effort)."""
+    try:
+        from src.guardrails.dynamic_registry import get_pattern_registry
+        registry = get_pattern_registry()
+        r = registry._redis
+        if not r:
+            return
+        import json as _json
+        for event in events[:3]:  # Max 3 events per block
+            entry = _json.dumps({
+                "ts": time.time(),
+                "tenant": tenant_id,
+                "agent": agent_id,
+                "category": event.category.value if event.category else "unknown",
+                "description": event.description,
+                "severity": event.severity or "high",
+                "pattern": event.matched_pattern or "",
+            })
+            r.lpush("sentinel:recent_blocks", entry)
+            r.ltrim("sentinel:recent_blocks", 0, 49)  # Keep last 50
+    except Exception:
+        pass
+
+
+def _record_tenant_usage(tenant_id: str, verdict: str):
+    """Increment per-tenant AND global usage counters in Redis (best effort)."""
+    try:
+        from src.guardrails.dynamic_registry import get_pattern_registry
+        registry = get_pattern_registry()
+        r = registry._redis
+        if not r:
+            return
+        r.hincrby("sentinel:usage:total", tenant_id, 1)
+        r.hincrby(f"sentinel:usage:{verdict}", tenant_id, 1)
+        # Global counters (persist across pod restarts)
+        r.incrby("sentinel:global:requests_total", 1)
+        r.incrby(f"sentinel:global:{verdict}", 1)
+    except Exception:
+        pass
+
+
+async def _enrich_and_record(
+    text: str, verdict: str, request_id: str, tenant_id: str
+) -> None:
+    """Fire-and-forget: run enrichment scanners and record in AttackReplayDB."""
+    try:
+        enrichment_mgr = get_enrichment_manager()
+        results = await enrichment_mgr.enrich(text, request_id)
+
+        # Record in AttackReplayDB
+        from src.enrichment.attack_replay_db import get_attack_replay_db
+        replay_db = get_attack_replay_db()
+        replay_db.record(
+            payload=text,
+            verdict=verdict,
+            source="input_guardrail",
+            request_id=request_id,
+            tenant_id=tenant_id,
+            enrichment_results=results,
+        )
+    except Exception as e:
+        # Never let enrichment errors affect anything
+        await logger.awarn("enrichment_pipeline_error", error=str(e))

@@ -1,0 +1,220 @@
+# Sentinel Gateway — Azure DevOps Pipeline
+#
+# Prerequisites:
+#   - Service connection: 'acr-connection' (Azure Container Registry)
+#   - Service connection: 'aks-staging' (Kubernetes - staging cluster)
+#   - Service connection: 'aks-production' (Kubernetes - production cluster)
+#   - Variable group: 'sentinel-gateway-vars' containing:
+#     * REGISTRY_URL (e.g., myregistry.azurecr.io)
+#     * BACKEND_IP
+#   - Secure file: 'values-staging.yaml'
+#   - Secure file: 'values-production.yaml'
+#
+# Trigger:
+#   - Push to main → staging
+#   - Tag v*.*.* → production (with approval gate)
+
+trigger:
+  branches:
+    include:
+      - main
+  tags:
+    include:
+      - "v*.*.*"
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  - group: sentinel-gateway-vars
+  - name: imageProxy
+    value: sentinel-gateway-proxy
+  - name: imageAdmin
+    value: sentinel-gateway-admin
+  - name: helmRelease
+    value: sentinel-gateway
+  - name: namespace
+    value: sentinel-gateway
+  - name: isTag
+    value: ${{ startsWith(variables['Build.SourceBranch'], 'refs/tags/v') }}
+  - name: isMain
+    value: ${{ eq(variables['Build.SourceBranch'], 'refs/heads/main') }}
+  - name: version
+    ${{ if startsWith(variables['Build.SourceBranch'], 'refs/tags/v') }}:
+      value: ${{ replace(variables['Build.SourceBranch'], 'refs/tags/v', '') }}
+    ${{ else }}:
+      value: sha-$(Build.SourceVersion)
+
+stages:
+  # ─── Stage 1: Test ──────────────────────────────────────────────────────────
+  - stage: Test
+    displayName: "Lint & Test"
+    jobs:
+      - job: TestJob
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.11"
+
+          - script: |
+              pip install -r requirements.lock ruff mypy pytest
+            displayName: "Install dependencies"
+
+          - script: ruff check src/ tests/
+            displayName: "Lint (ruff)"
+
+          - script: mypy src/ --ignore-missing-imports
+            displayName: "Type check (mypy)"
+
+          - script: pytest tests/ -q --tb=short --ignore=tests/test_admin_integration.py --junitxml=test-results.xml
+            displayName: "Unit tests"
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: "JUnit"
+              testResultsFiles: "test-results.xml"
+            condition: always()
+
+  # ─── Stage 2: Build ─────────────────────────────────────────────────────────
+  - stage: Build
+    displayName: "Build & Push Images"
+    dependsOn: Test
+    condition: and(succeeded(), or(eq(variables.isMain, true), eq(variables.isTag, true)))
+    jobs:
+      - job: BuildImages
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: Docker@2
+            displayName: "Build proxy image"
+            inputs:
+              containerRegistry: "acr-connection"
+              repository: $(imageProxy)
+              command: buildAndPush
+              Dockerfile: Dockerfile
+              tags: |
+                $(version)
+                latest
+
+          - task: Docker@2
+            displayName: "Build admin image"
+            inputs:
+              containerRegistry: "acr-connection"
+              repository: $(imageAdmin)
+              command: buildAndPush
+              Dockerfile: docker/Dockerfile.admin
+              tags: |
+                $(version)
+                latest
+
+  # ─── Stage 3: Deploy Staging ────────────────────────────────────────────────
+  - stage: DeployStaging
+    displayName: "Deploy to Staging"
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables.isMain, true))
+    jobs:
+      - deployment: DeployStagingJob
+        displayName: "Helm deploy (staging)"
+        pool:
+          vmImage: ubuntu-latest
+        environment: staging
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: DownloadSecureFile@1
+                  name: valuesFile
+                  displayName: "Download values-staging.yaml"
+                  inputs:
+                    secureFile: "values-staging.yaml"
+
+                - task: HelmInstaller@0
+                  displayName: "Install Helm"
+                  inputs:
+                    helmVersion: "3.14.0"
+
+                - task: Kubernetes@1
+                  displayName: "Deploy with Helm"
+                  inputs:
+                    connectionType: "Kubernetes Service Connection"
+                    kubernetesServiceEndpoint: "aks-staging"
+                    command: custom
+                    customCommand: |
+                      helm upgrade --install $(helmRelease) ./helm/sentinel-gateway \
+                        --namespace $(namespace) \
+                        --create-namespace \
+                        --values $(valuesFile.secureFilePath) \
+                        --set proxy.image.repository=$(REGISTRY_URL)/$(imageProxy) \
+                        --set proxy.image.tag=$(version) \
+                        --set admin.image.repository=$(REGISTRY_URL)/$(imageAdmin) \
+                        --set admin.image.tag=$(version) \
+                        --wait \
+                        --timeout 5m
+
+                - script: |
+                    echo "Staging deployment complete: $(version)"
+                  displayName: "Deployment summary"
+
+  # ─── Stage 4: Deploy Production ─────────────────────────────────────────────
+  - stage: DeployProduction
+    displayName: "Deploy to Production"
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables.isTag, true))
+    jobs:
+      - deployment: DeployProdJob
+        displayName: "Helm deploy (production)"
+        pool:
+          vmImage: ubuntu-latest
+        environment: production  # Requires approval gate configured in Azure DevOps
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: DownloadSecureFile@1
+                  name: valuesFile
+                  displayName: "Download values-production.yaml"
+                  inputs:
+                    secureFile: "values-production.yaml"
+
+                - task: HelmInstaller@0
+                  displayName: "Install Helm"
+                  inputs:
+                    helmVersion: "3.14.0"
+
+                - task: Kubernetes@1
+                  displayName: "Deploy with Helm"
+                  inputs:
+                    connectionType: "Kubernetes Service Connection"
+                    kubernetesServiceEndpoint: "aks-production"
+                    command: custom
+                    customCommand: |
+                      helm upgrade --install $(helmRelease) ./helm/sentinel-gateway \
+                        --namespace $(namespace) \
+                        --create-namespace \
+                        --values $(valuesFile.secureFilePath) \
+                        --set proxy.image.repository=$(REGISTRY_URL)/$(imageProxy) \
+                        --set proxy.image.tag=$(version) \
+                        --set admin.image.repository=$(REGISTRY_URL)/$(imageAdmin) \
+                        --set admin.image.tag=$(version) \
+                        --wait \
+                        --timeout 5m
+
+            on:
+              failure:
+                steps:
+                  - task: Kubernetes@1
+                    displayName: "Rollback on failure"
+                    inputs:
+                      connectionType: "Kubernetes Service Connection"
+                      kubernetesServiceEndpoint: "aks-production"
+                      command: custom
+                      customCommand: |
+                        helm rollback $(helmRelease) --namespace $(namespace) --wait

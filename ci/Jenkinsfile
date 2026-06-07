@@ -1,0 +1,216 @@
+// Sentinel Gateway — Jenkins Declarative Pipeline
+//
+// Prerequisites:
+//   - Jenkins plugins: Docker Pipeline, Kubernetes CLI, Pipeline Utility Steps
+//   - Credentials configured in Jenkins:
+//     * 'registry-credentials' (username/password for container registry)
+//     * 'kubeconfig-staging' (secret file with staging kubeconfig)
+//     * 'kubeconfig-production' (secret file with production kubeconfig)
+//     * 'helm-values-staging' (secret file with values-staging.yaml)
+//     * 'helm-values-production' (secret file with values-prod.yaml)
+//
+// Usage:
+//   1. Create a Multibranch Pipeline pointing to this repo
+//   2. Jenkins auto-discovers this Jenkinsfile
+//   3. Push to main → staging deploy; tag v*.*.* → production deploy
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: builder
+      image: docker:24-dind
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+    - name: helm
+      image: alpine/helm:3.14.0
+      command: ['sleep', '3600']
+    - name: python
+      image: python:3.11-slim
+      command: ['sleep', '3600']
+  volumes:
+    - name: docker-sock
+      hostPath:
+        path: /var/run/docker.sock
+'''
+        }
+    }
+
+    environment {
+        REGISTRY       = credentials('registry-url')       // e.g., myregistry.azurecr.io
+        IMAGE_PROXY    = 'sentinel-gateway-proxy'
+        IMAGE_ADMIN    = 'sentinel-gateway-admin'
+        HELM_RELEASE   = 'sentinel-gateway'
+        NAMESPACE      = 'sentinel-gateway'
+    }
+
+    stages {
+        // ─── Stage 1: Lint & Test ─────────────────────────────────────────────
+        stage('Test') {
+            steps {
+                container('python') {
+                    sh '''
+                        pip install -q -r requirements.lock ruff mypy pytest
+                        echo "=== Lint ==="
+                        ruff check src/ tests/
+                        echo "=== Type Check ==="
+                        mypy src/ --ignore-missing-imports
+                        echo "=== Unit Tests ==="
+                        pytest tests/ -q --tb=short --ignore=tests/test_admin_integration.py
+                    '''
+                }
+            }
+        }
+
+        // ─── Stage 2: Build Images ───────────────────────────────────────────
+        stage('Build') {
+            when {
+                anyOf {
+                    branch 'main'
+                    buildingTag()
+                }
+            }
+            steps {
+                container('builder') {
+                    script {
+                        def version = env.TAG_NAME ? env.TAG_NAME.replaceFirst('v', '') : "sha-${env.GIT_COMMIT[0..7]}"
+                        env.IMAGE_VERSION = version
+
+                        withCredentials([usernamePassword(
+                            credentialsId: 'registry-credentials',
+                            usernameVariable: 'REG_USER',
+                            passwordVariable: 'REG_PASS'
+                        )]) {
+                            sh """
+                                docker login ${REGISTRY} -u \$REG_USER -p \$REG_PASS
+                                docker build -t ${REGISTRY}/${IMAGE_PROXY}:${version} -f Dockerfile .
+                                docker build -t ${REGISTRY}/${IMAGE_ADMIN}:${version} -f docker/Dockerfile.admin .
+                                docker push ${REGISTRY}/${IMAGE_PROXY}:${version}
+                                docker push ${REGISTRY}/${IMAGE_ADMIN}:${version}
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Stage 3: Deploy Staging ──────────────────────────────────────────
+        stage('Deploy Staging') {
+            when { branch 'main' }
+            steps {
+                container('helm') {
+                    withCredentials([
+                        file(credentialsId: 'kubeconfig-staging', variable: 'KUBECONFIG'),
+                        file(credentialsId: 'helm-values-staging', variable: 'VALUES_FILE')
+                    ]) {
+                        sh """
+                            helm upgrade --install ${HELM_RELEASE} ./helm/sentinel-gateway \
+                                --namespace ${NAMESPACE} \
+                                --create-namespace \
+                                --values \$VALUES_FILE \
+                                --set proxy.image.repository=${REGISTRY}/${IMAGE_PROXY} \
+                                --set proxy.image.tag=${env.IMAGE_VERSION} \
+                                --set admin.image.repository=${REGISTRY}/${IMAGE_ADMIN} \
+                                --set admin.image.tag=${env.IMAGE_VERSION} \
+                                --wait \
+                                --timeout 5m
+                        """
+                    }
+                }
+            }
+            post {
+                success {
+                    echo "Staging deployment successful: ${env.IMAGE_VERSION}"
+                }
+                failure {
+                    echo "Staging deployment FAILED"
+                }
+            }
+        }
+
+        // ─── Stage 4: Deploy Production ───────────────────────────────────────
+        stage('Deploy Production') {
+            when { buildingTag() }
+            input {
+                message "Deploy ${env.TAG_NAME} to production?"
+                ok "Deploy"
+                submitter "admin,deployers"
+            }
+            steps {
+                container('helm') {
+                    withCredentials([
+                        file(credentialsId: 'kubeconfig-production', variable: 'KUBECONFIG'),
+                        file(credentialsId: 'helm-values-production', variable: 'VALUES_FILE')
+                    ]) {
+                        sh """
+                            helm upgrade --install ${HELM_RELEASE} ./helm/sentinel-gateway \
+                                --namespace ${NAMESPACE} \
+                                --create-namespace \
+                                --values \$VALUES_FILE \
+                                --set proxy.image.repository=${REGISTRY}/${IMAGE_PROXY} \
+                                --set proxy.image.tag=${env.IMAGE_VERSION} \
+                                --set admin.image.repository=${REGISTRY}/${IMAGE_ADMIN} \
+                                --set admin.image.tag=${env.IMAGE_VERSION} \
+                                --wait \
+                                --timeout 5m
+                        """
+                    }
+                }
+            }
+            post {
+                success {
+                    echo "Production deployment successful: ${env.IMAGE_VERSION}"
+                }
+                failure {
+                    echo "Production deployment FAILED — initiating rollback"
+                    container('helm') {
+                        withCredentials([file(credentialsId: 'kubeconfig-production', variable: 'KUBECONFIG')]) {
+                            sh "helm rollback ${HELM_RELEASE} --namespace ${NAMESPACE} --wait"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Stage 5: Post-Deploy Validation ─────────────────────────────────
+        stage('Validate') {
+            when {
+                anyOf {
+                    branch 'main'
+                    buildingTag()
+                }
+            }
+            steps {
+                container('helm') {
+                    script {
+                        def kubeconfigCred = env.TAG_NAME ? 'kubeconfig-production' : 'kubeconfig-staging'
+                        withCredentials([file(credentialsId: kubeconfigCred, variable: 'KUBECONFIG')]) {
+                            sh """
+                                kubectl wait --for=condition=ready pod \
+                                    -l app.kubernetes.io/name=proxy \
+                                    -n ${NAMESPACE} --timeout=120s
+                                kubectl wait --for=condition=ready pod \
+                                    -l app.kubernetes.io/name=admin \
+                                    -n ${NAMESPACE} --timeout=120s
+                                echo "All pods ready"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}

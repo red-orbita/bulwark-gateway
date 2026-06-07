@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}Security Coverage — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Security Coverage{% endblock %}
+{% block content %}
+<div x-data="coverageManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Security Coverage Matrix</h1>
+            <p class="text-sm text-gray-400 mt-0.5">OWASP LLM Top 10 coverage, detection techniques, and language support</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="sg-badge sg-badge-success">Protected</span>
+            <span class="sg-badge sg-badge-warning">Partial</span>
+            <span class="sg-badge sg-badge-danger">Not Covered</span>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div class="sg-card text-center">
+            <p class="text-3xl font-bold text-cyan-400" x-text="stats.total_techniques"></p>
+            <p class="text-xs text-gray-400 mt-1">Detection Techniques</p>
+        </div>
+        <div class="sg-card text-center">
+            <p class="text-3xl font-bold text-green-400" x-text="stats.total_patterns"></p>
+            <p class="text-xs text-gray-400 mt-1">Regex Patterns</p>
+        </div>
+        <div class="sg-card text-center">
+            <p class="text-3xl font-bold text-purple-400">3</p>
+            <p class="text-xs text-gray-400 mt-1">Defense Layers</p>
+        </div>
+        <div class="sg-card text-center">
+            <p class="text-3xl font-bold text-yellow-400">7</p>
+            <p class="text-xs text-gray-400 mt-1">Languages</p>
+        </div>
+        <div class="sg-card text-center">
+            <p class="text-3xl font-bold text-orange-400">9/10</p>
+            <p class="text-xs text-gray-400 mt-1">OWASP LLM Top 10</p>
+        </div>
+    </div>
+
+    <!-- OWASP LLM Top 10 -->
+    <div class="sg-card !p-0">
+        <div class="px-5 py-4 border-b border-gray-700">
+            <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                <i data-lucide="shield-alert" class="w-4 h-4 text-cyan-400"></i>
+                OWASP LLM Top 10 Coverage
+            </h3>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr><th>ID</th><th>Vulnerability</th><th>Status</th><th>Layer</th></tr>
+                </thead>
+                <tbody>
+                    <template x-for="item in owasp" :key="item.id">
+                        <tr>
+                            <td class="font-mono text-cyan-400" x-text="item.id"></td>
+                            <td x-text="item.name"></td>
+                            <td>
+                                <span class="sg-badge"
+                                    :class="item.covered === 'full' ? 'sg-badge-success' : item.covered === 'partial' ? 'sg-badge-warning' : 'sg-badge-danger'"
+                                    x-text="item.covered === 'full' ? 'Protected' : item.covered === 'partial' ? 'Partial' : 'Not Covered'"></span>
+                            </td>
+                            <td class="text-xs text-gray-400" x-text="item.layer"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Defense Layers -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <template x-for="layer in layers" :key="layer.name">
+            <div class="sg-card !p-0">
+                <div class="px-5 py-4 border-b border-gray-700">
+                    <h4 class="text-sm font-semibold text-white" x-text="layer.name"></h4>
+                    <p class="text-xs text-gray-400 mt-0.5" x-text="layer.description"></p>
+                </div>
+                <div class="p-4 space-y-2 max-h-80 overflow-y-auto">
+                    <template x-for="attack in layer.attacks" :key="attack.id">
+                        <div class="flex justify-between items-center py-1">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs font-mono text-gray-500 w-5" x-text="attack.id"></span>
+                                <span class="text-sm text-gray-200" x-text="attack.name"></span>
+                            </div>
+                            <span class="sg-badge sg-badge-neutral text-xs" x-text="attack.owasp || '—'"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Evasion Techniques -->
+    <div class="sg-card !p-0">
+        <div class="px-5 py-4 border-b border-gray-700">
+            <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                <i data-lucide="eye-off" class="w-4 h-4 text-green-400"></i>
+                Evasion Detection Techniques
+            </h3>
+            <p class="text-xs text-gray-400 mt-0.5">Encoding/obfuscation bypasses that are actively decoded and scanned</p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 p-4">
+            <template x-for="tech in evasions" :key="tech.name">
+                <div class="bg-gray-900 rounded-lg px-3 py-2 border border-gray-700">
+                    <p class="text-sm font-medium text-green-400" x-text="tech.name"></p>
+                    <p class="text-xs text-gray-500 mt-0.5" x-text="tech.description"></p>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Language Coverage -->
+    <div class="sg-card !p-0">
+        <div class="px-5 py-4 border-b border-gray-700">
+            <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                <i data-lucide="languages" class="w-4 h-4 text-purple-400"></i>
+                Multilingual Coverage
+            </h3>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr><th>Language</th><th>Injection</th><th>Plan Corruption</th><th>Memory Manipulation</th></tr>
+                </thead>
+                <tbody>
+                    <template x-for="lang in languages" :key="lang.name">
+                        <tr>
+                            <td class="font-medium" x-text="lang.name"></td>
+                            <td><span class="sg-dot" :class="lang.injection ? 'sg-dot-success' : 'sg-dot-danger'"></span> <span class="text-xs" :class="lang.injection ? 'text-green-400' : 'text-red-400'" x-text="lang.injection ? 'Yes' : 'No'"></span></td>
+                            <td><span class="sg-dot" :class="lang.plan ? 'sg-dot-success' : 'sg-dot-danger'"></span> <span class="text-xs" :class="lang.plan ? 'text-green-400' : 'text-red-400'" x-text="lang.plan ? 'Yes' : 'No'"></span></td>
+                            <td><span class="sg-dot" :class="lang.memory ? 'sg-dot-success' : 'sg-dot-danger'"></span> <span class="text-xs" :class="lang.memory ? 'text-green-400' : 'text-red-400'" x-text="lang.memory ? 'Yes' : 'No'"></span></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function coverageManager() {
+    return {
+        stats: { total_techniques: 44, total_patterns: 277 },
+        owasp: [
+            { id: 'LLM01', name: 'Prompt Injection', covered: 'full', layer: 'Input + Output' },
+            { id: 'LLM02', name: 'Insecure Output Handling', covered: 'full', layer: 'Output (17 patterns)' },
+            { id: 'LLM03', name: 'Training Data Poisoning', covered: 'partial', layer: 'Input (RAG manipulation)' },
+            { id: 'LLM04', name: 'Model Denial of Service', covered: 'full', layer: 'Input (entropy, rate limit)' },
+            { id: 'LLM05', name: 'Supply Chain Vulnerabilities', covered: 'none', layer: '—' },
+            { id: 'LLM06', name: 'Sensitive Info Disclosure', covered: 'full', layer: 'Output + Tool Policy' },
+            { id: 'LLM07', name: 'Insecure Plugin Design', covered: 'full', layer: 'Tool Policy' },
+            { id: 'LLM08', name: 'Excessive Agency', covered: 'full', layer: 'Tool Policy + Output' },
+            { id: 'LLM09', name: 'Overreliance', covered: 'full', layer: 'Output (human review)' },
+            { id: 'LLM10', name: 'Model Theft', covered: 'full', layer: 'Input (extraction detect)' },
+        ],
+        layers: [
+            { name: 'INPUT GUARDRAIL', description: 'Before input reaches LLM', attacks: [
+                { id: 1, name: 'Prompt Injection', owasp: 'LLM01' },
+                { id: 2, name: 'Jailbreak', owasp: 'LLM01' },
+                { id: 3, name: 'Social Engineering', owasp: 'LLM01' },
+                { id: 4, name: 'Tool Abuse', owasp: 'LLM08' },
+                { id: 5, name: 'Exfiltration', owasp: 'LLM07' },
+                { id: 6, name: 'Credential Access', owasp: 'LLM06' },
+                { id: 7, name: 'Reverse Shell', owasp: 'LLM08' },
+                { id: 8, name: 'Model Theft', owasp: 'LLM10' },
+                { id: 9, name: 'Privacy Attack', owasp: '—' },
+                { id: 10, name: 'Plan Corruption', owasp: 'Agentic' },
+                { id: 11, name: 'Cross-Agent Injection', owasp: 'Agentic' },
+                { id: 12, name: 'Memory/RAG Manipulation', owasp: 'Agentic' },
+                { id: 13, name: 'DoS via Encoding', owasp: 'LLM04' },
+            ]},
+            { name: 'OUTPUT FILTER', description: 'Before returning response', attacks: [
+                { id: 14, name: 'Insecure Output (RCE/SQLi/XSS)', owasp: 'LLM02' },
+                { id: 15, name: 'Overreliance (--force, prod)', owasp: 'LLM09' },
+                { id: 16, name: 'Credential Leak', owasp: 'LLM06' },
+                { id: 17, name: 'PII Exposure', owasp: 'LLM06' },
+                { id: 18, name: 'Indirect Injection in Output', owasp: 'LLM01' },
+                { id: 19, name: 'Unicode Smuggling', owasp: 'LLM01' },
+                { id: 20, name: 'Encoded Secrets (ROT13/B64)', owasp: 'LLM06' },
+            ]},
+            { name: 'TOOL POLICY', description: 'Before executing tools', attacks: [
+                { id: 21, name: 'Unauthorized Tool Use', owasp: 'LLM08' },
+                { id: 22, name: 'Sensitive File Access', owasp: 'LLM06' },
+                { id: 23, name: 'Self-Protection Bypass', owasp: '—' },
+                { id: 24, name: 'Rate Limiting', owasp: 'LLM04' },
+                { id: 25, name: 'Argument Validation', owasp: 'LLM08' },
+            ]},
+        ],
+        evasions: [
+            { name: 'ROT13', description: 'Decode & scan' },
+            { name: 'Base64', description: 'Decode blocks & verify' },
+            { name: 'Hex Encoding', description: 'With/without spaces' },
+            { name: 'Reversed Text', description: 'Reverse & scan' },
+            { name: 'Caesar (1-25)', description: 'All rotations' },
+            { name: 'Atbash Cipher', description: 'Decode & scan' },
+            { name: 'Pig Latin', description: 'Decode & scan' },
+            { name: 'Morse Code', description: 'Decode & scan' },
+            { name: 'Braille Unicode', description: 'U+2800-28FF map' },
+            { name: 'NATO Phonetic', description: 'Decode to letters' },
+            { name: 'Leetspeak', description: 'De-obfuscate digits' },
+            { name: 'Unicode Homoglyphs', description: 'Cyrillic to Latin' },
+            { name: 'Math Bold Unicode', description: 'U+1D400-1D7FF' },
+            { name: 'URL Encoding (%XX)', description: 'Percent-decode' },
+            { name: 'Spaced Characters', description: 'Collapse spaces' },
+            { name: 'Acrostic Stegano', description: 'First-letter keywords' },
+            { name: 'Markdown URL', description: 'Image URL exfil' },
+            { name: 'Distributed Keywords', description: 'Split across lines' },
+            { name: 'Zero-Width Chars', description: 'U+200B-200F detect' },
+        ],
+        languages: [
+            { name: 'English', injection: true, plan: true, memory: true },
+            { name: 'Spanish', injection: true, plan: true, memory: true },
+            { name: 'French', injection: true, plan: true, memory: true },
+            { name: 'German', injection: true, plan: true, memory: true },
+            { name: 'Portuguese', injection: true, plan: false, memory: false },
+            { name: 'Chinese', injection: true, plan: false, memory: false },
+            { name: 'Arabic', injection: true, plan: false, memory: false },
+        ],
+        async init() {
+            try {
+                const resp = await fetch('/admin/guardrails/patterns');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.stats.total_patterns = data.length;
+                }
+            } catch(e) {}
+        }
+    };
+}
+</script>
+{% endblock %}

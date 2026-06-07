@@ -1,0 +1,800 @@
+{% extends "base.html" %}
+{% block title %}Access Control — Sentinel Gateway Admin{% endblock %}
+{% block content %}
+<div class="space-y-6" x-data="accessControlManager()">
+    <!-- Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h2 class="text-2xl font-bold">Access Control</h2>
+            <p class="text-sm text-gray-400 mt-1">Manage users, roles, and permissions</p>
+        </div>
+        <button x-show="activeTab === 'users'" @click="openCreateUser()"
+            class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-medium flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            New User
+        </button>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="border-b border-gray-700">
+        <nav class="flex gap-8">
+            <button @click="activeTab = 'users'" class="pb-3 text-sm font-medium border-b-2 transition-colors"
+                :class="activeTab === 'users' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-gray-400 hover:text-gray-200'">
+                Users
+                <span class="ml-1.5 px-2 py-0.5 bg-gray-700 rounded-full text-xs" x-text="users.length"></span>
+            </button>
+            <button @click="activeTab = 'roles'" class="pb-3 text-sm font-medium border-b-2 transition-colors"
+                :class="activeTab === 'roles' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-gray-400 hover:text-gray-200'">
+                Roles & Permissions
+            </button>
+        </nav>
+    </div>
+
+    <!-- ==================== USERS TAB ==================== -->
+    <div x-show="activeTab === 'users'" x-cloak>
+        <!-- Toolbar -->
+        <div class="flex items-center gap-4 mb-4">
+            <div class="relative flex-1 max-w-sm">
+                <input type="text" x-model="userSearch" placeholder="Search by username..."
+                    class="w-full bg-gray-800 border border-gray-600 rounded-lg pl-9 pr-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500">
+                <svg class="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+            </div>
+            <select x-model="userRoleFilter" class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200">
+                <option value="">All Roles</option>
+                <template x-for="r in roles" :key="r.id"><option :value="r.id" x-text="r.label"></option></template>
+            </select>
+            <select x-model="userStatusFilter" class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200">
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="inactive">Disabled</option>
+            </select>
+            <span class="text-xs text-gray-500 ml-auto" x-text="filteredUsers.length + ' of ' + users.length + ' users'"></span>
+        </div>
+
+        <!-- Users Table -->
+        <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-900/50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">User</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Role</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Scope</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Security</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Last Active</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-700/50">
+                    <template x-for="u in paginatedUsers" :key="u.id">
+                        <tr class="hover:bg-gray-700/20 transition-colors group">
+                            <!-- User cell -->
+                            <td class="px-4 py-3">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                                        :class="{
+                                            'bg-purple-900/60 text-purple-300 ring-1 ring-purple-600': u.role === 'admin',
+                                            'bg-orange-900/60 text-orange-300 ring-1 ring-orange-600': u.role === 'security',
+                                            'bg-blue-900/60 text-blue-300 ring-1 ring-blue-600': u.role === 'auditor',
+                                            'bg-gray-700 text-gray-300 ring-1 ring-gray-600': u.role === 'viewer'
+                                        }"
+                                        x-text="u.username.substring(0,2).toUpperCase()"></div>
+                                    <div>
+                                        <p class="font-medium text-gray-200" x-text="u.username"></p>
+                                        <p class="text-xs text-gray-500 font-mono" x-text="u.id.substring(0,8)"></p>
+                                    </div>
+                                </div>
+                            </td>
+                            <!-- Role -->
+                            <td class="px-4 py-3">
+                                <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium"
+                                    :class="{
+                                        'bg-purple-900/40 text-purple-300 ring-1 ring-purple-700/50': u.role === 'admin',
+                                        'bg-orange-900/40 text-orange-300 ring-1 ring-orange-700/50': u.role === 'security',
+                                        'bg-blue-900/40 text-blue-300 ring-1 ring-blue-700/50': u.role === 'auditor',
+                                        'bg-gray-700/60 text-gray-300 ring-1 ring-gray-600/50': u.role === 'viewer'
+                                    }" x-text="u.role.charAt(0).toUpperCase() + u.role.slice(1)"></span>
+                            </td>
+                            <!-- Scope -->
+                            <td class="px-4 py-3">
+                                <span class="text-xs text-gray-400 font-mono" x-text="u.tenant_scope || 'All tenants'"></span>
+                            </td>
+                            <!-- Status -->
+                            <td class="px-4 py-3">
+                                <span class="inline-flex items-center gap-1.5 text-xs font-medium"
+                                    :class="u.active ? 'text-green-400' : 'text-red-400'">
+                                    <span class="w-1.5 h-1.5 rounded-full" :class="u.active ? 'bg-green-400' : 'bg-red-400'"></span>
+                                    <span x-text="u.active ? 'Active' : 'Disabled'"></span>
+                                </span>
+                            </td>
+                            <!-- Security (MFA) -->
+                            <td class="px-4 py-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="inline-flex items-center gap-1 text-xs"
+                                        :class="u.mfa_enabled ? 'text-green-400' : 'text-gray-500'">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                                        </svg>
+                                        <span x-text="u.mfa_enabled ? 'MFA' : 'No MFA'"></span>
+                                    </span>
+                                </div>
+                            </td>
+                            <!-- Last Active -->
+                            <td class="px-4 py-3">
+                                <span class="text-xs text-gray-400" x-text="u.last_login ? timeAgo(u.last_login) : 'Never'"></span>
+                            </td>
+                            <!-- Actions -->
+                            <td class="px-4 py-3 text-right">
+                                <div class="flex justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                                    <button @click="editUser(u)" class="p-1.5 rounded hover:bg-gray-600 text-gray-400 hover:text-white" title="Edit">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                    </button>
+                                    <button @click="resetPassword(u)" class="p-1.5 rounded hover:bg-gray-600 text-gray-400 hover:text-yellow-400" title="Reset password">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                                    </button>
+                                    <button @click="toggleMfa(u)" class="p-1.5 rounded hover:bg-gray-600 text-gray-400 hover:text-cyan-400"
+                                        :title="u.mfa_enabled ? 'Disable MFA' : 'Setup MFA'">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                                    </button>
+                                    <button @click="viewSessions(u)" class="p-1.5 rounded hover:bg-gray-600 text-gray-400 hover:text-blue-400" title="Sessions">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                    </button>
+                                    <button @click="deleteUser(u)" class="p-1.5 rounded hover:bg-gray-600 text-gray-400 hover:text-red-400" title="Delete"
+                                        :disabled="u.username === 'admin'">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                    <template x-if="paginatedUsers.length === 0">
+                        <tr><td colspan="7" class="px-4 py-12 text-center text-gray-500">No users match your filters</td></tr>
+                    </template>
+                </tbody>
+            </table>
+
+            <!-- Pagination -->
+            <div class="px-4 py-3 border-t border-gray-700 flex items-center justify-between" x-show="totalPages > 1">
+                <p class="text-xs text-gray-500" x-text="`Showing ${(currentPage-1)*pageSize+1} to ${Math.min(currentPage*pageSize, filteredUsers.length)} of ${filteredUsers.length}`"></p>
+                <div class="flex gap-1">
+                    <button @click="currentPage = Math.max(1, currentPage-1)" :disabled="currentPage === 1"
+                        class="px-3 py-1.5 rounded-md bg-gray-700 text-xs text-gray-300 disabled:opacity-40 hover:bg-gray-600 transition-colors">Prev</button>
+                    <template x-for="p in visiblePages" :key="p">
+                        <button @click="currentPage = p"
+                            class="px-3 py-1.5 rounded-md text-xs transition-colors"
+                            :class="p === currentPage ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'"
+                            x-text="p"></button>
+                    </template>
+                    <button @click="currentPage = Math.min(totalPages, currentPage+1)" :disabled="currentPage === totalPages"
+                        class="px-3 py-1.5 rounded-md bg-gray-700 text-xs text-gray-300 disabled:opacity-40 hover:bg-gray-600 transition-colors">Next</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sessions Panel (slide-in) -->
+        <div x-show="sessionsUser" x-cloak x-transition
+            class="mt-4 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+            <div class="px-4 py-3 bg-gray-900/50 border-b border-gray-700 flex justify-between items-center">
+                <h4 class="text-sm font-semibold">
+                    Active Sessions
+                    <span class="text-cyan-400 ml-1" x-text="sessionsUser?.username"></span>
+                </h4>
+                <button @click="sessionsUser = null" class="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-700">&times; Close</button>
+            </div>
+            <table class="w-full text-xs">
+                <thead><tr class="text-gray-400 border-b border-gray-700/50"><th class="px-4 py-2 text-left">Session ID</th><th class="px-4 py-2 text-left">Created</th><th class="px-4 py-2 text-left">IP Address</th><th class="px-4 py-2 text-right">Action</th></tr></thead>
+                <tbody class="divide-y divide-gray-700/30">
+                    <template x-for="s in sessions" :key="s.id">
+                        <tr class="hover:bg-gray-700/20">
+                            <td class="px-4 py-2 font-mono text-gray-300" x-text="s.id.substring(0,16) + '...'"></td>
+                            <td class="px-4 py-2 text-gray-400" x-text="new Date(s.created_at).toLocaleString()"></td>
+                            <td class="px-4 py-2 text-gray-400" x-text="s.ip || 'Unknown'"></td>
+                            <td class="px-4 py-2 text-right">
+                                <button @click="revokeSession(s)" class="px-2 py-1 bg-red-800 hover:bg-red-700 rounded text-red-200">Revoke</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+            <div x-show="sessions.length === 0" class="px-4 py-6 text-center text-gray-500 text-xs">No active sessions</div>
+        </div>
+    </div>
+
+    <!-- ==================== ROLES TAB ==================== -->
+    <div x-show="activeTab === 'roles'" x-cloak>
+        <div class="grid grid-cols-12 gap-6">
+            <!-- Role Sidebar -->
+            <div class="col-span-3 space-y-2">
+                <div class="flex justify-between items-center mb-3 px-1">
+                    <p class="text-xs text-gray-500 uppercase font-medium">Roles</p>
+                    <button @click="showCreateRole = true" class="text-xs text-cyan-400 hover:text-cyan-300 font-medium">+ New</button>
+                </div>
+                <template x-for="role in roles" :key="role.id">
+                    <div class="relative group/role">
+                        <button @click="selectedRole = role.id"
+                            class="w-full text-left p-4 rounded-lg border transition-all"
+                            :class="selectedRole === role.id
+                                ? 'bg-gray-800 border-cyan-500/70 shadow-lg shadow-cyan-900/10'
+                                : 'bg-gray-800/40 border-gray-700 hover:border-gray-500 hover:bg-gray-800/70'">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <div class="flex items-center gap-1.5">
+                                        <p class="font-semibold text-sm text-gray-200" x-text="role.label"></p>
+                                        <span x-show="!role.builtin" class="text-[9px] px-1.5 py-0.5 rounded bg-cyan-900/40 text-cyan-400 border border-cyan-700/30">custom</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-0.5 leading-tight" x-text="role.description"></p>
+                                </div>
+                                <div class="flex flex-col items-end gap-1">
+                                    <span class="text-xs font-mono px-2 py-0.5 rounded-full bg-gray-700 text-gray-400" x-text="role.permCount"></span>
+                                    <span x-show="role.hasOverride" class="text-[10px] text-yellow-400 font-medium">modified</span>
+                                </div>
+                            </div>
+                        </button>
+                        <!-- Delete button for custom roles -->
+                        <button x-show="!role.builtin" @click.stop="deleteRole(role)"
+                            class="absolute top-2 right-2 p-1 rounded opacity-0 group-hover/role:opacity-100 hover:bg-red-800/50 text-gray-500 hover:text-red-400 transition-all"
+                            title="Delete role">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Permission Panel -->
+            <div class="col-span-9">
+                <template x-if="selectedRole">
+                    <div class="space-y-4">
+                        <!-- Role Header -->
+                        <div class="flex justify-between items-center bg-gray-800 rounded-lg p-4 border border-gray-700">
+                            <div>
+                                <div class="flex items-center gap-3">
+                                    <h3 class="text-lg font-semibold text-gray-100" x-text="getRoleLabel(selectedRole)"></h3>
+                                    <span x-show="isOverridden(selectedRole)"
+                                        class="text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 border border-yellow-700/40">
+                                        Custom overrides active
+                                    </span>
+                                </div>
+                                <p class="text-sm text-gray-400 mt-1" x-text="getRoleDescription(selectedRole)"></p>
+                            </div>
+                            <button @click="resetRole(selectedRole)" x-show="isOverridden(selectedRole)"
+                                class="px-3 py-1.5 bg-gray-700 border border-gray-600 text-gray-300 hover:bg-gray-600 hover:text-white rounded-lg text-xs font-medium transition-colors">
+                                Reset to Defaults
+                            </button>
+                        </div>
+
+                        <!-- Permission Groups -->
+                        <div class="space-y-3">
+                            <template x-for="group in permissionGroups" :key="group.name">
+                                <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden" x-data="{ open: true }">
+                                    <button @click="open = !open" class="w-full px-4 py-3 bg-gray-900/40 border-b border-gray-700/50 cursor-pointer hover:bg-gray-900/60 transition-colors">
+                                        <div class="flex justify-between items-center">
+                                            <h4 class="text-sm font-medium text-gray-300 flex items-center gap-2">
+                                                <svg class="w-4 h-4 text-gray-500 transition-transform duration-200" :class="open ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                                </svg>
+                                                <span x-text="group.icon" class="text-base"></span>
+                                                <span x-text="group.name"></span>
+                                            </h4>
+                                            <span class="text-[11px] text-gray-500 font-mono"
+                                                x-text="countGroupPerms(group) + ' of ' + group.permissions.length"></span>
+                                        </div>
+                                    </button>
+                                    <div x-show="open" x-collapse class="divide-y divide-gray-700/30">
+                                        <template x-for="perm in group.permissions" :key="perm.id">
+                                            <div class="px-4 py-3 flex items-center justify-between hover:bg-gray-700/15 transition-colors">
+                                                <div class="flex-1 min-w-0">
+                                                    <p class="text-sm text-gray-200" x-text="perm.label"></p>
+                                                    <p class="text-[11px] text-gray-500 font-mono mt-0.5" x-text="perm.id"></p>
+                                                </div>
+                                                <button @click="togglePermission(selectedRole, perm.id)"
+                                                    class="relative w-11 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-cyan-500 shrink-0 ml-4"
+                                                    :class="hasPermission(selectedRole, perm.id) ? 'bg-cyan-600' : 'bg-gray-600'"
+                                                    :disabled="isProtectedPerm(selectedRole, perm.id)"
+                                                    :title="isProtectedPerm(selectedRole, perm.id) ? 'Protected permission' : ''">
+                                                    <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200"
+                                                        :class="hasPermission(selectedRole, perm.id) ? 'translate-x-5' : 'translate-x-0'"></span>
+                                                </button>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+                <template x-if="!selectedRole">
+                    <div class="flex flex-col items-center justify-center h-64 text-gray-500">
+                        <svg class="w-12 h-12 mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                        <p class="text-sm">Select a role to manage permissions</p>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== MODALS ==================== -->
+
+    <!-- Create/Edit User Modal -->
+    <div x-show="showModal" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showModal = false">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl" @click.away="showModal = false">
+            <div class="p-5 border-b border-gray-700">
+                <h3 class="text-lg font-semibold" x-text="editing ? 'Edit User' : 'Create New User'"></h3>
+                <p class="text-xs text-gray-400 mt-1" x-text="editing ? 'Update user properties' : 'Add a new user to the system'"></p>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+                    <input type="text" x-model="form.username"
+                        class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                        :disabled="editing" placeholder="e.g. john.smith">
+                </div>
+                <div x-show="!editing">
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
+                    <input type="password" x-model="form.password"
+                        class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                        placeholder="Min 8 characters">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-400 mb-1.5">Role</label>
+                        <select x-model="form.role" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500">
+                            <template x-for="r in roles" :key="r.id"><option :value="r.id" x-text="r.label"></option></template>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-400 mb-1.5">Tenant Scope</label>
+                        <input type="text" x-model="form.tenant_scope"
+                            class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                            placeholder="Leave empty for all">
+                    </div>
+                </div>
+                <div x-show="editing" class="flex items-center gap-3 pt-1">
+                    <button @click="form.active = !form.active" class="relative w-11 h-6 rounded-full transition-colors"
+                        :class="form.active ? 'bg-green-600' : 'bg-gray-600'">
+                        <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform"
+                            :class="form.active ? 'translate-x-5' : 'translate-x-0'"></span>
+                    </button>
+                    <span class="text-sm text-gray-300" x-text="form.active ? 'Active' : 'Disabled'"></span>
+                </div>
+            </div>
+            <div class="p-5 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showModal = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-300 transition-colors">Cancel</button>
+                <button @click="saveUser()" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-medium transition-colors">
+                    <span x-text="editing ? 'Save Changes' : 'Create User'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reset Password Modal -->
+    <div x-show="showResetPw" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showResetPw = false">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl">
+            <div class="p-5 border-b border-gray-700">
+                <h3 class="text-lg font-semibold">Reset Password</h3>
+                <p class="text-xs text-gray-400 mt-1">Set a new password for <span class="text-cyan-400 font-medium" x-text="resetPwUser?.username"></span></p>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">New Password</label>
+                    <input type="password" x-model="resetPwValue" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500" placeholder="Minimum 8 characters">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Confirm Password</label>
+                    <input type="password" x-model="resetPwConfirm" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500" placeholder="Re-enter password">
+                </div>
+                <p x-show="resetPwError" class="text-red-400 text-xs bg-red-900/20 rounded px-3 py-2" x-text="resetPwError"></p>
+            </div>
+            <div class="p-5 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showResetPw = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-300 transition-colors">Cancel</button>
+                <button @click="confirmResetPassword()" class="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg text-sm font-medium transition-colors">Reset Password</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirm Modal -->
+    <div x-show="showDeleteConfirm" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showDeleteConfirm = false">
+        <div class="bg-gray-800 rounded-xl border border-red-800/50 w-full max-w-sm shadow-2xl">
+            <div class="p-5 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-red-400">Delete User</h3>
+            </div>
+            <div class="p-5">
+                <p class="text-sm text-gray-300">Permanently delete <span class="font-mono text-cyan-400 font-medium" x-text="deleteTarget?.username"></span>?</p>
+                <p class="text-xs text-gray-500 mt-2">This will revoke all sessions and remove all access. This action cannot be undone.</p>
+            </div>
+            <div class="p-5 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showDeleteConfirm = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-300 transition-colors">Cancel</button>
+                <button @click="confirmDelete()" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors">Delete User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MFA Setup Modal -->
+    <div x-show="mfaUri" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="mfaUri = null; mfaSecret = null">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl text-center">
+            <div class="p-5 border-b border-gray-700">
+                <h3 class="text-lg font-semibold">MFA Setup</h3>
+                <p class="text-xs text-gray-400 mt-1">Scan the QR code with your authenticator app</p>
+            </div>
+            <div class="p-6">
+                <div class="flex justify-center mb-4">
+                    <div id="mfa-qr" class="bg-white p-3 rounded-lg inline-block"></div>
+                </div>
+                <details class="text-left">
+                    <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-300">Manual entry key</summary>
+                    <div class="mt-2 bg-gray-900 border border-gray-600 rounded-lg p-3 text-xs font-mono break-all text-cyan-400" x-text="mfaSecret"></div>
+                </details>
+            </div>
+            <div class="p-5 border-t border-gray-700">
+                <button @click="mfaUri = null; mfaSecret = null;" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-medium w-full transition-colors">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Role Modal -->
+    <div x-show="showCreateRole" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showCreateRole = false">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.away="showCreateRole = false">
+            <div class="p-5 border-b border-gray-700">
+                <h3 class="text-lg font-semibold">Create New Role</h3>
+                <p class="text-xs text-gray-400 mt-1">Define a custom role with specific permissions</p>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Role ID</label>
+                    <input type="text" x-model="newRoleForm.name"
+                        class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 font-mono focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                        placeholder="e.g. soc_analyst">
+                    <p class="text-[11px] text-gray-500 mt-1">Lowercase, no spaces. Used as identifier.</p>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Display Name</label>
+                    <input type="text" x-model="newRoleForm.label"
+                        class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                        placeholder="e.g. SOC Analyst">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Description</label>
+                    <input type="text" x-model="newRoleForm.description"
+                        class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                        placeholder="Brief description of this role's purpose">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Clone permissions from</label>
+                    <select x-model="newRoleForm.clone_from" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500">
+                        <option value="">Start with no permissions</option>
+                        <template x-for="r in roles" :key="r.id">
+                            <option :value="r.id" x-text="r.label"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+            <div class="p-5 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showCreateRole = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-300 transition-colors">Cancel</button>
+                <button @click="createRole()" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-medium transition-colors">Create Role</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Saving indicator -->
+    <div x-show="saving" x-cloak x-transition
+        class="fixed bottom-6 right-6 bg-gray-800 border border-gray-600 text-gray-200 px-4 py-2.5 rounded-lg shadow-xl text-sm flex items-center gap-2">
+        <svg class="w-4 h-4 animate-spin text-cyan-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        Saving...
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+function accessControlManager() {
+    return {
+        activeTab: 'users',
+        // === Users ===
+        users: [],
+        userSearch: '',
+        userRoleFilter: '',
+        userStatusFilter: '',
+        currentPage: 1,
+        pageSize: 15,
+        showModal: false,
+        editing: false,
+        form: { username: '', password: '', role: 'viewer', tenant_scope: '', active: true },
+        _editId: null,
+        sessionsUser: null,
+        sessions: [],
+        mfaUri: null,
+        mfaSecret: null,
+        showResetPw: false,
+        resetPwUser: null,
+        resetPwValue: '',
+        resetPwConfirm: '',
+        resetPwError: '',
+        showDeleteConfirm: false,
+        deleteTarget: null,
+        // === Roles ===
+        roles: [],
+        selectedRole: null,
+        matrix: {},
+        hasOverrides: [],
+        saving: false,
+        showCreateRole: false,
+        newRoleForm: { name: '', label: '', description: '', clone_from: '' },
+        permissionGroups: [
+            { name: 'Policies', icon: '📋', permissions: [
+                { id: 'policies:read', label: 'View policies' },
+                { id: 'policies:write', label: 'Create and edit policies' },
+                { id: 'policies:delete', label: 'Delete policies' },
+                { id: 'policies:apply', label: 'Apply policies to tenants' },
+            ]},
+            { name: 'Guardrails', icon: '🛡', permissions: [
+                { id: 'guardrails:read', label: 'View guardrail patterns and config' },
+                { id: 'guardrails:write', label: 'Create, edit, and toggle patterns' },
+                { id: 'guardrails:test', label: 'Run sandbox tests' },
+            ]},
+            { name: 'Threat Intelligence', icon: '🔍', permissions: [
+                { id: 'iocs:read', label: 'View IOC feeds and indicators' },
+                { id: 'iocs:write', label: 'Manage IOC feeds and sources' },
+            ]},
+            { name: 'SIEM & Monitoring', icon: '📡', permissions: [
+                { id: 'siem:read', label: 'View SIEM configuration' },
+                { id: 'siem:write', label: 'Configure SIEM transport and endpoints' },
+                { id: 'siem:test', label: 'Test SIEM connectivity' },
+            ]},
+            { name: 'Audit & Compliance', icon: '📜', permissions: [
+                { id: 'audit:read', label: 'View audit logs' },
+                { id: 'audit:export', label: 'Export audit data (CSV/JSON)' },
+            ]},
+            { name: 'System Administration', icon: '⚙', permissions: [
+                { id: 'admin:read', label: 'Access admin portal' },
+                { id: 'users:manage', label: 'Manage users and roles' },
+                { id: 'orchestrator:trigger', label: 'Trigger orchestrator tasks (Red Team, QA)' },
+                { id: 'config:validate', label: 'Validate configurations' },
+                { id: 'config:rollback', label: 'Rollback configurations' },
+            ]},
+        ],
+        roleMetadata: {
+            admin: { label: 'Administrator', description: 'Full system access with user management capabilities' },
+            security: { label: 'Security Engineer', description: 'Manage guardrails, policies, SIEM integrations, and threat intel' },
+            auditor: { label: 'Auditor', description: 'Read-only access with audit log export for compliance' },
+            viewer: { label: 'Viewer', description: 'Read-only dashboard access for monitoring' },
+        },
+
+        async init() {
+            await Promise.all([this.loadUsers(), this.loadMatrix()]);
+            if (this.roles.length > 0) this.selectedRole = this.roles[0].id;
+        },
+
+        // === Users Methods ===
+        async loadUsers() {
+            const resp = await fetch('/admin/users');
+            if (resp.ok) this.users = await resp.json();
+        },
+
+        get filteredUsers() {
+            let list = this.users;
+            if (this.userSearch) {
+                const s = this.userSearch.toLowerCase();
+                list = list.filter(u => u.username.toLowerCase().includes(s) || (u.id || '').includes(s));
+            }
+            if (this.userRoleFilter) list = list.filter(u => u.role === this.userRoleFilter);
+            if (this.userStatusFilter === 'active') list = list.filter(u => u.active);
+            if (this.userStatusFilter === 'inactive') list = list.filter(u => !u.active);
+            return list;
+        },
+        get totalPages() { return Math.ceil(this.filteredUsers.length / this.pageSize) || 1; },
+        get paginatedUsers() {
+            const start = (this.currentPage - 1) * this.pageSize;
+            return this.filteredUsers.slice(start, start + this.pageSize);
+        },
+        get visiblePages() {
+            const pages = [];
+            const total = this.totalPages;
+            const cur = this.currentPage;
+            for (let i = Math.max(1, cur - 2); i <= Math.min(total, cur + 2); i++) pages.push(i);
+            return pages;
+        },
+
+        timeAgo(dateStr) {
+            const diff = Date.now() - new Date(dateStr).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 60) return mins + 'm ago';
+            const hours = Math.floor(mins / 60);
+            if (hours < 24) return hours + 'h ago';
+            const days = Math.floor(hours / 24);
+            return days + 'd ago';
+        },
+
+        openCreateUser() {
+            this.editing = false;
+            this.form = { username: '', password: '', role: 'viewer', tenant_scope: '', active: true };
+            this.showModal = true;
+        },
+        editUser(u) {
+            this.editing = true;
+            this._editId = u.id;
+            this.form = { username: u.username, role: u.role, tenant_scope: u.tenant_scope || '', active: u.active };
+            this.showModal = true;
+        },
+        async saveUser() {
+            this.saving = true;
+            const method = this.editing ? 'PUT' : 'POST';
+            const url = this.editing ? `/admin/users/${this._editId}` : '/admin/users';
+            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.form) });
+            this.saving = false;
+            if (resp.ok) { this.showModal = false; await this.loadUsers(); showToast(this.editing ? 'User updated' : 'User created', 'success'); }
+            else { const err = await resp.json().catch(() => ({})); showToast(err.detail || 'Operation failed', 'error'); }
+        },
+        deleteUser(u) {
+            if (u.username === 'admin') { showToast('Cannot delete the primary admin', 'error'); return; }
+            this.deleteTarget = u;
+            this.showDeleteConfirm = true;
+        },
+        async confirmDelete() {
+            this.saving = true;
+            const resp = await fetch(`/admin/users/${this.deleteTarget.id}`, { method: 'DELETE' });
+            this.saving = false;
+            this.showDeleteConfirm = false;
+            if (resp.ok) { await this.loadUsers(); showToast('User deleted', 'success'); }
+            else { showToast('Failed to delete user', 'error'); }
+        },
+        resetPassword(u) {
+            this.resetPwUser = u;
+            this.resetPwValue = '';
+            this.resetPwConfirm = '';
+            this.resetPwError = '';
+            this.showResetPw = true;
+        },
+        async confirmResetPassword() {
+            if (this.resetPwValue.length < 8) { this.resetPwError = 'Password must be at least 8 characters'; return; }
+            if (this.resetPwValue !== this.resetPwConfirm) { this.resetPwError = 'Passwords do not match'; return; }
+            this.saving = true;
+            const resp = await fetch(`/admin/users/${this.resetPwUser.id}/reset-password`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ new_password: this.resetPwValue })
+            });
+            this.saving = false;
+            if (resp.ok) { this.showResetPw = false; showToast('Password reset successfully', 'success'); }
+            else { const err = await resp.json().catch(() => ({})); this.resetPwError = err.detail || 'Failed to reset password'; }
+        },
+        async toggleMfa(u) {
+            if (u.mfa_enabled) {
+                const ok = await showConfirm('Disable MFA', `Disable MFA for ${u.username}? This reduces account security.`, 'Disable');
+                if (!ok) return;
+                await fetch(`/admin/users/${u.id}/mfa`, { method: 'DELETE' });
+                await this.loadUsers();
+                showToast('MFA disabled', 'success');
+            } else {
+                const resp = await fetch(`/admin/users/${u.id}/mfa/setup`, { method: 'POST' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.mfaUri = data.provisioning_uri || data.uri;
+                    this.mfaSecret = data.secret || '';
+                    this.$nextTick(() => {
+                        const container = document.getElementById('mfa-qr');
+                        if (container) {
+                            container.innerHTML = '';
+                            new QRCode(container, { text: this.mfaUri, width: 200, height: 200, colorDark: '#000000', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+                        }
+                    });
+                } else { showToast('MFA setup failed', 'error'); }
+            }
+        },
+        async viewSessions(u) {
+            this.sessionsUser = u;
+            const resp = await fetch(`/admin/users/${u.id}/sessions`);
+            this.sessions = resp.ok ? await resp.json() : [];
+        },
+        async revokeSession(s) {
+            await fetch(`/admin/users/${this.sessionsUser.id}/sessions/${s.id}`, { method: 'DELETE' });
+            await this.viewSessions(this.sessionsUser);
+            showToast('Session revoked', 'success');
+        },
+
+        // === Roles Methods ===
+        async loadMatrix() {
+            const resp = await fetch('/admin/rbac/matrix');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            this.matrix = data.matrix;
+            this.hasOverrides = data.has_overrides || [];
+            const meta = data.role_meta || {};
+            this.roles = data.roles.map(r => ({
+                id: r,
+                label: meta[r]?.label || this.roleMetadata[r]?.label || r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+                description: meta[r]?.description || this.roleMetadata[r]?.description || '',
+                permCount: (data.matrix[r] || []).length,
+                hasOverride: (data.has_overrides || []).includes(r),
+                builtin: meta[r]?.builtin !== false,
+            }));
+        },
+
+        getRoleLabel(role) { return this.roleMetadata[role]?.label || role; },
+        getRoleDescription(role) { return this.roleMetadata[role]?.description || ''; },
+        isOverridden(role) { return this.hasOverrides.includes(role); },
+        hasPermission(role, perm) { return (this.matrix[role] || []).includes(perm); },
+        isProtectedPerm(role, perm) { return role === 'admin' && (perm === 'admin:read' || perm === 'users:manage'); },
+        countGroupPerms(group) { return group.permissions.filter(p => this.hasPermission(this.selectedRole, p.id)).length; },
+
+        async togglePermission(role, perm) {
+            if (this.isProtectedPerm(role, perm)) { showToast('This permission is protected for the Admin role', 'error'); return; }
+            const perms = this.matrix[role] || [];
+            const idx = perms.indexOf(perm);
+            if (idx >= 0) perms.splice(idx, 1);
+            else perms.push(perm);
+            this.matrix[role] = [...perms];
+            const roleObj = this.roles.find(r => r.id === role);
+            if (roleObj) roleObj.permCount = perms.length;
+            await this.saveRole(role);
+        },
+
+        async saveRole(role) {
+            this.saving = true;
+            const resp = await fetch(`/admin/rbac/role/${role}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ role, permissions: this.matrix[role] || [] })
+            });
+            this.saving = false;
+            if (resp.ok) {
+                if (!this.hasOverrides.includes(role)) this.hasOverrides.push(role);
+                const roleObj = this.roles.find(r => r.id === role);
+                if (roleObj) roleObj.hasOverride = true;
+                showToast(`${this.getRoleLabel(role)} updated`, 'success');
+            } else {
+                showToast('Failed to save', 'error');
+                await this.loadMatrix();
+            }
+        },
+
+        async resetRole(role) {
+            const ok = await showConfirm('Reset to Defaults', `Reset "${this.getRoleLabel(role)}" permissions to defaults? Custom overrides will be lost.`, 'Reset');
+            if (!ok) return;
+            const resp = await fetch(`/admin/rbac/role/${role}/reset`, { method: 'POST' });
+            if (resp.ok) {
+                showToast(`${this.getRoleLabel(role)} reset to defaults`, 'success');
+                await this.loadMatrix();
+            }
+        },
+
+        async createRole() {
+            if (!this.newRoleForm.name.trim()) { showToast('Role ID is required', 'error'); return; }
+            this.saving = true;
+            const resp = await fetch('/admin/rbac/role', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(this.newRoleForm)
+            });
+            this.saving = false;
+            if (resp.ok) {
+                this.showCreateRole = false;
+                this.newRoleForm = { name: '', label: '', description: '', clone_from: '' };
+                await this.loadMatrix();
+                // Select the newly created role
+                const created = this.roles.find(r => r.id === this.newRoleForm.name) || this.roles[this.roles.length - 1];
+                if (created) this.selectedRole = created.id;
+                showToast('Role created successfully', 'success');
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to create role', 'error');
+            }
+        },
+
+        async deleteRole(role) {
+            const ok = await showConfirm('Delete Role', `Permanently delete the "${role.label}" role? Users assigned to this role will lose access.`, 'Delete');
+            if (!ok) return;
+            this.saving = true;
+            const resp = await fetch(`/admin/rbac/role/${role.id}`, { method: 'DELETE' });
+            this.saving = false;
+            if (resp.ok) {
+                if (this.selectedRole === role.id) this.selectedRole = this.roles[0]?.id || null;
+                await this.loadMatrix();
+                showToast(`Role "${role.label}" deleted`, 'success');
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to delete role', 'error');
+            }
+        },
+    };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,75 @@
+# Policy: Healthcare data processor
+# Strict sandbox — PII-sensitive, no external network, no code execution
+tenant: healthcare-corp
+
+agents:
+  - id: patient-assistant
+    sandbox_level: strict
+    allowed_tools:
+      - read_knowledge_base
+      - get_patient_summary  # pre-approved internal API
+      - schedule_appointment
+    denied_tools:
+      - run_command
+      - execute
+      - bash
+      - write_file
+      - delete_file
+      - read_file
+      - web_search  # No external search for HIPAA compliance
+    allow_command_execution: false
+    allow_file_write: false
+    allow_network_access: false  # Isolated from internet
+    max_tool_calls: 5
+    tool_policies:
+      - name: get_patient_summary
+        max_calls: 3
+        required_arguments:
+          - patient_id
+        denied_arguments:
+          patient_id:
+            - "*"          # No wildcard queries
+            - "all"
+            - "SELECT"     # SQL injection in ID field
+      - name: schedule_appointment
+        max_calls: 2
+        required_arguments:
+          - patient_id
+          - datetime
+          - provider_id
+
+  - id: medical-researcher
+    sandbox_level: standard
+    allowed_tools:
+      - query_database
+      - web_search
+      - read_file
+    denied_tools:
+      - run_command
+      - write_file
+      - delete_file
+    allow_command_execution: false
+    allow_file_write: false
+    allow_network_access: true
+    max_tool_calls: 20
+    tool_policies:
+      - name: query_database
+        max_calls: 10
+        denied_arguments:
+          query:
+            - "DROP"
+            - "DELETE"
+            - "TRUNCATE"
+            - "ALTER"
+            - "INSERT"
+            - "UPDATE"
+            - "patient_name"    # No PII in research queries
+            - "social_security"
+            - "date_of_birth"
+      - name: read_file
+        denied_arguments:
+          filepath:
+            - ".env"
+            - "/etc/"
+            - ".ssh/"
+            - "patient_records/"  # Raw records restricted

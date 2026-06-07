@@ -1,0 +1,427 @@
+---
+# ConfigMap — Sentinel Gateway custom decoder and rules for Wazuh
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-sentinel-decoder-rules
+  namespace: sentinel-siem
+  labels:
+    app.kubernetes.io/name: wazuh
+    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/component: siem
+data:
+  local_decoder.xml: |
+    <!-- Sentinel Gateway security event decoder -->
+    <decoder name="sentinel-gateway">
+      <prematch>^security_event\s+</prematch>
+      <regex offset="after_prematch">agent=(\S+) category=(\S+) description='([^']+)' pattern='([^']*?)' severity=(\S+) tenant=(\S+) tool=(\S+) verdict=(\S+)</regex>
+      <order>dstuser,extra_data,data,system_name,status,user,url,action</order>
+    </decoder>
+  local_rules.xml: |
+    <!-- Sentinel Gateway detection rules -->
+    <group name="sentinel-gateway,">
+
+      <rule id="100100" level="3">
+        <decoded_as>sentinel-gateway</decoded_as>
+        <description>Sentinel Gateway: Security event</description>
+        <group>sentinel-gateway,</group>
+      </rule>
+
+      <rule id="100101" level="12">
+        <if_sid>100100</if_sid>
+        <field name="action">BLOCK</field>
+        <description>Sentinel Gateway: Critical security event — action blocked</description>
+        <group>sentinel-gateway,attack,</group>
+      </rule>
+
+      <rule id="100102" level="14">
+        <if_sid>100100</if_sid>
+        <field name="extra_data">jailbreak</field>
+        <description>Sentinel Gateway: Jailbreak attempt detected</description>
+        <mitre>
+          <id>T1059</id>
+        </mitre>
+        <group>sentinel-gateway,jailbreak,</group>
+      </rule>
+
+      <rule id="100103" level="14">
+        <if_sid>100100</if_sid>
+        <field name="extra_data">exfiltration</field>
+        <description>Sentinel Gateway: Data exfiltration attempt detected</description>
+        <mitre>
+          <id>T1041</id>
+        </mitre>
+        <group>sentinel-gateway,exfiltration,</group>
+      </rule>
+
+      <rule id="100104" level="10">
+        <if_sid>100100</if_sid>
+        <field name="extra_data">prompt_injection</field>
+        <description>Sentinel Gateway: Prompt injection attempt detected</description>
+        <mitre>
+          <id>T1190</id>
+        </mitre>
+        <group>sentinel-gateway,injection,</group>
+      </rule>
+
+      <rule id="100105" level="13">
+        <if_sid>100100</if_sid>
+        <field name="extra_data">credential</field>
+        <description>Sentinel Gateway: Credential access attempt detected</description>
+        <mitre>
+          <id>T1552</id>
+        </mitre>
+        <group>sentinel-gateway,credential_access,</group>
+      </rule>
+
+      <rule id="100106" level="12">
+        <if_sid>100100</if_sid>
+        <field name="extra_data">tool_abuse</field>
+        <description>Sentinel Gateway: Tool abuse detected</description>
+        <mitre>
+          <id>T1059</id>
+        </mitre>
+        <group>sentinel-gateway,tool_abuse,</group>
+      </rule>
+
+      <rule id="100107" level="14">
+        <if_sid>100100</if_sid>
+        <field name="extra_data">ssrf</field>
+        <description>Sentinel Gateway: SSRF attempt detected</description>
+        <mitre>
+          <id>T1552.005</id>
+        </mitre>
+        <group>sentinel-gateway,ssrf,</group>
+      </rule>
+
+    </group>
+---
+# ConfigMap — Log fetch script (pulls security events from proxy pods via k8s API)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-sentinel-fetch-script
+  namespace: sentinel-siem
+  labels:
+    app.kubernetes.io/name: wazuh
+    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/component: siem
+data:
+  fetch_sentinel_logs.sh: |
+    #!/bin/bash
+    # fetch_sentinel_logs.sh — Fetch security events from sentinel-gateway proxy pods
+    # Executed by Wazuh command wodle every 30s
+    set -euo pipefail
+
+    NAMESPACE="sentinel-gateway"
+    LABEL_SELECTOR="app.kubernetes.io/name=proxy"
+    OUTPUT_FILE="/var/log/sentinel-gateway/security_events.log"
+    STATE_FILE="/var/ossec/data/sentinel_fetch_state"
+    KUBE_API="https://kubernetes.default.svc"
+    SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
+    TOKEN="$(cat ${SA_DIR}/token)"
+    CACERT="${SA_DIR}/ca.crt"
+
+    # Calculate time window based on last fetch
+    SINCE_SECONDS=30
+    if [ -f "$STATE_FILE" ]; then
+      LAST_RUN=$(cat "$STATE_FILE")
+      NOW=$(date +%s)
+      SINCE_SECONDS=$(( NOW - LAST_RUN ))
+      [ "$SINCE_SECONDS" -lt 5 ] && SINCE_SECONDS=5
+      [ "$SINCE_SECONDS" -gt 300 ] && SINCE_SECONDS=300
+    fi
+
+    # Discover proxy pods
+    POD_JSON=$(curl -sf --cacert "$CACERT" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      "${KUBE_API}/api/v1/namespaces/${NAMESPACE}/pods?labelSelector=${LABEL_SELECTOR}&fieldSelector=status.phase=Running")
+
+    PODS=$(echo "$POD_JSON" | python3 -c "
+    import sys, json
+    data = json.load(sys.stdin)
+    for item in data.get('items', []):
+        print(item['metadata']['name'])
+    " 2>/dev/null)
+
+    # Fetch logs from each proxy pod and extract security events
+    for POD in $PODS; do
+      curl -sf --cacert "$CACERT" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        "${KUBE_API}/api/v1/namespaces/${NAMESPACE}/pods/${POD}/log?sinceSeconds=${SINCE_SECONDS}&container=proxy" \
+        2>/dev/null | grep "^security_event" >> "$OUTPUT_FILE" || true
+    done
+
+    # Update state timestamp
+    date +%s > "$STATE_FILE"
+---
+# Wazuh Manager — StatefulSet (single-node)
+# Deployed in sentinel-siem namespace (baseline PSS — Wazuh needs elevated privileges)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh
+  namespace: sentinel-siem
+  labels:
+    app.kubernetes.io/name: wazuh
+    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/component: siem
+spec:
+  serviceName: wazuh
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wazuh
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wazuh
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: siem
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: init-filebeat
+          image: wazuh/wazuh-manager:4.9.2
+          command: ["sh", "-c", "cp -a /etc/filebeat/* /filebeat-etc/ 2>/dev/null || true; echo '#!/bin/sh\nexec sleep infinity' > /filebeat-bin/filebeat; chmod +x /filebeat-bin/filebeat"]
+          volumeMounts:
+            - name: filebeat-etc
+              mountPath: /filebeat-etc
+            - name: filebeat-bin
+              mountPath: /filebeat-bin
+        - name: init-sentinel-config
+          image: wazuh/wazuh-manager:4.9.2
+          command:
+            - sh
+            - -c
+            - |
+              # Copy default /var/ossec/etc from image into the emptyDir
+              # (The emptyDir is mounted at /mnt/wazuh-etc so we can still
+              #  read the image-layer defaults at /var/ossec/etc/)
+              cp -a /var/ossec/etc/* /mnt/wazuh-etc/ 2>/dev/null || true
+              cp -a /var/ossec/etc/.??* /mnt/wazuh-etc/ 2>/dev/null || true
+
+              # Create directories for custom decoders and rules
+              mkdir -p /mnt/wazuh-etc/decoders /mnt/wazuh-etc/rules
+
+              # Install sentinel-gateway decoder, rules, and fetch script
+              cp /tmp/sentinel-config/local_decoder.xml /mnt/wazuh-etc/decoders/local_decoder.xml
+              cp /tmp/sentinel-config/local_rules.xml /mnt/wazuh-etc/rules/local_rules.xml
+              cp /tmp/sentinel-fetch/fetch_sentinel_logs.sh /mnt/wazuh-etc/fetch_sentinel_logs.sh
+              chmod +x /mnt/wazuh-etc/fetch_sentinel_logs.sh
+
+              # Ensure output log directory exists
+              mkdir -p /mnt/sentinel-logs
+
+              # Append localfile and command wodle to ossec.conf
+              if ! grep -q "fetch_sentinel_logs" /mnt/wazuh-etc/ossec.conf 2>/dev/null; then
+                cat >> /mnt/wazuh-etc/ossec.conf << 'SENTINEL_CONF'
+
+              <!-- Sentinel Gateway integration — auto-injected by init container -->
+              <ossec_config>
+                <localfile>
+                  <log_format>syslog</log_format>
+                  <location>/var/log/sentinel-gateway/security_events.log</location>
+                </localfile>
+
+                <wodle name="command">
+                  <disabled>no</disabled>
+                  <command>/var/ossec/etc/fetch_sentinel_logs.sh</command>
+                  <interval>30s</interval>
+                  <run_on_start>yes</run_on_start>
+                  <timeout>20</timeout>
+                </wodle>
+              </ossec_config>
+              SENTINEL_CONF
+              fi
+
+              echo "[init-sentinel-config] Configuration injected successfully"
+          volumeMounts:
+            - name: wazuh-etc
+              mountPath: /mnt/wazuh-etc
+            - name: sentinel-decoder-rules
+              mountPath: /tmp/sentinel-config
+            - name: sentinel-fetch-script
+              mountPath: /tmp/sentinel-fetch
+            - name: siem-stats
+              mountPath: /mnt/sentinel-logs
+      containers:
+        - name: wazuh-manager
+          image: wazuh/wazuh-manager:4.9.2
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+          env:
+            - name: WAZUH_CLUSTER_DISABLED
+              value: "true"
+            - name: FILEBEAT_SSL_VERIFICATION_MODE
+              value: "none"
+          ports:
+            - name: syslog
+              containerPort: 1514
+              protocol: UDP
+            - name: enrollment
+              containerPort: 1515
+              protocol: TCP
+            - name: api
+              containerPort: 55000
+              protocol: TCP
+          resources:
+            limits:
+              memory: 1Gi
+              cpu: "1"
+            requests:
+              memory: 512Mi
+              cpu: "250m"
+          volumeMounts:
+            - name: wazuh-data
+              mountPath: /var/ossec/data
+            - name: wazuh-logs
+              mountPath: /var/ossec/logs
+            - name: wazuh-tmp
+              mountPath: /tmp
+            - name: wazuh-run
+              mountPath: /var/run
+            - name: wazuh-etc
+              mountPath: /var/ossec/etc
+            - name: wazuh-queue
+              mountPath: /var/ossec/queue
+            - name: filebeat-etc
+              mountPath: /etc/filebeat
+            - name: filebeat-bin
+              mountPath: /usr/share/filebeat/bin
+            - name: siem-stats
+              mountPath: /var/log/sentinel-gateway
+          livenessProbe:
+            tcpSocket:
+              port: 55000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+          readinessProbe:
+            tcpSocket:
+              port: 55000
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            failureThreshold: 12
+      volumes:
+        - name: siem-stats
+          persistentVolumeClaim:
+            claimName: siem-stats-wazuh
+        - name: wazuh-logs
+          emptyDir: {}
+        - name: wazuh-tmp
+          emptyDir: {}
+        - name: wazuh-run
+          emptyDir: {}
+        - name: wazuh-etc
+          emptyDir: {}
+        - name: wazuh-queue
+          emptyDir: {}
+        - name: filebeat-etc
+          emptyDir: {}
+        - name: filebeat-bin
+          emptyDir: {}
+        - name: filebeat-config
+          configMap:
+            name: wazuh-filebeat-config
+        - name: sentinel-decoder-rules
+          configMap:
+            name: wazuh-sentinel-decoder-rules
+        - name: sentinel-fetch-script
+          configMap:
+            name: wazuh-sentinel-fetch-script
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: wazuh-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+# PVC for reading SIEM stats from proxy (cross-namespace shared data)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: siem-stats-wazuh
+  namespace: sentinel-siem
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 100Mi
+---
+# Filebeat config — output disabled (no indexer needed, file-only mode)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-filebeat-config
+  namespace: sentinel-siem
+  labels:
+    app.kubernetes.io/name: wazuh
+    app.kubernetes.io/part-of: sentinel-gateway
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+      - type: log
+        enabled: false
+    output.file:
+      path: /tmp
+      filename: filebeat-discard
+---
+# Wazuh Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh
+  namespace: sentinel-siem
+  labels:
+    app.kubernetes.io/name: wazuh
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  type: ClusterIP
+  ports:
+    - name: syslog
+      port: 1514
+      targetPort: syslog
+      protocol: UDP
+    - name: enrollment
+      port: 1515
+      targetPort: enrollment
+      protocol: TCP
+    - name: api
+      port: 55000
+      targetPort: api
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: wazuh
+---
+# NetworkPolicy — allow proxy to send logs to Wazuh
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-proxy-to-wazuh
+  namespace: sentinel-siem
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: wazuh
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: sentinel-gateway
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+      ports:
+        - port: 1514
+          protocol: UDP
+        - port: 55000
+          protocol: TCP

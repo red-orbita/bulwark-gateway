@@ -1,0 +1,69 @@
+# Sentinel Gateway — Staging Environment Values
+#
+# This file is used by CI/CD pipelines for staging deployments.
+# Copy and customize for your environment.
+#
+# Sensitive values should be injected via CI/CD secrets, not committed here.
+# Use --set overrides for: backend.ip, externalRedis.password, secrets.*
+
+# Backend — staging LLM endpoint
+backend:
+  type: ip
+  ip: ""  # Set via CI/CD: --set backend.ip=<STAGING_BACKEND_IP>
+  port: 11434
+
+# Proxy
+proxy:
+  replicas: 2
+  logLevel: "INFO"
+  failMode: "closed"
+  rateLimit: 120
+  workers: 2
+
+# Admin
+admin:
+  replicas: 1
+
+# Redis — use internal for staging (simpler), or external if shared
+redis:
+  enabled: true
+  maxMemory: "128mb"
+  storage: 2Gi
+
+# Uncomment below for external Redis in staging:
+# redis:
+#   enabled: false
+# externalRedis:
+#   host: "staging-redis.cache.windows.net"
+#   port: 6380
+#   tls: true
+#   existingSecret: "redis-credentials"
+#   existingSecretKey: "password"
+
+# Ingress
+ingress:
+  enabled: true
+  className: "nginx"
+  tls:
+    enabled: true
+    secretName: "sentinel-staging-tls"
+  hosts:
+    proxy: "api-staging.sentinel-gateway.mycompany.com"
+    admin: "admin-staging.sentinel-gateway.mycompany.com"
+
+# Telemetry
+telemetry:
+  enabled: true
+  batchSize: 50
+  flushInterval: 2.0
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+  grafana:
+    enabled: false  # Use shared Grafana in staging
+
+# Notifications — configure via admin UI post-deploy
+notifications:
+  enabled: true

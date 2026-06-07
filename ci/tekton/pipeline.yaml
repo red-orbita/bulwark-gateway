@@ -1,0 +1,218 @@
+# Sentinel Gateway — Tekton Pipeline
+#
+# Kubernetes-native CI/CD using Tekton Pipelines.
+#
+# Prerequisites:
+#   - Tekton Pipelines v0.50+ installed in cluster
+#   - Tekton Triggers (for webhook-based execution)
+#   - Secrets:
+#     * 'registry-credentials' — Docker registry auth (kubernetes.io/dockerconfigjson)
+#     * 'helm-values-staging' — ConfigMap or Secret with values-staging.yaml
+#     * 'helm-values-production' — ConfigMap or Secret with values-production.yaml
+#   - ServiceAccount 'tekton-deployer' with RBAC for Helm operations
+#
+# Install:
+#   kubectl apply -f ci/tekton/pipeline.yaml -n tekton-pipelines
+
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: sentinel-gateway-deploy
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  description: "Build, test, and deploy Sentinel Gateway"
+  params:
+    - name: git-url
+      type: string
+      description: "Git repository URL"
+    - name: git-revision
+      type: string
+      description: "Git revision (branch, tag, or SHA)"
+      default: "main"
+    - name: image-registry
+      type: string
+      description: "Container registry base URL"
+    - name: target-environment
+      type: string
+      description: "Deployment target: staging or production"
+      default: "staging"
+    - name: version
+      type: string
+      description: "Image version tag"
+
+  workspaces:
+    - name: source
+      description: "Shared workspace for source code"
+    - name: docker-credentials
+      description: "Docker registry credentials"
+    - name: helm-values
+      description: "Helm values file for target environment"
+
+  tasks:
+    # ─── Task 1: Clone ─────────────────────────────────────────────────────────
+    - name: clone
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: source
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    # ─── Task 2: Test ──────────────────────────────────────────────────────────
+    - name: test
+      runAfter: [clone]
+      workspaces:
+        - name: source
+          workspace: source
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: lint-and-test
+            image: python:3.11-slim
+            workingDir: $(workspaces.source.path)
+            script: |
+              #!/bin/bash
+              set -ex
+              pip install -q -r requirements.lock ruff pytest
+              ruff check src/ tests/
+              pytest tests/ -q --tb=short --ignore=tests/test_admin_integration.py
+
+    # ─── Task 3: Build Proxy Image ────────────────────────────────────────────
+    - name: build-proxy
+      runAfter: [test]
+      taskRef:
+        name: kaniko
+        kind: ClusterTask
+      workspaces:
+        - name: source
+          workspace: source
+        - name: dockerconfig
+          workspace: docker-credentials
+      params:
+        - name: IMAGE
+          value: "$(params.image-registry)/sentinel-gateway-proxy:$(params.version)"
+        - name: DOCKERFILE
+          value: "Dockerfile"
+        - name: CONTEXT
+          value: "."
+
+    # ─── Task 4: Build Admin Image ────────────────────────────────────────────
+    - name: build-admin
+      runAfter: [test]
+      taskRef:
+        name: kaniko
+        kind: ClusterTask
+      workspaces:
+        - name: source
+          workspace: source
+        - name: dockerconfig
+          workspace: docker-credentials
+      params:
+        - name: IMAGE
+          value: "$(params.image-registry)/sentinel-gateway-admin:$(params.version)"
+        - name: DOCKERFILE
+          value: "docker/Dockerfile.admin"
+        - name: CONTEXT
+          value: "."
+
+    # ─── Task 5: Deploy with Helm ─────────────────────────────────────────────
+    - name: deploy
+      runAfter: [build-proxy, build-admin]
+      workspaces:
+        - name: source
+          workspace: source
+        - name: values
+          workspace: helm-values
+      taskSpec:
+        params:
+          - name: registry
+            type: string
+          - name: version
+            type: string
+          - name: environment
+            type: string
+        workspaces:
+          - name: source
+          - name: values
+        steps:
+          - name: helm-deploy
+            image: alpine/helm:3.14.0
+            workingDir: $(workspaces.source.path)
+            script: |
+              #!/bin/sh
+              set -ex
+              VALUES_FILE=$(workspaces.values.path)/values-$(params.environment).yaml
+
+              helm upgrade --install sentinel-gateway ./helm/sentinel-gateway \
+                --namespace sentinel-gateway \
+                --create-namespace \
+                --values "$VALUES_FILE" \
+                --set proxy.image.repository=$(params.registry)/sentinel-gateway-proxy \
+                --set proxy.image.tag=$(params.version) \
+                --set admin.image.repository=$(params.registry)/sentinel-gateway-admin \
+                --set admin.image.tag=$(params.version) \
+                --wait \
+                --timeout 5m
+
+          - name: validate
+            image: bitnami/kubectl:1.29
+            script: |
+              #!/bin/sh
+              set -ex
+              kubectl wait --for=condition=ready pod \
+                -l app.kubernetes.io/name=proxy \
+                -n sentinel-gateway --timeout=120s
+              kubectl wait --for=condition=ready pod \
+                -l app.kubernetes.io/name=admin \
+                -n sentinel-gateway --timeout=120s
+              echo "Deployment validated successfully"
+      params:
+        - name: registry
+          value: $(params.image-registry)
+        - name: version
+          value: $(params.version)
+        - name: environment
+          value: $(params.target-environment)
+---
+# PipelineRun example (for manual execution)
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: sentinel-gateway-deploy-
+  namespace: tekton-pipelines
+spec:
+  pipelineRef:
+    name: sentinel-gateway-deploy
+  params:
+    - name: git-url
+      value: "https://github.com/myorg/sentinel-gateway.git"
+    - name: git-revision
+      value: "main"
+    - name: image-registry
+      value: "myregistry.azurecr.io"
+    - name: target-environment
+      value: "staging"
+    - name: version
+      value: "0.4.3"
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 1Gi
+    - name: docker-credentials
+      secret:
+        secretName: registry-credentials
+    - name: helm-values
+      configMap:
+        name: sentinel-gateway-helm-values

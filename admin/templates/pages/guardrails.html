@@ -1,0 +1,485 @@
+{% extends "base.html" %}
+{% block title %}Guardrails — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Guardrails{% endblock %}
+{% block content %}
+<div class="space-y-6" x-data="guardrailsManager()" x-init="init()">
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Guardrail Manager</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Manage detection patterns, modules, and parameters</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="exportConfig()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="download" class="w-4 h-4"></i> Export
+            </button>
+            <button @click="showCreate = true" class="sg-btn sg-btn-primary">
+                <i data-lucide="plus" class="w-4 h-4"></i> New Pattern
+            </button>
+        </div>
+    </div>
+
+    <!-- Module Toggles -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="sg-card flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-lg bg-brand-500/10 flex items-center justify-center">
+                    <i data-lucide="shield" class="w-[18px] h-[18px] text-brand-400"></i>
+                </div>
+                <div>
+                    <p class="text-sm font-medium text-white">Input Guardrail</p>
+                    <p class="text-[11px] text-gray-500">Prompt injection, jailbreak</p>
+                </div>
+            </div>
+            <button @click="toggleModule('input')" class="sg-toggle" :data-state="modules.input ? 'on' : 'off'">
+                <span class="sg-toggle-thumb"></span>
+            </button>
+        </div>
+        <div class="sg-card flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                    <i data-lucide="wrench" class="w-[18px] h-[18px] text-purple-400"></i>
+                </div>
+                <div>
+                    <p class="text-sm font-medium text-white">Tool Policy Engine</p>
+                    <p class="text-[11px] text-gray-500">Tool call validation & RBAC</p>
+                </div>
+            </div>
+            <button @click="toggleModule('tool_policy')" class="sg-toggle" :data-state="modules.tool_policy ? 'on' : 'off'">
+                <span class="sg-toggle-thumb"></span>
+            </button>
+        </div>
+        <div class="sg-card flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                    <i data-lucide="filter" class="w-[18px] h-[18px] text-amber-400"></i>
+                </div>
+                <div>
+                    <p class="text-sm font-medium text-white">Output Filter</p>
+                    <p class="text-[11px] text-gray-500">Secret/PII redaction</p>
+                </div>
+            </div>
+            <button @click="toggleModule('output')" class="sg-toggle" :data-state="modules.output ? 'on' : 'off'">
+                <span class="sg-toggle-thumb"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Detection Parameters (collapsible) -->
+    <div class="sg-card" x-data="{ paramsOpen: false }">
+        <button @click="paramsOpen = !paramsOpen" class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2">
+                <i data-lucide="sliders-horizontal" class="w-4 h-4 text-gray-400"></i>
+                <span class="text-sm font-medium text-white">Detection Parameters</span>
+            </div>
+            <i data-lucide="chevron-down" class="w-4 h-4 text-gray-400 transition-transform" :class="paramsOpen && 'rotate-180'"></i>
+        </button>
+        <div x-show="paramsOpen" x-collapse x-cloak class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div>
+                <label class="sg-label">Entropy Threshold</label>
+                <input type="number" step="0.1" x-model="params.entropy_threshold" @change="updateParams()" class="sg-input">
+            </div>
+            <div>
+                <label class="sg-label">Max Input Size (bytes)</label>
+                <input type="number" x-model="params.max_input_size" @change="updateParams()" class="sg-input">
+            </div>
+            <div>
+                <label class="sg-label">Max Nesting Depth</label>
+                <input type="number" x-model="params.max_nesting_depth" @change="updateParams()" class="sg-input">
+            </div>
+            <div>
+                <label class="sg-label">Chunk Window</label>
+                <input type="number" x-model="params.chunk_window" @change="updateParams()" class="sg-input">
+            </div>
+        </div>
+    </div>
+
+    <!-- Pattern List -->
+    <div class="sg-card !p-0 overflow-hidden">
+        <!-- Search & Filters -->
+        <div class="p-4 border-b border-gray-800 flex flex-col sm:flex-row gap-3">
+            <div class="relative flex-1">
+                <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"></i>
+                <input type="text" x-model="search" placeholder="Search patterns by description, regex, or category..."
+                       class="sg-input pl-10">
+            </div>
+            <div class="flex gap-2 flex-wrap">
+                <select x-model="filterLayer" class="sg-select w-auto">
+                    <option value="">All Layers</option>
+                    <option value="input">Input</option>
+                    <option value="output">Output</option>
+                    <option value="tool_policy">Tool Policy</option>
+                </select>
+                <select x-model="filterCategory" class="sg-select w-auto">
+                    <option value="">All Categories</option>
+                    <template x-for="cat in categories" :key="cat"><option :value="cat" x-text="cat"></option></template>
+                </select>
+                <select x-model="filterStatus" class="sg-select w-auto">
+                    <option value="">All</option>
+                    <option value="active">Active</option>
+                    <option value="disabled">Disabled</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Count bar -->
+        <div class="px-4 py-2 bg-gray-800/30 border-b border-gray-800 flex items-center justify-between">
+            <span class="text-[11px] text-gray-500">
+                <span class="text-gray-300 font-medium" x-text="filteredPatterns.length"></span> / <span x-text="patterns.length"></span> patterns
+            </span>
+            <div class="flex items-center gap-3 text-[11px]">
+                <span class="flex items-center gap-1"><span class="sg-dot sg-dot-success"></span> <span x-text="patterns.filter(p=>p.enabled).length"></span> active</span>
+                <span class="flex items-center gap-1"><span class="sg-dot sg-dot-danger"></span> <span x-text="patterns.filter(p=>!p.enabled).length"></span> disabled</span>
+            </div>
+        </div>
+
+        <!-- Loading -->
+        <div x-show="loading" class="p-6 space-y-2">
+            <template x-for="i in 6"><div class="sg-skeleton h-12 w-full"></div></template>
+        </div>
+
+        <!-- Empty -->
+        <div x-show="!loading && filteredPatterns.length === 0" class="sg-empty">
+            <i data-lucide="shield-alert" class="sg-empty-icon"></i>
+            <p class="sg-empty-title">No patterns match your filters</p>
+            <p class="sg-empty-desc">Try adjusting your search or filter criteria</p>
+        </div>
+
+        <!-- Pattern rows -->
+        <div x-show="!loading && filteredPatterns.length > 0" class="divide-y divide-gray-800 max-h-[420px] overflow-y-auto">
+            <template x-for="pattern in filteredPatterns" :key="pattern.id">
+                <div class="px-4 py-3 hover:bg-gray-800/30 transition-colors flex items-center gap-3 group">
+                    <!-- Status dot -->
+                    <span class="sg-dot flex-shrink-0" :class="pattern.enabled ? 'sg-dot-success' : 'sg-dot-danger'"></span>
+                    <!-- Info -->
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-sm text-white font-medium truncate" x-text="pattern.description"></span>
+                            <span class="sg-badge sg-badge-neutral text-[9px]" x-text="pattern.layer"></span>
+                            <span class="sg-badge text-[9px]" :class="{
+                                'sg-badge-danger': pattern.severity==='critical',
+                                'sg-badge-warning': pattern.severity==='high',
+                                'sg-badge-brand': pattern.severity==='medium',
+                                'sg-badge-neutral': pattern.severity==='low'
+                            }" x-text="pattern.severity"></span>
+                            <span class="sg-badge sg-badge-neutral text-[9px]" x-text="pattern.category" x-show="pattern.category"></span>
+                        </div>
+                        <p class="text-[11px] text-gray-500 font-mono truncate mt-0.5" x-text="pattern.regex"></p>
+                    </div>
+                    <!-- Actions (visible on hover) -->
+                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button @click="togglePattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm" :title="pattern.enabled ? 'Disable' : 'Enable'">
+                            <i :data-lucide="pattern.enabled ? 'pause' : 'play'" class="w-3.5 h-3.5"></i>
+                        </button>
+                        <button @click="testPattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Test in sandbox">
+                            <i data-lucide="flask-conical" class="w-3.5 h-3.5"></i>
+                        </button>
+                        <button @click="editPattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Edit">
+                            <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Sandbox -->
+    <div class="sg-card">
+        <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="flask-conical" class="w-4 h-4 text-brand-400"></i>
+            <h3 class="text-sm font-semibold text-white">Pattern Sandbox</h3>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+                <label class="sg-label">Test Payload</label>
+                <textarea x-model="sandboxPayload" class="sg-input font-mono text-xs h-32" placeholder="Enter payload to test against all active patterns..."></textarea>
+                <div class="flex gap-2 mt-3">
+                    <button @click="runSandbox('input')" :disabled="!sandboxPayload.trim()" class="sg-btn sg-btn-primary sg-btn-sm flex-1">
+                        <i data-lucide="shield" class="w-3.5 h-3.5"></i> Test Input
+                    </button>
+                    <button @click="runSandbox('output')" :disabled="!sandboxPayload.trim()" class="sg-btn sg-btn-secondary sg-btn-sm flex-1">
+                        <i data-lucide="filter" class="w-3.5 h-3.5"></i> Test Output
+                    </button>
+                </div>
+            </div>
+            <div>
+                <label class="sg-label">Results</label>
+                <div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-4 h-32 overflow-auto">
+                    <template x-if="!sandboxResult">
+                        <div class="flex items-center justify-center h-full text-xs text-gray-500">
+                            <span>Results will appear here</span>
+                        </div>
+                    </template>
+                    <template x-if="sandboxResult">
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="sg-badge" :class="{
+                                    'sg-badge-danger': sandboxResult.verdict==='block',
+                                    'sg-badge-warning': sandboxResult.verdict==='warn',
+                                    'sg-badge-success': sandboxResult.verdict==='allow' || sandboxResult.verdict==='pass'
+                                }" x-text="sandboxResult.verdict?.toUpperCase()"></span>
+                                <span class="text-[10px] font-mono text-gray-500" x-text="sandboxResult.latency_ms?.toFixed(2) + 'ms'"></span>
+                            </div>
+                            <template x-if="sandboxResult.matched_patterns?.length">
+                                <div class="space-y-1.5">
+                                    <template x-for="mp in sandboxResult.matched_patterns" :key="mp.id">
+                                        <div class="flex items-center gap-2 text-[11px]">
+                                            <span class="sg-badge sg-badge-danger text-[9px]" x-text="mp.category || mp.id"></span>
+                                            <span class="text-gray-300" x-text="mp.description"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                            <template x-if="sandboxResult.events?.length && !sandboxResult.matched_patterns?.length">
+                                <ul class="space-y-1">
+                                    <template x-for="e in sandboxResult.events"><li class="text-[11px] text-gray-300" x-text="e.description || e"></li></template>
+                                </ul>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Pattern Modal -->
+    <div x-show="editingPattern" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0">
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="editingPattern = null"></div>
+        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700/50">
+                <h3 class="text-base font-semibold text-white">Edit Pattern</h3>
+                <button @click="editingPattern = null" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Pattern ID</label>
+                        <input type="text" :value="editingPattern?.id" disabled class="sg-input text-gray-500">
+                    </div>
+                    <div>
+                        <label class="sg-label">Layer</label>
+                        <input type="text" :value="editingPattern?.layer" disabled class="sg-input text-gray-500">
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Description</label>
+                    <input type="text" x-model="editForm.description" class="sg-input">
+                </div>
+                <div>
+                    <label class="sg-label">Regex Pattern</label>
+                    <textarea x-model="editForm.regex" class="sg-input font-mono text-xs h-24"></textarea>
+                </div>
+                <div class="grid grid-cols-3 gap-4">
+                    <div>
+                        <label class="sg-label">Severity</label>
+                        <select x-model="editForm.severity" class="sg-select">
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="sg-label">Category</label>
+                        <input type="text" x-model="editForm.category" class="sg-input">
+                    </div>
+                    <div class="flex items-end">
+                        <button @click="editForm.enabled = !editForm.enabled" class="sg-toggle" :data-state="editForm.enabled ? 'on' : 'off'">
+                            <span class="sg-toggle-thumb"></span>
+                        </button>
+                        <span class="ml-2 text-xs text-gray-400" x-text="editForm.enabled ? 'Enabled' : 'Disabled'"></span>
+                    </div>
+                </div>
+                <!-- Regex validation -->
+                <div x-show="regexValidation" x-cloak x-transition class="flex items-center gap-2 px-3 py-2.5 rounded-lg border"
+                     :class="regexValidation?.valid ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'">
+                    <i :data-lucide="regexValidation?.valid ? 'check-circle-2' : 'x-circle'" class="w-4 h-4" :class="regexValidation?.valid ? 'text-emerald-400' : 'text-red-400'"></i>
+                    <span class="text-xs" :class="regexValidation?.valid ? 'text-emerald-300' : 'text-red-300'" x-text="regexValidation?.valid ? 'Valid regex' : regexValidation?.error"></span>
+                </div>
+                <!-- Quick test -->
+                <div>
+                    <label class="sg-label">Quick Test</label>
+                    <div class="flex gap-2">
+                        <input type="text" x-model="editTestPayload" class="sg-input font-mono text-xs flex-1" placeholder="Enter text to match...">
+                        <button @click="testEditRegex()" class="sg-btn sg-btn-secondary sg-btn-sm">Test</button>
+                    </div>
+                    <p x-show="editTestResult !== null" x-cloak class="mt-2 text-xs flex items-center gap-1.5"
+                       :class="editTestResult ? 'text-red-400' : 'text-emerald-400'">
+                        <i :data-lucide="editTestResult ? 'alert-triangle' : 'check'" class="w-3.5 h-3.5"></i>
+                        <span x-text="editTestResult ? 'MATCHES — would trigger detection' : 'No match — would pass'"></span>
+                    </p>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700/50 flex justify-between">
+                <button @click="validateEditRegex()" class="sg-btn sg-btn-warning sg-btn-sm">
+                    <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i> Validate
+                </button>
+                <div class="flex gap-2">
+                    <button @click="editingPattern = null" class="sg-btn sg-btn-ghost">Cancel</button>
+                    <button @click="savePattern()" class="sg-btn sg-btn-primary">
+                        <i data-lucide="save" class="w-4 h-4"></i> Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Pattern Modal -->
+    <div x-show="showCreate" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0">
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="showCreate = false"></div>
+        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700/50">
+                <h3 class="text-base font-semibold text-white">Create New Pattern</h3>
+                <button @click="showCreate = false" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Layer</label>
+                        <select x-model="newForm.layer" class="sg-select">
+                            <option value="input">Input</option>
+                            <option value="output">Output</option>
+                            <option value="tool_policy">Tool Policy</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="sg-label">Severity</label>
+                        <select x-model="newForm.severity" class="sg-select">
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Description</label>
+                    <input type="text" x-model="newForm.description" class="sg-input" placeholder="What does this pattern detect?">
+                </div>
+                <div>
+                    <label class="sg-label">Regex Pattern</label>
+                    <textarea x-model="newForm.regex" class="sg-input font-mono text-xs h-24" placeholder="(?i)malicious\s+pattern"></textarea>
+                </div>
+                <div>
+                    <label class="sg-label">Category</label>
+                    <input type="text" x-model="newForm.category" class="sg-input" placeholder="prompt_injection, data_exfiltration, jailbreak...">
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700/50 flex justify-end gap-2">
+                <button @click="showCreate = false" class="sg-btn sg-btn-ghost">Cancel</button>
+                <button @click="createPattern()" class="sg-btn sg-btn-primary">
+                    <i data-lucide="plus" class="w-4 h-4"></i> Create Pattern
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function guardrailsManager() {
+    return {
+        patterns: [],
+        modules: { input: true, tool_policy: true, output: true },
+        params: { entropy_threshold: 4.5, max_input_size: 102400, max_nesting_depth: 10, chunk_window: 4096 },
+        search: '', filterLayer: '', filterCategory: '', filterStatus: '',
+        showCreate: false, editingPattern: null, loading: true,
+        editForm: { description: '', regex: '', severity: 'medium', category: '', enabled: true },
+        newForm: { layer: 'input', description: '', regex: '', severity: 'high', category: 'prompt_injection' },
+        regexValidation: null, editTestPayload: '', editTestResult: null,
+        sandboxPayload: '', sandboxResult: null,
+
+        get categories() { return [...new Set(this.patterns.map(p => p.category).filter(Boolean))].sort(); },
+        get filteredPatterns() {
+            let list = this.patterns;
+            if (this.filterLayer) list = list.filter(p => p.layer === this.filterLayer);
+            if (this.filterCategory) list = list.filter(p => p.category === this.filterCategory);
+            if (this.filterStatus === 'active') list = list.filter(p => p.enabled);
+            if (this.filterStatus === 'disabled') list = list.filter(p => !p.enabled);
+            if (this.search) { const s = this.search.toLowerCase(); list = list.filter(p => (p.description||'').toLowerCase().includes(s) || (p.regex||'').toLowerCase().includes(s) || (p.category||'').toLowerCase().includes(s)); }
+            return list;
+        },
+
+        async init() {
+            this.loading = true;
+            try {
+                const [pResp, parResp] = await Promise.all([fetch('/admin/guardrails/patterns'), fetch('/admin/guardrails/params')]);
+                if (pResp.ok) this.patterns = await pResp.json();
+                if (parResp.ok) this.params = await parResp.json();
+            } catch(e) { showToast('Failed to load guardrails', 'error'); }
+            this.loading = false;
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        async toggleModule(mod) {
+            this.modules[mod] = !this.modules[mod];
+            await fetch('/admin/guardrails/modules/' + mod + '/toggle', { method: 'POST' });
+            showToast(`${mod} module ${this.modules[mod] ? 'enabled' : 'disabled'}`, 'success');
+        },
+        async togglePattern(pattern) {
+            const resp = await fetch('/admin/guardrails/patterns/' + pattern.id + '/toggle', { method: 'POST' });
+            if (resp.ok) { pattern.enabled = !pattern.enabled; this.$nextTick(() => lucide.createIcons()); }
+        },
+        async updateParams() {
+            await fetch('/admin/guardrails/params', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.params) });
+            showToast('Parameters updated', 'success');
+        },
+        async runSandbox(layer) {
+            this.sandboxResult = null;
+            if (!this.sandboxPayload.trim()) return;
+            try {
+                const resp = await fetch('/admin/guardrails/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ payload: this.sandboxPayload, layer }) });
+                this.sandboxResult = resp.ok ? await resp.json() : { verdict: 'error', events: [{ description: `Error ${resp.status}` }], latency_ms: 0 };
+            } catch(e) { this.sandboxResult = { verdict: 'error', events: [{ description: e.message }], latency_ms: 0 }; }
+            this.$nextTick(() => lucide.createIcons());
+        },
+        testPattern(p) { this.sandboxPayload = '// Test: ' + p.description; },
+        editPattern(p) {
+            this.editingPattern = p;
+            this.editForm = { description: p.description, regex: p.regex, severity: p.severity, category: p.category || '', enabled: p.enabled };
+            this.regexValidation = null; this.editTestPayload = ''; this.editTestResult = null;
+            this.$nextTick(() => lucide.createIcons());
+        },
+        async validateEditRegex() {
+            const resp = await fetch('/admin/guardrails/validate-pattern', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ pattern: this.editForm.regex }) });
+            if (resp.ok) this.regexValidation = await resp.json();
+            this.$nextTick(() => lucide.createIcons());
+        },
+        testEditRegex() {
+            try { this.editTestResult = new RegExp(this.editForm.regex, 'i').test(this.editTestPayload); }
+            catch(e) { this.editTestResult = null; this.regexValidation = { valid: false, error: e.message }; }
+            this.$nextTick(() => lucide.createIcons());
+        },
+        async savePattern() {
+            if (!this.editingPattern) return;
+            Object.assign(this.editingPattern, this.editForm);
+            await fetch('/admin/guardrails/patterns/' + this.editingPattern.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.editForm) });
+            this.editingPattern = null;
+            showToast('Pattern saved', 'success');
+        },
+        async createPattern() {
+            const resp = await fetch('/admin/guardrails/patterns', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newForm) });
+            if (resp.ok) {
+                this.patterns.push(await resp.json());
+                this.showCreate = false;
+                this.newForm = { layer: 'input', description: '', regex: '', severity: 'high', category: 'prompt_injection' };
+                showToast('Pattern created', 'success');
+            } else { const e = await resp.json().catch(()=>({})); showToast(e.detail || 'Failed', 'error'); }
+            this.$nextTick(() => lucide.createIcons());
+        },
+        async exportConfig() {
+            const resp = await fetch('/admin/guardrails/export');
+            if (resp.ok) {
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = 'guardrails-export.json'; a.click();
+                URL.revokeObjectURL(url);
+                showToast('Config exported', 'success');
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

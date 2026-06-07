@@ -1,0 +1,109 @@
+---
+# PVC: Policies (shared between proxy and admin)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: policies
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.policies.size }}
+---
+# PVC: SIEM Stats (shared between proxy and admin)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: siem-stats
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.siemStats.size }}
+---
+# PVC: Telemetry Data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: telemetry-data
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.telemetryData.size }}
+---
+# PVC: Admin Data (agents.yaml, database)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: admin-data
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.adminData.size }}
+---
+# PVC: Reports
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reports
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.reports.size }}
+---
+# PVC: Notifications Data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: notifications-data
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: notifications
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.notifications.size }}

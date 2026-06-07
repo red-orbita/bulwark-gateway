@@ -390,11 +390,8 @@ function dashboardPage() {
             }
             this._sparkIdx++;
 
-            // Update bypass/FP rates — only override persisted value if proxy has real traffic
-            const total = (data.events_blocked || 0) + (data.events_warned || 0) + (data.events_allowed || 0);
-            if (total > 0) {
-                this.bypassRate = ((data.events_allowed || 0) / total * 100).toFixed(1);
-            }
+            // Bypass rate: only from persisted red-team reports (loaded at init).
+            // Live traffic allowed/total is NOT a bypass rate.
 
             // Update circuit state
             this.circuitState = data.circuit_state || 'closed';

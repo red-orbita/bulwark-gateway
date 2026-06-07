@@ -1,0 +1,36 @@
+# Kustomization — Sentinel Gateway Kubernetes Deployment
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sentinel-gateway
+
+resources:
+  - namespace.yaml
+  - base/volumes.yaml
+  - base/configmaps.yaml
+  - base/redis.yaml
+  - base/external-backends.yaml
+  - base/proxy.yaml
+  - base/admin.yaml
+  - base/network-policies.yaml
+  - base/ingress.yaml
+  - base/pdb.yaml
+  - monitoring/prometheus-grafana.yaml
+  # Wazuh deployed separately in sentinel-siem namespace (baseline PSS)
+  - monitoring/namespace-siem.yaml
+  - monitoring/wazuh.yaml
+
+# Labels applied to all resources
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/version: "0.4.3"
+
+# Images — pin to semver tags (NEVER use 'latest' in production)
+# For immutable deploys, use sha256 digests: newTag: sha256:abc123...
+images:
+  - name: sentinel-gateway-proxy
+    newName: sentinel-gateway-proxy
+    newTag: "0.4.3"
+  - name: sentinel-gateway-admin
+    newName: sentinel-gateway-admin
+    newTag: "0.4.2"

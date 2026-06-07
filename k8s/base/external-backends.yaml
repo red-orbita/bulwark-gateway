@@ -1,0 +1,107 @@
+# External Backend Services — Abstraction layer for LLM backends
+#
+# In production, agents live outside the cluster (AWS, GCP, Azure, on-prem).
+# This file creates stable DNS names (e.g., ollama.sentinel-gateway.svc)
+# that proxy pods use. To change the backend, update Endpoints — no pod restart needed.
+#
+# Pattern:
+#   Service (clusterIP: None, headless) + Endpoints (manual IP list)
+#   This decouples sentinel-gateway from specific backend locations.
+#
+# For cloud-hosted backends (with DNS), use ExternalName type instead:
+#   type: ExternalName
+#   externalName: my-llm.us-east-1.amazonaws.com
+#
+# --- Configuring BACKEND_IP ---
+# The placeholder ${BACKEND_IP} below is substituted at deploy time.
+# Three options:
+#
+#   1. Environment variable (recommended for CI/CD):
+#        export BACKEND_IP=10.0.1.50
+#        ./k8s/deploy.sh
+#
+#   2. Deploy script parameter:
+#        ./k8s/deploy.sh --backend-ip 10.0.1.50
+#
+#   3. Manual kubectl patch (post-deploy):
+#        kubectl patch endpoints ollama -n sentinel-gateway \
+#          --type='json' -p='[{"op":"replace","path":"/subsets/0/addresses/0/ip","value":"10.0.1.50"}]'
+#
+# On minikube, the gateway IP is auto-detected if BACKEND_IP is not set.
+
+---
+# --- Ollama (default LLM backend) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/component: external-backend
+    app.kubernetes.io/name: ollama
+spec:
+  clusterIP: None  # Headless — DNS resolves directly to Endpoints IPs
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
+
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: ollama  # Must match Service name
+  namespace: sentinel-gateway
+subsets:
+  - addresses:
+      # Substituted at deploy time — see top of file for configuration options
+      - ip: ${BACKEND_IP}
+    ports:
+      - name: http
+        port: 11434
+        protocol: TCP
+
+# --- Example: Cloud-hosted LLM (ExternalName) ---
+# Uncomment and adapt for cloud-hosted backends:
+#
+# ---
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: cloud-llm
+#   namespace: sentinel-gateway
+#   labels:
+#     app.kubernetes.io/component: external-backend
+# spec:
+#   type: ExternalName
+#   externalName: my-model.openai.azure.com
+#   ports:
+#     - port: 443
+
+# --- Example: On-premise GPU cluster ---
+# ---
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: onprem-gpu
+#   namespace: sentinel-gateway
+# spec:
+#   clusterIP: None
+#   ports:
+#     - name: http
+#       port: 8080
+#       targetPort: 8080
+# ---
+# apiVersion: v1
+# kind: Endpoints
+# metadata:
+#   name: onprem-gpu
+#   namespace: sentinel-gateway
+# subsets:
+#   - addresses:
+#       - ip: 10.0.50.10
+#       - ip: 10.0.50.11  # Multiple backends for HA
+#     ports:
+#       - name: http
+#         port: 8080

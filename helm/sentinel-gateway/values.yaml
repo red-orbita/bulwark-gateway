@@ -1,0 +1,337 @@
+# -- Sentinel Gateway Helm Chart Values
+# All configurable values with production-ready defaults.
+# Use `helm-docs` to regenerate documentation from these comments.
+
+# -- Namespace configuration
+namespace:
+  # -- Name of the namespace to deploy into
+  name: "sentinel-gateway"
+  # -- Create the namespace (set to false if it already exists)
+  create: true
+
+# -- Backend LLM Configuration
+backend:
+  # -- Type: "ip" (headless svc + endpoints), "externalName" (DNS), or "none" (skip)
+  type: "ip"
+  # -- Backend IP address (REQUIRED for type=ip)
+  # For minikube: typically 192.168.49.1 (auto-detected by deploy script)
+  # For cloud: your LLM service IP (e.g., internal load balancer)
+  ip: ""
+  # -- Backend port
+  port: 11434
+  # -- Backend DNS name (for type=externalName)
+  externalName: ""
+  # -- Service name used in agents.yaml
+  serviceName: "ollama"
+
+# -- Proxy configuration
+proxy:
+  # -- Number of replicas (minimum for HPA)
+  replicas: 2
+  image:
+    # -- Proxy container image repository
+    repository: sentinel-gateway-proxy
+    # -- Image tag (defaults to appVersion)
+    tag: ""
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      # -- Memory limit
+      memory: 512Mi
+      # -- CPU limit
+      cpu: "1"
+    requests:
+      # -- Memory request
+      memory: 128Mi
+      # -- CPU request
+      cpu: 250m
+  # -- Fail mode: "closed" (block on error) or "open" (allow on error)
+  failMode: "closed"
+  # -- Rate limit (requests per minute)
+  rateLimit: 60
+  # -- Log level: DEBUG, INFO, WARNING, ERROR
+  logLevel: "INFO"
+  # -- Number of uvicorn workers
+  workers: 1
+  # -- HPA configuration
+  autoscaling:
+    # -- Enable HPA
+    enabled: true
+    # -- Minimum replicas
+    minReplicas: 2
+    # -- Maximum replicas
+    maxReplicas: 10
+    # -- Target CPU utilization percentage
+    targetCPUUtilization: 70
+    # -- Target memory utilization percentage
+    targetMemoryUtilization: 80
+  # -- PodDisruptionBudget
+  pdb:
+    # -- Enable PDB
+    enabled: true
+    # -- Minimum available pods
+    minAvailable: 1
+
+# -- Admin dashboard configuration
+admin:
+  # -- Number of replicas
+  replicas: 1
+  image:
+    # -- Admin container image repository
+    repository: sentinel-gateway-admin
+    # -- Image tag (defaults to appVersion)
+    tag: ""
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      # -- Memory limit
+      memory: 256Mi
+      # -- CPU limit
+      cpu: 500m
+    requests:
+      # -- Memory request
+      memory: 64Mi
+      # -- CPU request
+      cpu: 100m
+  # -- JWT token expiry (hours)
+  jwtExpiryHours: 8
+  # -- CORS allowed origins (comma-separated, empty = all)
+  corsOrigins: ""
+
+# -- Redis configuration
+redis:
+  # -- Deploy Redis as part of this chart (set to false for external Redis)
+  enabled: true
+  image:
+    # -- Redis image
+    repository: redis
+    # -- Redis image tag
+    tag: "7-alpine"
+  # -- Redis password (auto-generated if empty)
+  password: ""
+  resources:
+    limits:
+      # -- Memory limit
+      memory: 128Mi
+      # -- CPU limit
+      cpu: 250m
+    requests:
+      # -- Memory request
+      memory: 64Mi
+      # -- CPU request
+      cpu: 100m
+  # -- Redis max memory setting
+  maxMemory: "64mb"
+  # -- PVC storage size
+  storage: 1Gi
+  # -- PodDisruptionBudget
+  pdb:
+    # -- Enable PDB for Redis
+    enabled: true
+    # -- Max unavailable pods
+    maxUnavailable: 1
+
+# -- External Redis configuration (used when redis.enabled=false)
+# Supports Azure Cache for Redis, AWS ElastiCache, GCP Memorystore, or on-premise.
+externalRedis:
+  # -- Redis host (e.g., "my-redis.cache.windows.net", "my-cluster.abc123.euw1.cache.amazonaws.com")
+  host: ""
+  # -- Redis port (6379 for plain, 6380 for Azure TLS, 6379 for AWS/GCP TLS)
+  port: 6379
+  # -- Redis database number
+  db: 0
+  # -- Redis password (or use existingSecret)
+  password: ""
+  # -- Use existing Kubernetes secret for password
+  existingSecret: ""
+  # -- Key within the existing secret that holds the Redis password
+  existingSecretKey: "redis-password"
+  # -- Enable TLS/SSL (required for Azure, optional for AWS/GCP)
+  tls: false
+  # -- Skip TLS certificate verification (for self-signed certs)
+  tlsInsecure: false
+
+# -- Ingress configuration
+ingress:
+  # -- Enable ingress
+  enabled: true
+  # -- Ingress class name
+  className: "nginx"
+  # -- Ingress annotations (nginx-specific defaults)
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "10"
+    nginx.ingress.kubernetes.io/rate-limit-rps: "30"
+    nginx.ingress.kubernetes.io/enable-hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+  hosts:
+    # -- Proxy API hostname
+    proxy: "sentinel-gateway.local"
+    # -- Admin dashboard hostname
+    admin: "admin.sentinel-gateway.local"
+  tls:
+    # -- Enable TLS
+    enabled: false
+    # -- TLS secret name (must contain tls.crt and tls.key)
+    secretName: "sentinel-gateway-tls"
+    # -- Set to true to use cert-manager for auto-provisioning
+    certManager: false
+    # -- cert-manager ClusterIssuer name
+    issuerName: "letsencrypt-prod"
+
+# -- SIEM / Telemetry configuration
+telemetry:
+  # -- Enable telemetry collection
+  enabled: true
+  # -- Batch size before flush
+  batchSize: 100
+  # -- Flush interval in seconds
+  flushInterval: 1.0
+  # -- Default transport (auto-configured on first boot)
+  defaultTransport:
+    # -- Transport type: "file", "syslog", "http", "none"
+    type: "file"
+    # -- File path (used when type=file)
+    path: "/app/shared/siem/events.ndjson"
+    # -- Syslog host (used when type=syslog)
+    syslogHost: ""
+    # -- Syslog port (used when type=syslog)
+    syslogPort: 514
+    # -- HTTP endpoint URL (used when type=http)
+    httpUrl: ""
+    # -- HTTP auth type: "none", "bearer", "basic"
+    httpAuthType: "none"
+    # -- HTTP auth key/token
+    httpAuthKey: ""
+
+# -- Notifications configuration (Telegram, webhooks)
+notifications:
+  telegram:
+    # -- Enable Telegram notifications
+    enabled: false
+    # -- Telegram bot token (from @BotFather)
+    botToken: ""
+    # -- Telegram chat ID
+    chatId: ""
+    # -- Channel display name
+    channelName: "sentinel-gateway"
+
+# -- Wazuh SIEM integration
+wazuh:
+  # -- Deploy Wazuh as part of this chart
+  enabled: true
+  # -- Wazuh namespace (separate from main app for PSS reasons)
+  namespace: "sentinel-siem"
+  image:
+    # -- Wazuh manager image
+    repository: wazuh/wazuh-manager
+    # -- Wazuh manager tag
+    tag: "4.9.2"
+  resources:
+    limits:
+      # -- Memory limit
+      memory: 1Gi
+      # -- CPU limit
+      cpu: "1"
+    requests:
+      # -- Memory request
+      memory: 512Mi
+      # -- CPU request
+      cpu: 250m
+  # -- Wazuh data PVC size
+  storage: 5Gi
+
+# -- Monitoring (Prometheus + Grafana)
+monitoring:
+  prometheus:
+    # -- Deploy Prometheus
+    enabled: true
+    image:
+      # -- Prometheus image
+      repository: prom/prometheus
+      # -- Prometheus tag
+      tag: "v2.51.0"
+    # -- TSDB retention
+    retention: "30d"
+    # -- Scrape interval
+    scrapeInterval: "15s"
+    # -- PVC storage size
+    storage: 10Gi
+    resources:
+      limits:
+        memory: 512Mi
+        cpu: 500m
+      requests:
+        memory: 256Mi
+        cpu: 100m
+  grafana:
+    # -- Deploy Grafana
+    enabled: true
+    image:
+      # -- Grafana image
+      repository: grafana/grafana
+      # -- Grafana tag
+      tag: "10.4.0"
+    # -- Grafana admin password (auto-generated if empty)
+    adminPassword: ""
+    # -- PVC storage size
+    storage: 2Gi
+    resources:
+      limits:
+        memory: 256Mi
+        cpu: 500m
+      requests:
+        memory: 128Mi
+        cpu: 100m
+
+# -- Secrets (leave empty to auto-generate random values)
+secrets:
+  # -- JWT secret for proxy authentication
+  jwtSecret: ""
+  # -- Admin dashboard password
+  adminPassword: ""
+  # -- Security role password
+  securityPassword: ""
+  # -- Auditor role password
+  auditorPassword: ""
+  # -- API key for proxy
+  apiKey: ""
+  # -- Database encryption key
+  dbEncryptionKey: ""
+
+# -- Persistent volume configuration
+persistence:
+  # -- Storage class (empty = cluster default)
+  storageClass: ""
+  policies:
+    # -- Policies PVC size
+    size: 100Mi
+  siemStats:
+    # -- SIEM stats PVC size
+    size: 500Mi
+  telemetryData:
+    # -- Telemetry data PVC size
+    size: 2Gi
+  adminData:
+    # -- Admin data PVC size
+    size: 1Gi
+  reports:
+    # -- Reports PVC size
+    size: 1Gi
+  notifications:
+    # -- Notifications PVC size
+    size: 50Mi
+
+# -- Network policies
+networkPolicies:
+  # -- Enable network policies (strongly recommended for production)
+  enabled: true
+
+# -- Image pull secrets (for private registries)
+imagePullSecrets: []
+#  - name: my-registry-secret

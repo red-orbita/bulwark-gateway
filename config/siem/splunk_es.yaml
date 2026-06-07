@@ -1,0 +1,45 @@
+# Splunk Enterprise Security — HTTP Event Collector (HEC)
+# Sentinel Gateway SIEM Integration Template
+---
+transport: http_rest
+platform: splunk_es
+
+connection:
+  url: "https://splunk-hec.example.com:8088/services/collector/event"
+  auth_method: bearer
+  token: "${SENTINEL_SPLUNK_HEC_TOKEN}"
+  verify_ssl: true
+  timeout_seconds: 10
+
+batching:
+  batch_size: 100
+  flush_interval_seconds: 1.0
+  compress: false  # Set true for gzip if network-constrained
+
+format: json
+# Splunk HEC expects {"event": {...}, "sourcetype": "...", "index": "..."}
+# The exporter wraps each event in HEC envelope automatically
+field_mapping:
+  sourcetype: "sentinel:gateway:security"
+  index: "security"
+  source: "sentinel-gateway"
+  host: "${HOSTNAME}"
+
+# Splunk field extraction (props.conf reference)
+# [sentinel:gateway:security]
+# KV_MODE = json
+# TIME_FORMAT = %Y-%m-%dT%H:%M:%S%z
+# TIME_PREFIX = "@timestamp"
+
+retry:
+  max_retries: 3
+  backoff_base_seconds: 1.0
+  backoff_max_seconds: 30.0
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_seconds: 30
+
+# Docker example for testing:
+# docker run -d -p 8088:8088 -e SPLUNK_START_ARGS=--accept-license \
+#   -e SPLUNK_HEC_TOKEN=your-token splunk/splunk:latest
