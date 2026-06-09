@@ -1,19 +1,19 @@
 ---
-# Ingress — Exposes proxy (8080) and admin (8090) via path-based routing
+# Ingress — Proxy API (rate-limited, security-hardened)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: sentinel-gateway
+  name: sentinel-gateway-proxy
   namespace: sentinel-gateway
   labels:
     app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/component: proxy
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
     nginx.ingress.kubernetes.io/rate-limit-connections: "10"
     nginx.ingress.kubernetes.io/rate-limit-rps: "30"
-    # M-08: HSTS via annotation (supported natively by ingress-nginx)
     nginx.ingress.kubernetes.io/enable-hsts: "true"
     nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
     nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
@@ -22,13 +22,11 @@ spec:
   tls:
     - hosts:
         - sentinel-gateway.local
-        - admin.sentinel-gateway.local
       secretName: sentinel-gateway-tls
   rules:
     - host: sentinel-gateway.local
       http:
         paths:
-          # Proxy API (main guardrail path)
           - path: /v1
             pathType: Prefix
             backend:
@@ -36,7 +34,6 @@ spec:
                 name: proxy
                 port:
                   number: 8080
-          # Health check (public)
           - path: /health
             pathType: Prefix
             backend:
@@ -44,7 +41,6 @@ spec:
                 name: proxy
                 port:
                   number: 8080
-          # Grafana dashboards
           - path: /grafana
             pathType: Prefix
             backend:
@@ -52,7 +48,32 @@ spec:
                 name: grafana
                 port:
                   number: 3000
-    # Admin portal — dedicated subdomain (serves web GUI at /)
+---
+# Ingress — Admin portal (relaxed limits for web UI + SSE)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sentinel-gateway-admin
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/component: admin
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/enable-hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - admin.sentinel-gateway.local
+      secretName: sentinel-gateway-tls
+  rules:
     - host: admin.sentinel-gateway.local
       http:
         paths:

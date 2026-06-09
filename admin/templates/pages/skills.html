@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block title %}Skill Scanner — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Skill Scanner{% endblock %}
+{% block content %}
+<div x-data="skillScanner()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Skill Security Scanner</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Pre-deployment vulnerability scanning powered by NVIDIA SkillSpector</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="text-xs font-mono px-2 py-1 rounded"
+                  :class="status.available ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'"
+                  x-text="status.available ? 'Scanner: ' + status.mode.toUpperCase() : 'Scanner: Unavailable'"></span>
+        </div>
+    </div>
+
+    <!-- Scanner Status Card -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-white">Scanner Configuration</h2>
+            <span class="text-xs text-gray-500" x-text="'v' + status.version"></span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div>
+                <p class="text-xs text-gray-500">Status</p>
+                <p class="text-sm font-medium" :class="status.enabled ? 'text-emerald-400' : 'text-red-400'"
+                   x-text="status.enabled ? 'Enabled' : 'Disabled'"></p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-500">Mode</p>
+                <p class="text-sm font-medium text-white" x-text="status.mode || '-'"></p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-500">Block Threshold</p>
+                <p class="text-sm font-medium text-orange-400" x-text="status.block_threshold + '/10'"></p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-500">Warn Threshold</p>
+                <p class="text-sm font-medium text-yellow-400" x-text="status.warn_threshold + '/10'"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scan Actions -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Upload Scan -->
+        <div class="sg-card">
+            <h3 class="text-sm font-semibold text-white mb-3">Scan File Upload</h3>
+            <p class="text-xs text-gray-400 mb-4">Upload a skill definition file (YAML/JSON) for security analysis</p>
+            <form @submit.prevent="scanUpload()" class="space-y-3">
+                <div class="border-2 border-dashed border-gray-700 rounded-lg p-6 text-center hover:border-cyan-500/50 transition-colors"
+                     @dragover.prevent="dragOver = true" @dragleave="dragOver = false"
+                     @drop.prevent="handleDrop($event)"
+                     :class="dragOver ? 'border-cyan-400 bg-cyan-500/5' : ''">
+                    <i data-lucide="upload-cloud" class="w-8 h-8 text-gray-500 mx-auto mb-2"></i>
+                    <p class="text-sm text-gray-400">Drop file here or</p>
+                    <label class="sg-btn sg-btn-secondary sg-btn-sm mt-2 cursor-pointer inline-block">
+                        <input type="file" class="hidden" accept=".yaml,.yml,.json,.toml"
+                               @change="fileSelected($event)">
+                        Browse Files
+                    </label>
+                    <p class="text-xs text-gray-500 mt-2" x-text="selectedFile ? selectedFile.name : 'YAML, JSON, or TOML (max 1MB)'"></p>
+                </div>
+                <button type="submit" class="sg-btn sg-btn-primary sg-btn-sm w-full" :disabled="!selectedFile || scanning">
+                    <i data-lucide="scan" class="w-4 h-4"></i>
+                    <span x-text="scanning ? 'Scanning...' : 'Run Security Scan'"></span>
+                </button>
+            </form>
+        </div>
+
+        <!-- Content Scan -->
+        <div class="sg-card">
+            <h3 class="text-sm font-semibold text-white mb-3">Scan Inline Content</h3>
+            <p class="text-xs text-gray-400 mb-4">Paste skill definition content directly for analysis</p>
+            <form @submit.prevent="scanContent()" class="space-y-3">
+                <textarea x-model="contentInput" rows="8"
+                          class="sg-input font-mono text-xs w-full resize-none"
+                          placeholder="Paste YAML or JSON skill definition here..."></textarea>
+                <button type="submit" class="sg-btn sg-btn-primary sg-btn-sm w-full" :disabled="!contentInput.trim() || scanning">
+                    <i data-lucide="scan" class="w-4 h-4"></i>
+                    <span x-text="scanning ? 'Scanning...' : 'Analyze Content'"></span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Scan Result (shown after scan) -->
+    <template x-if="lastResult">
+        <div class="sg-card" :class="{
+            'border-l-4 border-l-emerald-500': lastResult.verdict === 'pass',
+            'border-l-4 border-l-yellow-500': lastResult.verdict === 'warn',
+            'border-l-4 border-l-red-500': lastResult.verdict === 'block',
+            'border-l-4 border-l-gray-500': lastResult.verdict === 'error',
+        }">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-semibold text-white">Scan Result</h3>
+                <div class="flex items-center gap-3">
+                    <span class="text-xs text-gray-500 font-mono" x-text="lastResult.scan_id"></span>
+                    <span class="sg-badge" :class="{
+                        'sg-badge-success': lastResult.verdict === 'pass',
+                        'sg-badge-warning': lastResult.verdict === 'warn',
+                        'sg-badge-danger': lastResult.verdict === 'block',
+                        'sg-badge-neutral': lastResult.verdict === 'error',
+                    }" x-text="lastResult.verdict.toUpperCase()"></span>
+                </div>
+            </div>
+
+            <!-- Score Display -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                <div>
+                    <p class="text-xs text-gray-500">Risk Score</p>
+                    <p class="text-lg font-bold" :class="{
+                        'text-emerald-400': lastResult.risk_score < 4,
+                        'text-yellow-400': lastResult.risk_score >= 4 && lastResult.risk_score < 7,
+                        'text-red-400': lastResult.risk_score >= 7,
+                    }" x-text="lastResult.risk_score.toFixed(1) + '/10'"></p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500">Severity</p>
+                    <p class="text-sm font-medium text-white capitalize" x-text="lastResult.risk_severity"></p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500">Findings</p>
+                    <p class="text-sm font-medium text-white" x-text="lastResult.findings.length"></p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-500">Scan Duration</p>
+                    <p class="text-sm font-medium text-white" x-text="lastResult.scan_duration_ms.toFixed(0) + 'ms'"></p>
+                </div>
+            </div>
+
+            <!-- Recommendation -->
+            <template x-if="lastResult.recommendation">
+                <div class="bg-gray-800/50 rounded-lg p-3 mb-4">
+                    <p class="text-xs text-gray-400 font-medium mb-1">Recommendation</p>
+                    <p class="text-sm text-gray-300" x-text="lastResult.recommendation"></p>
+                </div>
+            </template>
+
+            <!-- Findings Table -->
+            <template x-if="lastResult.findings.length > 0">
+                <div>
+                    <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">Findings</h4>
+                    <div class="overflow-x-auto">
+                        <table class="sg-table text-xs">
+                            <thead>
+                                <tr>
+                                    <th>Rule</th>
+                                    <th>Severity</th>
+                                    <th>Message</th>
+                                    <th>Location</th>
+                                    <th>Confidence</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="f in lastResult.findings" :key="f.rule_id + f.location">
+                                    <tr>
+                                        <td class="font-mono text-cyan-400" x-text="f.rule_id"></td>
+                                        <td>
+                                            <span class="sg-badge" :class="{
+                                                'sg-badge-danger': f.severity === 'critical' || f.severity === 'high',
+                                                'sg-badge-warning': f.severity === 'medium',
+                                                'sg-badge-neutral': f.severity === 'low',
+                                            }" x-text="f.severity"></span>
+                                        </td>
+                                        <td class="text-gray-300 max-w-[300px] truncate" x-text="f.message"></td>
+                                        <td class="text-gray-500 font-mono" x-text="f.location || '-'"></td>
+                                        <td class="text-gray-400" x-text="(f.confidence * 100).toFixed(0) + '%'"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <!-- Scan History -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold text-white">Recent Scans</h3>
+            <select x-model="historyFilter" @change="loadHistory()" class="sg-select text-xs w-auto">
+                <option value="">All Verdicts</option>
+                <option value="pass">Pass</option>
+                <option value="warn">Warn</option>
+                <option value="block">Block</option>
+                <option value="error">Error</option>
+            </select>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="sg-table text-xs">
+                <thead>
+                    <tr>
+                        <th>Scan ID</th>
+                        <th>Timestamp</th>
+                        <th>Input</th>
+                        <th>Score</th>
+                        <th>Verdict</th>
+                        <th>Findings</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="h in history" :key="h.scan_id">
+                        <tr class="cursor-pointer hover:bg-gray-800/50" @click="viewScan(h.scan_id)">
+                            <td class="font-mono text-cyan-400" x-text="h.scan_id"></td>
+                            <td class="text-gray-400" x-text="new Date(h.timestamp).toLocaleString()"></td>
+                            <td class="text-gray-300 max-w-[200px] truncate" x-text="h.input_path || '-'"></td>
+                            <td>
+                                <span class="font-medium" :class="{
+                                    'text-emerald-400': h.risk_score < 4,
+                                    'text-yellow-400': h.risk_score >= 4 && h.risk_score < 7,
+                                    'text-red-400': h.risk_score >= 7,
+                                }" x-text="h.risk_score.toFixed(1)"></span>
+                            </td>
+                            <td>
+                                <span class="sg-badge" :class="{
+                                    'sg-badge-success': h.verdict === 'pass',
+                                    'sg-badge-warning': h.verdict === 'warn',
+                                    'sg-badge-danger': h.verdict === 'block',
+                                    'sg-badge-neutral': h.verdict === 'error',
+                                }" x-text="h.verdict"></span>
+                            </td>
+                            <td class="text-gray-400" x-text="h.finding_count"></td>
+                        </tr>
+                    </template>
+                    <template x-if="history.length === 0">
+                        <tr><td colspan="6" class="text-center text-gray-500 py-8">No scan history yet</td></tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function skillScanner() {
+    return {
+        status: { enabled: false, available: false, mode: '', version: '', block_threshold: 7, warn_threshold: 4, cache_size: 0 },
+        scanning: false,
+        selectedFile: null,
+        contentInput: '',
+        lastResult: null,
+        history: [],
+        historyFilter: '',
+        dragOver: false,
+
+        async init() {
+            await this.loadStatus();
+            await this.loadHistory();
+        },
+
+        async loadStatus() {
+            try {
+                const resp = await fetch('/admin/skills/status', { credentials: 'include' });
+                if (resp.ok) this.status = await resp.json();
+            } catch (e) { console.error('Failed to load scanner status:', e); }
+        },
+
+        async loadHistory() {
+            try {
+                let url = '/admin/skills/history?limit=20';
+                if (this.historyFilter) url += '&verdict=' + this.historyFilter;
+                const resp = await fetch(url, { credentials: 'include' });
+                if (resp.ok) this.history = await resp.json();
+            } catch (e) { console.error('Failed to load scan history:', e); }
+        },
+
+        fileSelected(event) {
+            this.selectedFile = event.target.files[0] || null;
+        },
+
+        handleDrop(event) {
+            this.dragOver = false;
+            const files = event.dataTransfer.files;
+            if (files.length > 0) this.selectedFile = files[0];
+        },
+
+        async scanUpload() {
+            if (!this.selectedFile || this.scanning) return;
+            this.scanning = true;
+            try {
+                const fd = new FormData();
+                fd.append('file', this.selectedFile);
+                const resp = await fetch('/admin/skills/scan/upload', {
+                    method: 'POST', body: fd, credentials: 'include',
+                });
+                if (resp.ok) {
+                    this.lastResult = await resp.json();
+                    this.loadHistory();
+                    if (typeof showToast === 'function') {
+                        const msg = `Scan complete: ${this.lastResult.verdict.toUpperCase()} (score: ${this.lastResult.risk_score.toFixed(1)})`;
+                        showToast(msg, this.lastResult.verdict === 'block' ? 'error' : this.lastResult.verdict === 'warn' ? 'warning' : 'success');
+                    }
+                } else {
+                    const err = await resp.json().catch(() => ({ detail: 'Scan request failed' }));
+                    if (typeof showToast === 'function') showToast(err.detail || 'Scan failed', 'error');
+                }
+            } catch (e) {
+                if (typeof showToast === 'function') showToast('Network error during scan', 'error');
+            } finally { this.scanning = false; }
+        },
+
+        async scanContent() {
+            if (!this.contentInput.trim() || this.scanning) return;
+            this.scanning = true;
+            try {
+                const resp = await fetch('/admin/skills/scan/content', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: this.contentInput, filename: 'skill.yaml' }),
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    this.lastResult = await resp.json();
+                    this.loadHistory();
+                    if (typeof showToast === 'function') {
+                        const msg = `Scan complete: ${this.lastResult.verdict.toUpperCase()} (score: ${this.lastResult.risk_score.toFixed(1)})`;
+                        showToast(msg, this.lastResult.verdict === 'block' ? 'error' : this.lastResult.verdict === 'warn' ? 'warning' : 'success');
+                    }
+                } else {
+                    const err = await resp.json().catch(() => ({ detail: 'Scan request failed' }));
+                    if (typeof showToast === 'function') showToast(err.detail || 'Scan failed', 'error');
+                }
+            } catch (e) {
+                if (typeof showToast === 'function') showToast('Network error during scan', 'error');
+            } finally { this.scanning = false; }
+        },
+
+        async viewScan(scanId) {
+            try {
+                const resp = await fetch(`/admin/skills/history/${scanId}`, { credentials: 'include' });
+                if (resp.ok) this.lastResult = await resp.json();
+            } catch (e) { console.error('Failed to load scan result:', e); }
+        },
+    };
+}
+</script>
+{% endblock %}

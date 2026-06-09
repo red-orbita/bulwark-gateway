@@ -99,6 +99,18 @@ admin:
   jwtExpiryHours: 8
   # -- CORS allowed origins (comma-separated, empty = all)
   corsOrigins: ""
+  # -- SkillSpector configuration
+  skillspector:
+    # -- Enable/disable skill security scanning
+    enabled: true
+    # -- Risk score threshold to BLOCK agent registration (0-10)
+    blockThreshold: "7.0"
+    # -- Risk score threshold to WARN (0-10)
+    warnThreshold: "4.0"
+    # -- Scan timeout in seconds
+    timeout: "60"
+    # -- Cache TTL for scan results in seconds
+    cacheTTL: "300"
 
 # -- Redis configuration
 redis:

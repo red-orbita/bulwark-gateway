@@ -60,6 +60,12 @@ data:
   DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
   SENTINEL_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
   SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  # SkillSpector configuration
+  SENTINEL_SKILLSPECTOR_ENABLED: {{ .Values.admin.skillspector.enabled | quote }}
+  SENTINEL_SKILLSPECTOR_BLOCK_THRESHOLD: {{ .Values.admin.skillspector.blockThreshold | quote }}
+  SENTINEL_SKILLSPECTOR_WARN_THRESHOLD: {{ .Values.admin.skillspector.warnThreshold | quote }}
+  SENTINEL_SKILLSPECTOR_TIMEOUT: {{ .Values.admin.skillspector.timeout | quote }}
+  SENTINEL_SKILLSPECTOR_CACHE_TTL: {{ .Values.admin.skillspector.cacheTTL | quote }}
 {{- if .Values.redis.enabled }}
 ---
 # Redis ConfigMap — hardened redis.conf

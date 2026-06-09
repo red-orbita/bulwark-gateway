@@ -33,7 +33,7 @@ from .services.audit_logger import AuditLogger, get_audit_logger
 from .services.prometheus_client import PrometheusMetrics, get_metrics
 
 # Routes
-from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications
+from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
 
 
 @asynccontextmanager
@@ -120,7 +120,7 @@ async def auth_guard_pages(request: Request, call_next):
     is_page_route = (
         path in ("/", "/policies", "/guardrails", "/siem", "/audit", "/orchestrator",
                  "/tenants", "/agents", "/users", "/iocs", "/settings", "/coverage",
-                 "/rbac", "/setup", "/status", "/notifications")
+                 "/rbac", "/setup", "/status", "/notifications", "/skills")
     )
 
     if is_page_route:
@@ -181,6 +181,7 @@ app.include_router(config.router, prefix="/admin/config", tags=["config"])
 app.include_router(iocs.router, tags=["iocs"])
 app.include_router(rbac.router, prefix="/admin/rbac", tags=["rbac"])
 app.include_router(notifications.router, prefix="/admin/notifications", tags=["notifications"])
+app.include_router(skills.router, tags=["skills"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -284,3 +285,9 @@ async def status_page(request: Request):
 async def notifications_page(request: Request):
     """Notification channels management page."""
     return templates.TemplateResponse(request, "pages/notifications.html")
+
+
+@app.get("/skills", response_class=HTMLResponse)
+async def skills_page(request: Request):
+    """Skill security scanner (SkillSpector) page."""
+    return templates.TemplateResponse(request, "pages/skills.html")
