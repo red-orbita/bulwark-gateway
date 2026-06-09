@@ -49,11 +49,11 @@ spec:
                 name: admin-config
           resources:
             limits:
-              memory: 256Mi
-              cpu: "500m"
+              memory: 768Mi
+              cpu: "1000m"
             requests:
-              memory: 128Mi
-              cpu: "100m"
+              memory: 384Mi
+              cpu: "200m"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -79,17 +79,18 @@ spec:
             httpGet:
               path: /admin/health
               port: http
-            initialDelaySeconds: 10
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 3
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /admin/health
               port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 3
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 3
       volumes:
         - name: secrets
           secret:

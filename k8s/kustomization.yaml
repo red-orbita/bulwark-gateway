@@ -33,4 +33,4 @@ images:
     newTag: "0.4.3"
   - name: sentinel-gateway-admin
     newName: sentinel-gateway-admin
-    newTag: "0.4.2"
+    newTag: "0.4.3-sp2"

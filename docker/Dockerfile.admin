@@ -6,15 +6,25 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Install build deps for pysqlcipher3
+# Install build deps for pysqlcipher3 + yara-python (required by SkillSpector)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libsqlcipher-dev && \
+    gcc g++ libsqlcipher-dev git \
+    libyara-dev automake libtool make pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
 COPY requirements-admin.lock .
 RUN pip install --no-cache-dir --require-hashes -r requirements-admin.lock && \
-    pip install --no-cache-dir PyJWT==2.13.0 redis==8.0.0
+    pip install --no-cache-dir PyJWT==2.13.0 redis==8.0.0 python-multipart>=0.0.9
+
+# Install NVIDIA SkillSpector from GitHub (Apache 2.0)
+# Provides 64 vulnerability patterns, AST analysis, taint tracking, YARA signatures, OSV.dev CVE lookups
+ARG INSTALL_SKILLSPECTOR=true
+RUN if [ "$INSTALL_SKILLSPECTOR" = "true" ]; then \
+      pip install --no-cache-dir "git+https://github.com/NVIDIA/SkillSpector.git@main" && \
+      echo "INFO: SkillSpector installed successfully" || \
+      echo "WARN: SkillSpector install failed — falling back to built-in scanner"; \
+    fi
 
 # ============================================================
 FROM python:3.12-slim AS runtime

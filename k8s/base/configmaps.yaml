@@ -65,6 +65,12 @@ data:
   DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
   SENTINEL_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
   SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  # SkillSpector — pre-deployment skill security scanning
+  SENTINEL_SKILLSPECTOR_ENABLED: "true"
+  SENTINEL_SKILLSPECTOR_BLOCK_THRESHOLD: "7.0"
+  SENTINEL_SKILLSPECTOR_WARN_THRESHOLD: "4.0"
+  SENTINEL_SKILLSPECTOR_TIMEOUT: "60"
+  SENTINEL_SKILLSPECTOR_CACHE_TTL: "300"
 ---
 # Static config files (iocs, agents, siem)
 apiVersion: v1
