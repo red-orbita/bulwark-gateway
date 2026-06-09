@@ -7,7 +7,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Skill Security Scanner</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Pre-deployment vulnerability scanning powered by NVIDIA SkillSpector</p>
+            <p class="text-sm text-gray-400 mt-0.5">Pre-deployment vulnerability scanning — SkillSpector + MCP Security + Sentinel</p>
         </div>
         <div class="flex items-center gap-2">
             <span class="text-xs font-mono px-2 py-1 rounded"
@@ -22,7 +22,7 @@
             <h2 class="text-sm font-semibold text-white">Scanner Configuration</h2>
             <span class="text-xs text-gray-500" x-text="'v' + status.version"></span>
         </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
             <div>
                 <p class="text-xs text-gray-500">Status</p>
                 <p class="text-sm font-medium" :class="status.enabled ? 'text-emerald-400' : 'text-red-400'"
@@ -39,6 +39,28 @@
             <div>
                 <p class="text-xs text-gray-500">Warn Threshold</p>
                 <p class="text-sm font-medium text-yellow-400" x-text="status.warn_threshold + '/10'"></p>
+            </div>
+        </div>
+        <!-- Engine breakdown -->
+        <div class="border-t border-gray-700/50 pt-3">
+            <p class="text-xs text-gray-500 mb-2">Detection Engines</p>
+            <div class="flex flex-wrap gap-2">
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono"
+                      :class="status.skillspector_installed ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 'bg-gray-800 text-gray-500 border border-gray-700'">
+                    <span class="w-1.5 h-1.5 rounded-full" :class="status.skillspector_installed ? 'bg-purple-400' : 'bg-gray-600'"></span>
+                    SkillSpector <span x-text="status.skillspector_installed ? '(64)' : '(off)'"></span>
+                </span>
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                    MCP Security <span x-text="'(' + (status.mcp_security_patterns || 0) + ')'"></span>
+                </span>
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                    Sentinel <span x-text="'(' + status.sentinel_rules_count + ')'"></span>
+                </span>
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-gray-800 text-gray-300 border border-gray-600">
+                    Total: <span class="text-white font-semibold" x-text="status.total_patterns || 0"></span> patterns
+                </span>
             </div>
         </div>
     </div>
@@ -148,6 +170,7 @@
                             <thead>
                                 <tr>
                                     <th>Rule</th>
+                                    <th>Engine</th>
                                     <th>Severity</th>
                                     <th>Message</th>
                                     <th>Location</th>
@@ -155,9 +178,17 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <template x-for="f in lastResult.findings" :key="f.rule_id + f.location">
+                                <template x-for="f in lastResult.findings" :key="f.rule_id + f.location + f.message">
                                     <tr>
                                         <td class="font-mono text-cyan-400" x-text="f.rule_id"></td>
+                                        <td>
+                                            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono"
+                                                  :class="{
+                                                      'bg-purple-500/10 text-purple-400': f.source === 'skillspector',
+                                                      'bg-cyan-500/10 text-cyan-400': f.source === 'mcp_security',
+                                                      'bg-amber-500/10 text-amber-400': f.source === 'sentinel',
+                                                  }" x-text="f.source === 'mcp_security' ? 'MCP' : f.source === 'skillspector' ? 'SP' : 'SEN'"></span>
+                                        </td>
                                         <td>
                                             <span class="sg-badge" :class="{
                                                 'sg-badge-danger': f.severity === 'critical' || f.severity === 'high',
