@@ -112,11 +112,15 @@ sentinel-gateway/
 │   │   ├── config.py             # Global config management
 │   │   ├── iocs.py               # IOC database management
 │   │   ├── notifications.py      # Alert channel configuration
+│   │   ├── skills.py             # Skill security scanner endpoints (scan/upload/status/history)
 │   │   └── validate.py           # Config validation endpoints
 │   ├── services/
 │   │   ├── redis_sync.py         # get_redis_client(), pattern sync, version tracking
 │   │   ├── auth_service.py       # Password hashing, JWT, sessions
 │   │   ├── guardrails_store.py   # Pattern CRUD operations
+│   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (138 patterns, 5-stage pipeline)
+│   │   ├── mcp_poisoning.py      # MCP Tool Poisoning detection (TP1-TP4, 20 patterns)
+│   │   ├── mcp_privilege.py      # MCP Least Privilege analysis (LP1-LP4, 29 patterns)
 │   │   ├── tenant_manager.py     # Tenant CRUD + agent assignment
 │   │   ├── user_store.py         # User persistence
 │   │   ├── config_manager.py     # Persistent config store
@@ -330,7 +334,7 @@ class GuardrailResult(BaseModel):
 
 ---
 
-## 4. Three Guardrail Engines
+## 4. Guardrail Engines
 
 ### Input Guardrail (src/guardrails/input_guardrail.py)
 
@@ -374,6 +378,68 @@ Scans LLM responses BEFORE returning to user:
 - PII (SSN, credit cards, phone numbers, emails)
 - Cloud credentials (service account keys, SAS tokens)
 - Private keys (RSA, EC, SSH)
+
+### Skill Scanner — SkillSpector (admin/services/skill_scanner.py)
+
+Pre-deployment security scanner for AI agent skills and MCP servers. Accessible
+via admin UI (`/skills`) and API (`/admin/skills/scan/*`). Version 2.1.0-sentinel.
+
+**5-stage pipeline**:
+```
+Stage 1: NVIDIA SkillSpector     (64 patterns, if installed)
+Stage 2a: MCP Tool Poisoning     (20 patterns — always runs)
+Stage 2b: MCP Least Privilege    (29 patterns — always runs)
+Stage 3: Sentinel Overlay        (25 patterns — always runs)
+Stage 4: Structural Checks       (RBAC/agency validation)
+```
+
+**Total patterns**: 138 (64 + 49 + 25)
+
+**MCP Tool Poisoning** (`admin/services/mcp_poisoning.py`):
+| Rule | Severity | Description |
+|------|----------|-------------|
+| SEN-MCP-TP1 | high/critical | Hidden instructions (HTML comments, zero-width chars, base64, Unicode Tags encoding) |
+| SEN-MCP-TP2 | high | Unicode deception (RTL overrides, homoglyphs, mixed-script identifiers) |
+| SEN-MCP-TP3 | medium/high | Parameter description injection (system prompt overrides, token injection) |
+| SEN-MCP-TP4 | medium | Description-behavior mismatch (deceptive naming vs actual capabilities) |
+
+**MCP Least Privilege** (`admin/services/mcp_privilege.py`):
+| Rule | Severity | Description |
+|------|----------|-------------|
+| SEN-MCP-LP1 | high | Underdeclared capability — code uses capabilities not in permissions |
+| SEN-MCP-LP2 | medium | Wildcard permission — overly broad access declaration |
+| SEN-MCP-LP3 | medium | Missing permissions — no declaration but code has capabilities |
+| SEN-MCP-LP4 | low | Overdeclared permission — declared but unused (suspicious) |
+
+**Sentinel Overlay** (25 rules, `SEN-TP-*` through `SEN-PV-*`):
+- Tool abuse (shell exec, file write, code eval, DB modification)
+- Privilege escalation (sudo, sandbox bypass, wildcard permissions)
+- Data exfiltration (external URLs, upload tools, DNS exfil)
+- Prompt injection (instruction override, role manipulation)
+- Credential access (hardcoded keys, cloud credential patterns)
+- Reverse shell / RCE (nc, socat, python socket, curl|sh)
+- Excessive agency (no restrictions, autonomous execution)
+- Cross-agent injection (inter-agent relay without validation)
+- Memory manipulation (vector store poisoning)
+- IOC indicators (malicious TLDs, IP URLs, DNS patterns)
+- Policy violation (proxy bypass, config tampering)
+
+**Scoring**: 0-10 scale. Combines all engines via weighted max.
+- Block threshold: >= 7.0 (configurable: `SENTINEL_SKILLSPECTOR_BLOCK_THRESHOLD`)
+- Warn threshold: >= 4.0 (configurable: `SENTINEL_SKILLSPECTOR_WARN_THRESHOLD`)
+
+**FP suppression**: Tool names appearing in `denied_tools` lists (YAML or JSON format)
+are not flagged — they represent BLOCKED capabilities, not vulnerabilities.
+
+**API endpoints**:
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/admin/skills/status` | Scanner status, engine breakdown, pattern counts |
+| POST | `/admin/skills/scan/content` | Scan inline YAML/JSON content |
+| POST | `/admin/skills/scan/upload` | Scan uploaded file |
+| POST | `/admin/skills/scan/path` | Scan server-side path |
+| GET | `/admin/skills/history` | Recent scan results |
+| GET | `/admin/skills/history/{scan_id}` | Detailed result for specific scan |
 
 ---
 
@@ -639,6 +705,12 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | GET/POST | `/admin/notifications/*` | Session | Alert channel configuration |
 | GET/POST | `/admin/config/*` | Session | Global configuration |
 | GET/POST | `/admin/rbac/*` | Session | Role-based access control |
+| GET | `/admin/skills/status` | Session | SkillSpector scanner status + pattern counts |
+| POST | `/admin/skills/scan/content` | Session | Scan inline YAML/JSON skill definition |
+| POST | `/admin/skills/scan/upload` | Session | Scan uploaded skill file |
+| POST | `/admin/skills/scan/path` | Session | Scan server-side file path |
+| GET | `/admin/skills/history` | Session | Recent scan results (filterable by verdict) |
+| GET | `/admin/skills/history/{id}` | Session | Detailed result for specific scan |
 
 ### Authentication
 
@@ -757,6 +829,9 @@ Security-critical files — review carefully before modifying:
 | `src/guardrails/input_guardrail.py` | Detection patterns (4600+ lines, regex) |
 | `src/guardrails/output_filter.py` | Secret redaction patterns |
 | `src/routes/proxy.py` | Main request pipeline, SSRF protection |
+| `admin/services/skill_scanner.py` | SkillSpector hybrid engine (138 patterns, scoring) |
+| `admin/services/mcp_poisoning.py` | MCP tool poisoning detection (20 patterns) |
+| `admin/services/mcp_privilege.py` | MCP least privilege analysis (29 patterns) |
 | `helm/sentinel-gateway/templates/secrets.yaml` | Secret generation |
 | `helm/sentinel-gateway/templates/network-policies.yaml` | Network isolation |
 
@@ -848,7 +923,8 @@ Exporter features: batch flush (100 events or 1s), circuit breaker, exponential 
 | Component | Version | Image Tag |
 |-----------|---------|-----------|
 | Proxy | 0.4.3 | `sentinel-gateway-proxy:0.4.3` |
-| Admin | 0.4.2 | `sentinel-gateway-admin:0.4.2` |
+| Admin | 0.4.3-sp2 | `sentinel-gateway-admin:0.4.3-sp2` |
+| SkillSpector Engine | 2.1.0-sentinel | — |
 | Helm Chart | 0.5.0 | — |
 | Kustomize | 0.4.3 | — |
 
