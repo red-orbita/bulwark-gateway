@@ -65,6 +65,7 @@ class ScannerStatusResponse(BaseModel):
     skillspector_installed: bool = False
     skillspector_version: str = "unavailable"
     sentinel_rules_count: int = 0
+    mcp_security_patterns: int = 0
     total_patterns: int = 0
 
 

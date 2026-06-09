@@ -3,11 +3,15 @@ Sentinel Skill Scanner — SkillSpector integration + Sentinel-specific patterns
 
 Architecture:
   1. Primary engine: NVIDIA SkillSpector (64 patterns, AST, taint tracking, YARA, OSV.dev)
-  2. Overlay: Sentinel-specific patterns (IOC, credential, policy, cross-agent)
-  3. Fallback: Built-in regex scanner if SkillSpector is unavailable
+  2. MCP Security: Tool Poisoning detection (hidden instructions, unicode, injection)
+  3. MCP Security: Least Privilege analysis (declared permissions vs actual code)
+  4. Overlay: Sentinel-specific patterns (IOC, credential, policy, cross-agent)
+  5. Fallback: Built-in regex scanner if SkillSpector is unavailable
 
 The combined scanner provides deeper coverage than either engine alone:
   - SkillSpector: code-level analysis (AST, taint flow, YARA sigs, CVE lookups)
+  - MCP Poisoning: detects attacks on tool DEFINITIONS that target the LLM
+  - MCP Privilege: validates permissions match actual code capabilities
   - Sentinel overlay: config/policy-level analysis (sandbox escape, agent injection, IOC)
 
 All analysis is static (use_llm=False) — no LLM calls during scanning.
@@ -30,6 +34,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+from admin.services.mcp_poisoning import (
+    analyze_content as mcp_poisoning_analyze,
+    PATTERN_COUNT as MCP_POISONING_PATTERNS,
+)
+from admin.services.mcp_privilege import (
+    analyze_content as mcp_privilege_analyze,
+    analyze_directory as mcp_privilege_analyze_dir,
+    PATTERN_COUNT as MCP_PRIVILEGE_PATTERNS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +78,7 @@ SKILLSPECTOR_WARN_THRESHOLD = float(os.getenv("SENTINEL_SKILLSPECTOR_WARN_THRESH
 SKILLSPECTOR_CACHE_TTL = int(os.getenv("SENTINEL_SKILLSPECTOR_CACHE_TTL", "300"))
 SKILLSPECTOR_TIMEOUT = int(os.getenv("SENTINEL_SKILLSPECTOR_TIMEOUT", "60"))
 
-_VERSION = "2.0.0-sentinel"
+_VERSION = "2.1.0-sentinel"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -491,6 +505,7 @@ class SkillScanner:
         return _VERSION
 
     def status(self) -> dict:
+        mcp_patterns = MCP_POISONING_PATTERNS + MCP_PRIVILEGE_PATTERNS
         return {
             "enabled": SKILLSPECTOR_ENABLED,
             "available": self.available,
@@ -502,7 +517,12 @@ class SkillScanner:
             "skillspector_installed": _SKILLSPECTOR_AVAILABLE,
             "skillspector_version": _SKILLSPECTOR_VERSION,
             "sentinel_rules_count": len(_SENTINEL_RULES),
-            "total_patterns": (64 + len(_SENTINEL_RULES)) if _SKILLSPECTOR_AVAILABLE else len(_SENTINEL_RULES),
+            "mcp_security_patterns": mcp_patterns,
+            "total_patterns": (
+                (64 if _SKILLSPECTOR_AVAILABLE else 0)
+                + len(_SENTINEL_RULES)
+                + mcp_patterns
+            ),
         }
 
     async def scan(self, input_path: str, scan_id: Optional[str] = None) -> ScanResult:
@@ -530,17 +550,26 @@ class SkillScanner:
                     skillspector_score = sp_result.get("risk_score", 0.0)
                     findings.extend(self._map_skillspector_findings(sp_result))
 
-            # Stage 2: Sentinel overlay patterns (always runs)
+            # Stage 2: MCP Security Analysis (always runs)
             path = Path(input_path)
             if path.is_dir():
                 content = self._read_directory(path)
             else:
                 content = path.read_text(encoding="utf-8", errors="replace")
 
+            # Stage 2a: MCP Tool Poisoning detection
+            poisoning_findings = self._run_mcp_poisoning(content, str(path))
+            findings.extend(poisoning_findings)
+
+            # Stage 2b: MCP Least Privilege analysis
+            privilege_findings = self._run_mcp_privilege(content, path)
+            findings.extend(privilege_findings)
+
+            # Stage 3: Sentinel overlay patterns (always runs)
             sentinel_findings = self._analyze_sentinel(content, str(path))
             findings.extend(sentinel_findings)
 
-            # Stage 3: Structural checks
+            # Stage 4: Structural checks
             structured = self._parse_structured(content)
             if structured:
                 findings.extend(self._structural_checks(structured, str(path)))
@@ -554,19 +583,26 @@ class SkillScanner:
                 input_path=input_path, engine=self.mode,
             )
 
-        # Score calculation: combine SkillSpector + Sentinel
+        # Score calculation: combine SkillSpector + MCP Security + Sentinel
         sentinel_score = min(10.0, sum(
             f.confidence * self._rule_score(f.rule_id)
             for f in findings if f.source == "sentinel"
+        ))
+
+        # MCP security findings contribute to score (high-value detections)
+        mcp_score = min(10.0, sum(
+            f.confidence * self._mcp_score(f.severity)
+            for f in findings if f.source == "mcp_security"
         ))
 
         if skillspector_score is not None:
             # Normalized SkillSpector score (0-100 → 0-10) combined with Sentinel score
             sp_normalized = _skillspector_score_to_sentinel(skillspector_score)
             # Use weighted max: whichever engine found more risk, biased to highest
-            risk_score = max(sp_normalized, sentinel_score, (sp_normalized + sentinel_score) / 2)
+            combined_sentinel = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
+            risk_score = max(sp_normalized, combined_sentinel, (sp_normalized + combined_sentinel) / 2)
         else:
-            risk_score = sentinel_score
+            risk_score = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
 
         risk_score = round(min(10.0, risk_score), 1)
         verdict = _verdict_from_score(risk_score)
@@ -611,11 +647,19 @@ class SkillScanner:
                     skillspector_score = sp_result.get("risk_score", 0.0)
                     findings.extend(self._map_skillspector_findings(sp_result))
 
-            # Stage 2: Sentinel overlay patterns
+            # Stage 2a: MCP Tool Poisoning detection
+            poisoning_findings = self._run_mcp_poisoning(content, filename)
+            findings.extend(poisoning_findings)
+
+            # Stage 2b: MCP Least Privilege analysis
+            privilege_findings = self._run_mcp_privilege(content, Path(filename))
+            findings.extend(privilege_findings)
+
+            # Stage 3: Sentinel overlay patterns
             sentinel_findings = self._analyze_sentinel(content, filename)
             findings.extend(sentinel_findings)
 
-            # Stage 3: Structural checks
+            # Stage 4: Structural checks
             structured = self._parse_structured(content)
             if structured:
                 findings.extend(self._structural_checks(structured, filename))
@@ -635,11 +679,17 @@ class SkillScanner:
             for f in findings if f.source == "sentinel"
         ))
 
+        mcp_score = min(10.0, sum(
+            f.confidence * self._mcp_score(f.severity)
+            for f in findings if f.source == "mcp_security"
+        ))
+
         if skillspector_score is not None:
             sp_normalized = _skillspector_score_to_sentinel(skillspector_score)
-            risk_score = max(sp_normalized, sentinel_score, (sp_normalized + sentinel_score) / 2)
+            combined_sentinel = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
+            risk_score = max(sp_normalized, combined_sentinel, (sp_normalized + combined_sentinel) / 2)
         else:
-            risk_score = sentinel_score
+            risk_score = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
 
         risk_score = round(min(10.0, risk_score), 1)
         verdict = _verdict_from_score(risk_score)
@@ -731,6 +781,79 @@ class SkillScanner:
 
         return findings
 
+    # ─── MCP Security Analysis ───────────────────────────────────
+
+    def _run_mcp_poisoning(self, content: str, source: str) -> list[SkillFinding]:
+        """Run MCP Tool Poisoning detection against content.
+
+        Detects hidden instructions, unicode deception, parameter injection,
+        and description-behavior mismatches in tool definitions.
+        """
+        try:
+            raw_findings = mcp_poisoning_analyze(content, source)
+        except Exception as e:
+            logger.warning("mcp_poisoning_failed source=%s error=%s", source, e)
+            return []
+
+        findings: list[SkillFinding] = []
+        for f in raw_findings:
+            severity = self._map_severity_str(f.get("severity", "medium"))
+            findings.append(SkillFinding(
+                rule_id=f.get("rule_id", "SEN-MCP-TP?"),
+                message=f.get("message", "MCP poisoning indicator"),
+                severity=severity,
+                confidence=f.get("confidence", 80) / 100,
+                location=f.get("file", source),
+                tags=["mcp-poisoning", f.get("pattern", "")],
+                category=f.get("category", "mcp_poisoning"),
+                source="mcp_security",
+            ))
+
+        return findings
+
+    def _run_mcp_privilege(self, content: str, path: Path) -> list[SkillFinding]:
+        """Run MCP Least Privilege analysis.
+
+        Validates that declared permissions match actual code capabilities.
+        For directories, performs full multi-file analysis.
+        """
+        try:
+            if path.is_dir():
+                raw_findings = mcp_privilege_analyze_dir(path)
+            else:
+                raw_findings = mcp_privilege_analyze(content, str(path))
+        except Exception as e:
+            logger.warning("mcp_privilege_failed path=%s error=%s", path, e)
+            return []
+
+        findings: list[SkillFinding] = []
+        for f in raw_findings:
+            severity = self._map_severity_str(f.get("severity", "medium"))
+            findings.append(SkillFinding(
+                rule_id=f.get("rule_id", "SEN-MCP-LP?"),
+                message=f.get("message", "MCP privilege issue"),
+                severity=severity,
+                confidence=f.get("confidence", 70) / 100,
+                location=f.get("file", str(path)),
+                tags=["mcp-privilege"],
+                category=f.get("category", "mcp_privilege"),
+                source="mcp_security",
+            ))
+
+        return findings
+
+    @staticmethod
+    def _map_severity_str(sev: str) -> RiskSeverity:
+        """Map a string severity to RiskSeverity enum."""
+        s = sev.lower()
+        if s == "critical":
+            return RiskSeverity.CRITICAL
+        elif s == "high":
+            return RiskSeverity.HIGH
+        elif s == "medium":
+            return RiskSeverity.MEDIUM
+        return RiskSeverity.LOW
+
     # ─── Sentinel overlay analysis ───────────────────────────────
 
     def _analyze_sentinel(self, content: str, source: str) -> list[SkillFinding]:
@@ -787,6 +910,19 @@ class SkillScanner:
         )
         for m in deny_pattern.finditer(content):
             zones.append((m.start(), m.end()))
+
+        # Match JSON arrays under denied_tools / denied_arguments keys
+        # Pattern: "denied_tools" : [ ... ] (captures the array content)
+        json_deny_pattern = re.compile(
+            r"[\"'](denied_tools|denied_arguments|deny|blocklist)[\"']\s*:\s*\[([^\]]*)\]",
+            re.I
+        )
+        for m in json_deny_pattern.finditer(content):
+            # Zone covers the entire array value (from [ to ])
+            array_start = m.start(2) - 1  # include the [
+            array_end = m.end(2) + 1       # include the ]
+            zones.append((array_start, array_end))
+
         return zones
 
     def _in_denied_zone(self, pos: int, zones: list[tuple[int, int]]) -> bool:
@@ -925,6 +1061,16 @@ class SkillScanner:
             if rule.id == rule_id:
                 return rule.score
         return 1.0
+
+    @staticmethod
+    def _mcp_score(severity: RiskSeverity) -> float:
+        """Score contribution for MCP security findings (0-10 scale)."""
+        return {
+            RiskSeverity.CRITICAL: 3.5,
+            RiskSeverity.HIGH: 2.5,
+            RiskSeverity.MEDIUM: 1.5,
+            RiskSeverity.LOW: 0.5,
+        }.get(severity, 1.0)
 
     def _disabled_result(self, scan_id: Optional[str] = None) -> ScanResult:
         return ScanResult(
