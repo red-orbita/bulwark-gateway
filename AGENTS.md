@@ -94,6 +94,34 @@ sentinel-gateway/
 │   │       └── tcp_tls.py        # Raw TCP+TLS (→ custom collectors)
 │   ├── policies/
 │   │   └── loader.py             # YAML policy loader with hot-reload (5s interval)
+│   ├── scanners/                  # Scanner framework (Phase 1-5)
+│   │   ├── protocol.py           # InputScanner/OutputScanner ABCs
+│   │   ├── pipeline.py           # 4-lane pipeline orchestrator
+│   │   ├── discovery.py          # Plugin discovery (entry_points + drop-in)
+│   │   ├── builtin/              # Builtin scanners (regex, output, tool_policy)
+│   │   ├── ml/                   # ML detection (injection, toxicity, topic, intent)
+│   │   ├── multilingual/         # Language detection + 10-language patterns
+│   │   ├── multimodal/           # OCR + vision scanner
+│   │   ├── output/               # Hallucination, schema, grounding, relevance
+│   │   └── rag/                  # RAG chunk scanner + memory guard
+│   ├── dialog/                    # Dialog flow engine (YAML-based state machine)
+│   │   └── engine.py
+│   ├── sdk/                       # Library mode SDK
+│   │   ├── guard.py              # Guard class (scan_input/output, protect, wrap)
+│   │   └── integrations/         # LangChain, LlamaIndex integrations
+│   ├── plugins/                   # Plugin hub (Phase 7)
+│   │   ├── spec.py               # PluginSpec model, validation
+│   │   ├── manager.py            # Lifecycle + security audit
+│   │   └── cli.py                # CLI: install/uninstall/list/create
+│   ├── evaluation/                # Red teaming framework (Phase 8)
+│   │   ├── attacks.py            # AttackGenerator (template/mutation/encoding)
+│   │   ├── runner.py             # EvaluationRunner + EvaluationReport
+│   │   ├── datasets.py           # Benign + standard attack datasets
+│   │   └── cli.py                # CLI: evaluate with thresholds
+│   ├── discovery/                 # Agent discovery (Phase 9)
+│   │   ├── agent_discovery.py    # Network/K8s LLM endpoint scanning
+│   │   ├── shadow_ai.py          # Shadow AI monitor (30 endpoints)
+│   │   └── mcp_inventory.py      # MCP risk assessment
 │   └── filters/
 │       └── __init__.py
 │
@@ -113,6 +141,9 @@ sentinel-gateway/
 │   │   ├── iocs.py               # IOC database management
 │   │   ├── notifications.py      # Alert channel configuration
 │   │   ├── skills.py             # Skill security scanner endpoints (scan/upload/status/history)
+│   │   ├── plugins.py            # Plugin management (install/uninstall/enable/disable/scaffold)
+│   │   ├── evaluation.py         # Red teaming evaluation (run/quick/preview/report)
+│   │   ├── discovery.py          # Agent discovery + Shadow AI + MCP risk assessment
 │   │   └── validate.py           # Config validation endpoints
 │   ├── services/
 │   │   ├── redis_sync.py         # get_redis_client(), pattern sync, version tracking
@@ -139,7 +170,7 @@ sentinel-gateway/
 │   │   └── metrics.py            # Metrics models
 │   ├── templates/                # Jinja2 HTML (HTMX + Alpine.js + TailwindCSS)
 │   │   ├── base.html             # Layout with CSP headers
-│   │   └── pages/                # 18 pages (dashboard, login, policies, etc.)
+│   │   └── pages/                # 21 pages (dashboard, login, policies, plugins, evaluation, discovery, etc.)
 │   └── static/                   # Vendored JS/CSS (no CDN dependencies)
 │       ├── css/tailwind.min.css
 │       └── js/vendor/            # htmx, alpine, lucide-icons
@@ -232,6 +263,15 @@ sentinel-gateway/
 │   ├── test_enrichment.py        # Attack replay and enrichment
 │   ├── test_integration_ioc.py   # IOC integration tests
 │   ├── test_admin_integration.py # Admin API integration (requires container)
+│   ├── test_scanner_framework.py # Scanner pipeline + builtin (37 tests)
+│   ├── test_ml_scanners.py       # ML scanner mocking (35 tests)
+│   ├── test_multilingual_multimodal.py # Language + vision (43 tests)
+│   ├── test_output_validation.py # Hallucination, schema, grounding (30 tests)
+│   ├── test_phase5_phase6.py     # RAG, dialog, SDK (27 tests)
+│   ├── test_phase7_plugins.py    # Plugin system (21 tests)
+│   ├── test_phase8_evaluation.py # Red teaming framework (19 tests)
+│   ├── test_phase9_discovery.py  # Agent discovery (25 tests)
+│   ├── test_exhaustive_integration.py # Cross-phase integration (41 tests)
 │   ├── telemetry/                # Telemetry subsystem tests
 │   │   ├── test_telemetry_unit.py
 │   │   ├── test_telemetry_integration.py
@@ -598,7 +638,7 @@ python -m uvicorn src.main:app --reload --port 8080
 # Run admin server locally
 python -m uvicorn admin.main:app --reload --port 8090
 
-# Run full test suite (~140 tests)
+# Run full test suite (~411 tests)
 pytest tests/ -q --tb=short
 
 # Run tests excluding container-only tests
@@ -711,6 +751,29 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/skills/scan/path` | Session | Scan server-side file path |
 | GET | `/admin/skills/history` | Session | Recent scan results (filterable by verdict) |
 | GET | `/admin/skills/history/{id}` | Session | Detailed result for specific scan |
+| GET | `/admin/plugins/` | Session | List installed plugins |
+| GET | `/admin/plugins/{name}` | Session | Get plugin specification |
+| POST | `/admin/plugins/install` | Session | Install plugin from source |
+| POST | `/admin/plugins/uninstall` | Session | Uninstall plugin |
+| POST | `/admin/plugins/{name}/enable` | Session | Enable plugin |
+| POST | `/admin/plugins/{name}/disable` | Session | Disable plugin |
+| POST | `/admin/plugins/scaffold` | Session | Create plugin template |
+| POST | `/admin/plugins/{name}/security-check` | Session | Run security audit |
+| GET | `/admin/evaluation/status` | Session | Evaluation framework status |
+| POST | `/admin/evaluation/run` | Session | Run adversarial evaluation |
+| POST | `/admin/evaluation/run/quick` | Session | Quick scan (5 per category) |
+| GET | `/admin/evaluation/attacks/preview` | Session | Preview attack payloads |
+| GET | `/admin/evaluation/datasets/benign` | Session | Standard benign dataset |
+| POST | `/admin/evaluation/report` | Session | Generate formatted report |
+| GET | `/admin/discovery/status` | Session | Discovery capabilities |
+| POST | `/admin/discovery/scan/network` | Session | Scan network for LLM agents |
+| POST | `/admin/discovery/scan/kubernetes` | Session | Scan K8s namespace |
+| GET | `/admin/discovery/shadow-ai/endpoints` | Session | AI endpoint blocklist |
+| POST | `/admin/discovery/shadow-ai/analyze` | Session | Analyze traffic for shadow AI |
+| POST | `/admin/discovery/shadow-ai/classify` | Session | Classify hostname |
+| GET | `/admin/discovery/mcp/status` | Session | MCP inventory status |
+| POST | `/admin/discovery/mcp/assess-risk` | Session | Assess MCP tool risk |
+| POST | `/admin/discovery/mcp/enumerate` | Session | Enumerate MCP server tools |
 
 ### Authentication
 
@@ -815,7 +878,7 @@ chore: <description>    — Maintenance, dependencies
 - All new guardrail patterns MUST have tests
 - Tests cover both positive (should block) and negative (should allow) cases
 - Run `pytest` before every commit
-- Current: ~140 tests, all passing
+- Current: ~411 tests, all passing
 - Container-only tests: `test_admin_integration.py`, `test_security_hardening.py` (require `/app` path)
 
 ### File Ownership

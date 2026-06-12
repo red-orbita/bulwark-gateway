@@ -14,6 +14,7 @@
 | [Notifications](NOTIFICATIONS.md) | Multi-channel alerting: Slack, Teams, Email, PagerDuty, etc. |
 | [Security Hardening](SECURITY-HARDENING.md) | Pentest results, remediations, security posture |
 | [API Reference](API-REFERENCE.md) | Proxy + Admin API endpoints, request/response formats |
+| [Roadmap](ROADMAP.md) | Implementation plan: ML detection, multilingual, SDK mode, plugin hub |
 
 ## Document Audience
 
@@ -22,7 +23,7 @@
 | **DevOps / SRE** | [Deployment](DEPLOYMENT.md) → [CI/CD](CICD.md) → [Operations](OPERATIONS.md) |
 | **Security Engineer** | [Architecture](ARCHITECTURE.md) → [Security Hardening](SECURITY-HARDENING.md) |
 | **SOC Analyst** | [Notifications](NOTIFICATIONS.md) → [Troubleshooting](TROUBLESHOOTING.md) |
-| **Developer** | [API Reference](API-REFERENCE.md) → [Architecture](ARCHITECTURE.md) |
+| **Developer** | [API Reference](API-REFERENCE.md) → [Architecture](ARCHITECTURE.md) → [Roadmap](ROADMAP.md) |
 | **Auditor** | [Security Hardening](SECURITY-HARDENING.md) → [API Reference](API-REFERENCE.md) |
 
 ## Project README
