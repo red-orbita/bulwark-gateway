@@ -72,6 +72,29 @@ proxy:
     enabled: true
     # -- Minimum available pods
     minAvailable: 1
+  # -- ML Scanner configuration
+  ml:
+    # -- Enable ML scanners (requires models volume)
+    enabled: false
+    # -- Run ML scanners in blocking mode (adds ~30ms latency)
+    blocking: false
+    # -- Path to model directory inside the container
+    modelDir: "/app/models"
+    # -- ML model storage size (PVC)
+    storage: 2Gi
+    # -- Models to download (used by init-container)
+    # Available: injection-classifier, toxicity, topic-classifier, intent-classifier
+    models:
+      - injection-classifier
+      - toxicity
+    # -- Resource overrides when ML is enabled (models need ~1GB RAM)
+    resources:
+      limits:
+        memory: 1536Mi
+        cpu: "2"
+      requests:
+        memory: 512Mi
+        cpu: 500m
 
 # -- Admin dashboard configuration
 admin:

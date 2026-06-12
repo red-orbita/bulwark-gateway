@@ -10,12 +10,19 @@ COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes --no-deps --prefix=/install -r requirements.lock && \
     pip install --no-cache-dir --prefix=/install .
 
+# ML dependencies (optional, controlled by build arg)
+ARG INSTALL_ML=false
+RUN if [ "$INSTALL_ML" = "true" ]; then \
+      pip install --no-cache-dir --prefix=/install \
+        "onnxruntime>=1.17" "tokenizers>=0.15" "numpy>=1.26"; \
+    fi
+
 # ============================================================
 FROM python:3.12-slim AS runtime
 
 LABEL org.opencontainers.image.title="sentinel-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"
-LABEL org.opencontainers.image.version="0.2.0"
+LABEL org.opencontainers.image.version="0.4.7"
 
 # Security: non-root user
 RUN groupadd -r sentinel && useradd -r -g sentinel -s /bin/false sentinel
@@ -29,8 +36,8 @@ COPY --from=builder /install /usr/local
 COPY src/ src/
 COPY config/ config/
 
-# Create data directories
-RUN mkdir -p data reports && chown -R sentinel:sentinel /app && \
+# Create data directories (models dir for ML, writable for download)
+RUN mkdir -p data reports models && chown -R sentinel:sentinel /app && \
     rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
 
 USER sentinel

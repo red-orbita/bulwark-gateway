@@ -41,6 +41,11 @@ reports/
 *.db-shm
 *.db-wal
 
+# --- ML Models (large, downloaded on demand) ---
+models/*.onnx
+models/*/model.onnx
+models/*/tokenizer.json
+
 # --- Logs ---
 *.log
 logs/

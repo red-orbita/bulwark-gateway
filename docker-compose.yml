@@ -50,6 +50,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_ML: ${INSTALL_ML:-false}
     ports:
       - "${SENTINEL_PORT:-8080}:8080"
     environment:
@@ -63,6 +65,12 @@ services:
       SENTINEL_TELEMETRY_ENABLED: ${SENTINEL_TELEMETRY_ENABLED:-true}
       SENTINEL_TELEMETRY_BATCH_SIZE: ${SENTINEL_TELEMETRY_BATCH_SIZE:-100}
       SENTINEL_TELEMETRY_FLUSH_INTERVAL: ${SENTINEL_TELEMETRY_FLUSH_INTERVAL:-1.0}
+      # ML Scanner configuration
+      SENTINEL_ML_ENABLED: ${SENTINEL_ML_ENABLED:-false}
+      SENTINEL_ML_MODEL_DIR: /app/models
+      SENTINEL_ML_BLOCKING: ${SENTINEL_ML_BLOCKING:-false}
+      # Enrichment pipeline
+      SENTINEL_REPLAY_DB_PATH: /app/shared/enrichment/attack_replay.db
       # Secrets via _FILE env vars (read from /run/secrets/)
       SENTINEL_JWT_SECRET_FILE: /run/secrets/jwt_secret
       SENTINEL_REDIS_PASSWORD_FILE: /run/secrets/redis_password
@@ -85,8 +93,10 @@ services:
       - policies:/app/config/policies
       - ./config/iocs.json:/app/config/iocs.json:ro
       - ./config/agents.yaml:/app/config/agents.yaml:ro
+      - ./models:/app/models:ro
       - telemetry_data:/app/data
       - siem_stats:/app/shared/siem
+      - enrichment_data:/app/shared/enrichment
     depends_on:
       redis:
         condition: service_healthy
@@ -113,11 +123,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${PROXY_MEMORY_LIMIT:-512M}
-          cpus: "${PROXY_CPU_LIMIT:-1.0}"
+          memory: ${PROXY_MEMORY_LIMIT:-1024M}
+          cpus: "${PROXY_CPU_LIMIT:-2.0}"
         reservations:
-          memory: 128M
-          cpus: "0.25"
+          memory: 256M
+          cpus: "0.5"
 
   # ── Admin Portal ─────────────────────────────────────────
   admin:
@@ -133,6 +143,9 @@ services:
       SENTINEL_TELEMETRY_ENABLED: ${SENTINEL_TELEMETRY_ENABLED:-true}
       SENTINEL_REDIS_URL: redis://redis:6379/0
       SENTINEL_REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      SENTINEL_IOC_PATH: /app/config/iocs.json
+      # Enrichment DB (read-only access to proxy's replay DB)
+      SENTINEL_REPLAY_DB_PATH: /app/shared/enrichment/attack_replay.db
       # Secrets via _FILE env vars
       ADMIN_JWT_SECRET_FILE: /run/secrets/admin_jwt_secret
       ADMIN_PASSWORD_FILE: /run/secrets/admin_password
@@ -156,6 +169,7 @@ services:
       - admin_data:/app/data
       - siem_stats:/app/shared/siem
       - reports:/app/reports
+      - enrichment_data:/app/shared/enrichment
       - ./admin/templates:/app/admin/templates:ro
       - ./admin/routes:/app/admin/routes:ro
     healthcheck:
@@ -303,6 +317,8 @@ volumes:
   reports:
     driver: local
   siem_stats:
+    driver: local
+  enrichment_data:
     driver: local
   prometheus_data:
     driver: local

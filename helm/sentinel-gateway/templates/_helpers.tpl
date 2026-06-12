@@ -116,7 +116,7 @@ Redis URL — internal (in-cluster) or external (cloud/on-premise)
 */}}
 {{- define "sentinel-gateway.redis.url" -}}
 {{- if .Values.redis.enabled }}
-{{- printf "redis://redis.%s.svc.cluster.local:6379/0" (include "sentinel-gateway.namespace" .) }}
+{{- printf "redis://redis.%s.svc.cluster.local.:6379/0" (include "sentinel-gateway.namespace" .) }}
 {{- else }}
 {{- $scheme := ternary "rediss" "redis" .Values.externalRedis.tls }}
 {{- printf "%s://%s:%d/%d" $scheme .Values.externalRedis.host (int .Values.externalRedis.port) (int .Values.externalRedis.db) }}
