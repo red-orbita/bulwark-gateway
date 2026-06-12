@@ -52,6 +52,8 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_ML: ${INSTALL_ML:-false}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${SENTINEL_PORT:-8080}:8080"
     environment:
@@ -70,7 +72,14 @@ services:
       SENTINEL_ML_MODEL_DIR: /app/models
       SENTINEL_ML_BLOCKING: ${SENTINEL_ML_BLOCKING:-false}
       # Enrichment pipeline
+      SENTINEL_ENRICHMENT_ENABLED: ${SENTINEL_ENRICHMENT_ENABLED:-true}
       SENTINEL_REPLAY_DB_PATH: /app/shared/enrichment/attack_replay.db
+      # Response cache
+      SENTINEL_CACHE_ENABLED: ${SENTINEL_CACHE_ENABLED:-true}
+      SENTINEL_CACHE_TTL: ${SENTINEL_CACHE_TTL:-3600}
+      # HuggingFace model cache (for sentence-transformers in enrichment)
+      HF_HOME: /tmp/hf_cache
+      SENTENCE_TRANSFORMERS_HOME: /app/models/sentence-transformers
       # Secrets via _FILE env vars (read from /run/secrets/)
       SENTINEL_JWT_SECRET_FILE: /run/secrets/jwt_secret
       SENTINEL_REDIS_PASSWORD_FILE: /run/secrets/redis_password
@@ -257,7 +266,7 @@ services:
     # --- Security Hardening ---
     read_only: true
     tmpfs:
-      - /tmp:size=10m
+      - /tmp:noexec,nosuid,size=500m
     cap_drop:
       - ALL
     security_opt:

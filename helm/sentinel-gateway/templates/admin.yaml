@@ -86,6 +86,11 @@ spec:
               mountPath: /app/shared/notifications
             - name: siem-stats
               mountPath: /app/shared/siem
+            {{- if .Values.proxy.enrichment.enabled }}
+            - name: enrichment-data
+              mountPath: /app/shared/enrichment
+              readOnly: true
+            {{- end }}
             - name: reports
               mountPath: /app/reports
             - name: tmp
@@ -126,6 +131,11 @@ spec:
         - name: siem-stats
           persistentVolumeClaim:
             claimName: siem-stats
+        {{- if .Values.proxy.enrichment.enabled }}
+        - name: enrichment-data
+          persistentVolumeClaim:
+            claimName: enrichment-data
+        {{- end }}
         - name: reports
           persistentVolumeClaim:
             claimName: reports

@@ -128,3 +128,24 @@ spec:
     requests:
       storage: {{ .Values.proxy.ml.storage }}
 {{- end }}
+{{- if .Values.proxy.enrichment.enabled }}
+---
+# PVC: Enrichment Data (replay DB + attack embeddings)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: enrichment-data
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: enrichment
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.proxy.enrichment.storage }}
+{{- end }}

@@ -46,7 +46,7 @@ class EmbeddingScanner(BaseEnrichmentScanner):
     """
 
     name = "embedding_scanner"
-    timeout_ms = 500.0  # Embedding inference can take longer
+    timeout_ms = 5000.0  # Model inference can take several seconds on CPU
 
     def __init__(self) -> None:
         self._model = None

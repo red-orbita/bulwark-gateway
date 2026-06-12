@@ -139,6 +139,10 @@ spec:
               mountPath: {{ .Values.proxy.ml.modelDir }}
               readOnly: true
             {{- end }}
+            {{- if .Values.proxy.enrichment.enabled }}
+            - name: enrichment-data
+              mountPath: /app/shared/enrichment
+            {{- end }}
             - name: telemetry-data
               mountPath: /app/data
             - name: siem-stats
@@ -190,6 +194,11 @@ spec:
           persistentVolumeClaim:
             claimName: ml-models
         {{- end }}
+        {{- if .Values.proxy.enrichment.enabled }}
+        - name: enrichment-data
+          persistentVolumeClaim:
+            claimName: enrichment-data
+        {{- end }}
         - name: telemetry-data
           emptyDir:
             medium: Memory
@@ -200,7 +209,11 @@ spec:
         - name: tmp
           emptyDir:
             medium: Memory
+            {{- if .Values.proxy.enrichment.enabled }}
+            sizeLimit: 500Mi
+            {{- else }}
             sizeLimit: 50Mi
+            {{- end }}
 ---
 # Proxy Service
 apiVersion: v1
