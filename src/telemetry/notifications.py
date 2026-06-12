@@ -83,6 +83,7 @@ class NotificationChannel:
     # Auth for generic webhooks
     auth_type: str = "none"  # none, bearer, basic, api_key
     auth_value: str = ""
+    source: str = "config"  # config, env, yaml — indicates where this channel was defined
 
     def to_dict(self) -> dict:
         """Serialize for JSON storage (masks secrets)."""
@@ -91,6 +92,7 @@ class NotificationChannel:
             "name": self.name,
             "type": self.type,
             "enabled": self.enabled,
+            "source": self.source,
             "min_severity": self.min_severity,
             "verdicts": self.verdicts,
             "tenants": self.tenants,
@@ -120,6 +122,7 @@ class NotificationChannel:
             name=d.get("name", ""),
             type=d.get("type", "generic"),
             enabled=d.get("enabled", True),
+            source=d.get("source", "config"),
             min_severity=d.get("min_severity", "high"),
             verdicts=d.get("verdicts", ["block"]),
             tenants=d.get("tenants", []),
@@ -209,7 +212,7 @@ class NotificationEngine:
                 ch_id = f"env-{hashlib.sha256(url.encode()).hexdigest()[:8]}"
                 if not any(c.id == ch_id for c in self._channels):
                     self._channels.append(NotificationChannel(
-                        id=ch_id, name=name, type=wtype, url=url
+                        id=ch_id, name=name, type=wtype, url=url, source="env"
                     ))
 
     def reload(self):

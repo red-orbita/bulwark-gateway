@@ -3,8 +3,10 @@ Rate limiting middleware — per-tenant request throttling with Redis backend.
 
 Uses Redis sliding window counter for distributed rate limiting across replicas.
 Falls back to in-memory token bucket if Redis is unavailable.
+Supports per-tenant rate limit overrides from admin (Redis-synced).
 """
 
+import json
 import time
 
 from typing import Optional
@@ -39,11 +41,17 @@ class RedisRateLimiter:
     def available(self) -> bool:
         return self._redis is not None
 
-    def consume(self, key: str) -> bool:
-        """Check rate limit using Redis sliding window. Returns True if allowed."""
+    def consume(self, key: str, limit: int | None = None) -> bool:
+        """Check rate limit using Redis sliding window. Returns True if allowed.
+
+        Args:
+            key: Rate limit key (e.g., "ip:1.2.3.4" or "tenant:acme-corp")
+            limit: Per-key limit override (RPM). Defaults to self.rate_rpm.
+        """
         if not self._redis:
             return True  # Fallback handled by caller
 
+        effective_limit = limit if limit is not None else self.rate_rpm
         redis_key = f"sentinel:ratelimit:{key}"
         now = time.time()
         window_start = now - 60.0  # 1-minute sliding window
@@ -61,7 +69,7 @@ class RedisRateLimiter:
             results = pipe.execute()
 
             count = results[1]  # zcard result
-            return count < self.rate_rpm
+            return count < effective_limit
         except Exception:
             return False  # Fail-CLOSED on Redis error (C-05)
 
@@ -93,6 +101,33 @@ class InMemoryTokenBucket:
         return False
 
 
+# Per-tenant rate limit config (synced from Redis)
+_RATE_LIMIT_CONFIG_KEY = "sentinel:rate_limits:config"
+_tenant_limits: dict[str, int] = {}  # tenant_id → RPM override
+_tenant_limits_version: int = 0
+
+
+def _load_tenant_limits(r: Optional[redis.Redis]) -> None:
+    """Load per-tenant rate limit overrides from Redis."""
+    global _tenant_limits, _tenant_limits_version
+    if not r:
+        return
+    try:
+        ver = r.get("sentinel:rate_limits:version")
+        if ver and int(ver) > _tenant_limits_version:
+            raw = r.get(_RATE_LIMIT_CONFIG_KEY)
+            if raw:
+                _tenant_limits = json.loads(raw)
+                _tenant_limits_version = int(ver)
+    except Exception:
+        pass
+
+
+def get_tenant_rpm(tenant_id: str) -> int | None:
+    """Get per-tenant RPM override, or None for global default."""
+    return _tenant_limits.get(tenant_id)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
@@ -102,6 +137,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             redis_url=getattr(settings, "redis_url", None),
         )
         self._fallback = InMemoryTokenBucket(rate=rate, burst=settings.rate_limit_rpm_burst)
+        self._last_config_check: float = 0.0
+
+    def _maybe_reload_config(self) -> None:
+        """Reload per-tenant config from Redis every 5 seconds."""
+        now = time.time()
+        if now - self._last_config_check < 5.0:
+            return
+        self._last_config_check = now
+        if self._redis_limiter._redis:
+            _load_tenant_limits(self._redis_limiter._redis)
 
     async def dispatch(self, request: Request, call_next):
         if not settings.rate_limit_enabled:
@@ -110,6 +155,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Skip health checks
         if request.url.path in ("/health", "/health/live", "/ready"):
             return await call_next(request)
+
+        # Reload per-tenant config periodically
+        self._maybe_reload_config()
 
         # Red team mode flag (informational only — does NOT bypass rate limiting)
         request.state.redteam_mode = request.headers.get("X-Redteam-Mode") == "true"
@@ -138,8 +186,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Per-tenant rate limit (second layer — uses authenticated identity)
         if tenant_id:
             tenant_key = f"tenant:{tenant_id}"
+            tenant_rpm = get_tenant_rpm(tenant_id)
+            effective_rpm = tenant_rpm if tenant_rpm is not None else settings.rate_limit_rpm
+
             if self._redis_limiter.available:
-                allowed = self._redis_limiter.consume(tenant_key)
+                allowed = self._redis_limiter.consume(tenant_key, limit=effective_rpm)
             else:
                 allowed = self._fallback.consume(tenant_key)
 
@@ -148,7 +199,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     status_code=429,
                     content={
                         "error": "Rate limit exceeded",
-                        "detail": f"Max {settings.rate_limit_rpm} requests/minute",
+                        "detail": f"Max {effective_rpm} requests/minute",
                     },
                 )
 

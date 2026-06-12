@@ -69,6 +69,48 @@ async def ready(request: Request):
     return {"status": "ready" if is_ready else "not_ready"}
 
 
+@router.get("/internal/scanners/status")
+async def internal_scanner_status(request: Request):
+    """Internal endpoint for admin pod to query scanner pipeline state.
+
+    No auth required — network-level isolation enforced by K8s NetworkPolicies.
+    Only admin pods can reach this via ClusterIP service.
+
+    Returns: registered scanners, health, lane counts, ML model status.
+    """
+    from src.scanners.pipeline import get_scanner_pipeline
+    from src.config import settings
+
+    pipeline = get_scanner_pipeline()
+
+    # Get scanner list with metrics
+    scanners = pipeline.list_scanners()
+
+    # Run health checks (model loaded, warm, etc.)
+    health_results = await pipeline.health_check()
+
+    # Enrich scanner info with health status
+    for scanner_info in scanners:
+        scanner_info["healthy"] = health_results.get(scanner_info["name"], False)
+
+    return JSONResponse(content={
+        "status": "ok",
+        "ml_enabled": settings.ml_enabled,
+        "ml_blocking": settings.ml_blocking,
+        "ml_timeout_ms": settings.ml_timeout_ms,
+        "rag_enabled": settings.rag_enabled,
+        "multilingual_enabled": settings.multilingual_enabled,
+        "lanes": {
+            "input_blocking": pipeline.input_blocking_count,
+            "input_async": pipeline.input_async_count,
+            "output_blocking": pipeline.output_blocking_count,
+            "output_async": pipeline.output_async_count,
+            "total": pipeline.total_count,
+        },
+        "scanners": scanners,
+    })
+
+
 @router.post("/health/redteam")
 async def redteam_test(request: Request):
     """

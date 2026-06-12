@@ -39,6 +39,8 @@ from src.models import (
     ToolCall,
     Verdict,
 )
+from src.scanners.pipeline import get_scanner_pipeline
+from src.scanners.protocol import ScanContext
 from src.telemetry.counters import get_counters
 from src.telemetry.queue import get_telemetry_queue
 from src.telemetry.schema import from_security_event
@@ -143,7 +145,22 @@ async def chat_completions(request: Request):
     messages = body.get("messages", [])
 
     # === PHASE 1: Input Guardrail ===
-    input_result = input_guardrail.inspect_messages(messages, tenant_id, agent_id)
+    # Use scanner pipeline if available, otherwise fall back to direct call
+    _pipeline = get_scanner_pipeline()
+    if _pipeline.input_blocking_count > 0 and settings.scanners_pipeline_enabled:
+        _scan_ctx = ScanContext(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            request_id=f"{tenant_id}:{agent_id}:{int(time.time()*1000)}",
+            messages=messages,
+            source_ip=source_ip,
+        )
+        user_content = " ".join(
+            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+        )
+        input_result = await _pipeline.run_input_blocking(user_content, _scan_ctx)
+    else:
+        input_result = input_guardrail.inspect_messages(messages, tenant_id, agent_id)
 
     if input_result.verdict == Verdict.BLOCK:
         await _log_events(input_result.events, source_ip)
@@ -164,6 +181,15 @@ async def chat_completions(request: Request):
 
     if input_result.verdict == Verdict.WARN:
         await _log_events(input_result.events, source_ip)
+
+    # === PHASE 1b: Fire async ML scanners immediately (parallel with backend call) ===
+    # These run in the background regardless of client disconnection.
+    if settings.scanners_pipeline_enabled and _pipeline.input_async_count > 0:
+        user_content_for_async = " ".join(
+            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+        )
+        if user_content_for_async:
+            asyncio.create_task(_run_async_scanners_and_log(user_content_for_async, _scan_ctx, tenant_id, agent_id))
 
     # === PHASE 2: IOC Check ===
     ioc_manager = request.app.state.ioc_manager
@@ -333,12 +359,26 @@ async def chat_completions(request: Request):
         message = choice.get("message", {})
         content = message.get("content")
         if content:
-            filter_result = output_filter.inspect_and_redact(content, tenant_id, agent_id)
+            # Use scanner pipeline for output filtering if available
+            if _pipeline.output_blocking_count > 0 and settings.scanners_pipeline_enabled:
+                _out_ctx = ScanContext(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    request_id=_scan_ctx.request_id if settings.scanners_pipeline_enabled else "",
+                    messages=messages,
+                    source_ip=source_ip,
+                )
+                filter_result = await _pipeline.run_output_blocking(content, _out_ctx)
+            else:
+                filter_result = output_filter.inspect_and_redact(content, tenant_id, agent_id)
+
             if filter_result.verdict == Verdict.REDACT and filter_result.modified_content:
                 message["content"] = filter_result.modified_content
                 await _log_events(filter_result.events, source_ip)
 
     # === PHASE 6: Async Enrichment (fire-and-forget) ===
+    # Note: Async scanners already fired at Phase 1b (before backend call).
+    # Only legacy enrichment manager runs here.
     enrichment_mgr = get_enrichment_manager()
     if enrichment_mgr.enabled:
         # Collect all user message content for enrichment
@@ -637,6 +677,22 @@ def _make_error_event(message: str) -> str:
         }
     }
     return f"data: {json.dumps(error)}\n\ndata: [DONE]\n\n"
+
+
+async def _run_async_scanners_and_log(
+    content: str, context, tenant_id: str, agent_id: str
+):
+    """Run async scanners and log any security events they produce."""
+    try:
+        pipeline = get_scanner_pipeline()
+        results = await pipeline.run_input_async(content, context)
+        for result in results:
+            if result.events:
+                await _log_events(result.events)
+                await _fire_webhook_alert(result.events, tenant_id, agent_id)
+    except Exception as e:
+        # Log async scanner failures for debugging (don't crash)
+        await logger.awarn("async_scanner_error", error=str(e)[:200])
 
 
 async def _log_events(events: list[SecurityEvent], source_ip: str | None = None):

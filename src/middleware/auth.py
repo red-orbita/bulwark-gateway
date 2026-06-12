@@ -56,7 +56,8 @@ def _is_token_revoked(jti: str) -> bool:
         return True
 
 # Paths that don't require auth (H-13: removed /health/stats, /health/telemetry)
-PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json"}
+# /internal/* paths are cluster-internal only (NetworkPolicy enforced)
+PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json", "/internal/scanners/status"}
 
 # Pre-compute valid API key hashes at startup (constant-time comparison)
 _API_KEY_HASHES: Set[str] = set()
