@@ -39,6 +39,20 @@ data:
   SENTINEL_ML_MODEL_DIR: {{ .Values.proxy.ml.modelDir | quote }}
   SENTINEL_ML_BLOCKING: {{ .Values.proxy.ml.blocking | quote }}
   {{- end }}
+  {{- if .Values.proxy.enrichment.enabled }}
+  SENTINEL_ENRICHMENT_ENABLED: "true"
+  SENTINEL_REPLAY_DB_PATH: {{ .Values.proxy.enrichment.replayDbPath | quote }}
+  SENTINEL_EMBED_MODEL: {{ .Values.proxy.enrichment.model | quote }}
+  SENTINEL_EMBED_THRESH_SUSPICIOUS: {{ .Values.proxy.enrichment.suspiciousThreshold | quote }}
+  SENTINEL_EMBED_THRESH_THREAT: {{ .Values.proxy.enrichment.threatThreshold | quote }}
+  SENTENCE_TRANSFORMERS_HOME: {{ .Values.proxy.enrichment.modelCachePath | quote }}
+  HF_HOME: "/tmp/hf_cache"
+  {{- end }}
+  {{- if .Values.proxy.cache.enabled }}
+  SENTINEL_CACHE_ENABLED: "true"
+  SENTINEL_CACHE_TTL: {{ .Values.proxy.cache.ttl | quote }}
+  SENTINEL_CACHE_MAX_SIZE: {{ .Values.proxy.cache.maxSize | quote }}
+  {{- end }}
 ---
 # Admin ConfigMap — environment variables for the admin container
 apiVersion: v1
@@ -71,6 +85,9 @@ data:
   SENTINEL_SKILLSPECTOR_WARN_THRESHOLD: {{ .Values.admin.skillspector.warnThreshold | quote }}
   SENTINEL_SKILLSPECTOR_TIMEOUT: {{ .Values.admin.skillspector.timeout | quote }}
   SENTINEL_SKILLSPECTOR_CACHE_TTL: {{ .Values.admin.skillspector.cacheTTL | quote }}
+  {{- if .Values.proxy.enrichment.enabled }}
+  SENTINEL_REPLAY_DB_PATH: {{ .Values.proxy.enrichment.replayDbPath | quote }}
+  {{- end }}
 {{- if .Values.redis.enabled }}
 ---
 # Redis ConfigMap — hardened redis.conf

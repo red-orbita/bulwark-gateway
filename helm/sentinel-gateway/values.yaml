@@ -95,6 +95,34 @@ proxy:
       requests:
         memory: 512Mi
         cpu: 500m
+  # -- Enrichment Pipeline (background semantic analysis)
+  enrichment:
+    # -- Enable async enrichment (embedding similarity detection)
+    enabled: false
+    # -- Replay DB path inside the container
+    replayDbPath: "/app/shared/enrichment/attack_replay.db"
+    # -- Enrichment data PVC size
+    storage: 500Mi
+    # -- Embedding model name (sentence-transformers)
+    model: "all-MiniLM-L6-v2"
+    # -- Path to sentence-transformers model cache (use enrichment volume)
+    modelCachePath: "/app/shared/enrichment/sentence-transformers"
+    # -- Suspicious similarity threshold (0.0-1.0)
+    suspiciousThreshold: "0.78"
+    # -- Threat similarity threshold (0.0-1.0)
+    threatThreshold: "0.88"
+  # -- Response Cache (reduces LLM costs for repeated queries)
+  cache:
+    # -- Enable response caching
+    enabled: false
+    # -- Cache TTL in seconds
+    ttl: 3600
+    # -- Max entries in LRU fallback
+    maxSize: 10000
+  # -- Cost Tracking (token usage accounting per tenant)
+  costTracking:
+    # -- Enable cost tracking
+    enabled: true
 
 # -- Admin dashboard configuration
 admin:

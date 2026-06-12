@@ -14,7 +14,9 @@ RUN pip install --no-cache-dir --require-hashes --no-deps --prefix=/install -r r
 ARG INSTALL_ML=false
 RUN if [ "$INSTALL_ML" = "true" ]; then \
       pip install --no-cache-dir --prefix=/install \
-        "onnxruntime>=1.17" "tokenizers>=0.15" "numpy>=1.26"; \
+        "onnxruntime>=1.17" "tokenizers>=0.15" "numpy>=1.26" \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        "torch>=2.2" "sentence-transformers>=2.6"; \
     fi
 
 # ============================================================
@@ -37,7 +39,8 @@ COPY src/ src/
 COPY config/ config/
 
 # Create data directories (models dir for ML, writable for download)
-RUN mkdir -p data reports models && chown -R sentinel:sentinel /app && \
+RUN mkdir -p data reports models shared/enrichment shared/siem && \
+    chown -R sentinel:sentinel /app && \
     rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
 
 USER sentinel

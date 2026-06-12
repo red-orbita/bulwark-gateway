@@ -70,7 +70,10 @@ async def lifespan(app: FastAPI):
         enrichment_mgr = get_enrichment_manager()
         try:
             from src.enrichment.embedding_scanner import EmbeddingScanner
-            enrichment_mgr.register(EmbeddingScanner())
+            scanner = EmbeddingScanner()
+            # Pre-initialize model at startup (avoids timeout on first request)
+            scanner._ensure_initialized()
+            enrichment_mgr.register(scanner)
             await logger.ainfo("enrichment_enabled", scanners=len(enrichment_mgr.scanners))
         except Exception as e:
             await logger.awarn("enrichment_init_failed", error=str(e))

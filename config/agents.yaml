@@ -15,11 +15,17 @@ tenants:
         status: active
       code-assistant:
         path_prefix: /v1
-        timeout: 120.0
+        timeout: 5.0
+        backend_url: http://nonexistent-backend:9999
         model: tinyllama
         health_endpoint: /
-        description: Ollama for code generation
+        description: Ollama for code generation (with fallback)
         status: active
+        max_retries: 2
+        fallback_backends:
+          - backend_url: ${SENTINEL_BACKEND_URL:-http://ollama:11434}
+            path_prefix: /v1
+            timeout: 120.0
     _meta:
       status: active
   healthcare-corp:
