@@ -42,6 +42,8 @@ class AgentBackend:
     health_endpoint: str = "/health"
     path_prefix: str = "/v1"
     trusted: bool = True  # Backends from config are operator-trusted (skip SSRF check)
+    fallback_backends: list["AgentBackend"] = field(default_factory=list)
+    max_retries: int = 1  # 0 = no retry, 1 = try fallback once
 
 
 @dataclass
@@ -114,6 +116,20 @@ class AgentRegistry:
                     if not isinstance(agent_cfg, dict):
                         continue
                     key = f"{tenant_id}:{agent_id}"
+
+                    # Parse fallback backends
+                    fallbacks = []
+                    for fb_cfg in agent_cfg.get("fallback_backends", []):
+                        if isinstance(fb_cfg, dict):
+                            fallbacks.append(AgentBackend(
+                                backend_url=_expand_env(fb_cfg.get("backend_url", "")),
+                                timeout=fb_cfg.get("timeout", self._defaults.timeout),
+                                auth_header=fb_cfg.get("auth_header"),
+                                auth_token=fb_cfg.get("auth_token"),
+                                health_endpoint=fb_cfg.get("health_endpoint", "/health"),
+                                path_prefix=fb_cfg.get("path_prefix", "/v1"),
+                            ))
+
                     new_agents[key] = AgentBackend(
                         backend_url=_expand_env(agent_cfg.get("backend_url", self._defaults.backend_url)),
                         timeout=agent_cfg.get("timeout", self._defaults.timeout),
@@ -124,6 +140,8 @@ class AgentRegistry:
                             "health_endpoint", self._defaults.health_endpoint
                         ),
                         path_prefix=agent_cfg.get("path_prefix", "/v1"),
+                        fallback_backends=fallbacks,
+                        max_retries=agent_cfg.get("max_retries", 1 if fallbacks else 0),
                     )
 
             # Atomic swap
