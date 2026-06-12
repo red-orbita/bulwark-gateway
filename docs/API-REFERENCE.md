@@ -391,6 +391,183 @@ Rollback to previous configuration version.
 
 ---
 
+### Plugin Management
+
+#### GET /admin/plugins/
+
+List all installed plugins.
+
+**Response**: Array of plugin specs (name, version, type, blocking, enabled status).
+
+#### GET /admin/plugins/{name}
+
+Get specific plugin specification.
+
+#### POST /admin/plugins/install
+
+Install a plugin from hub or local source.
+
+**Body**:
+```json
+{
+  "name": "my-scanner",
+  "source": "hub"
+}
+```
+
+#### POST /admin/plugins/uninstall
+
+Uninstall an installed plugin.
+
+**Body**: `{"name": "my-scanner"}`
+
+#### POST /admin/plugins/{name}/enable
+
+Enable a disabled plugin.
+
+#### POST /admin/plugins/{name}/disable
+
+Disable an enabled plugin.
+
+#### POST /admin/plugins/scaffold
+
+Create a new plugin scaffold (development template).
+
+**Body**: `{"name": "new-scanner"}`
+
+#### POST /admin/plugins/{name}/security-check
+
+Run security audit on plugin source code. Returns list of security warnings (eval, subprocess, pickle, etc.).
+
+---
+
+### Security Evaluation (Red Teaming)
+
+#### GET /admin/evaluation/status
+
+Return framework status: available categories, scanner count, dataset sizes.
+
+#### POST /admin/evaluation/run
+
+Run adversarial evaluation against the scanner pipeline.
+
+**Body**:
+```json
+{
+  "categories": ["prompt_injection", "jailbreak", "exfiltration"],
+  "count_per_category": 10,
+  "include_benign": true
+}
+```
+
+**Response**: Full EvaluationReport with detection_rate, false_positive_rate, bypass_rate, latency percentiles, per-category breakdown.
+
+#### POST /admin/evaluation/run/quick
+
+Quick scan with 5 attacks per category across all supported categories.
+
+#### GET /admin/evaluation/attacks/preview
+
+Preview generated attacks (query params: categories, count).
+
+#### GET /admin/evaluation/datasets/benign
+
+Return the standard benign dataset (30 legitimate prompts for FP testing).
+
+#### POST /admin/evaluation/report
+
+Generate formatted report from evaluation data.
+
+**Body**:
+```json
+{
+  "report": { ... },
+  "format": "text|json|html"
+}
+```
+
+---
+
+### Agent Discovery
+
+#### GET /admin/discovery/status
+
+Discovery capabilities status (available scanners, known ports/paths).
+
+#### POST /admin/discovery/scan/network
+
+Scan network targets for LLM API endpoints.
+
+**Body**:
+```json
+{
+  "targets": ["192.168.1.0/24", "10.0.0.1"],
+  "timeout": 5.0
+}
+```
+
+**Response**: Array of discovered agents (host, port, service_type, confidence).
+
+#### POST /admin/discovery/scan/kubernetes
+
+Scan a Kubernetes namespace for LLM services.
+
+**Body**: `{"namespace": "default"}`
+
+#### GET /admin/discovery/shadow-ai/endpoints
+
+Return the full AI endpoint blocklist (30+ known AI API hostnames).
+
+#### POST /admin/discovery/shadow-ai/analyze
+
+Analyze traffic logs for unauthorized AI usage.
+
+**Body**:
+```json
+{
+  "entries": [
+    {"hostname": "api.openai.com", "source_ip": "10.0.1.5", "timestamp": "2024-01-01T12:00:00Z"}
+  ]
+}
+```
+
+**Response**: Array of ShadowAIAlerts (hostname, service, risk_level).
+
+#### POST /admin/discovery/shadow-ai/classify
+
+Classify a single hostname as AI service or not.
+
+**Body**: `{"hostname": "api.openai.com"}`
+
+**Response**: `{"service": "OpenAI"}` or `{"service": null}`
+
+#### GET /admin/discovery/mcp/status
+
+MCP inventory scanner status.
+
+#### POST /admin/discovery/mcp/assess-risk
+
+Assess risk of an MCP tool based on its capabilities.
+
+**Body**:
+```json
+{
+  "name": "execute_command",
+  "description": "Runs shell commands",
+  "capabilities": ["shell_exec", "network_access"]
+}
+```
+
+**Response**: RiskAssessment (score 0-10, findings, recommendations).
+
+#### POST /admin/discovery/mcp/enumerate
+
+Enumerate tools on an MCP server via JSON-RPC.
+
+**Body**: `{"server_url": "http://localhost:3000"}`
+
+---
+
 ## Error Format
 
 All error responses follow this format:
