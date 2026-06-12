@@ -83,7 +83,7 @@
                 <span x-show="sidebarOpen" class="nav-label">Dashboard</span>
             </a>
             <a href="/policies" class="nav-item" data-page="policies">
-                <i data-lucide="file-shield" class="nav-icon"></i>
+                <i data-lucide="file-lock" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">Policies</span>
             </a>
             <a href="/guardrails" class="nav-item" data-page="guardrails">
@@ -107,10 +107,6 @@
             <div class="px-3 mt-4 mb-1" x-show="sidebarOpen">
                 <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Intelligence</span>
             </div>
-            <a href="/orchestrator" class="nav-item" data-page="orchestrator">
-                <i data-lucide="cpu" class="nav-icon"></i>
-                <span x-show="sidebarOpen" class="nav-label">Orchestrator</span>
-            </a>
             <a href="/coverage" class="nav-item" data-page="coverage">
                 <i data-lucide="grid-3x3" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">Coverage Matrix</span>
@@ -122,6 +118,26 @@
             <a href="/skills" class="nav-item" data-page="skills">
                 <i data-lucide="scan-search" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">SkillSpector</span>
+            </a>
+            <a href="/ml-scanners" class="nav-item" data-page="ml-scanners">
+                <i data-lucide="brain" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Advanced Scanners</span>
+            </a>
+            <a href="/enrichment" class="nav-item" data-page="enrichment">
+                <i data-lucide="layers" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Enrichment</span>
+            </a>
+            <a href="/plugins" class="nav-item" data-page="plugins">
+                <i data-lucide="puzzle" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Plugins</span>
+            </a>
+            <a href="/evaluation" class="nav-item" data-page="evaluation">
+                <i data-lucide="swords" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Red Teaming</span>
+            </a>
+            <a href="/discovery" class="nav-item" data-page="discovery">
+                <i data-lucide="radar" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Discovery</span>
             </a>
 
             <!-- Management -->
@@ -139,6 +155,10 @@
             <a href="/rbac" class="nav-item" data-page="rbac">
                 <i data-lucide="users" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">Access Control</span>
+            </a>
+            <a href="/rate-limits" class="nav-item" data-page="rate-limits">
+                <i data-lucide="gauge" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Rate Limits</span>
             </a>
             <a href="/settings" class="nav-item" data-page="settings">
                 <i data-lucide="settings" class="nav-icon"></i>
@@ -441,14 +461,19 @@
                     { id: 3, label: 'Guardrails', href: '/guardrails', icon: 'shield-alert', section: 'Navigation' },
                     { id: 4, label: 'SIEM Export', href: '/siem', icon: 'radio-tower', section: 'Navigation' },
                     { id: 5, label: 'Audit Log', href: '/audit', icon: 'scroll-text', section: 'Navigation' },
-                    { id: 6, label: 'Orchestrator', href: '/orchestrator', icon: 'cpu', section: 'Navigation' },
-                    { id: 7, label: 'Coverage Matrix', href: '/coverage', icon: 'grid-3x3', section: 'Navigation' },
-                    { id: 8, label: 'IOCs', href: '/iocs', icon: 'bug', section: 'Navigation' },
-                    { id: 9, label: 'Tenants', href: '/tenants', icon: 'building-2', section: 'Navigation' },
-                    { id: 10, label: 'Agents', href: '/agents', icon: 'bot', section: 'Navigation' },
-                    { id: 11, label: 'Access Control', href: '/rbac', icon: 'users', section: 'Navigation' },
+                    { id: 6, label: 'Coverage Matrix', href: '/coverage', icon: 'grid-3x3', section: 'Navigation' },
+                    { id: 7, label: 'IOCs', href: '/iocs', icon: 'bug', section: 'Navigation' },
+                    { id: 8, label: 'Tenants', href: '/tenants', icon: 'building-2', section: 'Navigation' },
+                    { id: 9, label: 'Agents', href: '/agents', icon: 'bot', section: 'Navigation' },
+                    { id: 10, label: 'Access Control', href: '/rbac', icon: 'users', section: 'Navigation' },
                     { id: 12, label: 'Settings', href: '/settings', icon: 'settings', section: 'Navigation' },
                     { id: 13, label: 'Notifications', href: '/notifications', icon: 'bell-ring', section: 'Navigation' },
+                    { id: 14, label: 'Plugins', href: '/plugins', icon: 'puzzle', section: 'Navigation' },
+                    { id: 15, label: 'Red Teaming', href: '/evaluation', icon: 'swords', section: 'Navigation' },
+                    { id: 16, label: 'Agent Discovery', href: '/discovery', icon: 'radar', section: 'Navigation' },
+                    { id: 17, label: 'Advanced Scanners', href: '/ml-scanners', icon: 'brain', section: 'Navigation' },
+                    { id: 18, label: 'Rate Limits', href: '/rate-limits', icon: 'gauge', section: 'Navigation' },
+                    { id: 19, label: 'Enrichment', href: '/enrichment', icon: 'layers', section: 'Navigation' },
                 ],
                 get filtered() {
                     if (!this.query) return this.items;

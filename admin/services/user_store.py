@@ -451,6 +451,7 @@ class UserStore:
         """Check if session is within idle timeout and update last_activity.
 
         Returns True if session is active (within idle timeout), False if timed out.
+        Activity is only written to DB if last update was >60s ago (reduces writes).
         """
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
@@ -461,15 +462,23 @@ class UserStore:
             ).fetchone()
             if not row:
                 return False
-            last_activity = row.get("last_activity") if isinstance(row, dict) else (dict(row) if row else {}).get("last_activity")
+            # Extract last_activity — handle both dict and sqlite3.Row
+            try:
+                last_activity = row["last_activity"]
+            except (KeyError, TypeError, IndexError):
+                last_activity = None
             if last_activity:
                 try:
                     last_dt = datetime.fromisoformat(last_activity)
-                    if (now - last_dt).total_seconds() > idle_timeout_minutes * 60:
+                    age_seconds = (now - last_dt).total_seconds()
+                    if age_seconds > idle_timeout_minutes * 60:
                         # Idle timeout exceeded — revoke session
                         self._conn.execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
                         self._conn.commit()
                         return False
+                    # Throttle: skip write if last activity was within 60s
+                    if age_seconds < 60:
+                        return True
                 except (ValueError, TypeError):
                     pass
             # Update last_activity

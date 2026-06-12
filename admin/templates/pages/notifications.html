@@ -37,6 +37,9 @@
                                 <span x-text="'≥ ' + ch.min_severity"></span>
                                 <span class="mx-1">·</span>
                                 <span x-text="ch.verdicts.join(', ')"></span>
+                                <template x-if="ch.source === 'env'">
+                                    <span class="ml-2 px-1.5 py-0.5 bg-amber-500/10 text-amber-400 rounded text-[10px]">from env</span>
+                                </template>
                             </p>
                         </div>
                     </div>
@@ -46,7 +49,8 @@
                     </div>
                 </div>
                 <div class="mt-3 pt-3 border-t border-gray-700/50 flex items-center gap-2">
-                    <button @click="editChannel(ch)" class="sg-btn sg-btn-ghost sg-btn-xs">
+                    <button @click="editChannel(ch)" class="sg-btn sg-btn-ghost sg-btn-xs"
+                            :disabled="ch.source === 'env'" :class="ch.source === 'env' && 'opacity-50 cursor-not-allowed'">
                         <i data-lucide="pencil" class="w-3 h-3"></i> Edit
                     </button>
                     <button @click="toggleChannel(ch.id)" class="sg-btn sg-btn-ghost sg-btn-xs"
@@ -54,10 +58,17 @@
                     <button @click="testChannel(ch.id)" class="sg-btn sg-btn-ghost sg-btn-xs">
                         <i data-lucide="zap" class="w-3 h-3"></i> Test
                     </button>
-                    <button @click="deleteChannel(ch.id)" class="sg-btn sg-btn-ghost sg-btn-xs text-red-400">
+                    <button @click="deleteChannel(ch.id)" class="sg-btn sg-btn-ghost sg-btn-xs text-red-400"
+                            :disabled="ch.source === 'env'" :class="ch.source === 'env' && 'opacity-50 cursor-not-allowed'">
                         <i data-lucide="trash-2" class="w-3 h-3"></i> Delete
                     </button>
                 </div>
+                <!-- Env warning -->
+                <template x-if="ch.source === 'env'">
+                    <div class="mt-2 px-3 py-1.5 rounded bg-amber-900/10 text-[10px] text-amber-400/80">
+                        Sourced from SENTINEL_WEBHOOK_ALERT_URLS env var. Edit the env var or create a managed copy to override.
+                    </div>
+                </template>
                 <!-- Test result -->
                 <template x-if="testResults[ch.id]">
                     <div class="mt-2 px-3 py-2 rounded text-xs"

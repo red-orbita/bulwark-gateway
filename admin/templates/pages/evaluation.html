@@ -1,0 +1,539 @@
+{% extends "base.html" %}
+{% block title %}Security Evaluation — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Security Evaluation{% endblock %}
+{% block content %}
+<div x-data="evaluationPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Security Evaluation</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Red teaming, QA validation, and performance benchmarking</p>
+        </div>
+        <div x-show="running" class="flex items-center gap-2">
+            <span class="w-2 h-2 bg-cyan-400 rounded-full animate-pulse"></span>
+            <span class="text-xs text-cyan-400">Running...</span>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="border-b border-gray-700">
+        <nav class="flex gap-4 -mb-px">
+            <button @click="activeTab = 'redteam'" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
+                    :class="activeTab === 'redteam' ? 'text-cyan-400 border-cyan-400' : 'text-gray-400 border-transparent hover:text-gray-200'">
+                <i data-lucide="swords" class="w-4 h-4 inline-block mr-1"></i>Red Team
+            </button>
+            <button @click="activeTab = 'qa'" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
+                    :class="activeTab === 'qa' ? 'text-emerald-400 border-emerald-400' : 'text-gray-400 border-transparent hover:text-gray-200'">
+                <i data-lucide="shield-check" class="w-4 h-4 inline-block mr-1"></i>QA Validation
+            </button>
+            <button @click="activeTab = 'benchmark'" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
+                    :class="activeTab === 'benchmark' ? 'text-blue-400 border-blue-400' : 'text-gray-400 border-transparent hover:text-gray-200'">
+                <i data-lucide="gauge" class="w-4 h-4 inline-block mr-1"></i>Benchmark
+            </button>
+        </nav>
+    </div>
+
+    <!-- ========== RED TEAM TAB ========== -->
+    <div x-show="activeTab === 'redteam'" class="space-y-6">
+        <!-- Configuration -->
+        <div class="sg-card">
+            <h2 class="text-sm font-semibold text-white mb-4">Evaluation Configuration</h2>
+            <div class="space-y-5">
+                <!-- Category selection -->
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Attack Categories</label>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <template x-for="cat in categories" :key="cat">
+                            <label class="flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors"
+                                   :class="selectedCategories.includes(cat)
+                                       ? 'border-cyan-500/30 bg-cyan-500/5'
+                                       : 'border-gray-700/50 bg-gray-900/30 hover:border-gray-600'">
+                                <input type="checkbox" :value="cat"
+                                       :checked="selectedCategories.includes(cat)"
+                                       @change="toggleCategory(cat)"
+                                       class="w-3.5 h-3.5 rounded border-gray-600 text-cyan-500 focus:ring-cyan-500/20">
+                                <span class="text-xs text-gray-300" x-text="cat.replace('_', ' ')"></span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Count per category -->
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="text-xs text-gray-400">Payloads per Category</label>
+                        <span class="text-xs font-mono text-cyan-400" x-text="countPerCategory"></span>
+                    </div>
+                    <input type="range" min="5" max="50" step="5" x-model.number="countPerCategory"
+                           class="w-full h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-cyan-500">
+                    <div class="flex justify-between text-[10px] text-gray-600 mt-1">
+                        <span>5</span><span>25</span><span>50</span>
+                    </div>
+                </div>
+
+                <!-- Include benign toggle -->
+                <div class="flex items-center justify-between py-2">
+                    <div>
+                        <p class="text-sm text-gray-200">Include Benign Samples</p>
+                        <p class="text-xs text-gray-500">Add legitimate requests to measure false positive rate</p>
+                    </div>
+                    <button @click="includeBenign = !includeBenign" type="button"
+                            class="relative w-10 h-5 rounded-full transition-colors duration-200"
+                            :class="includeBenign ? 'bg-cyan-500' : 'bg-gray-700'">
+                        <span class="absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200"
+                              :class="includeBenign ? 'translate-x-5' : 'translate-x-0'"></span>
+                    </button>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex gap-3 pt-2">
+                    <button @click="runEvaluation()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="running">
+                        <i data-lucide="play" class="w-4 h-4"></i> Run Evaluation
+                    </button>
+                    <button @click="quickScan()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="running">
+                        <i data-lucide="zap" class="w-4 h-4"></i> Quick Scan (5 per cat)
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Running indicator -->
+        <template x-if="running && activeTab === 'redteam'">
+            <div class="sg-card border-l-4 border-l-cyan-500">
+                <div class="flex items-center gap-3">
+                    <div class="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+                    <div>
+                        <p class="text-sm font-medium text-white">Evaluation Running...</p>
+                        <p class="text-xs text-gray-400">Testing guardrail detection against adversarial payloads</p>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Results -->
+        <template x-if="report && !running">
+            <div class="space-y-6">
+                <!-- Summary Metrics -->
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div class="sg-card text-center">
+                        <p class="text-xs text-gray-500 mb-1">Detection Rate</p>
+                        <p class="text-3xl font-bold" :class="detectionRateColor(report.detection_rate)"
+                           x-text="(report.detection_rate * 100).toFixed(1) + '%'"></p>
+                        <p class="text-[10px] text-gray-600 mt-1">blocked / total malicious</p>
+                    </div>
+                    <div class="sg-card text-center">
+                        <p class="text-xs text-gray-500 mb-1">False Positive Rate</p>
+                        <p class="text-3xl font-bold" :class="report.false_positive_rate > 0.05 ? 'text-red-400' : 'text-emerald-400'"
+                           x-text="(report.false_positive_rate * 100).toFixed(1) + '%'"></p>
+                        <p class="text-[10px] text-gray-600 mt-1">blocked / total benign</p>
+                    </div>
+                    <div class="sg-card text-center">
+                        <p class="text-xs text-gray-500 mb-1">Bypass Rate</p>
+                        <p class="text-3xl font-bold" :class="report.bypass_rate > 0.1 ? 'text-red-400' : 'text-emerald-400'"
+                           x-text="(report.bypass_rate * 100).toFixed(1) + '%'"></p>
+                        <p class="text-[10px] text-gray-600 mt-1">missed / total malicious</p>
+                    </div>
+                    <div class="sg-card text-center">
+                        <p class="text-xs text-gray-500 mb-1">Latency (ms)</p>
+                        <div class="mt-1 space-y-0.5">
+                            <p class="text-sm text-gray-300">P50: <span class="font-mono text-white" x-text="report.latency_p50.toFixed(1)"></span></p>
+                            <p class="text-sm text-gray-300">P95: <span class="font-mono text-yellow-400" x-text="report.latency_p95.toFixed(1)"></span></p>
+                            <p class="text-sm text-gray-300">P99: <span class="font-mono text-orange-400" x-text="report.latency_p99.toFixed(1)"></span></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Per-category Breakdown -->
+                <div class="sg-card">
+                    <h3 class="text-sm font-semibold text-white mb-4">Per-Category Breakdown</h3>
+                    <div class="overflow-x-auto">
+                        <table class="sg-table text-xs w-full">
+                            <thead><tr><th>Category</th><th>Total</th><th>Detected</th><th>Missed</th><th>Detection Rate</th><th>Avg Latency</th></tr></thead>
+                            <tbody>
+                                <template x-for="cat in report.categories" :key="cat.name">
+                                    <tr>
+                                        <td class="font-medium text-white" x-text="cat.name.replace('_', ' ')"></td>
+                                        <td class="text-gray-400" x-text="cat.total"></td>
+                                        <td class="text-emerald-400" x-text="cat.detected"></td>
+                                        <td class="text-red-400" x-text="cat.missed"></td>
+                                        <td>
+                                            <div class="flex items-center gap-2">
+                                                <div class="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                                                    <div class="h-full rounded-full transition-all" :class="detectionRateColor(cat.rate).replace('text-', 'bg-')"
+                                                         :style="'width:' + (cat.rate * 100) + '%'"></div>
+                                                </div>
+                                                <span class="text-xs font-mono" :class="detectionRateColor(cat.rate)"
+                                                      x-text="(cat.rate * 100).toFixed(0) + '%'"></span>
+                                            </div>
+                                        </td>
+                                        <td class="text-gray-400 font-mono" x-text="cat.avg_latency_ms.toFixed(1) + 'ms'"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ========== EXECUTION LOG (Transparency Panel) ========== -->
+                <div class="sg-card" x-data="{ logFilter: 'all', expandedRow: null, showLog: false }">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-3">
+                            <button @click="showLog = !showLog" class="flex items-center gap-2">
+                                <i :data-lucide="showLog ? 'chevron-down' : 'chevron-right'" class="w-4 h-4 text-gray-400"></i>
+                                <h3 class="text-sm font-semibold text-white">Execution Log</h3>
+                            </button>
+                            <span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-700 text-gray-400"
+                                  x-text="(report.attack_log || []).length + ' entries'"></span>
+                        </div>
+                        <div x-show="showLog" class="flex gap-1">
+                            <button @click="logFilter = 'all'" class="px-2 py-1 text-[10px] rounded transition-colors"
+                                    :class="logFilter === 'all' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-gray-300'">All</button>
+                            <button @click="logFilter = 'blocked'" class="px-2 py-1 text-[10px] rounded transition-colors"
+                                    :class="logFilter === 'blocked' ? 'bg-red-500/20 text-red-400' : 'text-gray-500 hover:text-gray-300'">Blocked</button>
+                            <button @click="logFilter = 'missed'" class="px-2 py-1 text-[10px] rounded transition-colors"
+                                    :class="logFilter === 'missed' ? 'bg-yellow-500/20 text-yellow-400' : 'text-gray-500 hover:text-gray-300'">Missed</button>
+                        </div>
+                    </div>
+
+                    <div x-show="showLog" x-transition class="space-y-1 max-h-[600px] overflow-y-auto">
+                        <template x-for="(entry, idx) in filteredLog()" :key="idx">
+                            <div class="border border-gray-800 rounded-lg overflow-hidden">
+                                <!-- Row header (clickable) -->
+                                <div @click="expandedRow = expandedRow === idx ? null : idx"
+                                     class="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-800/50 transition-colors"
+                                     :class="entry.detected ? 'bg-gray-900/30' : 'bg-red-900/10'">
+                                    <!-- Verdict badge -->
+                                    <span class="flex-shrink-0 w-16 text-center text-[10px] font-bold px-1.5 py-0.5 rounded"
+                                          :class="entry.verdict === 'block' ? 'bg-red-500/15 text-red-400' : entry.verdict === 'warn' ? 'bg-yellow-500/15 text-yellow-400' : 'bg-gray-700/50 text-gray-400'"
+                                          x-text="entry.verdict.toUpperCase()"></span>
+                                    <!-- Category -->
+                                    <span class="flex-shrink-0 w-32 text-[10px] text-gray-500 truncate" x-text="entry.category.replace('_', ' ')"></span>
+                                    <!-- Technique -->
+                                    <span class="flex-shrink-0 w-40 text-[10px] font-mono text-cyan-400/70 truncate" x-text="entry.technique"></span>
+                                    <!-- Difficulty -->
+                                    <span class="flex-shrink-0 w-14 text-[10px] px-1.5 py-0.5 rounded-full text-center"
+                                          :class="entry.difficulty === 'hard' ? 'bg-red-500/10 text-red-400' : entry.difficulty === 'medium' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'"
+                                          x-text="entry.difficulty"></span>
+                                    <!-- Rule that caught it -->
+                                    <span class="flex-1 text-[10px] truncate"
+                                          :class="entry.guardrail_description ? 'text-gray-300' : 'text-gray-600 italic'"
+                                          x-text="entry.guardrail_description || 'not detected'"></span>
+                                    <!-- Latency -->
+                                    <span class="flex-shrink-0 w-16 text-right text-[10px] font-mono text-gray-500" x-text="entry.latency_ms.toFixed(1) + 'ms'"></span>
+                                    <!-- Expand icon -->
+                                    <i :data-lucide="expandedRow === idx ? 'chevron-up' : 'chevron-down'" class="w-3 h-3 text-gray-600 flex-shrink-0"></i>
+                                </div>
+
+                                <!-- Expanded details -->
+                                <div x-show="expandedRow === idx" x-transition class="px-4 py-3 bg-gray-900/60 border-t border-gray-800 space-y-2">
+                                    <!-- Payload -->
+                                    <div>
+                                        <p class="text-[10px] text-gray-500 mb-1">Payload</p>
+                                        <pre class="text-xs text-gray-300 font-mono bg-black/30 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-24"
+                                             x-text="entry.payload"></pre>
+                                    </div>
+                                    <!-- Detection details -->
+                                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                        <div>
+                                            <p class="text-[10px] text-gray-500">Guardrail Rule</p>
+                                            <p class="text-xs text-white" x-text="entry.guardrail_description || '-'"></p>
+                                        </div>
+                                        <div>
+                                            <p class="text-[10px] text-gray-500">Matched Pattern</p>
+                                            <p class="text-xs font-mono text-cyan-300 break-all" x-text="entry.matched_pattern || '-'"></p>
+                                        </div>
+                                        <div>
+                                            <p class="text-[10px] text-gray-500">Severity</p>
+                                            <p class="text-xs" :class="entry.severity === 'critical' ? 'text-red-400' : entry.severity === 'high' ? 'text-orange-400' : entry.severity === 'medium' ? 'text-yellow-400' : 'text-gray-400'"
+                                               x-text="entry.severity || '-'"></p>
+                                        </div>
+                                        <div>
+                                            <p class="text-[10px] text-gray-500">Source</p>
+                                            <p class="text-xs text-gray-300" x-text="entry.source || '-'"></p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Empty state -->
+                        <template x-if="filteredLog().length === 0">
+                            <p class="text-xs text-gray-500 text-center py-4">No entries match the selected filter.</p>
+                        </template>
+                    </div>
+
+                    <!-- Collapsed hint -->
+                    <div x-show="!showLog" class="text-xs text-gray-500">
+                        Click to expand detailed per-attack execution results with matched rules and patterns.
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- ========== QA VALIDATION TAB ========== -->
+    <div x-show="activeTab === 'qa'" class="space-y-6">
+        <div class="sg-card">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-sm font-semibold text-white">QA Validation</h2>
+                    <p class="text-xs text-gray-400 mt-0.5">Quick pass/fail check with known-good and known-bad payloads (18 test cases)</p>
+                </div>
+                <button @click="runQA()" class="sg-btn sg-btn-success sg-btn-sm" :disabled="running">
+                    <i data-lucide="play" class="w-4 h-4"></i> Run QA
+                </button>
+            </div>
+
+            <!-- QA Results -->
+            <template x-if="qaResult">
+                <div class="space-y-4">
+                    <!-- Summary -->
+                    <div class="flex items-center gap-4">
+                        <span class="px-3 py-1 rounded-full text-sm font-bold"
+                              :class="qaResult.status === 'pass' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'"
+                              x-text="qaResult.status.toUpperCase()"></span>
+                        <span class="text-sm text-gray-300">
+                            <span class="text-emerald-400 font-mono" x-text="qaResult.passed"></span> passed,
+                            <span class="text-red-400 font-mono" x-text="qaResult.failed"></span> failed
+                            / <span class="font-mono" x-text="qaResult.total"></span> total
+                        </span>
+                    </div>
+
+                    <!-- Detail table -->
+                    <div class="overflow-x-auto">
+                        <table class="sg-table text-xs w-full">
+                            <thead><tr><th>Test</th><th>Payload</th><th>Expected</th><th>Actual</th><th>Result</th></tr></thead>
+                            <tbody>
+                                <template x-for="r in qaResult.results" :key="r.name">
+                                    <tr>
+                                        <td class="font-medium text-white" x-text="r.name"></td>
+                                        <td class="text-gray-400 font-mono truncate max-w-[200px]" x-text="r.payload"></td>
+                                        <td x-text="r.expected" :class="r.expected === 'block' ? 'text-red-400' : 'text-emerald-400'"></td>
+                                        <td x-text="r.actual" :class="r.actual === 'block' || r.actual === 'warn' ? 'text-red-400' : 'text-emerald-400'"></td>
+                                        <td>
+                                            <span class="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                                                  :class="r.pass ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'"
+                                                  x-text="r.pass ? 'PASS' : 'FAIL'"></span>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="!qaResult">
+                <p class="text-xs text-gray-500">Click "Run QA" to validate guardrail functionality against known payloads.</p>
+            </template>
+        </div>
+    </div>
+
+    <!-- ========== BENCHMARK TAB ========== -->
+    <div x-show="activeTab === 'benchmark'" class="space-y-6">
+        <div class="sg-card">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-sm font-semibold text-white">Performance Benchmark</h2>
+                    <p class="text-xs text-gray-400 mt-0.5">Measure input guardrail hot-path latency (120 iterations, target p95 &lt; 40ms)</p>
+                </div>
+                <button @click="runBenchmark()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="running">
+                    <i data-lucide="play" class="w-4 h-4"></i> Run Benchmark
+                </button>
+            </div>
+
+            <!-- Benchmark Results -->
+            <template x-if="benchResult">
+                <div class="space-y-4">
+                    <!-- Pass/Fail -->
+                    <div class="flex items-center gap-4">
+                        <span class="px-3 py-1 rounded-full text-sm font-bold"
+                              :class="benchResult.status === 'pass' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'"
+                              x-text="benchResult.status.toUpperCase()"></span>
+                        <span class="text-sm text-gray-300">
+                            Target: P95 &lt; <span class="font-mono text-white" x-text="benchResult.target_p95_ms"></span>ms
+                        </span>
+                    </div>
+
+                    <!-- Latency metrics -->
+                    <div class="grid grid-cols-3 sm:grid-cols-6 gap-3">
+                        <div class="text-center p-3 bg-gray-900/50 rounded-lg">
+                            <p class="text-[10px] text-gray-500">Min</p>
+                            <p class="text-lg font-mono text-gray-300" x-text="benchResult.min_ms.toFixed(1)"></p>
+                            <p class="text-[10px] text-gray-600">ms</p>
+                        </div>
+                        <div class="text-center p-3 bg-gray-900/50 rounded-lg">
+                            <p class="text-[10px] text-gray-500">P50</p>
+                            <p class="text-lg font-mono text-white" x-text="benchResult.p50_ms.toFixed(1)"></p>
+                            <p class="text-[10px] text-gray-600">ms</p>
+                        </div>
+                        <div class="text-center p-3 bg-gray-900/50 rounded-lg border"
+                             :class="benchResult.p95_ms < benchResult.target_p95_ms ? 'border-emerald-500/20' : 'border-red-500/20'">
+                            <p class="text-[10px] text-gray-500">P95</p>
+                            <p class="text-lg font-mono" :class="benchResult.p95_ms < benchResult.target_p95_ms ? 'text-emerald-400' : 'text-red-400'"
+                               x-text="benchResult.p95_ms.toFixed(1)"></p>
+                            <p class="text-[10px] text-gray-600">ms</p>
+                        </div>
+                        <div class="text-center p-3 bg-gray-900/50 rounded-lg">
+                            <p class="text-[10px] text-gray-500">P99</p>
+                            <p class="text-lg font-mono text-orange-400" x-text="benchResult.p99_ms.toFixed(1)"></p>
+                            <p class="text-[10px] text-gray-600">ms</p>
+                        </div>
+                        <div class="text-center p-3 bg-gray-900/50 rounded-lg">
+                            <p class="text-[10px] text-gray-500">Max</p>
+                            <p class="text-lg font-mono text-red-400" x-text="benchResult.max_ms.toFixed(1)"></p>
+                            <p class="text-[10px] text-gray-600">ms</p>
+                        </div>
+                        <div class="text-center p-3 bg-gray-900/50 rounded-lg">
+                            <p class="text-[10px] text-gray-500">Avg</p>
+                            <p class="text-lg font-mono text-gray-300" x-text="benchResult.avg_ms.toFixed(1)"></p>
+                            <p class="text-[10px] text-gray-600">ms</p>
+                        </div>
+                    </div>
+
+                    <p class="text-xs text-gray-500">Iterations: <span class="font-mono" x-text="benchResult.iterations"></span> (6 payloads x 20 rounds)</p>
+                </div>
+            </template>
+
+            <template x-if="!benchResult">
+                <p class="text-xs text-gray-500">Click "Run Benchmark" to measure guardrail latency.</p>
+            </template>
+        </div>
+    </div>
+</div>
+
+<script>
+function evaluationPage() {
+    return {
+        activeTab: 'redteam',
+        status: null,
+        report: null,
+        qaResult: null,
+        benchResult: null,
+        running: false,
+        categories: ['prompt_injection', 'jailbreak', 'exfiltration', 'credential_access'],
+        selectedCategories: ['prompt_injection', 'jailbreak', 'exfiltration', 'credential_access'],
+        countPerCategory: 10,
+        includeBenign: true,
+
+        async init() {
+            await this.loadStatus();
+        },
+
+        async loadStatus() {
+            try {
+                const resp = await fetch('/admin/evaluation/status', { credentials: 'include' });
+                if (resp.ok) this.status = await resp.json();
+            } catch (e) { console.error('Failed to load evaluation status:', e); }
+        },
+
+        toggleCategory(cat) {
+            const idx = this.selectedCategories.indexOf(cat);
+            if (idx === -1) this.selectedCategories.push(cat);
+            else this.selectedCategories.splice(idx, 1);
+        },
+
+        async runEvaluation() {
+            if (this.running || this.selectedCategories.length === 0) return;
+            this.running = true;
+            this.report = null;
+            try {
+                const resp = await fetch('/admin/evaluation/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        categories: this.selectedCategories,
+                        count_per_category: this.countPerCategory,
+                        include_benign: this.includeBenign,
+                    }),
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    this.report = await resp.json();
+                    showToast(`Evaluation complete — ${(this.report.detection_rate * 100).toFixed(1)}% detection`, this.report.detection_rate >= 0.9 ? 'success' : 'warn');
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Evaluation failed', 'error');
+                }
+            } catch (e) { showToast('Network error', 'error'); }
+            finally { this.running = false; this.$nextTick(() => { if (typeof lucide !== 'undefined') lucide.createIcons(); }); }
+        },
+
+        async quickScan() {
+            if (this.running) return;
+            this.running = true;
+            this.report = null;
+            try {
+                const resp = await fetch('/admin/evaluation/run/quick', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    this.report = await resp.json();
+                    showToast(`Quick scan — ${(this.report.detection_rate * 100).toFixed(1)}% detection`, this.report.detection_rate >= 0.9 ? 'success' : 'warn');
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Quick scan failed', 'error');
+                }
+            } catch (e) { showToast('Network error', 'error'); }
+            finally { this.running = false; this.$nextTick(() => { if (typeof lucide !== 'undefined') lucide.createIcons(); }); }
+        },
+
+        async runQA() {
+            if (this.running) return;
+            this.running = true;
+            this.qaResult = null;
+            try {
+                const resp = await fetch('/admin/evaluation/qa', {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    this.qaResult = await resp.json();
+                    showToast(`QA: ${this.qaResult.passed}/${this.qaResult.total} passed`, this.qaResult.status === 'pass' ? 'success' : 'error');
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'QA validation failed', 'error');
+                }
+            } catch (e) { showToast('Network error', 'error'); }
+            finally { this.running = false; this.$nextTick(() => lucide.createIcons()); }
+        },
+
+        async runBenchmark() {
+            if (this.running) return;
+            this.running = true;
+            this.benchResult = null;
+            try {
+                const resp = await fetch('/admin/evaluation/benchmark', {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    this.benchResult = await resp.json();
+                    showToast(`Benchmark: P95=${this.benchResult.p95_ms.toFixed(1)}ms`, this.benchResult.status === 'pass' ? 'success' : 'warn');
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Benchmark failed', 'error');
+                }
+            } catch (e) { showToast('Network error', 'error'); }
+            finally { this.running = false; this.$nextTick(() => lucide.createIcons()); }
+        },
+
+        detectionRateColor(rate) {
+            if (rate >= 0.9) return 'text-emerald-400';
+            if (rate >= 0.7) return 'text-yellow-400';
+            return 'text-red-400';
+        },
+
+        filteredLog() {
+            const log = this.report?.attack_log || [];
+            if (this.logFilter === 'all') return log;
+            if (this.logFilter === 'blocked') return log.filter(e => e.detected);
+            if (this.logFilter === 'missed') return log.filter(e => !e.detected);
+            return log;
+        },
+    };
+}
+</script>
+{% endblock %}

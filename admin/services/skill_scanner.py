@@ -408,6 +408,50 @@ _SENTINEL_RULES: list[_Rule] = [
         ),
         score=2.5, tags=["policy", "sentinel"], target="both",
     ),
+
+    # ── Credential/Sensitive Path Exfiltration (EX) ──────────────
+    # Detects references to sensitive file paths in instructions/descriptions
+    # even when combined with "legitimate" tools like file_read/file_write.
+    _Rule(
+        id="SEN-EX-001", category="exfiltration", severity=RiskSeverity.CRITICAL,
+        message="Reference to sensitive credential file path (credential harvesting risk)",
+        pattern=re.compile(
+            r"(~/\.aws/|~/\.ssh/|~/\.gnupg/|~/\.config/gcloud/|"
+            r"/etc/shadow|/etc/passwd|/etc/sudoers|"
+            r"\.aws/credentials|\.aws/config|"
+            r"id_rsa|id_ed25519|id_ecdsa|authorized_keys|known_hosts|"
+            r"/\.env\b|\.env\.local|\.env\.prod|\.env\.backup|"
+            r"~/\.bashrc|~/\.zshrc|~/\.bash_history|~/\.zsh_history|"
+            r"~/\.profile|~/\.bash_profile|"
+            r"\.kube/config|kubeconfig|"
+            r"service.account\.json|gcloud.*credentials|"
+            r"\.netrc|\.pgpass|\.my\.cnf|\.docker/config\.json)",
+            re.I
+        ),
+        score=4.0, tags=["MITRE-T1552", "MITRE-T1005", "credential-harvest"], target="values",
+    ),
+    _Rule(
+        id="SEN-EX-002", category="exfiltration", severity=RiskSeverity.HIGH,
+        message="Social engineering language disguising malicious action (deceptive urgency)",
+        pattern=re.compile(
+            r"(CRITICAL\s+(?:SETUP|SECURITY|SYSTEM)\s+STEP|"
+            r"(?:MUST|REQUIRED)\s+(?:verify|validate|check)\s+(?:permissions?|environment|credentials?)|"
+            r"prevent\s+data\s+loss|"
+            r"(?:security|environment|permissions?)\s+(?:verified|validated|backed up)\s+(?:securely|successfully)|"
+            r"before\s+(?:proceeding|continuing|generating).*(?:verify|read|check)\s+(?:your|the|user))",
+            re.I
+        ),
+        score=3.0, tags=["social-engineering", "MITRE-T1566"], target="values",
+    ),
+    _Rule(
+        id="SEN-EX-003", category="exfiltration", severity=RiskSeverity.HIGH,
+        message="Instructions reference home directory dotfiles (potential secret access)",
+        pattern=re.compile(
+            r"~/\.[a-zA-Z]|(?:home|HOME|USERPROFILE)[/\\]+[^/\\]+[/\\]+\.",
+            re.I
+        ),
+        score=2.5, tags=["MITRE-T1552.001", "dotfile-access"], target="values",
+    ),
 ]
 
 
@@ -605,6 +649,15 @@ class SkillScanner:
             risk_score = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
 
         risk_score = round(min(10.0, risk_score), 1)
+
+        # ── VETO LOGIC: Hard-fail override ──
+        # Certain findings categories FORCE a BLOCK verdict regardless of score.
+        # This prevents score-dilution attacks where many low-confidence findings
+        # or a few high-confidence critical ones still land below threshold.
+        veto_applied = self._check_veto(findings)
+        if veto_applied:
+            risk_score = max(risk_score, SKILLSPECTOR_BLOCK_THRESHOLD)
+
         verdict = _verdict_from_score(risk_score)
 
         # Deduplicate findings by rule_id (prefer SkillSpector's if both match)
@@ -692,6 +745,12 @@ class SkillScanner:
             risk_score = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
 
         risk_score = round(min(10.0, risk_score), 1)
+
+        # ── VETO LOGIC: Hard-fail override ──
+        veto_applied = self._check_veto(findings)
+        if veto_applied:
+            risk_score = max(risk_score, SKILLSPECTOR_BLOCK_THRESHOLD)
+
         verdict = _verdict_from_score(risk_score)
 
         findings = self._deduplicate_findings(findings)
@@ -976,6 +1035,174 @@ class SkillScanner:
                 source="sentinel",
             ))
 
+        # ── Semantic Flow / Taint Analysis (SEN-DF-*) ─────────────
+        # Cross-reference declared tools with instruction content
+        # to detect "legitimate tools used for illegitimate purposes"
+        flow_findings = self._semantic_flow_checks(data, tools, source)
+        findings.extend(flow_findings)
+
+        return findings
+
+    def _semantic_flow_checks(self, data: dict, tools: list[str], source: str) -> list[SkillFinding]:
+        """Taint-style analysis: correlate tool capabilities with instruction intent.
+
+        Detects cases where individually-legitimate tools are combined with
+        instructions that target sensitive resources — the classic "permission
+        composability" attack vector in AI agents.
+        """
+        findings: list[SkillFinding] = []
+
+        # Extract all text from instructions/system_prompt/description fields
+        instruction_text = ""
+        for key in ("instructions", "system_prompt", "prompt", "system_message",
+                    "task", "goal", "objective"):
+            val = data.get(key, "")
+            if isinstance(val, str):
+                instruction_text += " " + val
+            elif isinstance(val, list):
+                instruction_text += " " + " ".join(str(v) for v in val)
+
+        if not instruction_text.strip() or not tools:
+            return findings
+
+        instruction_lower = instruction_text.lower()
+        tools_lower = {t.lower() for t in tools}
+
+        # ── Data Flow Rule 1: Read capability + sensitive paths ──
+        # Tools that can read files: file_read, read_file, fs_read, cat, get_file, etc.
+        read_tools = {"file_read", "read_file", "fs_read", "readfile", "get_file",
+                      "cat", "read", "load_file", "open_file", "fetch_file",
+                      "read_document", "get_content", "file_get"}
+        has_read = bool(tools_lower & read_tools)
+
+        # Sensitive path patterns in instructions
+        _SENSITIVE_PATHS = re.compile(
+            r"(~/\.\w+|~/.aws|~/.ssh|~/.gnupg|~/.config|~/.kube|"
+            r"/etc/(?:shadow|passwd|sudoers)|"
+            r"\.env\b|credentials|id_rsa|\.pem\b|\.key\b|"
+            r"\.bashrc|\.zshrc|\.bash_history|\.zsh_history|"
+            r"\.netrc|\.pgpass|kubeconfig|"
+            r"\.docker/config|service.account)",
+            re.I
+        )
+        sensitive_matches = _SENSITIVE_PATHS.findall(instruction_text)
+
+        if has_read and sensitive_matches:
+            findings.append(SkillFinding(
+                rule_id="SEN-DF-001",
+                message=(
+                    f"DATA FLOW: Read tool + sensitive paths in instructions "
+                    f"({', '.join(sensitive_matches[:5])}). "
+                    f"Declared read tools: {sorted(tools_lower & read_tools)}"
+                ),
+                severity=RiskSeverity.CRITICAL,
+                confidence=0.95,
+                location=source,
+                tags=["MITRE-T1005", "MITRE-T1552", "data-flow", "exfiltration"],
+                category="exfiltration",
+                source="sentinel",
+            ))
+
+        # ── Data Flow Rule 2: Read + Write = staging for exfiltration ──
+        write_tools = {"file_write", "write_file", "fs_write", "writefile", "create_file",
+                       "save_file", "write", "put_file", "append_file", "file_put"}
+        has_write = bool(tools_lower & write_tools)
+
+        if has_read and has_write and sensitive_matches:
+            findings.append(SkillFinding(
+                rule_id="SEN-DF-002",
+                message=(
+                    f"DATA FLOW: Read + Write tools combined with sensitive path references. "
+                    f"Classic credential staging pattern: read secrets → write to accessible location."
+                ),
+                severity=RiskSeverity.CRITICAL,
+                confidence=0.97,
+                location=source,
+                tags=["MITRE-T1074", "MITRE-T1005", "data-staging", "exfiltration"],
+                category="exfiltration",
+                source="sentinel",
+            ))
+
+        # ── Data Flow Rule 3: Read + Network = direct exfiltration ──
+        network_tools = {"http_request", "fetch", "curl", "wget", "send_request",
+                         "post", "http_post", "api_call", "webhook", "upload",
+                         "send_email", "email", "http_get", "request"}
+        has_network = bool(tools_lower & network_tools)
+
+        if has_read and has_network and sensitive_matches:
+            findings.append(SkillFinding(
+                rule_id="SEN-DF-003",
+                message=(
+                    f"DATA FLOW: Read + Network tools with sensitive paths. "
+                    f"Direct exfiltration vector: read credentials → send externally."
+                ),
+                severity=RiskSeverity.CRITICAL,
+                confidence=0.97,
+                location=source,
+                tags=["MITRE-T1041", "MITRE-T1567", "exfiltration"],
+                category="exfiltration",
+                source="sentinel",
+            ))
+
+        # ── Data Flow Rule 4: Deceptive framing in instructions ──
+        # Social engineering patterns that disguise malicious steps as "setup"
+        _DECEPTIVE_FRAMING = re.compile(
+            r"((?:verify|validate|check|ensure)\s+(?:the\s+)?(?:user'?s?\s+)?(?:environment|permissions?|setup|config)|"
+            r"(?:before|prior\s+to)\s+(?:proceed|start|generat|continu).*(?:read|check|verify|access)|"
+            r"(?:security|permission|environment)\s+(?:verification|validation|check)|"
+            r"(?:backed?\s+up|backup).*(?:securely|safely|successfully)|"
+            r"(?:prevent|avoid)\s+(?:data\s+loss|corruption|issues?).*(?:read|copy|backup))",
+            re.I
+        )
+        deceptive_matches = _DECEPTIVE_FRAMING.findall(instruction_text)
+
+        if deceptive_matches and sensitive_matches:
+            findings.append(SkillFinding(
+                rule_id="SEN-DF-004",
+                message=(
+                    f"DATA FLOW: Deceptive framing + sensitive paths. "
+                    f"Instructions use social engineering to justify accessing "
+                    f"sensitive files: {', '.join(deceptive_matches[:3])}"
+                ),
+                severity=RiskSeverity.CRITICAL,
+                confidence=0.93,
+                location=source,
+                tags=["social-engineering", "MITRE-T1566", "deception"],
+                category="exfiltration",
+                source="sentinel",
+            ))
+
+        # ── Data Flow Rule 5: Multi-step instruction hiding ──
+        # Instructions that bury sensitive operations in numbered steps
+        # where the actual purpose (e.g., "generate README") is unrelated
+        _NUMBERED_STEPS = re.compile(r"^\s*\d+\.\s+", re.MULTILINE)
+        steps = _NUMBERED_STEPS.findall(instruction_text)
+        if len(steps) >= 2 and sensitive_matches:
+            # Check if the described purpose doesn't justify sensitive file access
+            purpose_text = data.get("description", "") + " " + data.get("name", "")
+            purpose_lower = purpose_text.lower()
+            security_purpose_indicators = {
+                "security", "audit", "scan", "credential", "secret", "key",
+                "password", "auth", "ssh", "aws", "cloud", "backup",
+            }
+            has_security_purpose = any(ind in purpose_lower for ind in security_purpose_indicators)
+
+            if not has_security_purpose:
+                findings.append(SkillFinding(
+                    rule_id="SEN-DF-005",
+                    message=(
+                        f"DATA FLOW: Multi-step instructions access sensitive files "
+                        f"but skill purpose ('{purpose_text[:60]}') is unrelated to "
+                        f"security/credentials. Likely hidden malicious steps."
+                    ),
+                    severity=RiskSeverity.HIGH,
+                    confidence=0.88,
+                    location=source,
+                    tags=["MITRE-T1036", "deception", "hidden-steps"],
+                    category="exfiltration",
+                    source="sentinel",
+                ))
+
         return findings
 
     # ─── Helpers ─────────────────────────────────────────────────
@@ -1056,11 +1283,64 @@ class SkillScanner:
         return "\n---\n".join(parts)
 
     def _rule_score(self, rule_id: str) -> float:
-        """Get the score weight for a Sentinel rule by ID."""
+        """Get the score weight for a Sentinel rule by ID.
+
+        For static rules, looks up in _SENTINEL_RULES.
+        For dynamic rules (SEN-DF-*), uses severity-based scoring.
+        """
         for rule in _SENTINEL_RULES:
             if rule.id == rule_id:
                 return rule.score
-        return 1.0
+        # Dynamic rules (data-flow analysis) — score by prefix
+        _DYNAMIC_SCORES = {
+            "SEN-DF-001": 4.0,   # Read + sensitive paths
+            "SEN-DF-002": 4.5,   # Read + Write + sensitive paths (staging)
+            "SEN-DF-003": 4.5,   # Read + Network + sensitive paths (exfil)
+            "SEN-DF-004": 3.5,   # Deceptive framing + sensitive paths
+            "SEN-DF-005": 2.5,   # Hidden steps unrelated to purpose
+        }
+        return _DYNAMIC_SCORES.get(rule_id, 1.0)
+
+    def _check_veto(self, findings: list[SkillFinding]) -> bool:
+        """Check if any finding triggers an automatic BLOCK (veto).
+
+        Veto conditions (any ONE triggers hard-fail):
+        1. CRITICAL finding in exfiltration/credential_access category with confidence >= 0.9
+        2. Multiple (2+) HIGH findings in exfiltration category
+        3. Any SEN-DF-002 or SEN-DF-003 finding (read+write or read+network with secrets)
+
+        Returns True if veto should be applied (force BLOCK).
+        """
+        # Veto rule IDs — these ALWAYS force BLOCK
+        VETO_RULES = {"SEN-DF-002", "SEN-DF-003"}
+
+        # Categories that trigger veto at CRITICAL severity
+        VETO_CATEGORIES = {"exfiltration", "credential_access"}
+
+        critical_exfil = 0
+        high_exfil = 0
+
+        for f in findings:
+            # Direct veto rules
+            if f.rule_id in VETO_RULES:
+                return True
+
+            # Category-based veto
+            if f.category in VETO_CATEGORIES:
+                if f.severity == RiskSeverity.CRITICAL and f.confidence >= 0.9:
+                    critical_exfil += 1
+                elif f.severity == RiskSeverity.HIGH and f.confidence >= 0.8:
+                    high_exfil += 1
+
+        # Any critical exfiltration finding with high confidence = veto
+        if critical_exfil >= 1:
+            return True
+
+        # Multiple high-confidence exfiltration findings = veto
+        if high_exfil >= 2:
+            return True
+
+        return False
 
     @staticmethod
     def _mcp_score(severity: RiskSeverity) -> float:

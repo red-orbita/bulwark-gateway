@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -18,6 +19,12 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..models.auth import UserRole, TokenPayload, ROLE_PERMISSIONS
+
+# ─── Session validation cache ─────────────────────────────────────────
+# SQLCipher is slow (50-800ms per operation). Cache session validity
+# in memory with a 30s TTL to avoid hitting the encrypted DB on every request.
+_session_cache: dict[str, float] = {}  # token_hash -> last_validated_at (monotonic)
+_SESSION_CACHE_TTL = 30.0  # seconds
 from .secrets import read_secret
 
 # Read JWT secret from Docker secret file or env var
@@ -170,18 +177,37 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
     # HIGH-04: Check token revocation + idle timeout
+    # Use in-memory cache to avoid SQLCipher overhead on every request
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    try:
-        from .user_store import get_user_store
-        store = get_user_store()
-        if not store.is_session_valid(token_hash):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session has been revoked or expired")
-        # Check idle timeout
-        if not store.check_and_update_activity(token_hash, SESSION_IDLE_TIMEOUT_MINUTES):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session timed out due to inactivity")
-    except (ImportError, AttributeError):
-        pass
+    now = time.monotonic()
+    last_checked = _session_cache.get(token_hash, 0.0)
 
+    if (now - last_checked) < _SESSION_CACHE_TTL:
+        # Cache hit — session was valid recently, skip DB check
+        return payload
+
+    # Cache miss — validate against DB (in executor to avoid blocking event loop)
+    import asyncio
+
+    def _validate_session() -> bool:
+        try:
+            from .user_store import get_user_store
+            store = get_user_store()
+            if not store.is_session_valid(token_hash):
+                return False
+            if not store.check_and_update_activity(token_hash, SESSION_IDLE_TIMEOUT_MINUTES):
+                return False
+        except (ImportError, AttributeError):
+            pass
+        return True
+
+    is_valid = await asyncio.get_event_loop().run_in_executor(None, _validate_session)
+    if not is_valid:
+        _session_cache.pop(token_hash, None)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session has been revoked or expired")
+
+    # Update cache
+    _session_cache[token_hash] = now
     return payload
 
 

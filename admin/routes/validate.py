@@ -1,4 +1,4 @@
-"""Validation & Orchestration routes — Dry-run, apply, trigger skills."""
+"""Validation routes — Dry-run and apply configuration changes."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from ..models.config import ConfigApplyRequest, ConfigApplyResult, PolicyValidat
 from ..services.auth_service import require_permission
 from ..services.config_validator import ConfigValidator, HotReloader
 from ..services.audit_logger import get_audit_logger
-from ..services.orchestrator_bridge import get_orchestrator_bridge
 
 router = APIRouter()
 
@@ -72,53 +71,3 @@ async def apply_config(
         validation=validation,
         rollback_version=0,
     )
-
-
-@router.post("/trigger/{skill}")
-async def trigger_skill(
-    skill: str,
-    background_tasks: BackgroundTasks,
-    user: TokenPayload = Depends(require_permission("orchestrator:trigger")),
-):
-    """Trigger a background skill (qa-validation, redteam-audit, performance-benchmark)."""
-    bridge = get_orchestrator_bridge()
-    task_id = str(uuid4())
-
-    valid_skills = {"qa-validation", "redteam-audit", "performance-benchmark"}
-    if skill not in valid_skills:
-        raise HTTPException(status_code=400, detail=f"Invalid skill. Valid: {valid_skills}")
-
-    # Run in background
-    if skill == "qa-validation":
-        background_tasks.add_task(bridge.run_qa_validation, task_id)
-    elif skill == "redteam-audit":
-        background_tasks.add_task(bridge.run_redteam_audit, task_id)
-    elif skill == "performance-benchmark":
-        background_tasks.add_task(bridge.run_latency_benchmark, task_id)
-
-    audit = get_audit_logger()
-    await audit.log(actor=user.sub, action="trigger", resource_type="orchestrator", resource_id=skill)
-
-    return {"task_id": task_id, "skill": skill, "status": "pending"}
-
-
-@router.get("/task/{task_id}")
-async def get_task_status(
-    task_id: str,
-    user: TokenPayload = Depends(require_permission("policies:read")),
-):
-    """Get status of a background task."""
-    bridge = get_orchestrator_bridge()
-    task = bridge.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return {
-        "task_id": task.task_id,
-        "skill": task.skill,
-        "status": task.status.value,
-        "output": task.output[-2048:] if task.output else "",
-        "exit_code": task.exit_code,
-        "details": task.details,
-        "started_at": task.started_at.isoformat() if task.started_at else None,
-        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-    }

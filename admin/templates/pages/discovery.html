@@ -1,0 +1,436 @@
+{% extends "base.html" %}
+{% block title %}Agent Discovery — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Agent Discovery{% endblock %}
+{% block content %}
+<div x-data="discoveryPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Agent Discovery</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Network scanning, shadow AI detection, and MCP risk assessment</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="text-xs font-mono px-2 py-1 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
+                  x-show="status" x-text="'Modules: ' + (status ? status.modules_active : 0) + '/3'"></span>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex items-center gap-1 p-1 rounded-lg" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <button @click="activeTab = 'network'" class="px-4 py-2 rounded-md text-xs font-medium transition-all"
+                :class="activeTab === 'network' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
+            <i data-lucide="wifi" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
+            Network Scan
+        </button>
+        <button @click="activeTab = 'shadow'" class="px-4 py-2 rounded-md text-xs font-medium transition-all"
+                :class="activeTab === 'shadow' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
+            <i data-lucide="ghost" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
+            Shadow AI
+        </button>
+        <button @click="activeTab = 'mcp'" class="px-4 py-2 rounded-md text-xs font-medium transition-all"
+                :class="activeTab === 'mcp' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
+            <i data-lucide="gauge" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
+            MCP Risk
+        </button>
+    </div>
+
+    <!-- Tab 1: Network Scan -->
+    <div x-show="activeTab === 'network'" x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0" class="space-y-4">
+        <div class="sg-card">
+            <h3 class="text-sm font-semibold text-white mb-3">Network Agent Scan</h3>
+            <p class="text-xs text-gray-400 mb-4">Discover AI agents and LLM endpoints on your network</p>
+            <form @submit.prevent="scanNetwork()" class="space-y-4">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1.5">Targets (one per line)</label>
+                    <textarea x-model="targets" rows="4" class="sg-input font-mono text-xs w-full resize-none"
+                              placeholder="192.168.1.0/24&#10;10.0.0.1:8080&#10;llm-backend.internal:11434"></textarea>
+                    <p class="text-[10px] text-gray-600 mt-1">IP addresses, CIDR ranges, or host:port combinations</p>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1.5">Timeout (seconds)</label>
+                        <input type="number" x-model.number="timeout" min="1" max="60" step="0.5"
+                               class="sg-input w-full text-sm" placeholder="5.0">
+                    </div>
+                    <div class="flex items-end">
+                        <button type="submit" class="sg-btn sg-btn-primary sg-btn-sm w-full" :disabled="scanning || !targets.trim()">
+                            <i data-lucide="radar" class="w-4 h-4"></i>
+                            <span x-text="scanning ? 'Scanning...' : 'Scan Network'"></span>
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- Scan Results -->
+        <template x-if="discoveredAgents.length > 0">
+            <div class="sg-card">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-sm font-semibold text-white">Discovered Agents</h3>
+                    <span class="sg-badge sg-badge-success" x-text="discoveredAgents.length + ' found'"></span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="sg-table text-xs w-full">
+                        <thead>
+                            <tr>
+                                <th>Host</th>
+                                <th>Port</th>
+                                <th>Type</th>
+                                <th>Model</th>
+                                <th>Status</th>
+                                <th>Latency</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="agent in discoveredAgents" :key="agent.host + ':' + agent.port">
+                                <tr>
+                                    <td class="font-mono text-white" x-text="agent.host"></td>
+                                    <td class="font-mono text-gray-400" x-text="agent.port"></td>
+                                    <td>
+                                        <span class="sg-badge sg-badge-neutral" x-text="agent.type || 'unknown'"></span>
+                                    </td>
+                                    <td class="text-gray-300" x-text="agent.model || '-'"></td>
+                                    <td>
+                                        <span class="sg-badge" :class="agent.status === 'active' ? 'sg-badge-success' : 'sg-badge-warning'"
+                                              x-text="agent.status"></span>
+                                    </td>
+                                    <td class="text-gray-400 font-mono" x-text="agent.latency_ms ? agent.latency_ms.toFixed(0) + 'ms' : '-'"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Tab 2: Shadow AI -->
+    <div x-show="activeTab === 'shadow'" x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0" class="space-y-4">
+        <div class="sg-card">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold text-white">Shadow AI Detection</h3>
+                <span class="text-xs text-gray-500" x-text="status ? status.known_endpoints + ' known endpoints' : '-'"></span>
+            </div>
+            <p class="text-xs text-gray-400 mb-4">Analyze network traffic logs to identify unauthorized AI/LLM usage</p>
+            <form @submit.prevent="analyzeTraffic()" class="space-y-4">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1.5">Traffic Log Entries (JSON, one per line)</label>
+                    <textarea x-model="trafficLog" rows="8" class="sg-input font-mono text-xs w-full resize-none"
+                              placeholder='{"src":"10.0.1.50","dst":"api.openai.com","port":443,"bytes":15234}&#10;{"src":"10.0.1.22","dst":"ollama.internal","port":11434,"bytes":8192}'></textarea>
+                    <p class="text-[10px] text-gray-600 mt-1">Paste network flow logs in JSON format for analysis</p>
+                </div>
+                <button type="submit" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="scanning || !trafficLog.trim()">
+                    <i data-lucide="search" class="w-4 h-4"></i>
+                    <span x-text="scanning ? 'Analyzing...' : 'Analyze Traffic'"></span>
+                </button>
+            </form>
+        </div>
+
+        <!-- Shadow AI Alerts -->
+        <template x-if="shadowAlerts.length > 0">
+            <div class="space-y-3">
+                <h3 class="text-sm font-semibold text-white">Shadow AI Alerts</h3>
+                <template x-for="alert in shadowAlerts" :key="alert.id || alert.endpoint + alert.source">
+                    <div class="sg-card border-l-4" :class="{
+                        'border-l-red-500': alert.severity === 'high' || alert.severity === 'critical',
+                        'border-l-yellow-500': alert.severity === 'medium',
+                        'border-l-blue-500': alert.severity === 'low',
+                    }">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="flex-1">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="sg-badge" :class="{
+                                        'sg-badge-danger': alert.severity === 'high' || alert.severity === 'critical',
+                                        'sg-badge-warning': alert.severity === 'medium',
+                                        'sg-badge-neutral': alert.severity === 'low',
+                                    }" x-text="alert.severity"></span>
+                                    <span class="text-sm font-medium text-white" x-text="alert.title || 'Unauthorized AI Endpoint'"></span>
+                                </div>
+                                <p class="text-xs text-gray-400" x-text="alert.description"></p>
+                                <div class="flex items-center gap-4 mt-2 text-[10px] text-gray-500">
+                                    <span x-text="'Source: ' + alert.source"></span>
+                                    <span x-text="'Endpoint: ' + alert.endpoint"></span>
+                                    <span x-show="alert.bytes" x-text="'Traffic: ' + formatBytes(alert.bytes)"></span>
+                                </div>
+                            </div>
+                            <i data-lucide="alert-triangle" class="w-5 h-5 flex-shrink-0" :class="{
+                                'text-red-400': alert.severity === 'high' || alert.severity === 'critical',
+                                'text-yellow-400': alert.severity === 'medium',
+                                'text-blue-400': alert.severity === 'low',
+                            }"></i>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </template>
+    </div>
+
+    <!-- Tab 3: MCP Risk -->
+    <div x-show="activeTab === 'mcp'" x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0" class="space-y-4">
+        <div class="sg-card">
+            <h3 class="text-sm font-semibold text-white mb-3">MCP Tool Risk Assessment</h3>
+            <p class="text-xs text-gray-400 mb-4">Evaluate the security risk of an MCP tool before deployment</p>
+            <form @submit.prevent="assessRisk()" class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1.5">Tool Name</label>
+                        <input type="text" x-model="mcpTool.name" class="sg-input w-full text-sm"
+                               placeholder="file_manager" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1.5">Description</label>
+                        <input type="text" x-model="mcpTool.description" class="sg-input w-full text-sm"
+                               placeholder="Manages local filesystem operations">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Capabilities</label>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        <template x-for="cap in availableCapabilities" :key="cap">
+                            <label class="flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors"
+                                   :class="mcpTool.capabilities.includes(cap)
+                                       ? 'border-cyan-500/30 bg-cyan-500/5'
+                                       : 'border-gray-700/50 bg-gray-900/30 hover:border-gray-600'">
+                                <input type="checkbox" :value="cap"
+                                       :checked="mcpTool.capabilities.includes(cap)"
+                                       @change="toggleCapability(cap)"
+                                       class="w-3.5 h-3.5 rounded border-gray-600 text-cyan-500 focus:ring-cyan-500/20">
+                                <span class="text-xs text-gray-300" x-text="cap"></span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+                <button type="submit" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="scanning || !mcpTool.name.trim()">
+                    <i data-lucide="shield-alert" class="w-4 h-4"></i>
+                    <span x-text="scanning ? 'Assessing...' : 'Assess Risk'"></span>
+                </button>
+            </form>
+        </div>
+
+        <!-- MCP Risk Assessment Result -->
+        <template x-if="riskAssessment">
+            <div class="space-y-4">
+                <!-- Risk Score Gauge -->
+                <div class="sg-card">
+                    <div class="flex items-center gap-6">
+                        <!-- Score circle -->
+                        <div class="relative w-24 h-24 flex-shrink-0">
+                            <svg class="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
+                                <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="8"/>
+                                <circle cx="50" cy="50" r="42" fill="none" stroke-width="8" stroke-linecap="round"
+                                        :stroke="riskAssessment.risk_score >= 7 ? '#ef4444' : riskAssessment.risk_score >= 4 ? '#eab308' : '#10b981'"
+                                        :stroke-dasharray="'calc(' + (riskAssessment.risk_score / 10 * 264) + ') 264'"
+                                        style="transition: stroke-dasharray 0.5s ease;"/>
+                            </svg>
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <span class="text-xl font-bold" :class="{
+                                    'text-emerald-400': riskAssessment.risk_score < 4,
+                                    'text-yellow-400': riskAssessment.risk_score >= 4 && riskAssessment.risk_score < 7,
+                                    'text-red-400': riskAssessment.risk_score >= 7,
+                                }" x-text="riskAssessment.risk_score.toFixed(1)"></span>
+                            </div>
+                        </div>
+                        <div class="flex-1">
+                            <p class="text-sm font-medium text-white" x-text="riskAssessment.tool_name"></p>
+                            <p class="text-xs text-gray-500 mt-0.5" x-text="'Risk Level: ' + riskAssessment.risk_level"></p>
+                            <span class="sg-badge mt-2" :class="{
+                                'sg-badge-success': riskAssessment.risk_score < 4,
+                                'sg-badge-warning': riskAssessment.risk_score >= 4 && riskAssessment.risk_score < 7,
+                                'sg-badge-danger': riskAssessment.risk_score >= 7,
+                            }" x-text="riskAssessment.risk_score < 4 ? 'LOW RISK' : riskAssessment.risk_score < 7 ? 'MEDIUM RISK' : 'HIGH RISK'"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Findings -->
+                <template x-if="riskAssessment.findings && riskAssessment.findings.length > 0">
+                    <div class="sg-card">
+                        <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Findings</h4>
+                        <div class="space-y-2">
+                            <template x-for="finding in riskAssessment.findings" :key="finding.rule_id + finding.message">
+                                <div class="flex items-start gap-2 p-2 rounded-lg bg-gray-800/30">
+                                    <i data-lucide="alert-circle" class="w-3.5 h-3.5 mt-0.5 flex-shrink-0" :class="{
+                                        'text-red-400': finding.severity === 'high' || finding.severity === 'critical',
+                                        'text-yellow-400': finding.severity === 'medium',
+                                        'text-gray-400': finding.severity === 'low',
+                                    }"></i>
+                                    <div>
+                                        <p class="text-xs text-gray-300" x-text="finding.message"></p>
+                                        <span class="text-[10px] font-mono text-gray-500" x-text="finding.rule_id"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- Recommendations -->
+                <template x-if="riskAssessment.recommendations && riskAssessment.recommendations.length > 0">
+                    <div class="sg-card">
+                        <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Recommendations</h4>
+                        <ul class="space-y-2">
+                            <template x-for="rec in riskAssessment.recommendations" :key="rec">
+                                <li class="flex items-start gap-2 text-xs text-gray-300">
+                                    <i data-lucide="check-circle-2" class="w-3.5 h-3.5 mt-0.5 text-cyan-400 flex-shrink-0"></i>
+                                    <span x-text="rec"></span>
+                                </li>
+                            </template>
+                        </ul>
+                    </div>
+                </template>
+            </div>
+        </template>
+    </div>
+</div>
+
+<script>
+function discoveryPage() {
+    return {
+        activeTab: 'network',
+        scanning: false,
+        status: null,
+
+        // Network scan
+        targets: '',
+        timeout: 5.0,
+        discoveredAgents: [],
+
+        // Shadow AI
+        shadowAlerts: [],
+        trafficLog: '',
+
+        // MCP Risk
+        mcpTool: { name: '', description: '', capabilities: [] },
+        riskAssessment: null,
+        availableCapabilities: [
+            'file_read', 'file_write', 'network_access',
+            'code_execution', 'shell_access', 'database_access',
+            'secret_access', 'system_config', 'user_data',
+        ],
+
+        async init() {
+            await this.loadStatus();
+        },
+
+        async loadStatus() {
+            try {
+                const resp = await fetch('/admin/discovery/status', { credentials: 'include' });
+                if (resp.ok) this.status = await resp.json();
+            } catch (e) {
+                console.error('Failed to load discovery status:', e);
+            }
+        },
+
+        async scanNetwork() {
+            if (this.scanning || !this.targets.trim()) return;
+            this.scanning = true;
+            this.discoveredAgents = [];
+            try {
+                const resp = await fetch('/admin/discovery/scan/network', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        targets: this.targets.split('\n').map(t => t.trim()).filter(Boolean),
+                        timeout: this.timeout,
+                    }),
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.discoveredAgents = data.agents || data;
+                    showToast(`Scan complete — ${this.discoveredAgents.length} agent(s) found`, 'success');
+                } else {
+                    const err = await resp.json().catch(() => ({ detail: 'Scan failed' }));
+                    showToast(err.detail || 'Network scan failed', 'error');
+                }
+            } catch (e) {
+                showToast('Network error during scan', 'error');
+            } finally {
+                this.scanning = false;
+                this.$nextTick(() => lucide.createIcons());
+            }
+        },
+
+        async analyzeTraffic() {
+            if (this.scanning || !this.trafficLog.trim()) return;
+            this.scanning = true;
+            this.shadowAlerts = [];
+            try {
+                const resp = await fetch('/admin/discovery/shadow-ai/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ log_entries: this.trafficLog }),
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.shadowAlerts = data.alerts || data;
+                    const count = this.shadowAlerts.length;
+                    showToast(
+                        count > 0 ? `${count} shadow AI alert(s) detected` : 'No unauthorized AI usage detected',
+                        count > 0 ? 'warn' : 'success'
+                    );
+                } else {
+                    const err = await resp.json().catch(() => ({ detail: 'Analysis failed' }));
+                    showToast(err.detail || 'Traffic analysis failed', 'error');
+                }
+            } catch (e) {
+                showToast('Network error during analysis', 'error');
+            } finally {
+                this.scanning = false;
+                this.$nextTick(() => lucide.createIcons());
+            }
+        },
+
+        toggleCapability(cap) {
+            const idx = this.mcpTool.capabilities.indexOf(cap);
+            if (idx === -1) {
+                this.mcpTool.capabilities.push(cap);
+            } else {
+                this.mcpTool.capabilities.splice(idx, 1);
+            }
+        },
+
+        async assessRisk() {
+            if (this.scanning || !this.mcpTool.name.trim()) return;
+            this.scanning = true;
+            this.riskAssessment = null;
+            try {
+                const resp = await fetch('/admin/discovery/mcp/assess-risk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: this.mcpTool.name,
+                        description: this.mcpTool.description,
+                        capabilities: this.mcpTool.capabilities,
+                    }),
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    this.riskAssessment = await resp.json();
+                    const score = this.riskAssessment.risk_score;
+                    showToast(
+                        `Risk score: ${score.toFixed(1)}/10`,
+                        score >= 7 ? 'error' : score >= 4 ? 'warn' : 'success'
+                    );
+                } else {
+                    const err = await resp.json().catch(() => ({ detail: 'Assessment failed' }));
+                    showToast(err.detail || 'Risk assessment failed', 'error');
+                }
+            } catch (e) {
+                showToast('Network error during assessment', 'error');
+            } finally {
+                this.scanning = false;
+                this.$nextTick(() => lucide.createIcons());
+            }
+        },
+
+        formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        },
+    };
+}
+</script>
+{% endblock %}

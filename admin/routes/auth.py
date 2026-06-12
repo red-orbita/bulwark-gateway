@@ -75,7 +75,11 @@ async def login(req: LoginRequest, request: Request, response: Response):
     # Rate limiting
     _check_login_rate_limit(ip, req.username)
 
-    result = AuthService.authenticate(req.username, req.password, req.mfa_code)
+    # Run bcrypt-heavy auth in thread pool to avoid blocking event loop
+    import asyncio
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, AuthService.authenticate, req.username, req.password, req.mfa_code
+    )
 
     if not result.get("success"):
         _record_login_attempt(ip, req.username)

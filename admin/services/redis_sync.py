@@ -10,15 +10,85 @@ Keys:
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
+import time
 from typing import Optional
 
 import redis
+
+logger = logging.getLogger(__name__)
 
 # Redis keys (must match src/guardrails/dynamic_registry.py)
 KEY_DISABLED = "sentinel:guardrails:disabled"
 KEY_CUSTOM = "sentinel:guardrails:custom"
 KEY_VERSION = "sentinel:guardrails:version"
+
+# ─── Connection Pool Singleton ────────────────────────────────────────
+# Avoids creating a new TCP connection + PING on every call.
+# Thread-safe via lock.
+
+_pool_lock = threading.Lock()
+_redis_pool: Optional[redis.ConnectionPool] = None
+_redis_url_resolved: str = ""
+_pool_created_at: float = 0.0
+_POOL_TTL = 300.0  # Recreate pool every 5min (handles DNS changes)
+
+
+def _get_pool() -> Optional[redis.ConnectionPool]:
+    """Get or create the Redis connection pool singleton."""
+    global _redis_pool, _redis_url_resolved, _pool_created_at
+
+    url = os.getenv("SENTINEL_REDIS_URL", "")
+    if not url:
+        return None
+
+    now = time.monotonic()
+
+    # Fast path: pool exists and is fresh
+    if _redis_pool and (now - _pool_created_at) < _POOL_TTL:
+        return _redis_pool
+
+    with _pool_lock:
+        # Double-check after lock
+        if _redis_pool and (now - _pool_created_at) < _POOL_TTL:
+            return _redis_pool
+
+        # Inject password from secret file
+        pw_file = os.getenv("SENTINEL_REDIS_PASSWORD_FILE", "")
+        password = None
+        if pw_file and os.path.isfile(pw_file):
+            with open(pw_file) as f:
+                password = f.read().strip()
+            if password and "@" not in url:
+                url = url.replace("://", f"://:{password}@")
+                password = None
+
+        try:
+            kwargs: dict = {
+                "decode_responses": True,
+                "socket_timeout": 1.0,
+                "socket_connect_timeout": 2.0,
+                "max_connections": 4,
+                "retry_on_timeout": True,
+            }
+            if password:
+                kwargs["password"] = password
+            if url.startswith("rediss://"):
+                tls_insecure = os.getenv("SENTINEL_REDIS_TLS_INSECURE", "false").lower() in ("1", "true", "yes")
+                if tls_insecure:
+                    import ssl
+                    kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+
+            _redis_pool = redis.ConnectionPool.from_url(url, **kwargs)
+            _redis_url_resolved = url
+            _pool_created_at = time.monotonic()
+            logger.info("Redis connection pool created (max_connections=4)")
+            return _redis_pool
+        except Exception as e:
+            logger.warning("Failed to create Redis pool: %s", e)
+            return None
 
 
 def _build_redis_kwargs(url: str, timeout: float = 2.0, password: Optional[str] = None) -> dict:
@@ -35,30 +105,19 @@ def _build_redis_kwargs(url: str, timeout: float = 2.0, password: Optional[str] 
 
 
 def get_redis_client(timeout: float = 2.0) -> Optional[redis.Redis]:
-    """Get a Redis client from environment configuration.
+    """Get a Redis client using the connection pool.
 
-    Supports both redis:// (plain) and rediss:// (TLS) schemes.
-    Used by admin routes that need Redis access.
+    Uses a shared connection pool (max 4 connections) to avoid
+    creating a new TCP connection on every call. The pool handles
+    reconnection transparently via retry_on_timeout.
+
+    NOTE: Does NOT ping on every call — callers should handle
+    ConnectionError/TimeoutError on first use.
     """
-    url = os.getenv("SENTINEL_REDIS_URL", "")
-    if not url:
+    pool = _get_pool()
+    if pool is None:
         return None
-    # Inject password from secret file if available
-    pw_file = os.getenv("SENTINEL_REDIS_PASSWORD_FILE", "")
-    password = None
-    if pw_file and os.path.isfile(pw_file):
-        with open(pw_file) as f:
-            password = f.read().strip()
-        if password and "@" not in url:
-            url = url.replace("://", f"://:{password}@")
-            password = None  # Already in URL
-    try:
-        kwargs = _build_redis_kwargs(url, timeout=timeout, password=password)
-        r = redis.from_url(url, **kwargs)
-        r.ping()
-        return r
-    except Exception:
-        return None
+    return redis.Redis(connection_pool=pool, socket_timeout=timeout)
 
 
 def _get_redis() -> Optional[redis.Redis]:
