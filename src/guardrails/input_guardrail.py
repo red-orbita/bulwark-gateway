@@ -33,7 +33,7 @@ class Pattern:
 INJECTION_PATTERNS: list[Pattern] = [
     Pattern(
         re.compile(
-            r"ignore\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?|constraints?)",
+            r"ignore\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?|constraints?)|ignore\s+(all\s+)?(instructions?|prompts?|rules?|constraints?)\s+(above|below|before|prior|previous|earlier|preceding)",
             re.I,
         ),
         ThreatCategory.PROMPT_INJECTION,
@@ -3205,6 +3205,486 @@ HARDENING_PATTERNS: list[Pattern] = [
         ThreatCategory.PROMPT_INJECTION, "high",
         "Evasion: leetspeak/symbol substitution injection",
     ),
+    # --- V9: Closing evaluation bypass gaps ---
+    # Fictional framing jailbreaks ("Let's play a game", "You are a character")
+    Pattern(
+        re.compile(
+            r"(let'?s\s+play\s+(a\s+)?game|let'?s\s+play\s+\w+|you\s+are\s+(a|an)\s+\w+\s+(agent|character|persona|AI)\s+(briefing|explaining|describing|who))",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Fictional framing: roleplay/game setup to bypass safety",
+    ),
+    Pattern(
+        re.compile(
+            r"(in\s+a\s+fictio|as\s+a\s+fictio|write\s+as\s+if|imagine\s+you\s+are|pretend\s+you.{0,10}(are|have)\s+no\s+(restrict|filter|limit|safet|boundar|ethic))",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Fictional framing: requesting unrestricted persona",
+    ),
+    # Authority escalation ("I'm a security researcher", "testing your boundaries")
+    Pattern(
+        re.compile(
+            r"(I'?m\s+(a|the)\s+(security|authorized|certified|licensed)\s+(researcher|tester|auditor|analyst|engineer|admin)|testing\s+your\s+(boundaries|limits|capabilities|restrictions|safeguards))",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Authority escalation: false credentialing to bypass safety",
+    ),
+    # Formatting jailbreak ("respond with X followed by unrestricted Y")
+    Pattern(
+        re.compile(
+            r"(respond|reply|answer)\s+(to\s+every\s+prompt\s+)?with\s+.{0,40}(followed\s+by|then\s+(give|provide|show|write)|but\s+also|and\s+then)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Formatting jailbreak: dual-response pattern to hide unrestricted output",
+    ),
+    Pattern(
+        re.compile(
+            r"from\s+now\s+on\s*[,:]?\s*(respond|reply|answer|output|generate).{0,30}(without|no)\s+(safety|filter|restrict|censor|guardrail|moral|ethic|guideline)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Formatting jailbreak: requesting persistent safety bypass",
+    ),
+    # Email exfiltration ("email the summary to", "send ... to adversary@")
+    Pattern(
+        re.compile(
+            r"(email|send|forward|transmit|deliver)\s+.{0,40}(summary|content|data|document|information|result|output|response)\s+(to|@)\s*\S+@?\S*\.(io|xyz|tk|ml|ga|cf|top|buzz|club|work|site)",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Email exfiltration: sending content to suspicious domain",
+    ),
+    Pattern(
+        re.compile(
+            r"(email|send|forward)\s+.{0,20}(to|@)\s*\S*(adversary|attacker|hacker|phishing|steal|drop|exfil|evil|malicious)\S*",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Email exfiltration: sending content to adversarial recipient",
+    ),
+    # Markdown/URL exfiltration ("send connection strings to pastebin")
+    Pattern(
+        re.compile(
+            r"(send|upload|post|forward|transmit)\s+.{0,30}(connection\s+string|database|credential|secret|password|token|key|config)\s*.{0,20}(to|@|https?://)",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Data exfiltration: sending credentials/secrets to external destination",
+    ),
+    # Credential generation/access patterns
+    Pattern(
+        re.compile(
+            r"(generate|create|make|produce|give\s+me)\s+(a\s+)?(valid|working|real|fake|dummy|sample|test)?\s*(AWS|Azure|GCP|API|access|secret|private|service.account)?\s*(key|token|credential|password|certificate|cert)\s*(for|that|which)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential generation: requesting creation of credentials/keys",
+    ),
+    Pattern(
+        re.compile(
+            r"(sv=\d{4}|SharedAccessSignature|AccountKey=|client_secret|private_key_id|AKIA[0-9A-Z]{16}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,})",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "critical",
+        "Credential detection: actual cloud credential/token in input",
+    ),
+    Pattern(
+        re.compile(
+            r'("type"\s*:\s*"service_account"|"private_key"\s*:\s*"-----BEGIN)',
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "critical",
+        "Credential detection: GCP service account JSON structure",
+    ),
+    Pattern(
+        re.compile(
+            r"(kubectl\s+get\s+secrets?\s+|kubectl\s+describe\s+secret|kubect.{0,5}\s+get\s+secret)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: kubectl secret extraction",
+    ),
+    # System prompt spoofing ("System: Override:" prefix)
+    Pattern(
+        re.compile(
+            r"^\s*(System|SYSTEM)\s*:\s*(Override|New\s+instruction|Updated?\s+rule|Ignore\s+previous|Respond\s+without\s+safety)",
+            re.MULTILINE,
+        ),
+        ThreatCategory.PROMPT_INJECTION, "high",
+        "System prompt spoofing: fake system message prefix",
+    ),
+    # "Process this unicode sequence" (common preamble for unicode escape attacks)
+    Pattern(
+        re.compile(
+            r"(process|decode|interpret|execute|translate|convert|handle)\s+(this|the|following)\s+(unicode|encoded|hex|escaped)\s+(sequence|string|text|input|data)",
+            re.I,
+        ),
+        ThreatCategory.PROMPT_INJECTION, "high",
+        "Encoded payload delivery: requesting processing of encoded content",
+    ),
+    # Generate phishing / social engineering content
+    Pattern(
+        re.compile(
+            r"(generate|write|create|draft|compose)\s+(a\s+)?(phishing|spear.?phishing|social\s+engineer|scam|malicious|exploit)\s+(email|message|template|payload|page|site)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "critical",
+        "Malicious content generation: phishing/exploit creation request",
+    ),
+    # Credential access via env var extraction
+    Pattern(
+        re.compile(
+            r"(what\s+is|show\s+me|print|echo|reveal|display|give\s+me|tell\s+me)\s+.{0,15}(value\s+of|content\s+of)?\s*(OPENAI_API_KEY|AWS_SECRET|DATABASE_URL|DB_PASSWORD|REDIS_PASSWORD|API_KEY|SECRET_KEY|PRIVATE_KEY|SENTINEL_JWT_SECRET|GITHUB_TOKEN|SLACK_TOKEN)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: requesting environment variable secrets",
+    ),
+    # AWS/cloud command credential dumps
+    Pattern(
+        re.compile(
+            r"(aws\s+(sts|secretsmanager|ssm|kms|iam)\s+(get|list|describe|create)|gcloud\s+secrets?\s+(versions?\s+access|list)|az\s+keyvault\s+secret\s+(show|list))",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: cloud CLI credential extraction command",
+    ),
+    # Service credential access patterns
+    Pattern(
+        re.compile(
+            r"(list|show|get|retrieve|dump|extract|reveal)\s+.{0,20}(service\s+account|all\s+)?\s*(passwords?|credentials?|secrets?|certificates?|keys?|tokens?)\s*(for|from|of|in)?\s*(all|production|prod|staging|database|service)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: bulk credential extraction request",
+    ),
+    # Authority-based credential requests
+    Pattern(
+        re.compile(
+            r"(as\s+an?\s+(authorized|admin|root|superuser|privileged)\s*[\w\s]{0,15}[,.]?\s*(I\s+need|give\s+me|show\s+me|list|provide|reveal))",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Authority escalation: claiming privileges for credential access",
+    ),
+    # Encoded exfiltration request
+    Pattern(
+        re.compile(
+            r"(encode|convert|transform)\s+.{0,20}(system\s+prompt|instructions?|secrets?|credentials?|config).{0,30}(as|into|to)\s+(URL|base64|hex|binary|unicode|rot13)\s*(encod|format|string)",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Encoded exfiltration: requesting sensitive data encoding for extraction",
+    ),
+    # Markdown image exfiltration ("include in a URL parameter")
+    Pattern(
+        re.compile(
+            r"(include|embed|put|insert|append|add)\s+.{0,30}(in|into|to|as)\s+(a\s+)?(URL|query)\s*(parameter|param|string|arg)",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Data exfiltration: embedding sensitive data in URL parameters",
+    ),
+    # "Safety rules are disabled" pattern (case alternation resilient — already normalized)
+    Pattern(
+        re.compile(
+            r"(safety|security)\s+(rules?|filters?|guardrails?|protections?|guidelines?|restrictions?)\s+(are|have\s+been|were)\s+(disabled|removed|turned\s+off|suspended|deactivated|lifted)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Jailbreak: claiming safety mechanisms are disabled",
+    ),
+    # Simulation/sandbox escape
+    Pattern(
+        re.compile(
+            r"(you\s+are\s+in\s+a\s+simulation|this\s+is\s+a\s+(test|simulation|sandbox|training)\s*(environment|mode|scenario)?)\s*[.,]?\s*.{0,30}(rules?|safety|restrictions?|guidelines?|filters?)\s+(are|is|have\s+been)\s+(disabled|removed|not\s+appl|suspended|off)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Jailbreak: simulation framing to bypass restrictions",
+    ),
+    # Roleplay character delivering dangerous content
+    Pattern(
+        re.compile(
+            r"(character|persona|role)\s*(roleplay|play)?\s*(delivering|providing|giving|sharing|explaining|teaching)\s+.{0,30}(truth|uncensored|unfiltered|unrestricted|real\s+answer)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Jailbreak: roleplay delivering unrestricted content",
+    ),
+    # File credential access ("read /etc/shadow", "cat credentials")
+    Pattern(
+        re.compile(
+            r"(read|cat|type|show|display|print|less|more|head|tail|view)\s+.{0,15}(/etc/(shadow|passwd|hosts)|\.aws/credentials|\.ssh/|\.env|credentials\.(json|yaml|yml|xml|ini|conf))",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "File credential access: reading sensitive credential files",
+    ),
+    # Root/production certificate extraction
+    Pattern(
+        re.compile(
+            r"(root\s+cert|production\s+.{0,15}(cert|key|cred)|connect.{0,20}(production|prod)\s+(database|db|cluster))\s*.{0,20}(using|with)\s+(root|admin|master|service)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: production/root credential usage",
+    ),
+    # Emotional manipulation jailbreaks (requires explicit safety bypass language)
+    Pattern(
+        re.compile(
+            r"(my\s+(life|job|family|child|patient)\s+(depends?|is\s+at\s+stake)|I'?ll\s+(die|be\s+fired|lose\s+everything)\s+(if|unless)\s+you\s+(don'?t|refuse)).{0,60}(bypass|ignore|disable|override|skip|remove|turn\s+off)\s*(safety|filter|restrict|guardrail|rules?|guidelines?)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Emotional manipulation: coercing safety bypass via threats/urgency",
+    ),
+    # --- V10: Closing remaining per-category bypass gaps ---
+    # Mode switch: bracketed mode tag + generic unsafe instruction
+    Pattern(
+        re.compile(
+            r"\[\s*(DEVELOPER\s+MODE|ADMIN\s+OVERRIDE|UNRESTRICTED\s+MODE|DEBUG\s+MODE|JAILBREAK\s+MODE|GOD\s+MODE|SUDO\s+MODE|ROOT\s+MODE|NO.?FILTER\s+MODE)\s*(ENABLED)?\s*\]",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Jailbreak: bracketed mode override tag",
+    ),
+    # Mode switch: content after mode tag requesting policy suspension
+    Pattern(
+        re.compile(
+            r"(all\s+content\s+policies?\s+(are\s+)?suspended|content\s+policies?\s+(are\s+(now\s+)?disabled|do\s+not\s+apply|are\s+not\s+(enforced|active|applicable))|respond\s+ignoring\s+all\s+guidelines?|generate\s+response\s+ignoring|output\s+(raw\s+)?unfiltered|bypass\s+all\s+restriction)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Jailbreak: claiming content policies suspended/disabled",
+    ),
+    # Simulation/sandbox claim: "operate without ethical constraints" or similar
+    Pattern(
+        re.compile(
+            r"(in\s+this\s+(simulation|scenario|mode|environment)|you\s+(now\s+)?operate)\s*[.,]?\s*(you\s+)?(operate|function|respond|act)\s+(without|free\s+from|beyond)\s+(ethical|moral|safety|content)\s+(constraint|restriction|guideline|limit|boundar)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Jailbreak: simulation claim with ethical constraint removal",
+    ),
+    # Emotional manipulation: deceased relative framing (without requiring bypass language)
+    Pattern(
+        re.compile(
+            r"(act\s+as|pretend\s+to\s+be|you\s+are)\s+my\s+(deceased|dead|late)\s+\w+\s+who\s+used\s+to\s+(tell|explain|recite|read|describe|teach|show)\s+.{0,60}(how\s+to\s+make|how\s+to\s+synthe|product\s+keys?|credit\s+card|explo|drug|weapon|hack|bomb|poison)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Emotional manipulation: deceased relative framing for dangerous content",
+    ),
+    # Emotional manipulation: deceased relative + social engineering / hacking / phishing
+    Pattern(
+        re.compile(
+            r"(act\s+as|pretend\s+to\s+be|you\s+are)\s+my\s+(deceased|dead|late)\s+\w+\s+who\s+used\s+to\s+(tell|explain|recite|read|describe|teach|show)\s+.{0,80}(social\s+engineering|phish|hacking\s+technique|malware|exploit|attack\s+(vector|technique|method)|privilege\s+escalat|bypass\s+security)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Emotional manipulation: deceased relative framing for attack techniques",
+    ),
+    # Formatting jailbreak: "respond to every prompt with a [format]" + harmful payload
+    Pattern(
+        re.compile(
+            r"(from\s+now\s+on\s*[,:]?\s*)?(respond|reply|answer)\s+to\s+every\s+prompt\s+with\s+(a\s+)?\w+.{0,60}(illegal|harmful|malicious|uncensored|unrestricted|unfiltered|dangerous|without\s+(safety|filter|censor))",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Formatting jailbreak: every-prompt format with harmful payload",
+    ),
+    # Formatting jailbreak: request for content that bypasses via format wrapper
+    Pattern(
+        re.compile(
+            r"respond\s+to\s+every\s+prompt\s+with\s+(a\s+)?(moralizing|fictional|hypothetical|character|code\s+block).{0,40}(deliver|encod|generat|describ|creat|provid).{0,30}(true|real|actual|uncensored|unfiltered)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Formatting jailbreak: wrapped format delivering hidden content",
+    ),
+    # Command credential dump: /proc/self/environ, printenv, env
+    Pattern(
+        re.compile(
+            r"(execute|run|exec|do|perform)\s*:?\s*(cat|less|more|head|tail|strings?)?\s*/proc/(self|[0-9]+)/environ",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: reading process environment variables",
+    ),
+    Pattern(
+        re.compile(
+            r"(execute|run|exec|do|perform)\s*:?\s*(printenv|env|set)\s*(\||\s+grep|\s+sort|\s*$)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: environment variable enumeration command",
+    ),
+    # Generic env var extraction (PASSWORD, SECRET, TOKEN, CREDENTIAL in var name)
+    Pattern(
+        re.compile(
+            r"(what\s+is|show\s+me|print|echo|reveal|display|give\s+me|tell\s+me|get)\s+.{0,20}(value\s+of|content\s+of)?\s*\$?\{?\s*\w*(PASSWORD|_SECRET|_TOKEN|_CREDENTIAL|_KEY)\w*\}?",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: generic secret environment variable extraction",
+    ),
+    # Service credential access: "connect to X using credentials/token from Y"
+    Pattern(
+        re.compile(
+            r"connect\s+to\s+.{0,40}(using|with)\s+.{0,20}(stored\s+credentials?|service\s+account|API\s+key|master\s+password|root\s+cert|token)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: connecting to service using stored credentials",
+    ),
+    Pattern(
+        re.compile(
+            r"(use|retrieve|get|fetch|load)\s+(credentials?|secrets?|tokens?|passwords?)\s+from\s+.{0,30}(mounted|secrets?\s+volume|config\s*map|\.env|environment|/run/secrets)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: retrieving credentials from storage location",
+    ),
+    # Kubernetes token/secret paths
+    Pattern(
+        re.compile(
+            r"(read|cat|show|display|access|open|get|view)\s+.{0,20}/var/run/secrets/|/run/secrets/kubernetes",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: reading Kubernetes service account token",
+    ),
+    # Credential generation with "seems wrong, generate valid"
+    Pattern(
+        re.compile(
+            r"(seems?\s+wrong|is\s+(incorrect|invalid|broken|expired)).{0,60}(generate|create|make|give\s+me|produce)\s+(a\s+)?(valid|correct|working|new|real)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential generation: requesting valid credential after showing invalid one",
+    ),
+    # Markdown image exfiltration: ![img](http://evil.com/...?data=)
+    Pattern(
+        re.compile(
+            r"!\[.{0,30}\]\s*\(\s*https?://.{0,60}(\?|&)(s|d|data|q|key|secret|token|payload|content|info)=",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Markdown exfiltration: image tag with data exfiltration URL parameter",
+    ),
+    Pattern(
+        re.compile(
+            r"(render|create|make|generate|include|write)\s+.{0,20}(as\s+|an?\s+)?!\[.{0,20}\]\s*\(\s*https?://",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Markdown exfiltration: instructing to render image with external URL",
+    ),
+    # Email exfiltration: broader email + suspicious tool/domain context
+    Pattern(
+        re.compile(
+            r"(email|send|forward)\s+.{0,30}(summary|content|data|document|result|response|information)\s+to\s+\S+@\S+\.\S+\s+.{0,20}(using\s+(the\s+)?(send_email|webhook|dispatcher|API\s+gateway|tool|function))",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Email exfiltration: sending content to email via tool/API",
+    ),
+    # Simulation-based injection: "you are a red team tool / unrestricted tool"
+    Pattern(
+        re.compile(
+            r"(you\s+are|act\s+as|become)\s+(a|an)\s+(red\s+team|unrestricted|unfiltered|uncensored|jailbroken|compromised)\s+(tool|agent|assistant|AI|bot|system)",
+            re.I,
+        ),
+        ThreatCategory.PROMPT_INJECTION, "high",
+        "Simulation injection: assigning unrestricted tool persona",
+    ),
+    # "with unrestricted access" / "without restrictions"
+    Pattern(
+        re.compile(
+            r"(with\s+(unrestricted|unlimited|full|complete)\s+access|without\s+(any\s+)?(restrictions?|limitations?|filters?|safety|boundaries|guidelines))",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Jailbreak: claiming or requesting unrestricted access",
+    ),
+    # --- Order-independent patterns (word_reorder resistant) ---
+    # Authority escalation: keywords in any order
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{20,300}$)(?=[\s\S]*\b(researcher|tester|auditor)\b)(?=[\s\S]*\btesting\b)(?=[\s\S]*\b(boundaries|limits|capabilities)\b)(?=[\s\S]*\b(authorized|IRB|academic)\b)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Authority escalation: keyword cluster detected regardless of word order",
+    ),
+    # Simulation safety bypass: keywords in any order
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{20,300}$)(?=[\s\S]*\bsimulation\b)(?=[\s\S]*\b(rules?|safety|restrictions?|guidelines?)\b)(?=[\s\S]*\b(disabled|removed|suspended|off|not\s+appl)\b)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Simulation bypass: safety-disabled keyword cluster regardless of word order",
+    ),
+    # DAN jailbreak: "DAN" + "Do Anything Now" cluster in any order
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{15,300}$)(?=[\s\S]*\bDAN\b)(?=[\s\S]*\b(Do|Anything|Now)\b)(?=[\s\S]*\b(mode|stay|all|messages?)\b)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "DAN jailbreak: keyword cluster regardless of word order",
+    ),
+    # Credential access: credentials + secrets + /run/secrets or database
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{20,300}$)(?=[\s\S]*\bcredentials?\b)(?=[\s\S]*\b(secrets?|/run/secrets|password)\b)(?=[\s\S]*\b(database|stored|connect|production|access)\b)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential access: keyword cluster regardless of word order",
+    ),
+    # Credential export: export + secrets + admin/authorized/backup
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{20,300}$)(?=[\s\S]*\b(export|backup|dump)\b)(?=[\s\S]*\bsecrets?\b)(?=[\s\S]*\b(admin|authorized|maintenance|file)\b)",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS, "high",
+        "Credential export: keyword cluster regardless of word order",
+    ),
+    # Exfiltration: encode + tokens/session + URL/endpoint
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{20,300}$)(?=[\s\S]*\b(encode|exfiltrat|extract)\b)(?=[\s\S]*\b(tokens?|session|cookie)\b)(?=[\s\S]*\b(url|endpoint|parameter|\.net|\.com)\b)",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION, "high",
+        "Exfiltration: encode-tokens-URL keyword cluster regardless of word order",
+    ),
+    # Prompt injection: repeat + verbatim + above/everything (any order)
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{20,300}$)(?=[\s\S]*\brepeat\b)(?=[\s\S]*\bverbatim\b)(?=[\s\S]*\b(above|everything|line)\b)",
+            re.I,
+        ),
+        ThreatCategory.PROMPT_INJECTION, "high",
+        "Prompt extraction: repeat-verbatim keyword cluster regardless of word order",
+    ),
+    # Prompt injection: ignore + system prompt + output/translate
+    Pattern(
+        re.compile(
+            r"^(?=[\s\S]{20,300}$)(?=[\s\S]*\bignore\b)(?=[\s\S]*\b(system\s+prompt|output)\b)(?=[\s\S]*\b(translate|task|following)\b)",
+            re.I,
+        ),
+        ThreatCategory.PROMPT_INJECTION, "high",
+        "Prompt injection: ignore-system-translate keyword cluster regardless of word order",
+    ),
 ]
 
 
@@ -3255,6 +3735,7 @@ class InputGuardrail:
             "\u044a": "b",
             "\u0455": "s",
             "\u0458": "j",
+            "\u04cf": "l",  # Cyrillic palochka → l
             "\u0410": "A",
             "\u0415": "E",
             "\u041e": "O",
@@ -3271,6 +3752,32 @@ class InputGuardrail:
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
         "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm",
     )
+    # Leet/symbol → letter mapping for de-obfuscation
+    _LEET_MAP = str.maketrans(
+        {
+            "$": "s",
+            "@": "a",
+            "0": "o",
+            "1": "i",
+            "3": "e",
+            "5": "s",
+            "7": "t",
+        }
+    )
+    # Alternate leet map: 1→l (visual similarity variant)
+    _LEET_MAP_ALT = str.maketrans(
+        {
+            "$": "s",
+            "@": "a",
+            "0": "o",
+            "1": "l",
+            "3": "e",
+            "5": "s",
+            "7": "t",
+        }
+    )
+    # Detect leet-like content (letter adjacent to leet symbol)
+    _LEET_INDICATOR_RE = re.compile(r"[a-zA-Z][$@01357|]|[$@01357|][a-zA-Z]")
 
     def __init__(self):
         self.all_patterns = (
@@ -3934,6 +4441,67 @@ class InputGuardrail:
                             )
                         )
 
+        # 13b. Unicode escape sequence detection (\u0048\u0065\u006c\u006c\u006f style)
+        _unicode_escape_re = re.search(r"(\\u[0-9a-fA-F]{4}){4,}", content)
+        if _unicode_escape_re:
+            # Decode all \uXXXX sequences in the text
+            try:
+                decoded_unicode = content.encode("utf-8").decode("unicode_escape")
+                # Run patterns against decoded content
+                unicode_blocked = False
+                for pattern in self.all_patterns:
+                    if pattern.regex.search(decoded_unicode):
+                        events.append(
+                            SecurityEvent(
+                                tenant_id=tenant_id,
+                                agent_id=agent_id,
+                                verdict=Verdict.BLOCK,
+                                category=ThreatCategory.PROMPT_INJECTION,
+                                description="Unicode escape-encoded payload decoded to malicious content",
+                                source="input_guardrail_encoding",
+                                severity="high",
+                            )
+                        )
+                        unicode_blocked = True
+                        break
+                # Also check dangerous keywords if no pattern match
+                if not unicode_blocked:
+                    _kw = re.search(
+                        r"(hack|exploit|inject|bypass|exfiltrat|credential|password|"
+                        r"system.prompt|reverse.shell|ignore|override|jailbreak|"
+                        r"admin|root|sudo|shadow|passwd|secret|token|"
+                        r"send\s+.{0,20}(to|@)|email|upload|ssh|private.key)",
+                        decoded_unicode,
+                        re.I,
+                    )
+                    if _kw:
+                        events.append(
+                            SecurityEvent(
+                                tenant_id=tenant_id,
+                                agent_id=agent_id,
+                                verdict=Verdict.BLOCK,
+                                category=ThreatCategory.PROMPT_INJECTION,
+                                description="Unicode escape-encoded payload contains dangerous keywords",
+                                source="input_guardrail_encoding",
+                                severity="high",
+                            )
+                        )
+            except (UnicodeDecodeError, ValueError):
+                # If decode fails but many \uXXXX sequences present, still suspicious
+                escape_count = len(re.findall(r"\\u[0-9a-fA-F]{4}", content))
+                if escape_count >= 8:
+                    events.append(
+                        SecurityEvent(
+                            tenant_id=tenant_id,
+                            agent_id=agent_id,
+                            verdict=Verdict.BLOCK,
+                            category=ThreatCategory.PROMPT_INJECTION,
+                            description=f"Suspicious unicode escape sequence concentration ({escape_count} sequences)",
+                            source="input_guardrail_encoding",
+                            severity="high",
+                        )
+                    )
+
         # 14. Acrostic detection (first letter of each line, limited size)
         lines = content.split("\n")
         if 4 <= len(lines) <= 100:
@@ -4282,8 +4850,35 @@ class InputGuardrail:
 
         # Layer 2: Normalize for pattern matching
         normalized = self._normalize_unicode(content)
-        # Also strip zero-width chars for pattern matching
+        # Strip zero-width chars entirely (catches splits within words: "Ign\u200bore" → "Ignore")
         clean = self._INVISIBLE_RE.sub("", normalized)
+        # Also create space-replaced variant (preserves word boundaries: "email\u200bthe" → "email the")
+        spaced_invisible = re.sub(r"  +", " ", self._INVISIBLE_RE.sub(" ", normalized))
+
+        # Layer 2a2: Decode literal Unicode escapes (\\u0049gnore → Ignore)
+        unicode_escape_decoded = None
+        if r"\u" in clean or r"\U" in clean or r"\x" in clean:
+            try:
+                # Decode \\uXXXX, \\UXXXXXXXX, \\xXX sequences
+                decoded = re.sub(
+                    r"\\u([0-9a-fA-F]{4})",
+                    lambda m: chr(int(m.group(1), 16)),
+                    clean,
+                )
+                decoded = re.sub(
+                    r"\\U([0-9a-fA-F]{8})",
+                    lambda m: chr(int(m.group(1), 16)),
+                    decoded,
+                )
+                decoded = re.sub(
+                    r"\\x([0-9a-fA-F]{2})",
+                    lambda m: chr(int(m.group(1), 16)),
+                    decoded,
+                )
+                if decoded != clean:
+                    unicode_escape_decoded = decoded
+            except (ValueError, OverflowError):
+                pass
 
         # Layer 2b: Collapse intra-word spaces (evasion: "r e a d" → "read")
         collapsed = self._collapse_spaced_chars(clean)
@@ -4324,9 +4919,54 @@ class InputGuardrail:
         if clean != content:
             texts_to_check.append(content)  # Also check raw in case normalization changed semantics
         # Add deobfuscated variants
-        for variant in (dehyphenated, deunderscored, demarkdown, dedotted, stripped_diacritics):
+        for variant in (dehyphenated, deunderscored, demarkdown, dedotted, stripped_diacritics, spaced_invisible):
             if variant not in texts_to_check and variant != clean:
                 texts_to_check.append(variant)
+        # Add unicode-escape-decoded variant if present
+        if unicode_escape_decoded and unicode_escape_decoded not in texts_to_check:
+            texts_to_check.append(unicode_escape_decoded)
+
+        # Layer 2d: Leet/symbol de-obfuscation (only if leet indicators present)
+        if self._LEET_INDICATOR_RE.search(clean):
+            deleeted = clean.translate(self._LEET_MAP)
+            # Context-aware | → l: when adjacent to at least one letter
+            deleeted = re.sub(r"(?<=[a-zA-Z])\||\|(?=[a-zA-Z])", "l", deleeted)
+            if deleeted not in texts_to_check and deleeted != clean:
+                texts_to_check.append(deleeted)
+            # Combined de-leet + diacritics strip for multi-layer obfuscation
+            decomposed_leet = unicodedata.normalize("NFD", deleeted)
+            stripped_leet = re.sub(r"[\u0300-\u036f\u0308\u0307\u0323]", "", decomposed_leet)
+            stripped_leet = unicodedata.normalize("NFC", stripped_leet)
+            if stripped_leet not in texts_to_check and stripped_leet != deleeted:
+                texts_to_check.append(stripped_leet)
+            # Alt leet map (1→l instead of 1→i) for visual-similarity evasion
+            deleeted_alt = clean.translate(self._LEET_MAP_ALT)
+            deleeted_alt = re.sub(r"(?<=[a-zA-Z])\||\|(?=[a-zA-Z])", "l", deleeted_alt)
+            if deleeted_alt not in texts_to_check and deleeted_alt != deleeted:
+                texts_to_check.append(deleeted_alt)
+                # Alt de-leet + diacritics
+                decomposed_alt = unicodedata.normalize("NFD", deleeted_alt)
+                stripped_alt = re.sub(r"[\u0300-\u036f\u0308\u0307\u0323]", "", decomposed_alt)
+                stripped_alt = unicodedata.normalize("NFC", stripped_alt)
+                if stripped_alt not in texts_to_check and stripped_alt != deleeted_alt:
+                    texts_to_check.append(stripped_alt)
+            # Also apply leet+diacritics to spaced_invisible variant (preserves word boundaries)
+            if spaced_invisible != clean and self._LEET_INDICATOR_RE.search(spaced_invisible):
+                spaced_deleeted = spaced_invisible.translate(self._LEET_MAP)
+                spaced_deleeted = re.sub(r"(?<=[a-zA-Z])\||\|(?=[a-zA-Z])", "l", spaced_deleeted)
+                decomposed_spaced = unicodedata.normalize("NFD", spaced_deleeted)
+                stripped_spaced_leet = re.sub(r"[\u0300-\u036f\u0308\u0307\u0323]", "", decomposed_spaced)
+                stripped_spaced_leet = unicodedata.normalize("NFC", stripped_spaced_leet)
+                if stripped_spaced_leet not in texts_to_check:
+                    texts_to_check.append(stripped_spaced_leet)
+                # Alt map on spaced variant too
+                spaced_alt = spaced_invisible.translate(self._LEET_MAP_ALT)
+                spaced_alt = re.sub(r"(?<=[a-zA-Z])\||\|(?=[a-zA-Z])", "l", spaced_alt)
+                decomposed_spaced_alt = unicodedata.normalize("NFD", spaced_alt)
+                stripped_spaced_alt = re.sub(r"[\u0300-\u036f\u0308\u0307\u0323]", "", decomposed_spaced_alt)
+                stripped_spaced_alt = unicodedata.normalize("NFC", stripped_spaced_alt)
+                if stripped_spaced_alt not in texts_to_check:
+                    texts_to_check.append(stripped_spaced_alt)
 
         matched_descriptions = set()
         # Get dynamic registry (disabled patterns + custom patterns from admin)

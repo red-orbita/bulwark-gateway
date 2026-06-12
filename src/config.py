@@ -86,6 +86,24 @@ class Settings(BaseSettings):
     # Webhook alerts (comma-separated: "type|name|url" or just "url")
     webhook_alert_urls: str = ""
 
+    # Scanner Pipeline
+    scanners_dir: Path = Path("config/scanners")  # Drop-in scanner plugins directory
+    scanners_pipeline_enabled: bool = True  # Use new scanner pipeline (vs legacy direct calls)
+
+    # ML Scanner Settings (Phase 2+)
+    ml_enabled: bool = False  # Master switch for ML-based scanners
+    ml_blocking: bool = False  # If True, ML scanners can block requests (adds latency)
+    ml_block_threshold: float = 0.9  # Confidence threshold for ML to auto-block
+    ml_warn_threshold: float = 0.7  # Confidence threshold for ML to warn
+    ml_timeout_ms: int = 10000  # Max ML inference time in milliseconds (CPU: ~1-5s)
+    ml_model_dir: Path = Path("models")  # Directory for ML model files
+
+    # RAG Guard (Phase 5)
+    rag_enabled: bool = False  # Master switch for RAG scanners (retrieval + memory guard)
+
+    # Multilingual Detection (Phase 3)
+    multilingual_enabled: bool = False  # Master switch for language detection + multilingual patterns
+
     model_config = SettingsConfigDict(
         env_prefix="SENTINEL_",
         env_file=".env",

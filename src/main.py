@@ -11,6 +11,7 @@ Modes:
 """
 
 from contextlib import asynccontextmanager
+import asyncio
 
 import uvicorn
 import structlog
@@ -74,6 +75,103 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             await logger.awarn("enrichment_init_failed", error=str(e))
 
+    # Initialize Scanner Pipeline (pluggable scanner framework)
+    from src.scanners.pipeline import get_scanner_pipeline
+    from src.scanners.builtin import RegexInputScanner, OutputRedactionScanner, ToolPolicyScanner
+    from src.scanners.discovery import discover_all_scanners, instantiate_scanner
+
+    pipeline = get_scanner_pipeline()
+
+    # Register built-in scanners
+    pipeline.register(RegexInputScanner())
+    pipeline.register(OutputRedactionScanner())
+
+    tool_policy_scanner = ToolPolicyScanner()
+    tool_policy_scanner.set_policy_engine(app.state.policy_loader.engine)
+    pipeline.register(tool_policy_scanner)
+
+    # Register ML scanners (async by default, no latency impact unless ml_blocking=true)
+    if settings.ml_enabled:
+        from src.scanners.ml import InjectionClassifier, ToxicityScanner, TopicScanner, IntentScanner
+        pipeline.register(InjectionClassifier())
+        pipeline.register(ToxicityScanner())
+        pipeline.register(TopicScanner())
+        pipeline.register(IntentScanner())
+        await logger.ainfo("ml_scanners_registered", blocking=settings.ml_blocking)
+
+    # Register RAG Guard scanners (memory manipulation + retrieval poisoning)
+    if settings.rag_enabled:
+        from src.scanners.rag.memory_guard import MemoryGuard
+        from src.scanners.rag.retrieval_scanner import RetrievalScanner
+        pipeline.register(MemoryGuard())
+        pipeline.register(RetrievalScanner())
+        await logger.ainfo("rag_scanners_registered")
+
+    # Register Multilingual scanners (language detection + non-English patterns)
+    if settings.multilingual_enabled:
+        from src.scanners.multilingual.language_detector import LanguageDetector
+        from src.scanners.multilingual.patterns import MultilingualPatterns
+        pipeline.register(LanguageDetector())
+        pipeline.register(MultilingualPatterns())
+        await logger.ainfo("multilingual_scanners_registered")
+
+    # Discover and register third-party plugins
+    if settings.scanners_dir.exists():
+        discovered = discover_all_scanners(settings.scanners_dir)
+        for cls in discovered:
+            try:
+                scanner = instantiate_scanner(cls)
+                pipeline.register(scanner)
+            except Exception as e:
+                await logger.awarn("plugin_instantiation_failed", cls=cls.__name__, error=str(e))
+
+    # Start all scanners (load models, warm caches)
+    await pipeline.startup()
+    app.state.scanner_pipeline = pipeline
+
+    await logger.ainfo(
+        "scanner_pipeline_ready",
+        input_blocking=pipeline.input_blocking_count,
+        input_async=pipeline.input_async_count,
+        output_blocking=pipeline.output_blocking_count,
+        output_async=pipeline.output_async_count,
+        total=pipeline.total_count,
+    )
+
+    # Background: sync ML scanner config from Redis (admin-pushed)
+    async def _ml_config_sync_loop():
+        """Periodically check Redis for ML scanner config changes."""
+        import json as _json
+        import redis as _redis
+        last_version = 0
+        r = None
+        if settings.redis_url:
+            try:
+                kwargs = {"decode_responses": True, "socket_timeout": 2}
+                if settings.redis_url.startswith("rediss://") and settings.redis_tls_insecure:
+                    import ssl
+                    kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+                r = _redis.from_url(settings.redis_url, **kwargs)
+                r.ping()
+            except Exception:
+                r = None
+        while True:
+            await asyncio.sleep(5)
+            if not r:
+                continue
+            try:
+                ver = r.get("sentinel:ml_scanners:version")
+                if ver and int(ver) > last_version:
+                    raw = r.get("sentinel:ml_scanners:config")
+                    if raw:
+                        config = _json.loads(raw)
+                        pipeline.apply_ml_config(config)
+                        last_version = int(ver)
+            except Exception:
+                pass
+
+    app.state._ml_sync_task = asyncio.create_task(_ml_config_sync_loop())
+
     await logger.ainfo(
         "sentinel-gateway ready",
         policies=app.state.policy_loader.count,
@@ -82,6 +180,8 @@ async def lifespan(app: FastAPI):
     )
     yield
     # Shutdown
+    app.state._ml_sync_task.cancel()
+    await app.state.scanner_pipeline.shutdown()
     await app.state.telemetry_exporter.stop()
     await app.state.policy_loader.stop_hot_reload()
     await logger.ainfo("sentinel-gateway shutting down")
