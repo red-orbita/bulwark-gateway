@@ -124,6 +124,9 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "users:manage", "orchestrator:trigger",
         "config:validate", "config:rollback",
         "admin:read",
+        "plugins:read", "plugins:write",
+        "evaluation:read", "evaluation:run",
+        "discovery:read", "discovery:scan",
     },
     UserRole.SECURITY: {
         "policies:read", "policies:write", "policies:apply",
@@ -134,6 +137,9 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "audit:read",
         "config:validate",
         "admin:read",
+        "plugins:read", "plugins:write",
+        "evaluation:read", "evaluation:run",
+        "discovery:read", "discovery:scan",
     },
     UserRole.AUDITOR: {
         "policies:read",
@@ -143,11 +149,17 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "notifications:read",
         "audit:read", "audit:export",
         "admin:read",
+        "plugins:read",
+        "evaluation:read",
+        "discovery:read",
     },
     UserRole.VIEWER: {
         "policies:read",
         "siem:read",
         "notifications:read",
         "admin:read",
+        "plugins:read",
+        "evaluation:read",
+        "discovery:read",
     },
 }

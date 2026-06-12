@@ -7,7 +7,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Settings</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Configure proxy, security, logging, and rate limiting parameters</p>
+            <p class="text-sm text-gray-400 mt-0.5">Configure proxy, security, and logging parameters</p>
         </div>
         <div class="flex items-center gap-2">
             <button @click="validateAll()" class="sg-btn sg-btn-warning sg-btn-sm">
@@ -112,7 +112,7 @@
 <script>
 function settingsManager() {
     return {
-        tabs: ['proxy', 'security', 'logging', 'rate_limiting'],
+        tabs: ['proxy', 'security', 'logging'],
         activeTab: 'proxy',
         sectionData: {},
         loading: false,

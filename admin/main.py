@@ -34,6 +34,7 @@ from .services.prometheus_client import PrometheusMetrics, get_metrics
 
 # Routes
 from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
+from .routes import plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment
 
 
 @asynccontextmanager
@@ -118,9 +119,11 @@ async def auth_guard_pages(request: Request, call_next):
 
     # Only guard HTML page routes (not /admin/* API routes)
     is_page_route = (
-        path in ("/", "/policies", "/guardrails", "/siem", "/audit", "/orchestrator",
+        path in ("/", "/policies", "/guardrails", "/siem", "/audit",
                  "/tenants", "/agents", "/users", "/iocs", "/settings", "/coverage",
-                 "/rbac", "/setup", "/status", "/notifications", "/skills")
+                 "/rbac", "/setup", "/status", "/notifications", "/skills",
+                 "/plugins", "/evaluation", "/discovery", "/ml-scanners",
+                 "/rate-limits", "/enrichment")
     )
 
     if is_page_route:
@@ -182,6 +185,12 @@ app.include_router(iocs.router, tags=["iocs"])
 app.include_router(rbac.router, prefix="/admin/rbac", tags=["rbac"])
 app.include_router(notifications.router, prefix="/admin/notifications", tags=["notifications"])
 app.include_router(skills.router, tags=["skills"])
+app.include_router(plugins.router, tags=["plugins"])
+app.include_router(evaluation.router, tags=["evaluation"])
+app.include_router(discovery.router, tags=["discovery"])
+app.include_router(ml_scanners.router, prefix="/admin/ml-scanners", tags=["ml-scanners"])
+app.include_router(rate_limits.router, prefix="/admin/rate-limits", tags=["rate-limits"])
+app.include_router(enrichment.router, prefix="/admin/enrichment", tags=["enrichment"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -218,12 +227,6 @@ async def siem_page(request: Request):
 async def audit_page(request: Request):
     """Audit log page."""
     return templates.TemplateResponse(request, "pages/audit.html")
-
-
-@app.get("/orchestrator", response_class=HTMLResponse)
-async def orchestrator_page(request: Request):
-    """Orchestrator page."""
-    return templates.TemplateResponse(request, "pages/orchestrator.html")
 
 
 @app.get("/tenants", response_class=HTMLResponse)
@@ -291,3 +294,39 @@ async def notifications_page(request: Request):
 async def skills_page(request: Request):
     """Skill security scanner (SkillSpector) page."""
     return templates.TemplateResponse(request, "pages/skills.html")
+
+
+@app.get("/plugins", response_class=HTMLResponse)
+async def plugins_page(request: Request):
+    """Plugin management page."""
+    return templates.TemplateResponse(request, "pages/plugins.html")
+
+
+@app.get("/evaluation", response_class=HTMLResponse)
+async def evaluation_page(request: Request):
+    """Security evaluation / red teaming page."""
+    return templates.TemplateResponse(request, "pages/evaluation.html")
+
+
+@app.get("/discovery", response_class=HTMLResponse)
+async def discovery_page(request: Request):
+    """Agent discovery and Shadow AI monitoring page."""
+    return templates.TemplateResponse(request, "pages/discovery.html")
+
+
+@app.get("/ml-scanners", response_class=HTMLResponse)
+async def ml_scanners_page(request: Request):
+    """ML Scanner management page."""
+    return templates.TemplateResponse(request, "pages/ml_scanners.html")
+
+
+@app.get("/rate-limits", response_class=HTMLResponse)
+async def rate_limits_page(request: Request):
+    """Rate limiting management page."""
+    return templates.TemplateResponse(request, "pages/rate_limits.html")
+
+
+@app.get("/enrichment", response_class=HTMLResponse)
+async def enrichment_page(request: Request):
+    """Enrichment pipeline visibility page."""
+    return templates.TemplateResponse(request, "pages/enrichment.html")

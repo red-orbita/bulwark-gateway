@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block title %}Rate Limits — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Rate Limits{% endblock %}
+{% block content %}
+<div x-data="rateLimitsPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Rate Limit Management</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Configure per-tenant request throttling (RPM). Overrides apply within seconds via Redis sync.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="showAdd = true" class="sg-btn sg-btn-primary sg-btn-sm">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                Add Override
+            </button>
+            <button @click="resetAll()" class="sg-btn sg-btn-ghost sg-btn-sm" x-show="Object.keys(tenants).length > 0">
+                <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                Clear All
+            </button>
+        </div>
+    </div>
+
+    <!-- Global Configuration -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-medium text-white">Global Configuration</h2>
+            <button @click="saveGlobal()" class="sg-btn sg-btn-success sg-btn-sm" x-show="globalDirty">
+                <i data-lucide="save" class="w-3.5 h-3.5"></i> Save
+            </button>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+                <label class="text-xs text-gray-400 block mb-1.5">Rate Limiting</label>
+                <label class="sg-toggle">
+                    <input type="checkbox" :checked="globalConfig.rate_limit_enabled" @change="globalConfig.rate_limit_enabled = $event.target.checked; globalDirty = true">
+                    <span class="sg-toggle-thumb"></span>
+                </label>
+                <p class="text-[10px] text-gray-500 mt-1" x-text="globalConfig.rate_limit_enabled ? 'Active — requests are throttled' : 'Disabled — no throttling'"></p>
+            </div>
+            <div>
+                <label class="text-xs text-gray-400 block mb-1.5">Default RPM</label>
+                <input type="number" x-model.number="globalConfig.rate_limit_rpm" @input="globalDirty = true" min="1" max="10000"
+                       class="sg-input w-full">
+                <p class="text-[10px] text-gray-500 mt-1">Requests per minute (all tenants without override)</p>
+            </div>
+            <div>
+                <label class="text-xs text-gray-400 block mb-1.5">Burst Size</label>
+                <input type="number" x-model.number="globalConfig.rate_limit_rpm_burst" @input="globalDirty = true" min="0" max="1000"
+                       class="sg-input w-full">
+                <p class="text-[10px] text-gray-500 mt-1">Extra requests allowed in burst window</p>
+            </div>
+        </div>
+        <div x-show="globalSaveResult" x-cloak class="mt-3 p-2 rounded text-xs"
+             :class="globalSaveResult === 'ok' ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-red-900/30 border border-red-700 text-red-300'"
+             x-text="globalSaveResult === 'ok' ? 'Global settings saved' : globalSaveResult"></div>
+    </div>
+
+    <!-- Stats summary -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">Status</p>
+            <p class="text-lg font-bold mt-1" :class="globalConfig.rate_limit_enabled ? 'text-emerald-400' : 'text-red-400'" x-text="globalConfig.rate_limit_enabled ? 'Enabled' : 'Disabled'"></p>
+        </div>
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">Global Default</p>
+            <p class="text-2xl font-bold text-cyan-400 mt-1"><span x-text="globalConfig.rate_limit_rpm"></span> <span class="text-xs text-gray-500">RPM</span></p>
+        </div>
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">Burst Size</p>
+            <p class="text-2xl font-bold text-amber-400 mt-1"><span x-text="globalConfig.rate_limit_rpm_burst"></span> <span class="text-xs text-gray-500">req</span></p>
+        </div>
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">Tenant Overrides</p>
+            <p class="text-2xl font-bold text-white mt-1" x-text="Object.keys(tenants).length"></p>
+        </div>
+    </div>
+
+    <!-- Per-tenant overrides table -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-medium text-white">Per-Tenant Overrides</h2>
+            <span class="text-xs text-gray-500" x-text="Object.keys(tenants).length + ' configured'"></span>
+        </div>
+
+        <!-- Empty state -->
+        <div x-show="Object.keys(tenants).length === 0" class="py-8 text-center">
+            <i data-lucide="gauge" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
+            <p class="text-sm text-gray-400">No per-tenant overrides configured</p>
+            <p class="text-xs text-gray-500 mt-1">All tenants use the global default of <span x-text="globalConfig.rate_limit_rpm"></span> RPM</p>
+        </div>
+
+        <!-- Table -->
+        <div x-show="Object.keys(tenants).length > 0" class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                        <th class="text-left py-2 px-3">Tenant ID</th>
+                        <th class="text-right py-2 px-3">RPM Limit</th>
+                        <th class="text-right py-2 px-3">vs Global</th>
+                        <th class="text-right py-2 px-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="[tid, rpm] in Object.entries(tenants)" :key="tid">
+                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
+                            <td class="py-2.5 px-3">
+                                <span class="font-mono text-white text-xs" x-text="tid"></span>
+                            </td>
+                            <td class="py-2.5 px-3 text-right">
+                                <span class="font-mono font-bold" :class="rpm > globalConfig.rate_limit_rpm ? 'text-emerald-400' : rpm < globalConfig.rate_limit_rpm ? 'text-red-400' : 'text-gray-300'" x-text="rpm"></span>
+                                <span class="text-xs text-gray-500 ml-1">RPM</span>
+                            </td>
+                            <td class="py-2.5 px-3 text-right">
+                                <span class="text-xs px-2 py-0.5 rounded-full"
+                                      :class="rpm > globalConfig.rate_limit_rpm ? 'bg-emerald-500/10 text-emerald-400' : rpm < globalConfig.rate_limit_rpm ? 'bg-red-500/10 text-red-400' : 'bg-gray-700 text-gray-400'"
+                                      x-text="rpm > globalConfig.rate_limit_rpm ? '+' + (rpm - globalConfig.rate_limit_rpm) : rpm < globalConfig.rate_limit_rpm ? (rpm - globalConfig.rate_limit_rpm) : 'same'"></span>
+                            </td>
+                            <td class="py-2.5 px-3 text-right">
+                                <button @click="editTenant(tid, rpm)" class="text-gray-400 hover:text-cyan-400 p-1">
+                                    <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                                </button>
+                                <button @click="removeTenant(tid)" class="text-gray-400 hover:text-red-400 p-1 ml-1">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Add/Edit Modal -->
+    <div x-show="showAdd" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @keydown.escape.window="showAdd = false">
+        <div class="sg-card w-full max-w-md" @click.away="showAdd = false">
+            <h3 class="text-lg font-medium text-white mb-4" x-text="editMode ? 'Edit Rate Limit' : 'Add Tenant Override'"></h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1">Tenant ID</label>
+                    <input type="text" x-model="form.tenant_id" :disabled="editMode"
+                           class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                           placeholder="e.g., acme-corp">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1">Requests Per Minute (RPM)</label>
+                    <input type="number" x-model.number="form.rpm" min="1" max="10000"
+                           class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                           placeholder="60">
+                    <p class="text-[10px] text-gray-500 mt-1">Global default: <span x-text="globalConfig.rate_limit_rpm"></span> RPM. Range: 1-10000.</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button @click="showAdd = false" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                <button @click="saveTenant()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!form.tenant_id || !form.rpm">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info box -->
+    <div class="sg-card border-cyan-900/30 bg-cyan-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="info" class="w-5 h-5 text-cyan-400 flex-shrink-0 mt-0.5"></i>
+            <div class="text-sm text-gray-300 space-y-2">
+                <p><strong>How rate limiting works:</strong></p>
+                <ul class="list-disc list-inside text-xs text-gray-400 space-y-1">
+                    <li>Global settings control the default RPM and burst for all tenants.</li>
+                    <li>Per-tenant overrides take priority over the global default.</li>
+                    <li>Changes are synced to proxy pods via Redis within 5 seconds.</li>
+                    <li>Rate limiting uses a 1-minute sliding window (not fixed buckets).</li>
+                    <li>Two layers: per-IP (global RPM) + per-tenant (overridable).</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function rateLimitsPage() {
+    return {
+        globalConfig: { rate_limit_enabled: true, rate_limit_rpm: 60, rate_limit_rpm_burst: 10 },
+        globalDirty: false,
+        globalSaveResult: null,
+        tenants: {},
+        showAdd: false,
+        editMode: false,
+        form: { tenant_id: '', rpm: 60 },
+        loading: true,
+
+        async init() {
+            await Promise.all([this.loadGlobalConfig(), this.loadStatus()]);
+        },
+
+        async loadGlobalConfig() {
+            try {
+                const res = await fetch('/admin/config/rate_limiting');
+                if (res.ok) {
+                    this.globalConfig = await res.json();
+                    this.globalDirty = false;
+                }
+            } catch (e) {
+                console.error('Failed to load global config:', e);
+            }
+        },
+
+        async saveGlobal() {
+            this.globalSaveResult = null;
+            try {
+                const res = await fetch('/admin/config/rate_limiting', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(this.globalConfig),
+                });
+                if (res.ok) {
+                    this.globalSaveResult = 'ok';
+                    this.globalDirty = false;
+                    setTimeout(() => this.globalSaveResult = null, 3000);
+                } else {
+                    const err = await res.json();
+                    this.globalSaveResult = err.detail || 'Save failed';
+                }
+            } catch (e) {
+                this.globalSaveResult = 'Network error: ' + e.message;
+            }
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/rate-limits/status');
+                if (!res.ok) throw new Error('Failed to load');
+                const data = await res.json();
+                this.tenants = data.tenants;
+            } catch (e) {
+                console.error('Failed to load rate limit status:', e);
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        editTenant(tid, rpm) {
+            this.editMode = true;
+            this.form = { tenant_id: tid, rpm: rpm };
+            this.showAdd = true;
+        },
+
+        async saveTenant() {
+            try {
+                const res = await fetch('/admin/rate-limits/tenant', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(this.form),
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    alert(err.detail || 'Save failed');
+                    return;
+                }
+                this.showAdd = false;
+                this.editMode = false;
+                this.form = { tenant_id: '', rpm: this.globalConfig.rate_limit_rpm };
+                await this.loadStatus();
+            } catch (e) {
+                console.error('Save failed:', e);
+            }
+        },
+
+        async removeTenant(tid) {
+            if (!confirm(`Remove rate limit override for "${tid}"?`)) return;
+            try {
+                const res = await fetch(`/admin/rate-limits/tenant/${tid}`, { method: 'DELETE' });
+                if (!res.ok) throw new Error('Delete failed');
+                await this.loadStatus();
+            } catch (e) {
+                console.error('Delete failed:', e);
+            }
+        },
+
+        async resetAll() {
+            if (!confirm('Remove ALL per-tenant overrides?')) return;
+            try {
+                const res = await fetch('/admin/rate-limits/reset', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                });
+                if (!res.ok) throw new Error('Reset failed');
+                await this.loadStatus();
+            } catch (e) {
+                console.error('Reset failed:', e);
+            }
+        },
+    };
+}
+</script>
+{% endblock %}

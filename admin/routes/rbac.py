@@ -104,7 +104,7 @@ ALL_PERMISSIONS = sorted({
     "siem:read", "siem:write", "siem:test",
     "notifications:read", "notifications:write",
     "audit:read", "audit:export",
-    "users:manage", "orchestrator:trigger",
+    "users:manage",
     "config:validate", "config:rollback",
     "admin:read",
 })
@@ -265,7 +265,7 @@ def reset_role_permissions(
             "siem:read", "siem:write", "siem:test",
             "notifications:read", "notifications:write",
             "audit:read", "audit:export",
-            "users:manage", "orchestrator:trigger",
+            "users:manage",
             "config:validate", "config:rollback",
             "admin:read",
         },

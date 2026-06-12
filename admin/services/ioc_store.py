@@ -26,7 +26,8 @@ from admin.models.iocs import (
     IOCUpdate,
 )
 
-IOC_PATH = Path("config/iocs.json")
+_DEFAULT_IOC_PATH = Path(os.environ.get("SENTINEL_IOC_PATH", "data/iocs.json"))
+_LEGACY_IOC_PATH = Path("config/iocs.json")
 FEED_STATE_PATH = Path("data/feed_state.json")
 
 # Map flat JSON keys to IOCType
@@ -55,13 +56,26 @@ def _generate_id(ioc_type: str, value: str) -> str:
 class IOCStore:
     """Thread-safe IOC management with flat-file persistence."""
 
-    def __init__(self, ioc_path: Path = IOC_PATH, feed_state_path: Path = FEED_STATE_PATH):
+    def __init__(self, ioc_path: Path = _DEFAULT_IOC_PATH, feed_state_path: Path = FEED_STATE_PATH):
         self._ioc_path = ioc_path
         self._feed_state_path = feed_state_path
         self._lock = threading.RLock()
         self._entries: dict[str, IOCEntry] = {}
         self._feed_state: dict[str, dict] = {}
+        self._migrate_legacy()
         self._load()
+
+    def _migrate_legacy(self) -> None:
+        """Migrate IOCs from legacy config/ path to writable data/ path (K8s fix)."""
+        if self._ioc_path.exists():
+            return  # Already have data at target path
+        if _LEGACY_IOC_PATH.exists():
+            try:
+                self._ioc_path.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(_LEGACY_IOC_PATH, self._ioc_path)
+            except OSError:
+                pass  # Legacy path may also be read-only; _load() handles missing file
 
     def _load(self) -> None:
         """Load flat iocs.json and convert to structured entries."""
