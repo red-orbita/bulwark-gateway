@@ -23,14 +23,14 @@ resources:
 # Labels applied to all resources
 commonLabels:
   app.kubernetes.io/managed-by: kustomize
-  app.kubernetes.io/version: "0.4.3"
+  app.kubernetes.io/version: "0.4.7"
 
 # Images — pin to semver tags (NEVER use 'latest' in production)
 # For immutable deploys, use sha256 digests: newTag: sha256:abc123...
 images:
   - name: sentinel-gateway-proxy
     newName: sentinel-gateway-proxy
-    newTag: "0.4.3"
+    newTag: "0.4.7"
   - name: sentinel-gateway-admin
     newName: sentinel-gateway-admin
-    newTag: "0.4.3-sp2"
+    newTag: "0.5.5"

@@ -66,6 +66,33 @@ spec:
           volumeMounts:
             - name: policies
               mountPath: /policies
+        {{- if .Values.proxy.ml.enabled }}
+        - name: init-models
+          image: {{ include "sentinel-gateway.proxy.image" . }}
+          imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Checking ML models..."
+              MODELS="{{ join " " .Values.proxy.ml.models }}"
+              for model in $MODELS; do
+                if [ -f "/models/$model/model.onnx" ]; then
+                  echo "  Model '$model' already present"
+                else
+                  echo "  Model '$model' not found — will run without it (graceful degradation)"
+                fi
+              done
+              echo "Model check complete"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: ml-models
+              mountPath: /models
+        {{- end }}
       containers:
         - name: proxy
           image: {{ include "sentinel-gateway.proxy.image" . }}
@@ -78,7 +105,11 @@ spec:
             - configMapRef:
                 name: proxy-config
           resources:
+            {{- if .Values.proxy.ml.enabled }}
+            {{- toYaml .Values.proxy.ml.resources | nindent 12 }}
+            {{- else }}
             {{- toYaml .Values.proxy.resources | nindent 12 }}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -103,6 +134,11 @@ spec:
             - name: admin-data
               mountPath: /app/shared/admin
               readOnly: true
+            {{- if .Values.proxy.ml.enabled }}
+            - name: ml-models
+              mountPath: {{ .Values.proxy.ml.modelDir }}
+              readOnly: true
+            {{- end }}
             - name: telemetry-data
               mountPath: /app/data
             - name: siem-stats
@@ -149,6 +185,11 @@ spec:
         - name: admin-data
           persistentVolumeClaim:
             claimName: admin-data
+        {{- if .Values.proxy.ml.enabled }}
+        - name: ml-models
+          persistentVolumeClaim:
+            claimName: ml-models
+        {{- end }}
         - name: telemetry-data
           emptyDir:
             medium: Memory

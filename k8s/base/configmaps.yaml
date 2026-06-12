@@ -12,6 +12,7 @@ data:
   # SENTINEL_BACKEND_URL: omitted — agents.yaml default uses k8s Service DNS (ollama:11434)
   # Override per-agent in agents.yaml for multi-cloud backends
   SENTINEL_AGENTS_FILE: "/app/shared/admin/agents.yaml"
+  SENTINEL_IOC_PATH: "/app/shared/admin/iocs.json"
   SENTINEL_FAIL_MODE: "closed"
   SENTINEL_LOG_FORMAT: "json"
   SENTINEL_LOG_LEVEL: "INFO"

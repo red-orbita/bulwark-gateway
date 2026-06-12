@@ -34,6 +34,11 @@ data:
   SENTINEL_OTX_KEY_FILE: "/run/secrets/otx-key"
   SENTINEL_ABUSEIPDB_KEY_FILE: "/run/secrets/abuseipdb-key"
   SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  {{- if .Values.proxy.ml.enabled }}
+  SENTINEL_ML_ENABLED: "true"
+  SENTINEL_ML_MODEL_DIR: {{ .Values.proxy.ml.modelDir | quote }}
+  SENTINEL_ML_BLOCKING: {{ .Values.proxy.ml.blocking | quote }}
+  {{- end }}
 ---
 # Admin ConfigMap — environment variables for the admin container
 apiVersion: v1

@@ -19,6 +19,7 @@ dependencies = [
     "PyJWT>=2.8",
     "redis>=5.0",
     "cachetools>=5.3",
+    "jsonschema>=4.20",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +28,24 @@ skill-scanner = [
 ]
 admin = [
     "python-multipart>=0.0.9",
+]
+ml = [
+    "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+]
+ml-gpu = [
+    "onnxruntime-gpu>=1.17",
+    "tokenizers>=0.15",
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+]
+multilingual = [
+    "lingua-language-detector>=2.0",
+]
+vision = [
+    "pillow>=10.0",
 ]
 dev = [
     "pytest>=8.0",
@@ -38,6 +57,13 @@ dev = [
 
 [project.scripts]
 sentinel-gateway = "src.main:main"
+sentinel-plugin = "src.plugins.cli:main"
+sentinel-evaluate = "src.evaluation.cli:main"
+
+# Scanner plugins register here. Third-party packages use:
+# [project.entry-points."sentinel.scanners"]
+# my_scanner = "my_package.module:MyScannerClass"
+[project.entry-points."sentinel.scanners"]
 
 [tool.ruff]
 target-version = "py311"

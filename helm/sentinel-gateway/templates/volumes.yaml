@@ -107,3 +107,24 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.notifications.size }}
+{{- if .Values.proxy.ml.enabled }}
+---
+# PVC: ML Models (shared across proxy replicas)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ml-models
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ml
+spec:
+  accessModes:
+    - ReadOnlyMany
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.proxy.ml.storage }}
+{{- end }}
