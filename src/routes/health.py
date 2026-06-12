@@ -60,6 +60,33 @@ async def proxy_stats(request: Request):
     return JSONResponse(content=counters.snapshot())
 
 
+@router.get("/health/cost")
+async def cost_usage(request: Request):
+    """Token usage and cost tracking per tenant.
+    Requires authentication (H-13)."""
+    if not getattr(request.state, "tenant_id", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    from src.services.cost_tracker import get_cost_tracker
+    tracker = get_cost_tracker()
+
+    tenant_id = request.state.tenant_id
+    tenant_usage = tracker.get_tenant_usage(tenant_id)
+    global_usage = tracker.get_global_usage()
+
+    return JSONResponse(content={
+        "tenant": {
+            "tenant_id": tenant_usage.tenant_id,
+            "prompt_tokens": tenant_usage.prompt_tokens,
+            "completion_tokens": tenant_usage.completion_tokens,
+            "total_tokens": tenant_usage.total_tokens,
+            "total_requests": tenant_usage.total_requests,
+            "estimated_cost_usd": tenant_usage.estimated_cost_usd,
+        },
+        "global": global_usage,
+    })
+
+
 @router.get("/ready")
 async def ready(request: Request):
     """Readiness check — minimal response for load balancers."""

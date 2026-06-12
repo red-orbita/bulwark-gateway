@@ -238,60 +238,99 @@ async def chat_completions(request: Request):
 
     is_streaming = body.get("stream", False)
 
-    try:
-        async with httpx.AsyncClient(timeout=backend.timeout) as client:
-            backend_headers = {
-                "Content-Type": "application/json",
-            }
-            # Use agent-specific auth if configured
-            # H-04: Only forward auth from pre-configured backend auth, NOT from client headers
-            if backend.auth_header and backend.auth_token:
-                backend_headers[backend.auth_header] = backend.auth_token
+    # === Response Cache: check for cached response (non-streaming only) ===
+    from src.services.response_cache import get_response_cache
+    response_cache = get_response_cache()
+    if response_cache.enabled and not is_streaming:
+        cached_response = response_cache.get(body)
+        if cached_response:
+            # Cache hit — skip backend call entirely
+            _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
+            _record_tenant_usage(tenant_id, "allow")
+            return JSONResponse(content=cached_response)
 
-            backend_url = f"{backend.backend_url.rstrip('/')}{backend.path_prefix}/chat/completions"
+    # Build ordered list of backends to try (primary + fallbacks)
+    backends_to_try = [backend] + backend.fallback_backends
 
-            # C-01: SSRF check at request-time (prevents DNS rebinding)
-            # Skip for admin-configured backends (agent registry) — these are trusted.
-            # SSRF protection targets user-controlled URLs, not operator-configured backends.
-            if not backend.trusted and _is_ssrf_target(backend_url):
-                logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id)
-                return JSONResponse(
-                    status_code=403,
-                    content={"error": {"message": "Backend URL resolves to blocked address", "type": "security_violation", "code": "ssrf_block"}},
-                )
+    last_error = None
+    for attempt_idx, current_backend in enumerate(backends_to_try):
+        try:
+            async with httpx.AsyncClient(timeout=current_backend.timeout) as client:
+                backend_headers = {
+                    "Content-Type": "application/json",
+                }
+                # Use agent-specific auth if configured
+                # H-04: Only forward auth from pre-configured backend auth, NOT from client headers
+                if current_backend.auth_header and current_backend.auth_token:
+                    backend_headers[current_backend.auth_header] = current_backend.auth_token
 
-            if is_streaming:
-                # Streaming path: forward SSE with chunk-level guardrails
-                policy_engine = request.app.state.policy_loader.engine
-                return await _handle_streaming(
-                    client,
+                backend_url = f"{current_backend.backend_url.rstrip('/')}{current_backend.path_prefix}/chat/completions"
+
+                # C-01: SSRF check at request-time (prevents DNS rebinding)
+                # Skip for admin-configured backends (agent registry) — these are trusted.
+                # SSRF protection targets user-controlled URLs, not operator-configured backends.
+                if not current_backend.trusted and _is_ssrf_target(backend_url):
+                    logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id)
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": {"message": "Backend URL resolves to blocked address", "type": "security_violation", "code": "ssrf_block"}},
+                    )
+
+                if is_streaming:
+                    # Streaming path: forward SSE with chunk-level guardrails
+                    policy_engine = request.app.state.policy_loader.engine
+                    return await _handle_streaming(
+                        client,
+                        backend_url,
+                        body,
+                        backend_headers,
+                        tenant_id,
+                        agent_id,
+                        source_ip,
+                        ioc_manager,
+                        policy_engine,
+                    )
+
+                resp = await client.post(
                     backend_url,
-                    body,
-                    backend_headers,
-                    tenant_id,
-                    agent_id,
-                    source_ip,
-                    ioc_manager,
-                    policy_engine,
+                    json=body,
+                    headers=backend_headers,
                 )
 
-            resp = await client.post(
-                backend_url,
-                json=body,
-                headers=backend_headers,
-            )
-    except httpx.TimeoutException as exc:
-        _counters.record_error()
-        _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
-        _record_tenant_usage(tenant_id, "allow")
-        # M-01: Generic error — don't reveal backend architecture
-        raise HTTPException(status_code=504, detail="Request timed out") from exc
-    except httpx.ConnectError as exc:
-        _counters.record_error()
-        _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
-        _record_tenant_usage(tenant_id, "allow")
-        # M-01: Generic error — don't reveal backend architecture
-        raise HTTPException(status_code=502, detail="Service unavailable") from exc
+                # If we got a server error (5xx) and have fallbacks, try next
+                if resp.status_code >= 500 and attempt_idx < len(backends_to_try) - 1:
+                    await logger.awarn(
+                        "backend_failover",
+                        primary=current_backend.backend_url,
+                        status=resp.status_code,
+                        attempt=attempt_idx + 1,
+                        next_backend=backends_to_try[attempt_idx + 1].backend_url,
+                    )
+                    continue
+
+                # Success or client error — stop trying
+                break
+
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            last_error = exc
+            if attempt_idx < len(backends_to_try) - 1:
+                # Log failover and try next backend
+                await logger.awarn(
+                    "backend_failover",
+                    primary=current_backend.backend_url,
+                    error=type(exc).__name__,
+                    attempt=attempt_idx + 1,
+                    next_backend=backends_to_try[attempt_idx + 1].backend_url,
+                )
+                continue
+            else:
+                # All backends exhausted
+                _counters.record_error()
+                _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
+                _record_tenant_usage(tenant_id, "allow")
+                if isinstance(exc, httpx.TimeoutException):
+                    raise HTTPException(status_code=504, detail="Request timed out") from exc
+                raise HTTPException(status_code=502, detail="Service unavailable") from exc
 
     if resp.status_code != 200:
         _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
@@ -422,6 +461,18 @@ async def chat_completions(request: Request):
             asyncio.create_task(
                 _enrich_and_record(user_content, input_result.verdict.value, request_id, tenant_id)
             )
+
+    # === Cost Tracking: parse usage tokens from response ===
+    usage_data = response_data.get("usage")
+    response_model = response_data.get("model", body.get("model", "unknown"))
+    if usage_data:
+        from src.services.cost_tracker import get_cost_tracker
+        cost_tracker = get_cost_tracker()
+        cost_tracker.record_usage(tenant_id, agent_id, response_model, usage_data)
+
+    # === Response Cache: store successful response ===
+    if response_cache.enabled and not is_streaming:
+        response_cache.put(body, response_data)
 
     _counters.record(input_result.verdict.value, (time.perf_counter() - _req_start) * 1000)
     _record_tenant_usage(tenant_id, input_result.verdict.value)
