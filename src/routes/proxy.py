@@ -181,6 +181,7 @@ async def chat_completions(request: Request):
 
     if input_result.verdict == Verdict.WARN:
         await _log_events(input_result.events, source_ip)
+        asyncio.create_task(_fire_webhook_alert(input_result.events, tenant_id, agent_id))
 
     # === PHASE 1b: Fire async ML scanners immediately (parallel with backend call) ===
     # These run in the background regardless of client disconnection.
@@ -207,6 +208,8 @@ async def chat_completions(request: Request):
                 severity="critical",
             )
             await _log_events([event], source_ip)
+            asyncio.create_task(_fire_webhook_alert([event], tenant_id, agent_id))
+            _push_recent_block([event], tenant_id, agent_id)
             _counters.record("block", (time.perf_counter() - _req_start) * 1000)
             return JSONResponse(
                 status_code=403,
@@ -331,6 +334,8 @@ async def chat_completions(request: Request):
 
             if policy_result.verdict == Verdict.BLOCK:
                 await _log_events(policy_result.events, source_ip)
+                asyncio.create_task(_fire_webhook_alert(policy_result.events, tenant_id, agent_id))
+                _push_recent_block(policy_result.events, tenant_id, agent_id)
                 # Remove blocked tool calls from response
                 message["tool_calls"] = [
                     tc
@@ -375,6 +380,33 @@ async def chat_completions(request: Request):
             if filter_result.verdict == Verdict.REDACT and filter_result.modified_content:
                 message["content"] = filter_result.modified_content
                 await _log_events(filter_result.events, source_ip)
+                asyncio.create_task(_fire_webhook_alert(filter_result.events, tenant_id, agent_id))
+            elif filter_result.verdict == Verdict.BLOCK:
+                # Block dangerous output entirely — replace with safe message
+                message["content"] = "[Content blocked by security policy — output contained dangerous material]"
+                await _log_events(filter_result.events, source_ip)
+                asyncio.create_task(_fire_webhook_alert(filter_result.events, tenant_id, agent_id))
+                _push_recent_block(filter_result.events, tenant_id, agent_id)
+            elif filter_result.verdict == Verdict.WARN and filter_result.events:
+                # WARN: log to SIEM + notify but don't modify content
+                await _log_events(filter_result.events, source_ip)
+                asyncio.create_task(_fire_webhook_alert(filter_result.events, tenant_id, agent_id))
+
+    # === PHASE 5b: Output Async Scanners (fire-and-forget) ===
+    # Run async output scanners (hallucination detection, etc.) in background.
+    if settings.scanners_pipeline_enabled and _pipeline.output_async_count > 0:
+        for choice in choices:
+            message = choice.get("message", {})
+            content = message.get("content")
+            if content:
+                _out_ctx = ScanContext(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    request_id=_scan_ctx.request_id if settings.scanners_pipeline_enabled else "",
+                    messages=messages,
+                    source_ip=source_ip,
+                )
+                asyncio.create_task(_run_output_async_scanners(content, _out_ctx, tenant_id, agent_id))
 
     # === PHASE 6: Async Enrichment (fire-and-forget) ===
     # Note: Async scanners already fired at Phase 1b (before backend call).
@@ -428,6 +460,8 @@ async def validate_tool_call(request: Request):
 
     if result.events:
         await _log_events(result.events, request.client.host if request.client else None)
+        if result.verdict == Verdict.BLOCK:
+            asyncio.create_task(_fire_webhook_alert(result.events, tenant_id, agent_id))
 
     return {
         "verdict": result.verdict.value,
@@ -544,8 +578,10 @@ async def _handle_streaming(
                             )
 
                             if policy_result.verdict == Verdict.BLOCK:
-                                # Log security events
+                                # Log security events + fire notifications
                                 await _log_events(policy_result.events, source_ip)
+                                asyncio.create_task(_fire_webhook_alert(policy_result.events, tenant_id, agent_id))
+                                _push_recent_block(policy_result.events, tenant_id, agent_id)
                                 # Emit error instead of tool calls
                                 blocked_names = ", ".join(policy_result.blocked_tools)
                                 yield _make_error_event(
@@ -652,13 +688,43 @@ def _filter_chunk(content: str, tenant_id: str, agent_id: str, source_ip: str | 
     """Run output filter on a content chunk.
 
     Returns redacted content, or None if content should be blocked entirely.
+    Events from this function are emitted asynchronously via _emit_streaming_events.
     """
     result = output_filter.inspect_and_redact(content, tenant_id, agent_id)
     if result.verdict == Verdict.BLOCK:
+        # Fire telemetry for streaming block (fire-and-forget)
+        if result.events:
+            _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip)
         return None
     if result.verdict == Verdict.REDACT and result.modified_content:
+        # Fire telemetry for streaming redaction (fire-and-forget)
+        if result.events:
+            _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip)
         return result.modified_content
     return content
+
+
+def _schedule_streaming_telemetry(
+    events: list[SecurityEvent], tenant_id: str, agent_id: str, source_ip: str | None
+):
+    """Schedule streaming telemetry emission. Safe to call from sync context."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_emit_streaming_events(events, tenant_id, agent_id, source_ip))
+    except RuntimeError:
+        # No running event loop (e.g., in unit tests) — skip telemetry
+        pass
+
+
+async def _emit_streaming_events(
+    events: list[SecurityEvent], tenant_id: str, agent_id: str, source_ip: str | None
+):
+    """Emit telemetry events from streaming output filter (fire-and-forget)."""
+    try:
+        await _log_events(events, source_ip)
+        await _fire_webhook_alert(events, tenant_id, agent_id)
+    except Exception:
+        pass  # Never let telemetry errors affect streaming
 
 
 def _make_content_event(content: str) -> str:
@@ -693,6 +759,21 @@ async def _run_async_scanners_and_log(
     except Exception as e:
         # Log async scanner failures for debugging (don't crash)
         await logger.awarn("async_scanner_error", error=str(e)[:200])
+
+
+async def _run_output_async_scanners(
+    content: str, context, tenant_id: str, agent_id: str
+):
+    """Run async OUTPUT scanners (hallucination, relevance, etc.) and log events."""
+    try:
+        pipeline = get_scanner_pipeline()
+        results = await pipeline.run_output_async(content, context)
+        for result in results:
+            if result.events:
+                await _log_events(result.events)
+                await _fire_webhook_alert(result.events, tenant_id, agent_id)
+    except Exception as e:
+        await logger.awarn("output_async_scanner_error", error=str(e)[:200])
 
 
 async def _log_events(events: list[SecurityEvent], source_ip: str | None = None):
@@ -792,7 +873,11 @@ def _record_tenant_usage(tenant_id: str, verdict: str):
 async def _enrich_and_record(
     text: str, verdict: str, request_id: str, tenant_id: str
 ) -> None:
-    """Fire-and-forget: run enrichment scanners and record in AttackReplayDB."""
+    """Fire-and-forget: run enrichment scanners and record in AttackReplayDB.
+
+    Also emits security events to SIEM if enrichment detects anything notable
+    (e.g., embedding similarity match to known attacks, post-hoc detection).
+    """
     try:
         enrichment_mgr = get_enrichment_manager()
         results = await enrichment_mgr.enrich(text, request_id)
@@ -808,6 +893,23 @@ async def _enrich_and_record(
             tenant_id=tenant_id,
             enrichment_results=results,
         )
+
+        # Emit SIEM events if enrichment found something notable
+        if results:
+            for enrichment_result in results:
+                # Enrichment results with similarity > threshold produce events
+                if hasattr(enrichment_result, "verdict") and enrichment_result.verdict != Verdict.ALLOW:
+                    event = SecurityEvent(
+                        tenant_id=tenant_id,
+                        agent_id="enrichment",
+                        verdict=enrichment_result.verdict,
+                        category=ThreatCategory.PROMPT_INJECTION,
+                        description=f"Enrichment detection: {getattr(enrichment_result, 'description', 'semantic match')}",
+                        source="enrichment_pipeline",
+                        severity="medium",
+                        metadata={"request_id": request_id},
+                    )
+                    await _log_events([event])
     except Exception as e:
         # Never let enrichment errors affect anything
         await logger.awarn("enrichment_pipeline_error", error=str(e))
