@@ -5,13 +5,16 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import os
+import socket
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from admin.models.iocs import (
     FeedConfig,
@@ -29,6 +32,46 @@ from admin.models.iocs import (
 _DEFAULT_IOC_PATH = Path(os.environ.get("SENTINEL_IOC_PATH", "data/iocs.json"))
 _LEGACY_IOC_PATH = Path("config/iocs.json")
 FEED_STATE_PATH = Path("data/feed_state.json")
+
+# SECURITY FIX (C-03): SSRF blocklist for feed URL validation
+_BLOCKED_SSRF_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+_BLOCKED_HOSTNAMES = {"metadata.google.internal", "localhost", "kubernetes.default", "kubernetes.default.svc"}
+
+
+def _validate_url_no_ssrf(url: str) -> str | None:
+    """Returns error message if URL is an SSRF target, None if safe."""
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname:
+        return "Empty hostname"
+    if hostname in _BLOCKED_HOSTNAMES:
+        return f"Blocked hostname: {hostname}"
+    if hostname.endswith(".internal") or hostname.endswith(".local"):
+        return f"Blocked internal hostname: {hostname}"
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError):
+        return f"Cannot resolve hostname: {hostname}"
+    for info in addr_infos:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            for net in _BLOCKED_SSRF_NETWORKS:
+                if ip in net:
+                    return f"IP {ip_str} in blocked range {net}"
+        except ValueError:
+            return f"Invalid IP: {ip_str}"
+    return None  # Safe
 
 # Map flat JSON keys to IOCType
 _KEY_TO_TYPE: dict[str, IOCType] = {
@@ -746,6 +789,11 @@ class IOCStore:
 
         if not feed.url:
             raise RuntimeError("Custom feed URL not configured")
+
+        # SECURITY FIX (C-03): Validate feed URLs against SSRF blocklist
+        ssrf_error = _validate_url_no_ssrf(feed.url)
+        if ssrf_error:
+            raise RuntimeError(f"Feed URL blocked (SSRF protection): {ssrf_error}")
 
         headers = {}
         api_key = self._get_feed_api_key(feed)

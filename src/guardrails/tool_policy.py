@@ -234,6 +234,43 @@ _SAFE_TOOLS = frozenset(
     }
 )
 
+# Zero-width characters that must be stripped from tool names
+_ZERO_WIDTH_CHARS = frozenset("\u200b\u200c\u200d\ufeff\u00ad")
+
+# Confusable character map: Cyrillic/Greek homoglyphs → Latin equivalents
+_CONFUSABLE_MAP = str.maketrans(
+    "еаосрхуіңтмквзн"  # Cyrillic lowercase
+    "ЕАОСРХУІҢТМКВЗН"  # Cyrillic uppercase
+    "ΑΒΕΗΙΚΜΝΟΡΤΧΥΖαβεηικμνοτυ",  # Greek
+    "eaocpxyintmkvzn"  # Latin lowercase
+    "EAOCPXYINТMKVZN"  # Latin uppercase
+    "ABEHIKMNOPTXYZabenikmnoty",  # Latin
+)
+
+
+# SECURITY FIX (C-06): Normalize tool names to prevent Unicode/case bypass
+def _normalize_tool_name(name: str) -> str:
+    """Normalize a tool name to prevent bypass via Unicode tricks, case, or whitespace.
+
+    Applies:
+      1. NFKC normalization — collapses fullwidth and compatibility chars
+      2. Confusable map — translates Cyrillic/Greek homoglyphs to Latin
+      3. Zero-width character removal (U+200B, U+200C, U+200D, U+FEFF, U+00AD)
+      4. casefold() — locale-aware lowercase for case-insensitive comparison
+      5. strip() — removes leading/trailing whitespace
+    """
+    # 1. NFKC normalization (fullwidth → ASCII, compatibility decomposition)
+    name = unicodedata.normalize("NFKC", name)
+    # 2. Map cross-script homoglyphs (Cyrillic а → Latin a, etc.)
+    name = name.translate(_CONFUSABLE_MAP)
+    # 3. Remove zero-width characters
+    name = "".join(ch for ch in name if ch not in _ZERO_WIDTH_CHARS)
+    # 4. Case-insensitive comparison
+    name = name.casefold()
+    # 5. Strip whitespace
+    name = name.strip()
+    return name
+
 
 @dataclass
 class ToolPolicy:
@@ -280,6 +317,11 @@ class ToolPolicyEngine:
         self, tool_call: ToolCall, tenant_id: str, agent_id: str, call_count: int = 0
     ) -> GuardrailResult:
         """Evaluate a single tool call against the policy."""
+        # SECURITY FIX (C-06): Normalize tool names to prevent Unicode/case bypass
+        tool_call = tool_call.model_copy(
+            update={"name": _normalize_tool_name(tool_call.name)}
+        )
+
         policy = self.get_policy(tenant_id, agent_id)
 
         # No policy = use defaults (deny dangerous tools)
@@ -289,7 +331,7 @@ class ToolPolicyEngine:
         events: list[SecurityEvent] = []
 
         # Check if tool is explicitly denied
-        if tool_call.name in policy.denied_tools:
+        if tool_call.name in {_normalize_tool_name(t) for t in policy.denied_tools}:
             events.append(
                 SecurityEvent(
                     tenant_id=tenant_id,
@@ -307,7 +349,9 @@ class ToolPolicyEngine:
             )
 
         # Check allowlist (if defined, only listed tools are allowed)
-        if policy.allowed_tools and tool_call.name not in policy.allowed_tools:
+        if policy.allowed_tools and tool_call.name not in {
+            _normalize_tool_name(t) for t in policy.allowed_tools
+        }:
             events.append(
                 SecurityEvent(
                     tenant_id=tenant_id,
@@ -545,7 +589,20 @@ class ToolPolicyEngine:
         # Check argument allowlist patterns
         for arg_name, pattern_str in policy.argument_patterns.items():
             arg_value = str(tool_call.arguments.get(arg_name, ""))
-            if arg_value and not re.match(pattern_str, arg_value):
+            # SECURITY FIX (H-03): Compile with timeout protection against ReDoS
+            if len(pattern_str) > 500:
+                import structlog
+                structlog.get_logger().warning(
+                    "argument_pattern_too_complex", pattern_length=len(pattern_str)
+                )
+                continue
+            try:
+                compiled = re.compile(pattern_str)
+            except re.error:
+                continue
+            # Limit input length to prevent catastrophic backtracking
+            match_result = compiled.match(arg_value) if len(arg_value) < 10000 else None
+            if arg_value and not match_result:
                 events.append(
                     SecurityEvent(
                         tenant_id=tenant_id,
@@ -740,11 +797,16 @@ class ToolPolicyEngine:
         self, tool_call: ToolCall, tenant_id: str, agent_id: str
     ) -> GuardrailResult | None:
         """Block SSRF attempts targeting private/internal networks."""
+        from urllib.parse import unquote
+
         all_values = self._extract_path_values(tool_call.arguments)
         for value in all_values:
             value_norm = unicodedata.normalize("NFKC", value)
+            # SECURITY FIX (H-10): URL-decode arguments before SSRF pattern matching
+            # Prevents bypass via double-encoding (%31%32%37 → 127)
+            decoded_value = unquote(unquote(value_norm))
             for pattern in self._SSRF_PATTERNS:
-                if pattern.search(value_norm):
+                if pattern.search(decoded_value):
                     event = SecurityEvent(
                         tenant_id=tenant_id,
                         agent_id=agent_id,

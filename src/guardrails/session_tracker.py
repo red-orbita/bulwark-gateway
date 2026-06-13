@@ -134,8 +134,10 @@ class SessionDecompositionTracker:
 
     def _session_key(self, tenant_id: str, agent_id: str, source_ip: str) -> str:
         """Generate session key from request context."""
-        raw = f"{tenant_id}:{agent_id}:{source_ip}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        # SECURITY FIX (H-02): Session key based on tenant+agent only.
+        # IP rotation no longer resets threat scores, preventing multi-IP decomposition attacks.
+        session_key = hashlib.sha256(f"{tenant_id}:{agent_id}".encode()).hexdigest()[:16]
+        return session_key
 
     def check_and_update(
         self,

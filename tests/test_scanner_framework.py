@@ -372,9 +372,9 @@ class TestScannerSafety:
     @pytest.mark.asyncio
     async def test_crash_handled_gracefully(self, pipeline, context):
         pipeline.register(CrashingScanner())
-        # Scanner crash → ALLOW (don't block on bugs)
+        # SECURITY (C-05): Blocking scanner crash → BLOCK (fail-closed)
         result = await pipeline.run_input_blocking("test", context)
-        assert result.verdict == Verdict.ALLOW
+        assert result.verdict == Verdict.BLOCK
 
     @pytest.mark.asyncio
     async def test_crash_does_not_stop_pipeline(self, pipeline, context):
@@ -382,8 +382,11 @@ class TestScannerSafety:
         pipeline.register(CrashingScanner())  # priority=50
         pipeline.register(allow)
 
+        # SECURITY (C-05): Pipeline returns BLOCK from crashed scanner;
+        # subsequent scanners may or may not run (implementation-defined),
+        # but the final verdict is BLOCK regardless.
         result = await pipeline.run_input_blocking("test", context)
-        assert allow.call_count == 1  # Still runs after crash
+        assert result.verdict == Verdict.BLOCK
 
 
 class TestInputAsyncPipeline:

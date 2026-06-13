@@ -11,8 +11,10 @@ Features:
 import json
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote
 
 import structlog
 
@@ -21,7 +23,55 @@ logger = structlog.get_logger()
 # Pre-compiled regexes for content extraction (avoid re-compilation in hot path)
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _IP_RE = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
-_DOMAIN_RE = re.compile(r"\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z]{2,}\b")
+_DOMAIN_RE = re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b")
+
+
+# SECURITY FIX (C-02): Unicode/IDN normalization prevents IOC bypass via homoglyphs
+def _normalize_for_ioc(content: str) -> str:
+    """Normalize content before IOC extraction to prevent Unicode/IDN bypass.
+
+    Handles:
+    - Fullwidth ASCII and homoglyphs (NFKC normalization)
+    - URL-encoded characters (%2E → ., %2F → /, etc.)
+    - Uppercase evasion
+    - Punycode/IDN domains (xn-- prefixed)
+    """
+    # 1. NFKC normalization — collapses fullwidth chars, compatibility decompositions
+    content = unicodedata.normalize("NFKC", content)
+
+    # 2. Decode URL-encoded characters (handles %2E, %2F, %3A, etc.)
+    content = unquote(content)
+
+    # 3. Lowercase everything
+    content = content.lower()
+
+    # 4. Decode punycode/IDN domains inline
+    # Find potential punycode domains and replace with decoded Unicode
+    def _decode_punycode_domain(match: re.Match) -> str:
+        domain = match.group(0)
+        try:
+            # Split into labels and decode each xn-- label
+            labels = domain.split(".")
+            decoded_labels = []
+            for label in labels:
+                if label.startswith("xn--"):
+                    try:
+                        decoded_labels.append(label.encode("ascii").decode("idna"))
+                    except (UnicodeError, UnicodeDecodeError):
+                        decoded_labels.append(label)
+                else:
+                    decoded_labels.append(label)
+            return ".".join(decoded_labels)
+        except Exception:
+            return domain
+
+    content = re.sub(
+        r"\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b",
+        _decode_punycode_domain,
+        content,
+    )
+
+    return content
 
 
 @dataclass
@@ -96,6 +146,14 @@ class IOCManager:
             self.db = new_db
             self._cached_mtime = current_mtime
 
+            # SECURITY FIX (M-01): Invalidate response cache on IOC update
+            # to prevent stale cached responses from bypassing new IOC detections
+            try:
+                from src.services.response_cache import get_response_cache
+                get_response_cache().clear()
+            except Exception:
+                pass  # Cache may not be initialized yet
+
             await logger.ainfo(
                 "ioc_loaded",
                 domains=len(self.db.domains),
@@ -127,6 +185,14 @@ class IOCManager:
 
             self.db = new_db
             self._cached_mtime = current_mtime
+
+            # SECURITY FIX (M-01): Invalidate response cache on IOC sync reload
+            try:
+                from src.services.response_cache import get_response_cache
+                get_response_cache().clear()
+            except Exception:
+                pass
+
             return True
         except Exception:
             return False
@@ -167,8 +233,13 @@ class IOCManager:
         """Check content for any IOC matches. Returns list of matched IOCs.
 
         Uses pre-compiled regexes for extraction — ~0.1ms for typical inputs.
+        Content is normalized (C-02) before extraction to prevent Unicode/IDN bypass.
         """
         matches = []
+
+        # SECURITY FIX (C-02): Normalize before extraction to catch homoglyphs,
+        # fullwidth chars, URL-encoded dots, and punycode evasion.
+        content = _normalize_for_ioc(content)
 
         # Extract and check URLs
         for url in _URL_RE.findall(content):
@@ -181,7 +252,7 @@ class IOCManager:
                 matches.append(f"ip:{ip}")
 
         # Extract and check domains
-        for domain in _DOMAIN_RE.findall(content.lower()):
+        for domain in _DOMAIN_RE.findall(content):
             if self.check_domain(domain):
                 matches.append(f"domain:{domain}")
 

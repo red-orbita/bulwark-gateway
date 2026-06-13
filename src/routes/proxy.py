@@ -190,10 +190,20 @@ async def chat_completions(request: Request):
             messages=messages,
             source_ip=source_ip,
         )
-        user_content = " ".join(
-            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+        # SECURITY FIX (M-08): Scan ALL role messages, not just 'user'.
+        # System/tool messages can contain attacker-controlled content that bypasses scanning.
+        # Join all message content for cross-message pattern detection.
+        all_content = " ".join(
+            msg.get("content", "") for msg in messages if msg.get("content")
         )
-        input_result = await _pipeline.run_input_blocking(user_content, _scan_ctx)
+        # Also scan user messages individually for single-message attacks
+        user_messages = [
+            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+        ]
+        user_content = " ".join(user_messages)
+        # Use the broader scan (all content) for guardrail evaluation
+        scan_content = all_content if all_content else user_content
+        input_result = await _pipeline.run_input_blocking(scan_content, _scan_ctx)
     else:
         input_result = input_guardrail.inspect_messages(messages, tenant_id, agent_id)
 
@@ -310,7 +320,7 @@ async def chat_completions(request: Request):
     from src.services.response_cache import get_response_cache
     response_cache = get_response_cache()
     if response_cache.enabled and not is_streaming:
-        cached_response = response_cache.get(body)
+        cached_response = response_cache.get(body, tenant_id, agent_id)
         if cached_response:
             # Cache hit — skip backend call entirely
             _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
@@ -543,7 +553,7 @@ async def chat_completions(request: Request):
 
     # === Response Cache: store successful response ===
     if response_cache.enabled and not is_streaming:
-        response_cache.put(body, response_data)
+        response_cache.put(body, response_data, tenant_id, agent_id)
 
     _counters.record(input_result.verdict.value, (time.perf_counter() - _req_start) * 1000)
     _record_tenant_usage(tenant_id, input_result.verdict.value)
@@ -614,6 +624,8 @@ async def _handle_streaming(
     - C-01: Tool call chunks are BUFFERED and policy-checked BEFORE yielding to client
     """
     BUFFER_SIZE = 256  # chars before flushing to client
+    # SECURITY FIX (C-04): 50% overlapping window prevents boundary-split secret leakage
+    OVERLAP_SIZE = 128
 
     async def stream_generator():
         content_buffer = ""
@@ -725,7 +737,8 @@ async def _handle_streaming(
                         if content_token:
                             content_buffer += content_token
 
-                            # Flush when buffer is full (sliding window filter)
+                            # SECURITY FIX (C-04): 50% overlapping window prevents boundary-split secret leakage
+                            # Flush when buffer is full — retain last OVERLAP_SIZE chars for next scan
                             if len(content_buffer) >= BUFFER_SIZE:
                                 redacted = _filter_chunk(
                                     content_buffer, tenant_id, agent_id, source_ip
@@ -734,8 +747,11 @@ async def _handle_streaming(
                                     yield _make_error_event("Output blocked by security policy")
                                     blocked = True
                                     break
-                                yield _make_content_event(redacted)
-                                content_buffer = ""
+                                # Yield only the non-overlapping portion (already scanned)
+                                yield_portion = redacted[:len(redacted) - OVERLAP_SIZE]
+                                yield _make_content_event(yield_portion)
+                                # Keep overlap for next iteration to catch boundary-split patterns
+                                content_buffer = content_buffer[-OVERLAP_SIZE:]
                             continue
 
                         # Non-content delta (role, etc) — pass through

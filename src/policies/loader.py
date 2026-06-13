@@ -114,9 +114,24 @@ class PolicyLoader:
             except Exception as e:
                 await logger.aerror("policy_reload_error", file=str(policy_file), error=str(e))
 
+        # SECURITY FIX (H-04): Refuse to swap to empty policy engine.
+        # If all policy files fail to parse, keep the previous (working) engine.
+        if not new_policies and self._policies and len(self._policies) > 0:
+            await logger.aerror("policy_reload_rejected", reason="new_engine_empty", keeping="previous")
+            return
+
         # Atomic swap
         self.engine = new_engine
         self._policies = new_policies
+
+        # SECURITY FIX (M-01): Invalidate response cache on policy reload
+        # to prevent stale cached responses from bypassing updated policies
+        try:
+            from src.services.response_cache import get_response_cache
+            get_response_cache().clear()
+        except Exception:
+            pass  # Cache may not be initialized yet
+
         await logger.ainfo("policy_reload_complete", count=len(new_policies))
 
     async def start_hot_reload(self, interval_seconds: int = 5):
