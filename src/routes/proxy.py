@@ -213,6 +213,17 @@ async def chat_completions(request: Request):
         _push_recent_block(input_result.events, tenant_id, agent_id)
         _counters.record("block", (time.perf_counter() - _req_start) * 1000)
         _record_tenant_usage(tenant_id, "block")
+        # Record blocked payload in enrichment replay DB (async, fire-and-forget)
+        enrichment_mgr = get_enrichment_manager()
+        if enrichment_mgr.enabled:
+            user_content = " ".join(
+                msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+            )
+            if user_content:
+                request_id = f"{tenant_id}:{agent_id}:{int(time.time()*1000)}"
+                asyncio.create_task(
+                    _enrich_and_record(user_content, "block", request_id, tenant_id)
+                )
         return JSONResponse(
             status_code=403,
             content={
@@ -531,6 +542,7 @@ async def chat_completions(request: Request):
     # === PHASE 6: Async Enrichment (fire-and-forget) ===
     # Note: Async scanners already fired at Phase 1b (before backend call).
     # Only legacy enrichment manager runs here.
+    # Records ALL payloads in AttackReplayDB for analysis, even without ML scanners.
     enrichment_mgr = get_enrichment_manager()
     if enrichment_mgr.enabled:
         # Collect all user message content for enrichment

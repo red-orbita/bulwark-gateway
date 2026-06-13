@@ -87,15 +87,28 @@ async def lifespan(app: FastAPI):
 
     if ENRICHMENT_ENABLED:
         enrichment_mgr = get_enrichment_manager()
+        # Ensure replay DB directory exists at startup
+        from src.enrichment.attack_replay_db import REPLAY_DB_PATH
+        REPLAY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # Pre-initialize replay DB (creates tables)
+        from src.enrichment.attack_replay_db import get_attack_replay_db
+        get_attack_replay_db()
+        await logger.ainfo("enrichment_replay_db_ready", path=str(REPLAY_DB_PATH))
+
+        # Try to register ML enrichment scanners (optional — graceful degradation)
         try:
             from src.enrichment.embedding_scanner import EmbeddingScanner
             scanner = EmbeddingScanner()
             # Pre-initialize model at startup (avoids timeout on first request)
-            scanner._ensure_initialized()
-            enrichment_mgr.register(scanner)
-            await logger.ainfo("enrichment_enabled", scanners=len(enrichment_mgr.scanners))
+            if scanner._ensure_initialized():
+                enrichment_mgr.register(scanner)
+                await logger.ainfo("enrichment_ml_scanner_registered", scanners=len(enrichment_mgr.scanners))
+            else:
+                await logger.ainfo("enrichment_ml_scanner_unavailable",
+                                   reason="sentence-transformers not installed, replay DB still active")
         except Exception as e:
-            await logger.awarn("enrichment_init_failed", error=str(e))
+            await logger.awarn("enrichment_ml_init_failed", error=str(e),
+                             note="Replay DB recording active without ML enrichment")
 
     # Initialize Scanner Pipeline (pluggable scanner framework)
     from src.scanners.pipeline import get_scanner_pipeline
