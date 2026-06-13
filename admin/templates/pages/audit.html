@@ -43,6 +43,7 @@
                 <option value="security">security</option>
                 <option value="auditor">auditor</option>
             </select>
+            <input type="text" x-model="filters.tenant_id" @input.debounce.400ms="loadEntries()" placeholder="Tenant ID..." class="sg-input w-32" title="Filter by tenant">
             <input type="date" x-model="filters.date_from" @change="loadEntries()" class="sg-input">
         </div>
     </div>
@@ -123,13 +124,14 @@ function auditManager() {
         total: 0,
         page: 1,
         loading: false,
-        filters: { search: '', action: '', user: '', date_from: '' },
+        filters: { search: '', action: '', user: '', tenant_id: '', date_from: '' },
         async init() { await this.loadEntries(); },
         async loadEntries() {
             this.loading = true;
             const params = new URLSearchParams({ limit: 50, offset: (this.page - 1) * 50 });
             if (this.filters.action) params.set('action', this.filters.action);
             if (this.filters.user) params.set('actor', this.filters.user);
+            if (this.filters.tenant_id) params.set('tenant_id', this.filters.tenant_id);
             const resp = await fetch('/admin/audit?' + params);
             if (resp.ok) {
                 const data = await resp.json();

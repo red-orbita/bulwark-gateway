@@ -10,19 +10,23 @@
             <p class="text-sm text-gray-400 mt-0.5">Manage multi-tenant organizations and their agent configurations</p>
         </div>
         <div class="flex items-center gap-2">
-            <button @click="openCreate()" class="sg-btn sg-btn-primary sg-btn-sm">
-                <i data-lucide="plus" class="w-4 h-4"></i> New Tenant
+            <button @click="openDefaults()" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                Global Defaults
+            </button>
+            <button @click="openCreateTenant()" class="sg-btn sg-btn-primary sg-btn-sm">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                New Tenant
             </button>
         </div>
     </div>
 
-    <!-- Loading skeleton -->
+    <!-- Loading -->
     <div x-show="loading" class="sg-card !p-0">
         <div class="p-4 space-y-3">
             <div class="sg-skeleton-lg w-full"></div>
             <div class="sg-skeleton h-4 w-full"></div>
             <div class="sg-skeleton h-4 w-3/4"></div>
-            <div class="sg-skeleton h-4 w-full"></div>
         </div>
     </div>
 
@@ -43,9 +47,7 @@
                 <tbody>
                     <template x-for="tenant in tenants" :key="tenant.id">
                         <tr>
-                            <td>
-                                <button @click="toggleExpand(tenant.id)" class="font-mono text-cyan-400 hover:underline text-xs" x-text="tenant.id"></button>
-                            </td>
+                            <td><span class="font-mono text-cyan-400 text-xs" x-text="tenant.id"></span></td>
                             <td x-text="tenant.name"></td>
                             <td>
                                 <span class="sg-badge"
@@ -56,86 +58,223 @@
                             <td class="text-gray-400 text-xs" x-text="tenant.contact_email || '—'"></td>
                             <td class="text-right">
                                 <div class="flex items-center justify-end gap-1">
-                                    <button @click="editTenant(tenant)" class="sg-btn sg-btn-secondary sg-btn-sm" title="Edit">
-                                        <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
-                                        Edit
-                                    </button>
+                                    <button @click="openConfigTenant(tenant)" class="sg-btn sg-btn-secondary sg-btn-sm">Configure</button>
                                     <button @click="togglePause(tenant)" class="sg-btn sg-btn-sm"
-                                        :class="tenant.status === 'paused' ? 'sg-btn-success' : 'sg-btn-warning'">
-                                        <span x-text="tenant.status === 'paused' ? 'Unpause' : 'Pause'"></span>
-                                    </button>
-                                    <button @click="deleteTenant(tenant)" class="sg-btn sg-btn-danger sg-btn-sm" title="Delete">
-                                        <svg class="w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-                                        Delete
-                                    </button>
+                                        :class="tenant.status === 'paused' ? 'sg-btn-success' : 'sg-btn-warning'"
+                                        x-text="tenant.status === 'paused' ? 'Unpause' : 'Pause'"></button>
+                                    <button @click="deleteTenant(tenant)" class="sg-btn sg-btn-danger sg-btn-sm">Delete</button>
                                 </div>
-                            </td>
-                        </tr>
-                    </template>
-                    <!-- Expanded agents row -->
-                    <template x-for="tenant in tenants" :key="'exp-'+tenant.id">
-                        <tr x-show="expanded === tenant.id" class="bg-gray-900/50">
-                            <td colspan="6" class="!px-8 !py-3">
-                                <div class="text-xs text-gray-400 mb-2 font-semibold">Agents for <span x-text="tenant.id"></span>:</div>
-                                <div x-show="!expandedAgents.length" class="text-xs text-gray-500">No agents configured.</div>
-                                <table x-show="expandedAgents.length" class="w-full text-xs">
-                                    <thead><tr class="text-gray-500"><th class="text-left py-1">Agent ID</th><th class="text-left py-1">Backend</th><th class="text-left py-1">Model</th><th class="text-left py-1">Status</th></tr></thead>
-                                    <tbody>
-                                        <template x-for="a in expandedAgents" :key="a.agent_id">
-                                            <tr class="border-t border-gray-700/50">
-                                                <td class="py-1 font-mono text-cyan-400" x-text="a.agent_id"></td>
-                                                <td class="py-1 text-gray-300" x-text="a.backend_url"></td>
-                                                <td class="py-1 text-gray-300" x-text="a.model || '—'"></td>
-                                                <td class="py-1"><span class="sg-badge" :class="a.status === 'active' ? 'sg-badge-success' : 'sg-badge-warning'" x-text="a.status"></span></td>
-                                            </tr>
-                                        </template>
-                                    </tbody>
-                                </table>
                             </td>
                         </tr>
                     </template>
                 </tbody>
             </table>
         </div>
-        <!-- Empty state -->
         <div x-show="tenants.length === 0 && !loading" class="sg-empty">
-            <div class="sg-empty-icon">
-                <i data-lucide="building-2" class="w-8 h-8"></i>
-            </div>
             <p class="sg-empty-title">No tenants found</p>
             <p class="sg-empty-desc">Create your first tenant to start managing agents</p>
         </div>
     </div>
 
-    <!-- Create/Edit Modal -->
-    <div x-show="showModal" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
-         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md"
-             x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
+    <!-- ======== MODAL: Create Tenant ======== -->
+    <div x-show="showCreate" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
-                <h3 class="text-lg font-semibold text-white" x-text="editing ? 'Edit Tenant' : 'Create Tenant'"></h3>
-                <button @click="showModal = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+                <h3 class="text-lg font-semibold text-white">New Tenant</h3>
+                <button @click="showCreate = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <div>
                     <label class="sg-label">Tenant ID</label>
-                    <input type="text" x-model="form.id" class="sg-input w-full" :disabled="editing">
+                    <input type="text" x-model="createForm.id" class="sg-input w-full" placeholder="my-company">
+                    <p class="text-xs text-gray-500 mt-1">Lowercase, hyphens allowed (3-64 chars)</p>
                 </div>
                 <div>
                     <label class="sg-label">Name</label>
-                    <input type="text" x-model="form.name" class="sg-input w-full">
+                    <input type="text" x-model="createForm.name" class="sg-input w-full" placeholder="My Company">
                 </div>
                 <div>
                     <label class="sg-label">Contact Email</label>
-                    <input type="email" x-model="form.contact_email" class="sg-input w-full">
+                    <input type="email" x-model="createForm.contact_email" class="sg-input w-full" placeholder="admin@company.com">
                 </div>
             </div>
             <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
-                <button @click="showModal = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
-                <button @click="saveTenant()" class="sg-btn sg-btn-success sg-btn-sm">
-                    <i data-lucide="check" class="w-4 h-4"></i> Save
-                </button>
+                <button @click="showCreate = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="saveCreateTenant()" class="sg-btn sg-btn-success sg-btn-sm">Create Tenant</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== MODAL: Configure Tenant (metadata + agents) ======== -->
+    <div x-show="showConfig" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-y-auto" style="z-index:9999">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-3xl shadow-2xl my-8" @click.stop>
+            <!-- Header -->
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white">Configure: <span class="text-cyan-400 font-mono" x-text="configTenantId"></span></h3>
+                <button @click="showConfig = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+            </div>
+
+            <div class="p-6 space-y-6">
+                <!-- Section: Tenant Info -->
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Tenant Information</h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label class="sg-label">Name</label>
+                            <input type="text" x-model="configForm.name" class="sg-input w-full">
+                        </div>
+                        <div>
+                            <label class="sg-label">Contact Email</label>
+                            <input type="email" x-model="configForm.contact_email" class="sg-input w-full">
+                        </div>
+                        <div>
+                            <label class="sg-label">Status</label>
+                            <select x-model="configForm.status" class="sg-input w-full">
+                                <option value="active">Active</option>
+                                <option value="paused">Paused</option>
+                                <option value="disabled">Disabled</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex justify-end mt-3">
+                        <button @click="saveConfigTenant()" class="sg-btn sg-btn-success sg-btn-sm">Save Tenant Info</button>
+                    </div>
+                </div>
+
+                <!-- Section: Agents -->
+                <div>
+                    <div class="flex items-center justify-between mb-3">
+                        <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Agents <span class="text-gray-500 font-normal" x-text="'(' + configAgents.length + ')'"></span></h4>
+                        <button @click="openAddAgent()" class="sg-btn sg-btn-primary sg-btn-sm">+ Add Agent</button>
+                    </div>
+
+                    <div x-show="configAgents.length === 0" class="text-sm text-gray-500 text-center py-4 border border-dashed border-gray-700 rounded-lg">
+                        No agents yet. Click "Add Agent" to create one.
+                    </div>
+
+                    <div x-show="configAgents.length > 0" class="space-y-2">
+                        <template x-for="agent in configAgents" :key="agent.agent_id">
+                            <div class="bg-gray-900/50 border border-gray-700/50 rounded-lg p-3">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <span class="font-mono text-cyan-400 text-sm font-semibold" x-text="agent.agent_id"></span>
+                                            <span class="sg-badge text-[10px]" :class="agent.status === 'active' ? 'sg-badge-success' : 'sg-badge-warning'" x-text="agent.status"></span>
+                                        </div>
+                                        <div class="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-0.5 text-xs text-gray-400">
+                                            <div><span class="text-gray-600">backend:</span> <span x-text="agent.backend_url || '(default)'"></span></div>
+                                            <div><span class="text-gray-600">model:</span> <span x-text="agent.model || '—'"></span></div>
+                                            <div><span class="text-gray-600">timeout:</span> <span x-text="agent.timeout + 's'"></span></div>
+                                            <div><span class="text-gray-600">path:</span> <span class="font-mono" x-text="agent.path_prefix || '/v1'"></span></div>
+                                            <div><span class="text-gray-600">health:</span> <span class="font-mono" x-text="agent.health_endpoint || '/health'"></span></div>
+                                            <div><span class="text-gray-600">auth:</span> <span x-text="agent.auth_header ? '(set)' : '—'"></span></div>
+                                        </div>
+                                        <div x-show="agent.description" class="text-xs text-gray-500 mt-1" x-text="agent.description"></div>
+                                    </div>
+                                    <div class="flex items-center gap-1 flex-shrink-0">
+                                        <button @click="healthCheckAgent(agent)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Health Check">HC</button>
+                                        <button @click="openEditAgent(agent)" class="sg-btn sg-btn-secondary sg-btn-sm">Edit</button>
+                                        <button @click="pauseAgent(agent)" class="sg-btn sg-btn-sm" :class="agent.status === 'paused' ? 'sg-btn-success' : 'sg-btn-warning'" x-text="agent.status === 'paused' ? 'Run' : 'Pause'"></button>
+                                        <button @click="deleteAgent(agent)" class="sg-btn sg-btn-danger sg-btn-sm">Del</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end">
+                <button @click="showConfig = false" class="sg-btn sg-btn-secondary sg-btn-sm">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== MODAL: Add/Edit Agent ======== -->
+    <div x-show="showAgentModal" x-cloak class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:10000">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl max-h-[85vh] overflow-y-auto" @click.stop>
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-800">
+                <h3 class="text-lg font-semibold text-white" x-text="editingAgent ? 'Edit Agent' : 'New Agent'"></h3>
+                <button @click="showAgentModal = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="sg-label">Agent ID</label>
+                    <input type="text" x-model="agentForm.agent_id" class="sg-input w-full" :disabled="editingAgent" placeholder="support-bot">
+                    <p x-show="!editingAgent" class="text-xs text-gray-500 mt-1">Lowercase + hyphens (3-64 chars)</p>
+                </div>
+                <div>
+                    <label class="sg-label">Backend URL</label>
+                    <input type="text" x-model="agentForm.backend_url" class="sg-input w-full" placeholder="http://ollama:11434">
+                    <p class="text-xs text-gray-500 mt-1">Leave empty to use global default. Supports ${VAR:-default}.</p>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Model</label>
+                        <input type="text" x-model="agentForm.model" class="sg-input w-full" placeholder="tinyllama">
+                    </div>
+                    <div>
+                        <label class="sg-label">Timeout (sec)</label>
+                        <input type="number" x-model.number="agentForm.timeout" class="sg-input w-full" min="1" max="600">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="sg-label">Path Prefix</label>
+                        <input type="text" x-model="agentForm.path_prefix" class="sg-input w-full" placeholder="/v1">
+                    </div>
+                    <div>
+                        <label class="sg-label">Health Endpoint</label>
+                        <input type="text" x-model="agentForm.health_endpoint" class="sg-input w-full" placeholder="/health">
+                    </div>
+                </div>
+                <div>
+                    <label class="sg-label">Auth Header</label>
+                    <input type="text" x-model="agentForm.auth_header" class="sg-input w-full" placeholder="Bearer sk-...">
+                    <p class="text-xs text-gray-500 mt-1">Sent to the LLM backend (optional)</p>
+                </div>
+                <div>
+                    <label class="sg-label">Description</label>
+                    <textarea x-model="agentForm.description" class="sg-input w-full" rows="2" placeholder="What this agent does..."></textarea>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3 sticky bottom-0 bg-gray-800">
+                <button @click="showAgentModal = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="saveAgent()" class="sg-btn sg-btn-success sg-btn-sm" x-text="editingAgent ? 'Save Agent' : 'Create Agent'"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== MODAL: Global Defaults ======== -->
+    <div x-show="showDefaultsModal" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.stop>
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white">Global Agent Defaults</h3>
+                <button @click="showDefaultsModal = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <p class="text-xs text-gray-400">Inherited by all agents that don't override them. Equivalent to <code class="text-cyan-400">defaults:</code> in agents.yaml.</p>
+                <div>
+                    <label class="sg-label">Backend URL</label>
+                    <input type="text" x-model="defaultsForm.backend_url" class="sg-input w-full" placeholder="http://ollama:11434">
+                    <p class="text-xs text-gray-500 mt-1">Supports ${VAR:-default} syntax</p>
+                </div>
+                <div>
+                    <label class="sg-label">Timeout (sec)</label>
+                    <input type="number" x-model.number="defaultsForm.timeout" class="sg-input w-full" min="1" max="600">
+                </div>
+                <div>
+                    <label class="sg-label">Health Endpoint</label>
+                    <input type="text" x-model="defaultsForm.health_endpoint" class="sg-input w-full" placeholder="/health">
+                </div>
+                <div>
+                    <label class="sg-label">Auth Header</label>
+                    <input type="text" x-model="defaultsForm.auth_header" class="sg-input w-full" placeholder="Bearer sk-... (optional)">
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showDefaultsModal = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="saveDefaults()" class="sg-btn sg-btn-success sg-btn-sm">Save Defaults</button>
             </div>
         </div>
     </div>
@@ -145,50 +284,179 @@
 function tenantsManager() {
     return {
         tenants: [],
-        showModal: false,
-        editing: false,
-        expanded: null,
-        expandedAgents: [],
         loading: false,
-        form: { id: '', name: '', contact_email: '' },
+
+        // Create tenant
+        showCreate: false,
+        createForm: { id: '', name: '', contact_email: '' },
+
+        // Configure tenant (edit + agents)
+        showConfig: false,
+        configTenantId: '',
+        configForm: { name: '', contact_email: '', status: 'active' },
+        configAgents: [],
+
+        // Agent modal
+        showAgentModal: false,
+        editingAgent: false,
+        agentForm: { agent_id: '', backend_url: '', model: '', timeout: 120, path_prefix: '/v1', health_endpoint: '/health', auth_header: '', description: '' },
+
+        // Defaults modal
+        showDefaultsModal: false,
+        defaultsForm: { backend_url: '', timeout: 120, health_endpoint: '/health', auth_header: '' },
+
         async init() {
             this.loading = true;
             const resp = await fetch('/admin/tenants');
             if (resp.ok) this.tenants = await resp.json();
             this.loading = false;
         },
-        openCreate() {
-            this.editing = false;
-            this.form = { id: '', name: '', contact_email: '' };
-            this.showModal = true;
+
+        // --- Create Tenant ---
+        openCreateTenant() {
+            this.createForm = { id: '', name: '', contact_email: '' };
+            this.showCreate = true;
         },
-        editTenant(t) {
-            this.editing = true;
-            this.form = { id: t.id, name: t.name, contact_email: t.contact_email || '' };
-            this.showModal = true;
+        async saveCreateTenant() {
+            const resp = await fetch('/admin/tenants', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.createForm) });
+            if (resp.ok) {
+                this.showCreate = false;
+                await this.init();
+                showToast('Tenant created — click Configure to add agents', 'success');
+            } else {
+                const err = await resp.json();
+                showToast(err.detail || JSON.stringify(err), 'error');
+            }
         },
-        async saveTenant() {
-            const method = this.editing ? 'PUT' : 'POST';
-            const url = this.editing ? `/admin/tenants/${this.form.id}` : '/admin/tenants';
-            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.form) });
-            if (resp.ok) { this.showModal = false; await this.init(); showToast('Tenant saved', 'success'); }
+
+        // --- Configure Tenant ---
+        async openConfigTenant(tenant) {
+            this.configTenantId = tenant.id;
+            this.configForm = { name: tenant.name, contact_email: tenant.contact_email || '', status: tenant.status || 'active' };
+            this.showConfig = true;
+            await this.loadConfigAgents();
+        },
+        async loadConfigAgents() {
+            const resp = await fetch(`/admin/tenants/${this.configTenantId}/agents`);
+            this.configAgents = resp.ok ? await resp.json() : [];
+        },
+        async saveConfigTenant() {
+            const resp = await fetch(`/admin/tenants/${this.configTenantId}`, {
+                method: 'PUT', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ name: this.configForm.name, contact_email: this.configForm.contact_email || null, status: this.configForm.status })
+            });
+            if (resp.ok) { await this.init(); showToast('Tenant updated', 'success'); }
             else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
         },
+
+        // --- Table actions ---
         async togglePause(t) {
             const resp = await fetch(`/admin/tenants/${t.id}/pause`, { method: 'PATCH' });
             if (resp.ok) await this.init();
         },
         async deleteTenant(t) {
-            const ok = await showConfirm('Delete Tenant', `Delete tenant "${t.id}"? This cannot be undone.`, 'Delete');
+            const ok = await showConfirm('Delete Tenant', `Delete "${t.id}" and ALL its agents?`, 'Delete');
             if (!ok) return;
             const resp = await fetch(`/admin/tenants/${t.id}`, { method: 'DELETE' });
             if (resp.ok) { await this.init(); showToast('Tenant deleted', 'success'); }
         },
-        async toggleExpand(id) {
-            if (this.expanded === id) { this.expanded = null; return; }
-            this.expanded = id;
-            const resp = await fetch(`/admin/agents?tenant_id=${id}`);
-            this.expandedAgents = resp.ok ? await resp.json() : [];
+
+        // --- Agent CRUD ---
+        openAddAgent() {
+            this.editingAgent = false;
+            this.agentForm = { agent_id: '', backend_url: '', model: '', timeout: 120, path_prefix: '/v1', health_endpoint: '/health', auth_header: '', description: '' };
+            this.showAgentModal = true;
+        },
+        openEditAgent(a) {
+            this.editingAgent = true;
+            this.agentForm = {
+                agent_id: a.agent_id,
+                backend_url: a.backend_url || '',
+                model: a.model || '',
+                timeout: a.timeout || 120,
+                path_prefix: a.path_prefix || '/v1',
+                health_endpoint: a.health_endpoint || '/health',
+                auth_header: a.auth_header || '',
+                description: a.description || ''
+            };
+            this.showAgentModal = true;
+        },
+        async saveAgent() {
+            let resp;
+            if (this.editingAgent) {
+                resp = await fetch(`/admin/agents/${this.configTenantId}/${this.agentForm.agent_id}`, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({
+                        backend_url: this.agentForm.backend_url || null,
+                        model: this.agentForm.model || null,
+                        timeout: this.agentForm.timeout || 120,
+                        path_prefix: this.agentForm.path_prefix || '/v1',
+                        health_endpoint: this.agentForm.health_endpoint || '/health',
+                        auth_header: this.agentForm.auth_header || null,
+                        description: this.agentForm.description || null
+                    })
+                });
+            } else {
+                const payload = {
+                    agent_id: this.agentForm.agent_id,
+                    tenant_id: this.configTenantId,
+                    backend_url: this.agentForm.backend_url || 'http://ollama:11434',
+                    timeout: this.agentForm.timeout || 120,
+                    path_prefix: this.agentForm.path_prefix || '/v1',
+                    health_endpoint: this.agentForm.health_endpoint || '/health',
+                };
+                if (this.agentForm.model) payload.model = this.agentForm.model;
+                if (this.agentForm.auth_header) payload.auth_header = this.agentForm.auth_header;
+                if (this.agentForm.description) payload.description = this.agentForm.description;
+                resp = await fetch('/admin/agents', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            }
+            if (resp.ok) {
+                this.showAgentModal = false;
+                await this.loadConfigAgents();
+                await this.init();
+                showToast(this.editingAgent ? 'Agent updated' : 'Agent created', 'success');
+            } else {
+                const err = await resp.json();
+                showToast(err.detail || JSON.stringify(err), 'error');
+            }
+        },
+        async pauseAgent(a) {
+            const resp = await fetch(`/admin/agents/${this.configTenantId}/${a.agent_id}/pause`, { method: 'PATCH' });
+            if (resp.ok) { await this.loadConfigAgents(); showToast(`Agent ${a.status === 'paused' ? 'resumed' : 'paused'}`, 'success'); }
+        },
+        async deleteAgent(a) {
+            const ok = await showConfirm('Delete Agent', `Delete "${a.agent_id}"?`, 'Delete');
+            if (!ok) return;
+            const resp = await fetch(`/admin/agents/${this.configTenantId}/${a.agent_id}`, { method: 'DELETE' });
+            if (resp.ok) { await this.loadConfigAgents(); await this.init(); showToast('Agent deleted', 'success'); }
+        },
+        async healthCheckAgent(a) {
+            showToast('Checking...', 'info');
+            const resp = await fetch(`/admin/agents/${this.configTenantId}/${a.agent_id}/health-check`, { method: 'POST' });
+            if (resp.ok) {
+                const d = await resp.json();
+                showToast(`${a.agent_id}: ${d.status === 'healthy' ? 'OK (' + d.latency_ms + 'ms)' : 'DOWN'}`, d.status === 'healthy' ? 'success' : 'error');
+            } else { showToast('Check failed', 'error'); }
+        },
+
+        // --- Defaults ---
+        async openDefaults() {
+            const resp = await fetch('/admin/defaults');
+            if (resp.ok) {
+                const d = await resp.json();
+                this.defaultsForm = { backend_url: d.backend_url || '', timeout: d.timeout || 120, health_endpoint: d.health_endpoint || '/health', auth_header: d.auth_header || '' };
+            }
+            this.showDefaultsModal = true;
+        },
+        async saveDefaults() {
+            const payload = {};
+            if (this.defaultsForm.backend_url) payload.backend_url = this.defaultsForm.backend_url;
+            if (this.defaultsForm.timeout) payload.timeout = this.defaultsForm.timeout;
+            if (this.defaultsForm.health_endpoint) payload.health_endpoint = this.defaultsForm.health_endpoint;
+            payload.auth_header = this.defaultsForm.auth_header || '';
+            const resp = await fetch('/admin/defaults', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            if (resp.ok) { this.showDefaultsModal = false; showToast('Defaults saved', 'success'); }
+            else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
         }
     };
 }

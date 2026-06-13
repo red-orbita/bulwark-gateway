@@ -34,7 +34,7 @@ from .services.prometheus_client import PrometheusMetrics, get_metrics
 
 # Routes
 from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
-from .routes import plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment
+from .routes import plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment, events
 
 
 @asynccontextmanager
@@ -123,7 +123,7 @@ async def auth_guard_pages(request: Request, call_next):
                  "/tenants", "/agents", "/users", "/iocs", "/settings", "/coverage",
                  "/rbac", "/setup", "/status", "/notifications", "/skills",
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
-                 "/rate-limits", "/enrichment")
+                 "/rate-limits", "/enrichment", "/events", "/tenant-analytics")
     )
 
     if is_page_route:
@@ -191,6 +191,7 @@ app.include_router(discovery.router, tags=["discovery"])
 app.include_router(ml_scanners.router, prefix="/admin/ml-scanners", tags=["ml-scanners"])
 app.include_router(rate_limits.router, prefix="/admin/rate-limits", tags=["rate-limits"])
 app.include_router(enrichment.router, prefix="/admin/enrichment", tags=["enrichment"])
+app.include_router(events.router, prefix="/admin/events", tags=["events"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -330,3 +331,15 @@ async def rate_limits_page(request: Request):
 async def enrichment_page(request: Request):
     """Enrichment pipeline visibility page."""
     return templates.TemplateResponse(request, "pages/enrichment.html")
+
+
+@app.get("/events", response_class=HTMLResponse)
+async def events_page(request: Request):
+    """Security events viewer — filterable by tenant, category, severity."""
+    return templates.TemplateResponse(request, "pages/events.html")
+
+
+@app.get("/tenant-analytics", response_class=HTMLResponse)
+async def tenant_analytics_page(request: Request):
+    """Per-tenant usage analytics dashboard."""
+    return templates.TemplateResponse(request, "pages/tenant_analytics.html")

@@ -21,6 +21,7 @@ Run after deployment to confirm security posture:
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -32,7 +33,13 @@ import httpx
 # ============================================================
 
 DEFAULT_HOST = "http://localhost:8080"
-API_KEY = "211225c0a6c86e10c6068fb59e27f042bc4d12182844af2d"
+# SECURITY: API key must come from environment variable, never hardcoded
+API_KEY = os.environ.get("SENTINEL_SMOKE_TEST_API_KEY", "")
+if not API_KEY:
+    API_KEY = os.environ.get("SENTINEL_API_KEYS", "").split(",")[0].strip()
+if not API_KEY:
+    print("ERROR: Set SENTINEL_SMOKE_TEST_API_KEY or SENTINEL_API_KEYS env var", file=sys.stderr)
+    sys.exit(1)
 
 HEADERS_SUPPORT = {
     "Content-Type": "application/json",

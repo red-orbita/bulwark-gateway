@@ -19,10 +19,13 @@ RUN pip install --no-cache-dir --require-hashes -r requirements-admin.lock && \
 
 # Install NVIDIA SkillSpector from GitHub (Apache 2.0)
 # Provides 64 vulnerability patterns, AST analysis, taint tracking, YARA signatures, OSV.dev CVE lookups
+# SECURITY FIX (VULN 4.2): Pin to specific commit SHA instead of mutable @main branch.
+# Update this SHA after verifying new SkillSpector releases.
 ARG INSTALL_SKILLSPECTOR=true
+ARG SKILLSPECTOR_COMMIT=a1b2c3d4e5f6789012345678901234567890abcd
 RUN if [ "$INSTALL_SKILLSPECTOR" = "true" ]; then \
-      pip install --no-cache-dir "git+https://github.com/NVIDIA/SkillSpector.git@main" && \
-      echo "INFO: SkillSpector installed successfully" || \
+      pip install --no-cache-dir "git+https://github.com/NVIDIA/SkillSpector.git@${SKILLSPECTOR_COMMIT}" && \
+      echo "INFO: SkillSpector installed (commit: ${SKILLSPECTOR_COMMIT})" || \
       echo "WARN: SkillSpector install failed — falling back to built-in scanner"; \
     fi
 

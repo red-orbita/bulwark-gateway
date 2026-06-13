@@ -32,6 +32,7 @@ from src.config import settings
 from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
+from src.guardrails.session_tracker import get_session_tracker
 from src.models import (
     GuardrailResult,
     SecurityEvent,
@@ -130,17 +131,28 @@ async def chat_completions(request: Request):
     source_ip = request.client.host if request.client else None
 
     # Parse request body
-    # M-03: Enforce body size limit (10MB max)
+    # SECURITY FIX (VULN 1.6): Enforce body size limit regardless of Content-Length header.
+    # Chunked transfer encoding has no Content-Length, so the previous check was bypassable.
+    # Now we read the raw body with an explicit size cap.
+    MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > 10 * 1024 * 1024:
+    if content_length and int(content_length) > MAX_BODY_SIZE:
         return JSONResponse(
             status_code=413,
             content={"error": {"message": "Request body too large (max 10MB)", "type": "validation_error", "code": "body_too_large"}},
         )
     try:
-        body = await request.json()
-    except Exception as exc:
+        raw_body = await request.body()
+        if len(raw_body) > MAX_BODY_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"error": {"message": "Request body too large (max 10MB)", "type": "validation_error", "code": "body_too_large"}},
+            )
+        body = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid request body") from exc
 
     messages = body.get("messages", [])
 
@@ -182,6 +194,39 @@ async def chat_completions(request: Request):
     if input_result.verdict == Verdict.WARN:
         await _log_events(input_result.events, source_ip)
         asyncio.create_task(_fire_webhook_alert(input_result.events, tenant_id, agent_id))
+
+    # === PHASE 1a: Multi-turn decomposition check ===
+    # Tracks threat signal accumulation across requests from same session.
+    # Even if the current request passed input guardrail (ALLOW/WARN), the accumulated
+    # context across multiple requests may reveal a decomposition attack.
+    if input_result.verdict != Verdict.BLOCK:
+        _session_tracker = get_session_tracker()
+        user_content_for_session = " ".join(
+            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+        )
+        if user_content_for_session:
+            session_result = _session_tracker.check_and_update(
+                user_content_for_session, tenant_id, agent_id, source_ip
+            )
+            if session_result.verdict == Verdict.BLOCK:
+                await _log_events(session_result.events, source_ip)
+                asyncio.create_task(_fire_webhook_alert(session_result.events, tenant_id, agent_id))
+                _push_recent_block(session_result.events, tenant_id, agent_id)
+                _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+                _record_tenant_usage(tenant_id, "block")
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": {
+                            "message": "Request blocked: multi-turn attack pattern detected",
+                            "type": "security_violation",
+                            "code": "session_decomposition_block",
+                        }
+                    },
+                )
+            elif session_result.verdict == Verdict.WARN:
+                await _log_events(session_result.events, source_ip)
+                asyncio.create_task(_fire_webhook_alert(session_result.events, tenant_id, agent_id))
 
     # === PHASE 1b: Fire async ML scanners immediately (parallel with backend call) ===
     # These run in the background regardless of client disconnection.
@@ -266,11 +311,13 @@ async def chat_completions(request: Request):
 
                 backend_url = f"{current_backend.backend_url.rstrip('/')}{current_backend.path_prefix}/chat/completions"
 
-                # C-01: SSRF check at request-time (prevents DNS rebinding)
-                # Skip for admin-configured backends (agent registry) — these are trusted.
-                # SSRF protection targets user-controlled URLs, not operator-configured backends.
-                if not current_backend.trusted and _is_ssrf_target(backend_url):
-                    logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id)
+                # SECURITY FIX (VULN 1.2): ALWAYS perform SSRF check at request-time,
+                # even for operator-configured backends. DNS rebinding can cause a
+                # previously-valid hostname to resolve to internal IPs (169.254.169.254,
+                # 10.x.x.x, etc.) between registration and request time.
+                # The "trusted" field is no longer used to skip SSRF validation.
+                if _is_ssrf_target(backend_url):
+                    logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
                     return JSONResponse(
                         status_code=403,
                         content={"error": {"message": "Backend URL resolves to blocked address", "type": "security_violation", "code": "ssrf_block"}},
@@ -649,61 +696,12 @@ async def _handle_streaming(
                             tool_call_buffer.clear()
                             continue
 
-                    data = line[6:]
-                    if data == "[DONE]":
-                        # Flush remaining buffer
-                        if content_buffer:
-                            redacted = _filter_chunk(content_buffer, tenant_id, agent_id, source_ip)
-                            if redacted is None:
-                                # Dangerous content — emit error
-                                yield _make_error_event("Output blocked by security policy")
-                                blocked = True
-                                break
-                            # Emit final buffered content as a chunk
-                            yield _make_content_event(redacted)
-                        yield "data: [DONE]\n\n"
-                        return
-
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        yield f"{line}\n"
-                        continue
-
-                    choices = chunk.get("choices", [])
-                    for choice in choices:
-                        delta = choice.get("delta", {})
-                        finish_reason = choice.get("finish_reason")
-
-                        # Accumulate tool calls
-                        if "tool_calls" in delta:
-                            for tc_delta in delta["tool_calls"]:
-                                idx = tc_delta.get("index", 0)
-                                if idx not in tool_call_buffer:
-                                    tool_call_buffer[idx] = {"name": "", "arguments": ""}
-                                if "function" in tc_delta:
-                                    fn = tc_delta["function"]
-                                    if "name" in fn:
-                                        tool_call_buffer[idx]["name"] = fn["name"]
-                                    if "arguments" in fn:
-                                        tool_call_buffer[idx]["arguments"] += fn["arguments"]
-                            # Forward tool call deltas as-is (policy checked at end)
-                            yield f"{line}\n\n"
-                            continue
-
-                        # Tool calls finished — policy check
-                        if finish_reason == "tool_calls" and tool_call_buffer:
-                            policy_engine = None  # Will check below
-                            # Defer: forward the finish event and log
-                            yield f"{line}\n\n"
-                            continue
-
-                        # Content token
+                        # Content token — buffer for output filtering
                         content_token = delta.get("content")
                         if content_token:
                             content_buffer += content_token
 
-                            # Flush when buffer is full
+                            # Flush when buffer is full (sliding window filter)
                             if len(content_buffer) >= BUFFER_SIZE:
                                 redacted = _filter_chunk(
                                     content_buffer, tenant_id, agent_id, source_ip

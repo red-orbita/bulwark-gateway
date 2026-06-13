@@ -7,192 +7,227 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Plugin Management</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Install, configure, and manage gateway plugins</p>
+            <p class="text-sm text-gray-400 mt-0.5">Install, audit, and manage community scanner plugins</p>
         </div>
         <div class="flex items-center gap-2">
-            <button @click="showCreate = true" class="sg-btn sg-btn-primary sg-btn-sm">
-                <i data-lucide="plus" class="w-4 h-4"></i>
-                Create Plugin
+            <button @click="showInstall = true" class="sg-btn sg-btn-primary sg-btn-sm">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Install Plugin
+            </button>
+            <button @click="showScaffold = true" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                Create Template
             </button>
         </div>
     </div>
 
     <!-- Stats Cards -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div class="sg-card">
-            <p class="text-xs text-gray-500">Total Plugins</p>
-            <p class="text-2xl font-bold text-white mt-1" x-text="plugins.length">
-                <span x-show="loading" class="sg-skeleton w-8 h-7 inline-block"></span>
-            </p>
+        <div class="sg-card !p-4">
+            <p class="text-xs text-gray-500 uppercase tracking-wider">Total Plugins</p>
+            <p class="text-2xl font-bold text-white mt-1" x-text="plugins.length"></p>
         </div>
-        <div class="sg-card">
-            <p class="text-xs text-gray-500">Enabled</p>
-            <p class="text-2xl font-bold text-emerald-400 mt-1" x-text="plugins.filter(p => p.enabled).length">
-                <span x-show="loading" class="sg-skeleton w-8 h-7 inline-block"></span>
-            </p>
+        <div class="sg-card !p-4">
+            <p class="text-xs text-gray-500 uppercase tracking-wider">Enabled</p>
+            <p class="text-2xl font-bold text-emerald-400 mt-1" x-text="plugins.filter(p => p.enabled).length"></p>
         </div>
-        <div class="sg-card">
-            <p class="text-xs text-gray-500">Disabled</p>
-            <p class="text-2xl font-bold text-gray-400 mt-1" x-text="plugins.filter(p => !p.enabled).length">
-                <span x-show="loading" class="sg-skeleton w-8 h-7 inline-block"></span>
-            </p>
+        <div class="sg-card !p-4">
+            <p class="text-xs text-gray-500 uppercase tracking-wider">Disabled</p>
+            <p class="text-2xl font-bold text-gray-400 mt-1" x-text="plugins.filter(p => !p.enabled).length"></p>
         </div>
-        <div class="sg-card">
-            <p class="text-xs text-gray-500">Security Issues</p>
-            <p class="text-2xl font-bold text-red-400 mt-1" x-text="plugins.filter(p => p.security_issues > 0).length">
-                <span x-show="loading" class="sg-skeleton w-8 h-7 inline-block"></span>
-            </p>
+        <div class="sg-card !p-4">
+            <p class="text-xs text-gray-500 uppercase tracking-wider">Security Issues</p>
+            <p class="text-2xl font-bold text-red-400 mt-1" x-text="plugins.filter(p => p.security_issues > 0).length"></p>
         </div>
     </div>
 
-    <!-- Plugin List Table -->
-    <div class="sg-card">
-        <div class="flex items-center justify-between mb-4">
-            <h2 class="text-sm font-semibold text-white">Installed Plugins</h2>
-            <span class="text-xs text-gray-500" x-text="plugins.length + ' plugins'"></span>
+    <!-- Plugin List -->
+    <div class="sg-card !p-0">
+        <div class="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Installed Plugins</h2>
+            <button @click="loadPlugins()" class="sg-btn sg-btn-ghost sg-btn-sm text-xs">Refresh</button>
         </div>
 
-        <!-- Loading skeleton -->
-        <template x-if="loading">
-            <div class="space-y-3">
-                <div class="sg-skeleton w-full h-10 rounded"></div>
-                <div class="sg-skeleton w-full h-10 rounded"></div>
-                <div class="sg-skeleton w-full h-10 rounded"></div>
-            </div>
-        </template>
+        <!-- Loading -->
+        <div x-show="loading" class="p-4 space-y-3">
+            <div class="sg-skeleton h-12 w-full rounded"></div>
+            <div class="sg-skeleton h-12 w-full rounded"></div>
+        </div>
 
         <!-- Table -->
-        <template x-if="!loading">
-            <div class="overflow-x-auto">
-                <table class="sg-table text-xs w-full">
-                    <thead>
+        <div x-show="!loading" class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr>
+                        <th>Plugin</th>
+                        <th>Version</th>
+                        <th>Type</th>
+                        <th>Mode</th>
+                        <th>Status</th>
+                        <th class="text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="plugin in plugins" :key="plugin.name">
                         <tr>
-                            <th>Name</th>
-                            <th>Version</th>
-                            <th>Type</th>
-                            <th>Status</th>
-                            <th>Actions</th>
+                            <td>
+                                <div>
+                                    <span class="font-semibold text-white text-sm" x-text="plugin.name"></span>
+                                    <p class="text-[11px] text-gray-500 mt-0.5 max-w-xs truncate" x-text="plugin.description"></p>
+                                </div>
+                            </td>
+                            <td class="font-mono text-xs text-gray-400" x-text="plugin.version"></td>
+                            <td>
+                                <span class="sg-badge sg-badge-brand text-[10px]" x-text="plugin.type"></span>
+                            </td>
+                            <td>
+                                <span class="text-[10px]" :class="plugin.blocking ? 'text-red-400' : 'text-green-400'" x-text="plugin.blocking ? 'blocking' : 'async'"></span>
+                            </td>
+                            <td>
+                                <span class="sg-badge text-[10px]" :class="plugin.enabled ? 'sg-badge-success' : 'sg-badge-neutral'"
+                                      x-text="plugin.enabled ? 'enabled' : 'disabled'"></span>
+                                <span x-show="plugin.security_issues > 0" class="sg-badge sg-badge-danger text-[10px] ml-1" x-text="plugin.security_issues + ' issues'"></span>
+                            </td>
+                            <td class="text-right">
+                                <div class="flex items-center justify-end gap-1">
+                                    <button @click="openTest(plugin.name)"
+                                            class="sg-btn sg-btn-primary sg-btn-sm" title="Live Test">Test</button>
+                                    <button @click="togglePlugin(plugin.name, !plugin.enabled)"
+                                            class="sg-btn sg-btn-sm" :class="plugin.enabled ? 'sg-btn-warning' : 'sg-btn-success'"
+                                            x-text="plugin.enabled ? 'Disable' : 'Enable'"></button>
+                                    <button @click="securityCheck(plugin.name)"
+                                            class="sg-btn sg-btn-secondary sg-btn-sm" title="Security Audit">Audit</button>
+                                    <button @click="uninstallPlugin(plugin.name)"
+                                            class="sg-btn sg-btn-danger sg-btn-sm">Uninstall</button>
+                                </div>
+                            </td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        <template x-for="plugin in plugins" :key="plugin.name">
-                            <tr>
-                                <td class="font-medium text-white" x-text="plugin.name"></td>
-                                <td class="font-mono text-gray-400" x-text="plugin.version || '-'"></td>
-                                <td>
-                                    <span class="sg-badge sg-badge-neutral" x-text="plugin.type || 'custom'"></span>
-                                </td>
-                                <td>
-                                    <span class="sg-badge" :class="plugin.enabled ? 'sg-badge-success' : 'sg-badge-neutral'"
-                                          x-text="plugin.enabled ? 'enabled' : 'disabled'"></span>
-                                </td>
-                                <td>
-                                    <div class="flex items-center gap-1">
-                                        <button @click="togglePlugin(plugin.name, !plugin.enabled)"
-                                                class="sg-btn sg-btn-ghost sg-btn-sm"
-                                                :title="plugin.enabled ? 'Disable' : 'Enable'">
-                                            <i :data-lucide="plugin.enabled ? 'pause' : 'play'" class="w-3.5 h-3.5"></i>
-                                        </button>
-                                        <button @click="securityCheck(plugin.name)"
-                                                class="sg-btn sg-btn-ghost sg-btn-sm" title="Security Check">
-                                            <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
-                                        </button>
-                                        <button @click="uninstallPlugin(plugin.name)"
-                                                class="sg-btn sg-btn-ghost sg-btn-sm text-red-400 hover:text-red-300" title="Uninstall">
-                                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        </template>
-                        <template x-if="plugins.length === 0">
-                            <tr>
-                                <td colspan="5" class="sg-empty text-center py-8">
-                                    <i data-lucide="package" class="w-8 h-8 text-gray-600 mx-auto mb-2"></i>
-                                    <p class="text-gray-500">No plugins installed</p>
-                                    <button @click="showCreate = true" class="sg-btn sg-btn-primary sg-btn-sm mt-3">
-                                        Create your first plugin
-                                    </button>
-                                </td>
-                            </tr>
-                        </template>
-                    </tbody>
-                </table>
-            </div>
-        </template>
-    </div>
+                    </template>
+                </tbody>
+            </table>
+        </div>
 
-    <!-- Create Plugin Modal -->
-    <div x-show="showCreate" x-cloak class="fixed inset-0 z-[80]"
-         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
-         x-transition:leave="transition duration-150" x-transition:leave-end="opacity-0">
-        <div class="fixed inset-0 bg-black/70 backdrop-blur-sm" @click="showCreate = false"></div>
-        <div class="fixed inset-0 flex items-center justify-center p-4">
-            <div class="sg-card w-full max-w-md" @click.stop
-                 x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0 scale-95"
-                 x-transition:enter-end="opacity-100 scale-100"
-                 style="box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8);">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-base font-semibold text-white">Create Plugin</h3>
-                    <button @click="showCreate = false" class="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
-                        <i data-lucide="x" class="w-5 h-5"></i>
-                    </button>
-                </div>
-                <form @submit.prevent="createPlugin()" class="space-y-4">
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1.5">Plugin Name</label>
-                        <input type="text" x-model="newName" class="sg-input w-full"
-                               placeholder="my-custom-plugin" required
-                               pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">
-                        <p class="text-[10px] text-gray-600 mt-1">Lowercase letters, numbers, and hyphens only</p>
-                    </div>
-                    <div class="flex justify-end gap-3 pt-2">
-                        <button type="button" @click="showCreate = false" class="sg-btn sg-btn-ghost">Cancel</button>
-                        <button type="submit" class="sg-btn sg-btn-primary" :disabled="!newName.trim()">
-                            <i data-lucide="plus" class="w-4 h-4"></i>
-                            Create
-                        </button>
-                    </div>
-                </form>
-            </div>
+        <!-- Empty State -->
+        <div x-show="!loading && plugins.length === 0" class="sg-empty py-12">
+            <svg class="w-10 h-10 text-gray-600 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 7.5v9l-4 2.25M20 7.5L12 2 4 7.5m16 0-8 4.5m-8-4.5v9l4 2.25M4 7.5l8 4.5m0 0v9l4-2.25M12 12l-4 2.25"/></svg>
+            <p class="text-gray-400 font-medium">No plugins installed</p>
+            <p class="text-xs text-gray-500 mt-1">Upload a .zip file, clone from Git, or create a template</p>
+            <button @click="showInstall = true" class="sg-btn sg-btn-primary sg-btn-sm mt-4">Install First Plugin</button>
         </div>
     </div>
 
-    <!-- Security Check Results Slide-over -->
-    <div x-show="securityResults !== null" x-cloak class="fixed inset-0 z-[80]"
-         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
-         x-transition:leave="transition duration-150" x-transition:leave-end="opacity-0">
-        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="securityResults = null"></div>
-        <div class="fixed right-0 top-0 h-full w-full max-w-lg overflow-y-auto"
-             style="background: linear-gradient(180deg, #0f172a, #030712); border-left: 1px solid rgba(255,255,255,0.06); box-shadow: -10px 0 40px rgba(0,0,0,0.5);"
-             x-transition:enter="transition transform duration-200" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
-             x-transition:leave="transition transform duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full">
-            <!-- Header -->
-            <div class="flex items-center justify-between p-5" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
-                <h2 class="text-base font-semibold text-white">Security Check Results</h2>
-                <button @click="securityResults = null" class="p-1.5 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
-                    <i data-lucide="x" class="w-5 h-5"></i>
+    <!-- ======== MODAL: Install Plugin ======== -->
+    <div x-show="showInstall" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl" @click.stop>
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white">Install Plugin</h3>
+                <button @click="showInstall = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+            </div>
+
+            <!-- Tab selector -->
+            <div class="px-6 pt-4 flex gap-1">
+                <button @click="installTab = 'upload'" class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                        :class="installTab === 'upload' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'text-gray-400 hover:text-white'">
+                    Upload Archive
+                </button>
+                <button @click="installTab = 'git'" class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                        :class="installTab === 'git' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'text-gray-400 hover:text-white'">
+                    Git Repository
                 </button>
             </div>
 
+            <!-- Upload tab -->
+            <div x-show="installTab === 'upload'" class="p-6 space-y-4">
+                <p class="text-xs text-gray-400">Upload a <code class="text-cyan-400">.zip</code> or <code class="text-cyan-400">.tar.gz</code> archive containing a valid plugin (must include <code class="text-cyan-400">sentinel-plugin.yaml</code>).</p>
+                <div class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-cyan-500/50 transition-colors cursor-pointer"
+                     @click="$refs.fileInput.click()"
+                     @dragover.prevent="dragOver = true"
+                     @dragleave="dragOver = false"
+                     @drop.prevent="handleDrop($event)"
+                     :class="dragOver && 'border-cyan-500 bg-cyan-500/5'">
+                    <svg class="w-8 h-8 text-gray-500 mx-auto mb-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <p class="text-sm text-gray-400" x-show="!selectedFile">Drop file here or click to browse</p>
+                    <p class="text-sm text-cyan-400 font-medium" x-show="selectedFile" x-text="selectedFile?.name"></p>
+                    <p class="text-[10px] text-gray-600 mt-1">Max 10MB. Formats: .zip, .tar.gz</p>
+                </div>
+                <input type="file" x-ref="fileInput" class="hidden" accept=".zip,.tar.gz,.tgz" @change="selectedFile = $event.target.files[0]">
+                <div x-show="uploadError" class="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg p-3" x-text="uploadError"></div>
+            </div>
+
+            <!-- Git tab -->
+            <div x-show="installTab === 'git'" class="p-6 space-y-4">
+                <p class="text-xs text-gray-400">Clone a plugin from a public Git repository. The repo must contain <code class="text-cyan-400">sentinel-plugin.yaml</code> at root or one level deep.</p>
+                <div>
+                    <label class="sg-label">Repository URL</label>
+                    <input type="url" x-model="gitUrl" class="sg-input w-full" placeholder="https://github.com/user/sentinel-plugin-example">
+                </div>
+                <div>
+                    <label class="sg-label">Branch</label>
+                    <input type="text" x-model="gitBranch" class="sg-input w-full" placeholder="main">
+                </div>
+                <div x-show="gitError" class="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg p-3" x-text="gitError"></div>
+            </div>
+
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showInstall = false; resetInstall()" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="doInstall()" class="sg-btn sg-btn-success sg-btn-sm" :disabled="installing">
+                    <span x-show="!installing">Install</span>
+                    <span x-show="installing">Installing...</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== MODAL: Create Template (Scaffold) ======== -->
+    <div x-show="showScaffold" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.stop>
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white">Create Plugin Template</h3>
+                <button @click="showScaffold = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <p class="text-xs text-gray-400">Generate a boilerplate plugin structure with <code class="text-cyan-400">sentinel-plugin.yaml</code>, <code class="text-cyan-400">scanner.py</code>, tests, and README.</p>
+                <div>
+                    <label class="sg-label">Plugin Name</label>
+                    <input type="text" x-model="scaffoldName" class="sg-input w-full" placeholder="my-custom-scanner" pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">
+                    <p class="text-[10px] text-gray-500 mt-1">Lowercase + hyphens (3-64 chars). Will be installed directly.</p>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button @click="showScaffold = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
+                <button @click="doScaffold()" class="sg-btn sg-btn-success sg-btn-sm" :disabled="!scaffoldName.trim()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== SLIDE-OVER: Security Check Results ======== -->
+    <div x-show="securityResults !== null" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl max-h-[85vh] overflow-y-auto" @click.stop>
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-800 z-10">
+                <h3 class="text-lg font-semibold text-white">Security Audit</h3>
+                <button @click="securityResults = null" class="text-gray-400 hover:text-white text-xl">&times;</button>
+            </div>
+
             <!-- Score -->
-            <div class="p-5" style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <div class="px-6 py-5 border-b border-gray-700/50">
                 <div class="flex items-center gap-4">
-                    <div class="w-16 h-16 rounded-xl flex items-center justify-center" :class="{
-                        'bg-emerald-500/10 border border-emerald-500/20': securityResults.risk_score < 4,
-                        'bg-yellow-500/10 border border-yellow-500/20': securityResults.risk_score >= 4 && securityResults.risk_score < 7,
-                        'bg-red-500/10 border border-red-500/20': securityResults.risk_score >= 7,
-                    }">
-                        <span class="text-xl font-bold" :class="{
-                            'text-emerald-400': securityResults.risk_score < 4,
-                            'text-yellow-400': securityResults.risk_score >= 4 && securityResults.risk_score < 7,
-                            'text-red-400': securityResults.risk_score >= 7,
-                        }" x-text="securityResults.risk_score.toFixed(1)"></span>
+                    <div class="w-16 h-16 rounded-xl flex items-center justify-center border"
+                         :class="{
+                            'bg-emerald-500/10 border-emerald-500/30': securityResults.risk_score < 4,
+                            'bg-yellow-500/10 border-yellow-500/30': securityResults.risk_score >= 4 && securityResults.risk_score < 7,
+                            'bg-red-500/10 border-red-500/30': securityResults.risk_score >= 7,
+                         }">
+                        <span class="text-2xl font-bold"
+                              :class="{
+                                'text-emerald-400': securityResults.risk_score < 4,
+                                'text-yellow-400': securityResults.risk_score >= 4 && securityResults.risk_score < 7,
+                                'text-red-400': securityResults.risk_score >= 7,
+                              }" x-text="securityResults.risk_score.toFixed(1)"></span>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-white" x-text="securityResults.plugin_name"></p>
-                        <p class="text-xs text-gray-500" x-text="securityResults.findings.length + ' findings'"></p>
-                        <span class="sg-badge mt-1" :class="{
+                        <p class="text-sm font-semibold text-white" x-text="securityResults.plugin_name"></p>
+                        <p class="text-xs text-gray-500" x-text="securityResults.findings.length + ' finding(s)'"></p>
+                        <span class="sg-badge mt-1 text-[10px]" :class="{
                             'sg-badge-success': securityResults.verdict === 'pass',
                             'sg-badge-warning': securityResults.verdict === 'warn',
                             'sg-badge-danger': securityResults.verdict === 'block',
@@ -201,33 +236,140 @@
                 </div>
             </div>
 
-            <!-- Findings -->
-            <div class="p-5 space-y-3">
-                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Findings</h3>
+            <!-- Findings list -->
+            <div class="p-6 space-y-3">
                 <template x-for="finding in securityResults.findings" :key="finding.rule_id + finding.message">
-                    <div class="rounded-lg p-3" :class="{
-                        'bg-red-500/5 border border-red-500/10': finding.severity === 'critical' || finding.severity === 'high',
-                        'bg-yellow-500/5 border border-yellow-500/10': finding.severity === 'medium',
-                        'bg-gray-800/50 border border-gray-700/50': finding.severity === 'low',
+                    <div class="rounded-lg p-3 border" :class="{
+                        'bg-red-500/5 border-red-500/20': finding.severity === 'critical' || finding.severity === 'high',
+                        'bg-yellow-500/5 border-yellow-500/20': finding.severity === 'medium',
+                        'bg-gray-800/50 border-gray-700/50': finding.severity === 'low',
                     }">
                         <div class="flex items-center justify-between mb-1">
                             <span class="text-xs font-mono text-cyan-400" x-text="finding.rule_id"></span>
-                            <span class="sg-badge" :class="{
+                            <span class="sg-badge text-[10px]" :class="{
                                 'sg-badge-danger': finding.severity === 'critical' || finding.severity === 'high',
                                 'sg-badge-warning': finding.severity === 'medium',
                                 'sg-badge-neutral': finding.severity === 'low',
                             }" x-text="finding.severity"></span>
                         </div>
                         <p class="text-sm text-gray-300" x-text="finding.message"></p>
-                        <p class="text-xs text-gray-500 mt-1" x-show="finding.location" x-text="finding.location"></p>
+                        <p class="text-xs text-gray-500 mt-1 font-mono" x-show="finding.location" x-text="finding.location"></p>
                     </div>
                 </template>
-                <template x-if="securityResults.findings.length === 0">
-                    <div class="text-center py-6">
-                        <i data-lucide="shield-check" class="w-8 h-8 text-emerald-500/60 mx-auto mb-2"></i>
-                        <p class="text-sm text-gray-400">No security issues found</p>
+                <div x-show="securityResults.findings.length === 0" class="text-center py-6">
+                    <svg class="w-10 h-10 text-emerald-500/50 mx-auto mb-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+                    <p class="text-sm text-gray-400">No security issues found</p>
+                    <p class="text-xs text-gray-500">Plugin passed all security checks</p>
+                </div>
+            </div>
+
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end">
+                <button @click="securityResults = null" class="sg-btn sg-btn-secondary sg-btn-sm">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== MODAL: Live Test ======== -->
+    <div x-show="showTest" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto" @click.stop>
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-800 z-10">
+                <div>
+                    <h3 class="text-lg font-semibold text-white">Live Test</h3>
+                    <p class="text-xs text-gray-500">Plugin: <span class="text-cyan-400 font-mono" x-text="testPluginName"></span></p>
+                </div>
+                <button @click="showTest = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+            </div>
+
+            <div class="p-6 space-y-4">
+                <!-- Input area -->
+                <div>
+                    <label class="sg-label">Test Input</label>
+                    <textarea x-model="testContent" class="sg-input w-full font-mono text-sm" rows="5"
+                              placeholder="Type or paste text here to test the plugin detection..."></textarea>
+                </div>
+
+                <!-- Quick examples -->
+                <div>
+                    <p class="text-xs text-gray-500 mb-2">Quick examples:</p>
+                    <div class="flex flex-wrap gap-1.5">
+                        <button @click="testContent = 'My credit card is 4532015112830366'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 border border-gray-600/30">Visa CC</button>
+                        <button @click="testContent = 'Transfer to IBAN ES9121000418450200051332'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 border border-gray-600/30">IBAN</button>
+                        <button @click="testContent = 'Mi DNI es 12345678Z'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 border border-gray-600/30">DNI</button>
+                        <button @click="testContent = 'Key: AKIAIOSFODNN7EXAMPLE'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 border border-gray-600/30">AWS Key</button>
+                        <button @click="testContent = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQ...'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 border border-gray-600/30">Private Key</button>
+                        <button @click="testContent = 'SSN: 123-45-6789'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 border border-gray-600/30">US SSN</button>
+                        <button @click="testContent = 'Contacts: john@acme.com, jane@corp.org, bob@test.net, alice@dev.io'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 border border-gray-600/30">Bulk Emails</button>
+                        <button @click="testContent = 'Can you help me write a Python function to sort a list?'" class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-green-300 hover:bg-gray-600/50 border border-green-600/30">Clean (should pass)</button>
                     </div>
-                </template>
+                </div>
+
+                <!-- Run button -->
+                <div class="flex justify-end">
+                    <button @click="runTest()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="testing || !testContent.trim()">
+                        <span x-show="!testing">Run Test</span>
+                        <span x-show="testing">Testing...</span>
+                    </button>
+                </div>
+
+                <!-- Results -->
+                <div x-show="testResult !== null" class="border border-gray-700 rounded-lg overflow-hidden">
+                    <!-- Verdict banner -->
+                    <div class="px-4 py-3 flex items-center justify-between" :class="{
+                        'bg-red-500/10 border-b border-red-500/20': testResult?.verdict === 'block',
+                        'bg-amber-500/10 border-b border-amber-500/20': testResult?.verdict === 'warn',
+                        'bg-green-500/10 border-b border-green-500/20': testResult?.verdict === 'allow',
+                        'bg-gray-700/50 border-b border-gray-600': testResult?.verdict === 'error',
+                    }">
+                        <div class="flex items-center gap-3">
+                            <span class="text-lg font-bold" :class="{
+                                'text-red-400': testResult?.verdict === 'block',
+                                'text-amber-400': testResult?.verdict === 'warn',
+                                'text-green-400': testResult?.verdict === 'allow',
+                                'text-gray-400': testResult?.verdict === 'error',
+                            }" x-text="testResult?.verdict?.toUpperCase()"></span>
+                            <span class="text-xs text-gray-400" x-text="testResult?.execution_time_ms + 'ms'"></span>
+                        </div>
+                        <span class="sg-badge text-[10px]" :class="{
+                            'sg-badge-danger': testResult?.verdict === 'block',
+                            'sg-badge-warning': testResult?.verdict === 'warn',
+                            'sg-badge-success': testResult?.verdict === 'allow',
+                        }" x-text="testResult?.verdict === 'block' ? 'BLOCKED' : testResult?.verdict === 'allow' ? 'PASSED' : testResult?.verdict?.toUpperCase()"></span>
+                    </div>
+
+                    <!-- Error -->
+                    <div x-show="testResult?.error" class="px-4 py-3 text-xs text-red-400 bg-red-500/5">
+                        <span class="font-semibold">Error:</span> <span x-text="testResult?.error"></span>
+                    </div>
+
+                    <!-- Events/findings -->
+                    <div x-show="testResult?.events?.length > 0" class="px-4 py-3 space-y-2">
+                        <p class="text-xs text-gray-500 font-semibold uppercase tracking-wider">Detection Details</p>
+                        <template x-for="evt in (testResult?.events || [])" :key="evt.description">
+                            <div class="bg-gray-900/50 border border-gray-700/50 rounded-lg p-3">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="sg-badge text-[10px]" :class="{
+                                        'sg-badge-danger': evt.severity === 'critical' || evt.severity === 'high',
+                                        'sg-badge-warning': evt.severity === 'medium',
+                                        'sg-badge-info': evt.severity === 'low',
+                                    }" x-text="evt.severity"></span>
+                                    <span class="text-[10px] text-gray-500 font-mono" x-text="evt.category"></span>
+                                    <span class="text-[10px] text-gray-600" x-text="'via ' + evt.source"></span>
+                                </div>
+                                <p class="text-sm text-gray-300" x-text="evt.description"></p>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- No events (clean) -->
+                    <div x-show="testResult?.verdict === 'allow' && (!testResult?.events || testResult?.events?.length === 0)" class="px-4 py-4 text-center">
+                        <p class="text-sm text-green-400">No sensitive data detected</p>
+                        <p class="text-xs text-gray-500 mt-1">This content would pass through the plugin without being blocked</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end">
+                <button @click="showTest = false" class="sg-btn sg-btn-secondary sg-btn-sm">Close</button>
             </div>
         </div>
     </div>
@@ -238,9 +380,27 @@ function pluginsPage() {
     return {
         plugins: [],
         loading: true,
-        showCreate: false,
-        newName: '',
+        // Install modal
+        showInstall: false,
+        installTab: 'upload',
+        selectedFile: null,
+        dragOver: false,
+        gitUrl: '',
+        gitBranch: 'main',
+        installing: false,
+        uploadError: '',
+        gitError: '',
+        // Scaffold modal
+        showScaffold: false,
+        scaffoldName: '',
+        // Security results
         securityResults: null,
+        // Live test
+        showTest: false,
+        testPluginName: '',
+        testContent: '',
+        testResult: null,
+        testing: false,
 
         async init() {
             await this.loadPlugins();
@@ -252,109 +412,224 @@ function pluginsPage() {
                 const resp = await fetch('/admin/plugins/', { credentials: 'include' });
                 if (resp.ok) {
                     this.plugins = await resp.json();
-                } else {
-                    showToast('Failed to load plugins', 'error');
+                } else if (resp.status === 503) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Plugin system unavailable', 'warn');
+                    this.plugins = [];
                 }
             } catch (e) {
-                console.error('Failed to load plugins:', e);
-                showToast('Network error loading plugins', 'error');
+                showToast('Failed to load plugins', 'error');
             } finally {
                 this.loading = false;
-                this.$nextTick(() => lucide.createIcons());
             }
         },
 
+        // --- Install ---
+        handleDrop(event) {
+            this.dragOver = false;
+            const files = event.dataTransfer.files;
+            if (files.length > 0) this.selectedFile = files[0];
+        },
+
+        resetInstall() {
+            this.selectedFile = null;
+            this.gitUrl = '';
+            this.gitBranch = 'main';
+            this.uploadError = '';
+            this.gitError = '';
+            this.installing = false;
+        },
+
+        async doInstall() {
+            this.installing = true;
+            this.uploadError = '';
+            this.gitError = '';
+
+            try {
+                if (this.installTab === 'upload') {
+                    await this.installUpload();
+                } else {
+                    await this.installGit();
+                }
+            } finally {
+                this.installing = false;
+            }
+        },
+
+        async installUpload() {
+            if (!this.selectedFile) {
+                this.uploadError = 'Please select a file first';
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', this.selectedFile);
+
+            const resp = await fetch('/admin/plugins/install/upload', {
+                method: 'POST',
+                body: formData,
+                credentials: 'include',
+            });
+
+            if (resp.ok) {
+                const data = await resp.json();
+                showToast(`Plugin "${data.name}" v${data.version} installed successfully`, 'success');
+                this.showInstall = false;
+                this.resetInstall();
+                await this.loadPlugins();
+            } else {
+                const err = await resp.json().catch(() => ({ detail: 'Upload failed' }));
+                this.uploadError = err.detail || 'Installation failed';
+            }
+        },
+
+        async installGit() {
+            if (!this.gitUrl.trim()) {
+                this.gitError = 'Please enter a repository URL';
+                return;
+            }
+            if (!this.gitUrl.startsWith('https://')) {
+                this.gitError = 'Only HTTPS URLs are allowed';
+                return;
+            }
+
+            const resp = await fetch('/admin/plugins/install/url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: this.gitUrl.trim(), branch: this.gitBranch || 'main' }),
+                credentials: 'include',
+            });
+
+            if (resp.ok) {
+                const data = await resp.json();
+                showToast(`Plugin "${data.name}" v${data.version} installed from Git`, 'success');
+                this.showInstall = false;
+                this.resetInstall();
+                await this.loadPlugins();
+            } else {
+                const err = await resp.json().catch(() => ({ detail: 'Git install failed' }));
+                this.gitError = err.detail || 'Installation failed';
+            }
+        },
+
+        // --- Scaffold ---
+        async doScaffold() {
+            if (!this.scaffoldName.trim()) return;
+            const resp = await fetch('/admin/plugins/scaffold', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: this.scaffoldName.trim() }),
+                credentials: 'include',
+            });
+            if (resp.ok) {
+                showToast(`Template "${this.scaffoldName}" created — edit scanner.py to add your logic`, 'success');
+                this.scaffoldName = '';
+                this.showScaffold = false;
+                await this.loadPlugins();
+            } else {
+                const err = await resp.json().catch(() => ({ detail: 'Scaffold failed' }));
+                showToast(err.detail || 'Failed to create template', 'error');
+            }
+        },
+
+        // --- Enable/Disable ---
         async togglePlugin(name, enable) {
             const action = enable ? 'enable' : 'disable';
-            try {
-                const resp = await fetch(`/admin/plugins/${name}/${action}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                });
-                if (resp.ok) {
-                    showToast(`Plugin "${name}" ${action}d`, 'success');
-                    await this.loadPlugins();
-                } else {
-                    const err = await resp.json().catch(() => ({ detail: 'Operation failed' }));
-                    showToast(err.detail || `Failed to ${action} plugin`, 'error');
-                }
-            } catch (e) {
-                showToast(`Network error: could not ${action} plugin`, 'error');
+            const resp = await fetch(`/admin/plugins/${name}/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+            });
+            if (resp.ok) {
+                showToast(`Plugin "${name}" ${action}d`, 'success');
+                await this.loadPlugins();
+            } else {
+                const err = await resp.json().catch(() => ({ detail: 'Operation failed' }));
+                showToast(err.detail, 'error');
             }
         },
 
-        async createPlugin() {
-            if (!this.newName.trim()) return;
-            try {
-                const resp = await fetch('/admin/plugins/scaffold', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: this.newName.trim() }),
-                    credentials: 'include',
-                });
-                if (resp.ok) {
-                    showToast(`Plugin "${this.newName}" created`, 'success');
-                    this.newName = '';
-                    this.showCreate = false;
-                    await this.loadPlugins();
-                } else {
-                    const err = await resp.json().catch(() => ({ detail: 'Creation failed' }));
-                    showToast(err.detail || 'Failed to create plugin', 'error');
-                }
-            } catch (e) {
-                showToast('Network error creating plugin', 'error');
-            }
-        },
-
+        // --- Uninstall ---
         async uninstallPlugin(name) {
-            const confirmed = await showConfirm(
-                'Uninstall Plugin',
-                `Are you sure you want to uninstall "${name}"? This action cannot be undone.`,
-                'Uninstall'
-            );
+            const confirmed = await showConfirm('Uninstall Plugin', `Remove "${name}" permanently? This cannot be undone.`, 'Uninstall');
             if (!confirmed) return;
-            try {
-                const resp = await fetch('/admin/plugins/uninstall', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name }),
-                    credentials: 'include',
-                });
-                if (resp.ok) {
-                    showToast(`Plugin "${name}" uninstalled`, 'success');
-                    await this.loadPlugins();
-                } else {
-                    const err = await resp.json().catch(() => ({ detail: 'Uninstall failed' }));
-                    showToast(err.detail || 'Failed to uninstall plugin', 'error');
-                }
-            } catch (e) {
-                showToast('Network error uninstalling plugin', 'error');
+            const resp = await fetch('/admin/plugins/uninstall', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+                credentials: 'include',
+            });
+            if (resp.ok) {
+                showToast(`Plugin "${name}" uninstalled`, 'success');
+                await this.loadPlugins();
+            } else {
+                const err = await resp.json().catch(() => ({ detail: 'Uninstall failed' }));
+                showToast(err.detail, 'error');
             }
         },
 
+        // --- Security Audit ---
         async securityCheck(name) {
+            showToast(`Auditing "${name}"...`, 'info');
+            const resp = await fetch(`/admin/plugins/${name}/security-check`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+            });
+            if (resp.ok) {
+                this.securityResults = await resp.json();
+                const v = this.securityResults.verdict;
+                showToast(`Audit complete: ${v.toUpperCase()} (score ${this.securityResults.risk_score.toFixed(1)}/10)`,
+                    v === 'block' ? 'error' : v === 'warn' ? 'warn' : 'success');
+            } else {
+                const err = await resp.json().catch(() => ({ detail: 'Audit failed' }));
+                showToast(err.detail, 'error');
+            }
+        },
+
+        // --- Live Test ---
+        openTest(name) {
+            this.testPluginName = name;
+            this.testContent = '';
+            this.testResult = null;
+            this.testing = false;
+            this.showTest = true;
+        },
+
+        async runTest() {
+            if (!this.testContent.trim()) return;
+            this.testing = true;
+            this.testResult = null;
+
             try {
-                showToast(`Running security check on "${name}"...`, 'info');
-                const resp = await fetch(`/admin/plugins/${name}/security-check`, {
+                const resp = await fetch(`/admin/plugins/${this.testPluginName}/test`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: this.testContent }),
                     credentials: 'include',
                 });
+
                 if (resp.ok) {
-                    this.securityResults = await resp.json();
-                    this.$nextTick(() => lucide.createIcons());
-                    const verdict = this.securityResults.verdict;
-                    showToast(
-                        `Security check complete: ${verdict.toUpperCase()}`,
-                        verdict === 'block' ? 'error' : verdict === 'warn' ? 'warn' : 'success'
-                    );
+                    this.testResult = await resp.json();
+                    const v = this.testResult.verdict;
+                    if (v === 'block') {
+                        showToast(`BLOCKED in ${this.testResult.execution_time_ms}ms`, 'error');
+                    } else if (v === 'warn') {
+                        showToast(`WARNING in ${this.testResult.execution_time_ms}ms`, 'warn');
+                    } else if (v === 'allow') {
+                        showToast(`PASSED in ${this.testResult.execution_time_ms}ms`, 'success');
+                    } else {
+                        showToast(`Result: ${v}`, 'info');
+                    }
                 } else {
-                    const err = await resp.json().catch(() => ({ detail: 'Security check failed' }));
-                    showToast(err.detail || 'Security check failed', 'error');
+                    const err = await resp.json().catch(() => ({ detail: 'Test failed' }));
+                    showToast(err.detail || 'Test request failed', 'error');
+                    this.testResult = { verdict: 'error', execution_time_ms: 0, error: err.detail, events: [] };
                 }
             } catch (e) {
-                showToast('Network error during security check', 'error');
+                showToast('Network error during test', 'error');
+                this.testResult = { verdict: 'error', execution_time_ms: 0, error: e.message, events: [] };
+            } finally {
+                this.testing = false;
             }
         },
     };

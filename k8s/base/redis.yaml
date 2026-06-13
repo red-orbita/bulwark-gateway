@@ -61,12 +61,17 @@ spec:
           type: RuntimeDefault
       containers:
         - name: redis
-          image: redis:7-alpine
+          # SECURITY FIX (VULN 2.12): Pin Redis to specific patch version
+          image: redis:7.2.5-alpine
           command:
             - sh
             - -c
             - |
-              redis-server /etc/redis/redis.conf --requirepass "$(cat /run/secrets/redis-password)"
+              # SECURITY FIX (VULN 2.3): Use redis.conf include + ACL file instead of
+              # --requirepass which exposes password in /proc/pid/cmdline.
+              # Write password to a temp redis include file (tmpfs, not visible in proc)
+              echo "requirepass $(cat /run/secrets/redis-password)" > /tmp/redis-auth.conf
+              exec redis-server /etc/redis/redis.conf --include /tmp/redis-auth.conf
           ports:
             - containerPort: 6379
               protocol: TCP

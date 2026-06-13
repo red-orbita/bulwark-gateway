@@ -41,7 +41,8 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: init-policies
-          image: sentinel-gateway-proxy:latest
+          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
+          image: sentinel-gateway-proxy:0.4.9-hardened
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "cp -rn /app/config/policies/* /policies/ 2>/dev/null || true"]
           securityContext:
@@ -54,7 +55,8 @@ spec:
               mountPath: /policies
       containers:
         - name: proxy
-          image: sentinel-gateway-proxy:latest
+          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
+          image: sentinel-gateway-proxy:0.4.9-hardened
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

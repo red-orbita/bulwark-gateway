@@ -93,6 +93,8 @@ spec:
             {{- end }}
             - name: reports
               mountPath: /app/reports
+            - name: plugins
+              mountPath: /app/plugins
             - name: tmp
               mountPath: /tmp
           livenessProbe:
@@ -139,6 +141,9 @@ spec:
         - name: reports
           persistentVolumeClaim:
             claimName: reports
+        - name: plugins
+          emptyDir:
+            sizeLimit: 100Mi
         - name: tmp
           emptyDir:
             medium: Memory

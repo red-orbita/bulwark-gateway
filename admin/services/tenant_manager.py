@@ -17,6 +17,8 @@ from admin.models.tenants import (
     AgentInfo,
     AgentStatus,
     AgentUpdate,
+    DefaultsInfo,
+    DefaultsUpdate,
     HealthCheckResponse,
     HealthStatus,
     TenantCreate,
@@ -318,6 +320,34 @@ class TenantManager:
             latency_ms=round(latency, 2) if latency else None,
             last_checked=now,
         )
+
+    # --- Defaults CRUD ---
+
+    def get_defaults(self) -> DefaultsInfo:
+        """Get global agent defaults."""
+        with self._rw_lock:
+            defaults = self._data.get("defaults", {})
+            return DefaultsInfo(
+                backend_url=defaults.get("backend_url", "http://ollama:11434"),
+                timeout=defaults.get("timeout", 120.0),
+                auth_header=defaults.get("auth_header"),
+                health_endpoint=defaults.get("health_endpoint", "/health"),
+            )
+
+    def update_defaults(self, req: DefaultsUpdate) -> DefaultsInfo:
+        """Update global agent defaults."""
+        with self._rw_lock:
+            defaults = self._data.setdefault("defaults", {})
+            if req.backend_url is not None:
+                defaults["backend_url"] = req.backend_url
+            if req.timeout is not None:
+                defaults["timeout"] = req.timeout
+            if req.auth_header is not None:
+                defaults["auth_header"] = req.auth_header if req.auth_header != "" else None
+            if req.health_endpoint is not None:
+                defaults["health_endpoint"] = req.health_endpoint
+            self.persist()
+            return self.get_defaults()
 
     # --- Helpers ---
 

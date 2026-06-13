@@ -10,13 +10,18 @@ COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes --no-deps --prefix=/install -r requirements.lock && \
     pip install --no-cache-dir --prefix=/install .
 
-# ML dependencies (optional, controlled by build arg)
+# ML dependencies (optional, controlled by build args)
 ARG INSTALL_ML=false
+ARG INSTALL_EMBEDDINGS=false
 RUN if [ "$INSTALL_ML" = "true" ]; then \
       pip install --no-cache-dir --prefix=/install \
-        "onnxruntime>=1.17" "tokenizers>=0.15" "numpy>=1.26" \
+        "onnxruntime>=1.17" "tokenizers>=0.15" "numpy>=1.26"; \
+    fi
+RUN if [ "$INSTALL_EMBEDDINGS" = "true" ] || [ "$INSTALL_ML" = "true" ]; then \
+      pip install --no-cache-dir --prefix=/install \
         --extra-index-url https://download.pytorch.org/whl/cpu \
-        "torch>=2.2" "sentence-transformers>=2.6"; \
+        "torch>=2.2" "sentence-transformers>=2.6" || \
+      echo "WARNING: torch/sentence-transformers install failed (non-fatal)"; \
     fi
 
 # ============================================================

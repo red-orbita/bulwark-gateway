@@ -67,6 +67,13 @@ metadata:
     nginx.ingress.kubernetes.io/enable-hsts: "true"
     nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
     nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+    # SECURITY FIX (VULN 2.4): Rate limiting on admin to prevent brute-force
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    nginx.ingress.kubernetes.io/limit-whitelist: ""
+    # SECURITY FIX (VULN 2.5): IP allowlist for admin panel (configure for your network)
+    # Uncomment and set to your corporate IP ranges:
+    # nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12"
 spec:
   ingressClassName: nginx
   tls:

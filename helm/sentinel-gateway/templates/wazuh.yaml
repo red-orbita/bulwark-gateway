@@ -207,10 +207,20 @@ spec:
     spec:
       securityContext:
         fsGroup: 1000
+        # SECURITY FIX (VULN 2.2): Run pod as non-root user (wazuh UID 1000)
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
       initContainers:
         - name: init-filebeat
           image: "{{ .Values.wazuh.image.repository }}:{{ .Values.wazuh.image.tag }}"
           command: ["sh", "-c", "cp -a /etc/filebeat/* /filebeat-etc/ 2>/dev/null || true; echo '#!/bin/sh\nexec sleep infinity' > /filebeat-bin/filebeat; chmod +x /filebeat-bin/filebeat"]
+          # SECURITY FIX (VULN 2.11): Init containers with security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: filebeat-etc
               mountPath: /filebeat-etc
@@ -218,6 +228,12 @@ spec:
               mountPath: /filebeat-bin
         - name: init-sentinel-config
           image: "{{ .Values.wazuh.image.repository }}:{{ .Values.wazuh.image.tag }}"
+          # SECURITY FIX (VULN 2.11): Init containers with security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
           command:
             - sh
             - -c
@@ -268,9 +284,16 @@ spec:
       containers:
         - name: wazuh-manager
           image: "{{ .Values.wazuh.image.repository }}:{{ .Values.wazuh.image.tag }}"
+          # SECURITY FIX (VULN 2.2): Run as non-root. Wazuh 4.9+ supports UID 1000.
+          # If Wazuh image requires root for bind ports <1024, use NET_BIND_SERVICE capability.
           securityContext:
-            runAsUser: 0
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
+            capabilities:
+              add: ["NET_BIND_SERVICE"]
+              drop: ["ALL"]
           env:
             - name: WAZUH_CLUSTER_DISABLED
               value: "true"

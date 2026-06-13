@@ -102,6 +102,10 @@
                 <i data-lucide="scroll-text" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">Audit Log</span>
             </a>
+            <a href="/events" class="nav-item" data-page="events">
+                <i data-lucide="shield-x" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Security Events</span>
+            </a>
 
             <!-- Intelligence -->
             <div class="px-3 mt-4 mb-1" x-show="sidebarOpen">
@@ -147,6 +151,10 @@
             <a href="/tenants" class="nav-item" data-page="tenants">
                 <i data-lucide="building-2" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">Tenants</span>
+            </a>
+            <a href="/tenant-analytics" class="nav-item" data-page="tenant-analytics">
+                <i data-lucide="bar-chart-3" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Tenant Analytics</span>
             </a>
             <a href="/agents" class="nav-item" data-page="agents">
                 <i data-lucide="bot" class="nav-icon"></i>
@@ -197,7 +205,7 @@
     </aside>
 
     <!-- Main content -->
-    <div :class="sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'" class="min-h-screen transition-all duration-200">
+    <div :class="sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'" class="min-h-screen" style="transition: margin-left 200ms ease-in-out">
         <!-- Top bar -->
         <header class="sticky top-0 z-30 header-glass">
             <div class="flex items-center justify-between h-14 px-4 lg:px-6">
@@ -235,7 +243,7 @@
         </header>
 
         <!-- Page content -->
-        <main class="p-4 lg:p-6 max-w-[1600px] relative z-10">
+        <main class="p-4 lg:p-6 max-w-[1600px] relative">
             {% block content %}{% endblock %}
         </main>
     </div>

@@ -94,3 +94,20 @@ class HealthCheckResponse(BaseModel):
     status: HealthStatus
     latency_ms: Optional[float] = None
     last_checked: datetime
+
+
+# --- Defaults models ---
+
+
+class DefaultsInfo(BaseModel):
+    backend_url: str = "http://ollama:11434"
+    timeout: float = 120.0
+    auth_header: Optional[str] = None
+    health_endpoint: str = "/health"
+
+
+class DefaultsUpdate(BaseModel):
+    backend_url: Optional[str] = None
+    timeout: Optional[float] = None
+    auth_header: Optional[str] = None
+    health_endpoint: Optional[str] = None

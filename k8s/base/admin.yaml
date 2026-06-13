@@ -38,7 +38,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: admin
-          image: sentinel-gateway-admin:latest
+          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
+          image: sentinel-gateway-admin:0.7.3-hardened
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

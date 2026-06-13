@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Security Events — Sentinel Gateway Admin{% endblock %}
+{% block breadcrumb %}Security Events{% endblock %}
+{% block content %}
+<div x-data="eventsManager()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Security Events</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Real-time view of blocked and warned requests per tenant</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="refresh()" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="sg-card !p-4">
+            <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Total Events</div>
+            <div class="text-2xl font-bold text-white" x-text="summary.total || 0"></div>
+        </div>
+        <div class="sg-card !p-4">
+            <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Tenants Affected</div>
+            <div class="text-2xl font-bold text-cyan-400" x-text="Object.keys(summary.by_tenant || {}).length"></div>
+        </div>
+        <div class="sg-card !p-4">
+            <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Critical / High</div>
+            <div class="text-2xl font-bold text-red-400" x-text="(summary.by_severity?.critical || 0) + (summary.by_severity?.high || 0)"></div>
+        </div>
+        <div class="sg-card !p-4">
+            <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Categories</div>
+            <div class="text-2xl font-bold text-amber-400" x-text="Object.keys(summary.by_category || {}).length"></div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="sg-card !p-4">
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div>
+                <label class="sg-label text-xs">Tenant</label>
+                <select x-model="filterTenant" @change="applyFilters()" class="sg-input w-full text-sm">
+                    <option value="">All tenants</option>
+                    <template x-for="t in availableTenants" :key="t">
+                        <option :value="t" x-text="t"></option>
+                    </template>
+                </select>
+            </div>
+            <div>
+                <label class="sg-label text-xs">Category</label>
+                <select x-model="filterCategory" @change="applyFilters()" class="sg-input w-full text-sm">
+                    <option value="">All categories</option>
+                    <template x-for="c in availableCategories" :key="c">
+                        <option :value="c" x-text="c"></option>
+                    </template>
+                </select>
+            </div>
+            <div>
+                <label class="sg-label text-xs">Severity</label>
+                <select x-model="filterSeverity" @change="applyFilters()" class="sg-input w-full text-sm">
+                    <option value="">All severities</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                </select>
+            </div>
+            <div class="flex items-end">
+                <button @click="clearFilters()" class="sg-btn sg-btn-ghost sg-btn-sm w-full">Clear Filters</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Events Table -->
+    <div class="sg-card !p-0">
+        <div class="overflow-x-auto">
+            <table class="sg-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Tenant</th>
+                        <th>Severity</th>
+                        <th>Category</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="evt in events" :key="evt.ts + evt.tenant + evt.description">
+                        <tr>
+                            <td class="text-xs text-gray-400 whitespace-nowrap" x-text="formatTime(evt.ts)"></td>
+                            <td>
+                                <span class="font-mono text-xs text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded" x-text="evt.tenant || '—'"></span>
+                            </td>
+                            <td>
+                                <span class="sg-badge text-[10px]"
+                                    :class="{
+                                        'sg-badge-danger': evt.severity === 'critical' || evt.severity === 'high',
+                                        'sg-badge-warning': evt.severity === 'medium',
+                                        'sg-badge-info': evt.severity === 'low'
+                                    }"
+                                    x-text="evt.severity"></span>
+                            </td>
+                            <td class="text-xs text-gray-300" x-text="evt.category"></td>
+                            <td class="text-xs text-gray-400 max-w-xs truncate" :title="evt.description" x-text="evt.description"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <div x-show="events.length === 0 && !loading" class="sg-empty">
+            <p class="sg-empty-title">No security events</p>
+            <p class="sg-empty-desc">Events appear here when the proxy blocks or warns on requests</p>
+        </div>
+        <div x-show="loading" class="p-6 text-center text-gray-500 text-sm">Loading events...</div>
+    </div>
+
+    <!-- Breakdown by Category (horizontal bar chart) -->
+    <div x-show="Object.keys(summary.by_category || {}).length > 0" class="sg-card">
+        <h3 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">Events by Category</h3>
+        <div class="space-y-2">
+            <template x-for="[cat, count] in sortedCategories()" :key="cat">
+                <div class="flex items-center gap-3">
+                    <div class="w-36 text-xs text-gray-400 truncate" x-text="cat"></div>
+                    <div class="flex-1 bg-gray-700/50 rounded-full h-5 overflow-hidden">
+                        <div class="h-full rounded-full bg-gradient-to-r from-cyan-500/70 to-cyan-400/50 flex items-center justify-end pr-2"
+                             :style="'width:' + Math.max(5, (count / summary.total * 100)) + '%'">
+                            <span class="text-[10px] font-mono text-white" x-text="count"></span>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<script>
+function eventsManager() {
+    return {
+        events: [],
+        summary: {},
+        loading: false,
+        filterTenant: '',
+        filterCategory: '',
+        filterSeverity: '',
+        availableTenants: [],
+        availableCategories: [],
+
+        async init() {
+            await this.refresh();
+        },
+
+        async refresh() {
+            this.loading = true;
+            await Promise.all([this.loadEvents(), this.loadSummary()]);
+            this.loading = false;
+        },
+
+        async loadEvents() {
+            let url = '/admin/events?limit=100';
+            if (this.filterTenant) url += `&tenant=${encodeURIComponent(this.filterTenant)}`;
+            if (this.filterCategory) url += `&category=${encodeURIComponent(this.filterCategory)}`;
+            if (this.filterSeverity) url += `&severity=${encodeURIComponent(this.filterSeverity)}`;
+            const resp = await fetch(url);
+            if (resp.ok) this.events = await resp.json();
+        },
+
+        async loadSummary() {
+            const resp = await fetch('/admin/events/summary');
+            if (resp.ok) {
+                this.summary = await resp.json();
+                this.availableTenants = Object.keys(this.summary.by_tenant || {}).sort();
+                this.availableCategories = Object.keys(this.summary.by_category || {}).sort();
+            }
+        },
+
+        async applyFilters() {
+            await this.loadEvents();
+        },
+
+        clearFilters() {
+            this.filterTenant = '';
+            this.filterCategory = '';
+            this.filterSeverity = '';
+            this.loadEvents();
+        },
+
+        formatTime(ts) {
+            if (!ts) return '—';
+            try {
+                const d = new Date(ts);
+                return d.toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+            } catch { return ts; }
+        },
+
+        sortedCategories() {
+            const cats = this.summary.by_category || {};
+            return Object.entries(cats).sort((a, b) => b[1] - a[1]);
+        }
+    };
+}
+</script>
+{% endblock %}

@@ -102,11 +102,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 # Try JWT first
                 try:
                     # H-03: Validate audience/issuer to prevent cross-service token reuse
-                    decode_options = {"require": ["exp"]}
+                    # SECURITY FIX (VULN 1.3+1.4): Require both exp AND jti claims.
+                    # Tokens without jti cannot be revoked. Tokens without exp never expire.
+                    decode_options = {"require": ["exp", "jti"]}
                     decode_kwargs = {
                         "algorithms": [settings.jwt_algorithm],
                     }
-                    # Only enforce aud/iss if configured (prevents admin→proxy token reuse)
+                    # SECURITY FIX (VULN 1.10): Always enforce audience/issuer
+                    # when configured, removing the empty-string bypass
                     jwt_audience = getattr(settings, "jwt_audience", None)
                     jwt_issuer = getattr(settings, "jwt_issuer", None)
                     if jwt_audience:
@@ -120,9 +123,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         options=decode_options,
                         **decode_kwargs,
                     )
-                    # Check revocation
-                    jti = payload.get("jti")
-                    if jti and _is_token_revoked(jti):
+                    # SECURITY FIX (VULN 1.3): jti is now mandatory (required above),
+                    # so this check always runs. No more skip-if-absent bypass.
+                    jti = payload["jti"]
+                    if _is_token_revoked(jti):
                         return JSONResponse(
                             status_code=401,
                             content={"error": "Token has been revoked"},

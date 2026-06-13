@@ -10,6 +10,8 @@ from admin.models.tenants import (
     AgentCreate,
     AgentInfo,
     AgentUpdate,
+    DefaultsInfo,
+    DefaultsUpdate,
     HealthCheckResponse,
     TenantCreate,
     TenantInfo,
@@ -181,3 +183,18 @@ async def health_check_agent(tenant_id: str, agent_id: str, mgr: TenantManager =
     if result is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found in tenant '{tenant_id}'")
     return result
+
+
+# --- Defaults endpoints ---
+
+
+@router.get("/defaults", response_model=DefaultsInfo)
+def get_defaults(mgr: TenantManager = Depends(_mgr), user: TokenPayload = Depends(require_permission("policies:read"))):
+    return mgr.get_defaults()
+
+
+@router.put("/defaults", response_model=DefaultsInfo)
+def update_defaults(req: DefaultsUpdate, mgr: TenantManager = Depends(_mgr), user: TokenPayload = Depends(require_permission("policies:write"))):
+    if req.backend_url:
+        _validate_backend_url(str(req.backend_url))
+    return mgr.update_defaults(req)
