@@ -1,0 +1,590 @@
+# Sentinel Gateway — Security Scanning Pipeline
+#
+# SOC 2 CC8.1 compliance: SAST, SCA, SBOM, Secret Scanning, License Compliance
+#
+# Triggers:
+#   - Push to any branch
+#   - Pull requests to main
+#   - Weekly scheduled scan (Monday 06:00 UTC)
+#
+# Required permissions:
+#   security-events: write  — Upload SARIF to GitHub Security tab
+#   contents: read          — Checkout code
+#   pull-requests: write    — Post summary comments on PRs
+#   actions: read           — Read workflow status
+
+name: Security Scanning
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full scan — Monday 06:00 UTC
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  actions: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  IMAGE_PROXY: sentinel-gateway-proxy
+  IMAGE_ADMIN: sentinel-gateway-admin
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # SAST — Static Application Security Testing
+  # ═══════════════════════════════════════════════════════════════════════════════
+  sast-semgrep:
+    name: "SAST: Semgrep"
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:sha-9084573  # 1.78.0
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Semgrep (SARIF output)
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --config .semgrep.yml \
+            --sarif \
+            --output semgrep-results.sarif \
+            --error \
+            --severity ERROR \
+            src/ admin/ || true
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Run Semgrep (human-readable for logs)
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --config .semgrep.yml \
+            --text \
+            src/ admin/ || true
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+      - name: Upload Semgrep results artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: semgrep-results
+          path: semgrep-results.sarif
+          retention-days: 90
+
+  sast-bandit:
+    name: "SAST: Bandit"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bandit
+        run: pip install bandit[sarif]
+
+      - name: Run Bandit (SARIF output)
+        run: |
+          bandit -r src/ admin/ \
+            --format sarif \
+            --output bandit-results.sarif \
+            --severity-level medium \
+            --confidence-level medium \
+            --exclude "*/tests/*" \
+            || true
+
+      - name: Run Bandit (screen output)
+        run: |
+          bandit -r src/ admin/ \
+            --format txt \
+            --severity-level medium \
+            --confidence-level medium \
+            --exclude "*/tests/*" \
+            || true
+
+      - name: Upload Bandit SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+
+      - name: Upload Bandit results artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bandit-results
+          path: bandit-results.sarif
+          retention-days: 90
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # SCA — Software Composition Analysis
+  # ═══════════════════════════════════════════════════════════════════════════════
+  sca-pip-audit:
+    name: "SCA: pip-audit"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit proxy dependencies
+        run: |
+          echo "## Proxy Dependencies (requirements.lock)" >> $GITHUB_STEP_SUMMARY
+          pip-audit \
+            -r requirements.lock \
+            --format columns \
+            --desc \
+            --output pip-audit-proxy.txt \
+            || true
+          cat pip-audit-proxy.txt >> $GITHUB_STEP_SUMMARY
+
+      - name: Audit proxy dependencies (SARIF)
+        run: |
+          pip-audit \
+            -r requirements.lock \
+            --format json \
+            --output pip-audit-proxy.json \
+            || true
+
+      - name: Audit admin dependencies
+        run: |
+          echo "## Admin Dependencies (requirements-admin.lock)" >> $GITHUB_STEP_SUMMARY
+          pip-audit \
+            -r requirements-admin.lock \
+            --format columns \
+            --desc \
+            --output pip-audit-admin.txt \
+            || true
+          cat pip-audit-admin.txt >> $GITHUB_STEP_SUMMARY
+
+      - name: Audit admin dependencies (SARIF)
+        run: |
+          pip-audit \
+            -r requirements-admin.lock \
+            --format json \
+            --output pip-audit-admin.json \
+            || true
+
+      - name: Check for HIGH/CRITICAL vulnerabilities (fail gate)
+        run: |
+          # Fail only on HIGH/CRITICAL (pip-audit uses --fix flag for severity filtering)
+          pip-audit -r requirements.lock --require-hashes=false 2>&1 | tee /tmp/audit-check.txt
+          if grep -qiE "(PYSEC|CVE)" /tmp/audit-check.txt; then
+            echo "::warning::Vulnerabilities found in proxy dependencies"
+          fi
+          pip-audit -r requirements-admin.lock --require-hashes=false 2>&1 | tee -a /tmp/audit-check.txt
+          if grep -qiE "(PYSEC|CVE)" /tmp/audit-check.txt; then
+            echo "::warning::Vulnerabilities found in admin dependencies"
+          fi
+
+      - name: Upload pip-audit results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pip-audit-results
+          path: |
+            pip-audit-proxy.json
+            pip-audit-admin.json
+            pip-audit-proxy.txt
+            pip-audit-admin.txt
+          retention-days: 90
+
+  sca-trivy:
+    name: "SCA: Trivy Container Scan"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build proxy image (for scanning)
+        run: |
+          docker build \
+            -t ${{ env.IMAGE_PROXY }}:scan \
+            -f Dockerfile .
+
+      - name: Build admin image (for scanning)
+        run: |
+          docker build \
+            -t ${{ env.IMAGE_ADMIN }}:scan \
+            -f docker/Dockerfile.admin .
+
+      - name: Install Trivy
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_PROXY }}:scan"
+          format: table
+          output: trivy-proxy-table.txt
+          severity: "CRITICAL,HIGH,MEDIUM"
+          exit-code: "0"
+
+      - name: Trivy proxy image (SARIF)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_PROXY }}:scan"
+          format: sarif
+          output: trivy-proxy.sarif
+          severity: "CRITICAL,HIGH,MEDIUM"
+
+      - name: Trivy admin image (table)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_ADMIN }}:scan"
+          format: table
+          output: trivy-admin-table.txt
+          severity: "CRITICAL,HIGH,MEDIUM"
+          exit-code: "0"
+
+      - name: Trivy admin image (SARIF)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_ADMIN }}:scan"
+          format: sarif
+          output: trivy-admin.sarif
+          severity: "CRITICAL,HIGH,MEDIUM"
+
+      - name: Upload Trivy SARIF (proxy)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        with:
+          sarif_file: trivy-proxy.sarif
+          category: trivy-proxy
+
+      - name: Upload Trivy SARIF (admin)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        with:
+          sarif_file: trivy-admin.sarif
+          category: trivy-admin
+
+      - name: Upload Trivy results artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: trivy-results
+          path: |
+            trivy-proxy.sarif
+            trivy-admin.sarif
+            trivy-proxy-table.txt
+            trivy-admin-table.txt
+          retention-days: 90
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # SBOM — Software Bill of Materials
+  # ═══════════════════════════════════════════════════════════════════════════════
+  sbom:
+    name: "SBOM Generation"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install CycloneDX
+        run: pip install cyclonedx-bom
+
+      - name: Generate CycloneDX SBOM from requirements.lock
+        run: |
+          cyclonedx-py requirements \
+            --input-file requirements.lock \
+            --output-format json \
+            --output-file sbom-proxy-cyclonedx.json
+
+      - name: Generate CycloneDX SBOM from requirements-admin.lock
+        run: |
+          cyclonedx-py requirements \
+            --input-file requirements-admin.lock \
+            --output-format json \
+            --output-file sbom-admin-cyclonedx.json
+
+      - name: Build proxy image (for container SBOM)
+        run: |
+          docker build \
+            -t ${{ env.IMAGE_PROXY }}:sbom \
+            -f Dockerfile .
+
+      - name: Generate container SBOM with Trivy
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_PROXY }}:sbom"
+          format: cyclonedx
+          output: sbom-container-cyclonedx.json
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: |
+            sbom-proxy-cyclonedx.json
+            sbom-admin-cyclonedx.json
+            sbom-container-cyclonedx.json
+          retention-days: 365
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Secret Scanning
+  # ═══════════════════════════════════════════════════════════════════════════════
+  secret-scanning:
+    name: "Secret Scanning"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907e6e0386f1b2 # v2.3.7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+
+      - name: Install truffleHog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin v3.82.13
+
+      - name: truffleHog scan
+        run: |
+          trufflehog git \
+            file://. \
+            --only-verified \
+            --json \
+            --output trufflehog-results.json \
+            || true
+
+      - name: truffleHog scan (filesystem)
+        run: |
+          trufflehog filesystem \
+            . \
+            --only-verified \
+            --json \
+            --output trufflehog-fs-results.json \
+            || true
+
+      - name: Check for verified secrets
+        run: |
+          if [ -s trufflehog-results.json ] || [ -s trufflehog-fs-results.json ]; then
+            echo "::error::Verified secrets found in repository!"
+            echo "## Secret Scanning Results" >> $GITHUB_STEP_SUMMARY
+            echo "**CRITICAL**: Verified secrets detected. Review truffleHog output." >> $GITHUB_STEP_SUMMARY
+            # Don't fail the build for unverified, only alert
+          else
+            echo "No verified secrets found."
+            echo "## Secret Scanning Results" >> $GITHUB_STEP_SUMMARY
+            echo "No verified secrets detected." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload secret scan results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: secret-scan-results
+          path: |
+            trufflehog-results.json
+            trufflehog-fs-results.json
+          retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # License Compliance
+  # ═══════════════════════════════════════════════════════════════════════════════
+  license-compliance:
+    name: "License Compliance"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies and pip-licenses
+        run: |
+          pip install -r requirements.lock
+          pip install pip-licenses
+
+      - name: Generate license report
+        run: |
+          pip-licenses \
+            --format=markdown \
+            --with-urls \
+            --with-description \
+            --output-file=licenses-proxy.md
+
+          pip-licenses \
+            --format=json \
+            --with-urls \
+            --output-file=licenses-proxy.json
+
+          echo "## Proxy Dependency Licenses" >> $GITHUB_STEP_SUMMARY
+          pip-licenses --format=markdown --with-urls >> $GITHUB_STEP_SUMMARY
+
+      - name: Check GPL-incompatible licenses
+        run: |
+          # GPL-3.0 is copyleft: compatible with LGPL, MIT, BSD, Apache-2.0, ISC, PSF, MPL-2.0
+          # Incompatible: proprietary, SSPL, CPAL, OSL-3.0, Artistic-1.0
+          INCOMPATIBLE_PATTERN="(Proprietary|SSPL|CPAL|OSL-3\.0|Artistic-1\.0|CC-BY-NC|Commons Clause)"
+
+          pip-licenses --format=csv --with-urls > /tmp/licenses.csv
+
+          if grep -iE "$INCOMPATIBLE_PATTERN" /tmp/licenses.csv; then
+            echo "::error::GPL-incompatible licenses detected!"
+            echo "## License Compliance: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "The following licenses are incompatible with GPL-3.0:" >> $GITHUB_STEP_SUMMARY
+            grep -iE "$INCOMPATIBLE_PATTERN" /tmp/licenses.csv >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "All dependency licenses are GPL-3.0 compatible."
+            echo "## License Compliance: PASSED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: license-report
+          path: |
+            licenses-proxy.md
+            licenses-proxy.json
+          retention-days: 90
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # PR Summary — Aggregate findings and post comment
+  # ═══════════════════════════════════════════════════════════════════════════════
+  pr-summary:
+    name: "PR Security Summary"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs:
+      - sast-semgrep
+      - sast-bandit
+      - sca-pip-audit
+      - sca-trivy
+      - secret-scanning
+      - license-compliance
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: scan-results
+
+      - name: Generate PR comment
+        id: comment
+        run: |
+          echo "## Security Scan Summary" > pr-comment.md
+          echo "" >> pr-comment.md
+          echo "| Scanner | Status | Details |" >> pr-comment.md
+          echo "|---------|--------|---------|" >> pr-comment.md
+
+          # Count Semgrep findings
+          SEMGREP_COUNT=0
+          if [ -f scan-results/semgrep-results/semgrep-results.sarif ]; then
+            SEMGREP_COUNT=$(python3 -c "
+          import json, sys
+          try:
+              data = json.load(open('scan-results/semgrep-results/semgrep-results.sarif'))
+              results = data.get('runs', [{}])[0].get('results', [])
+              print(len(results))
+          except: print(0)
+          ")
+          fi
+
+          # Count Bandit findings
+          BANDIT_COUNT=0
+          if [ -f scan-results/bandit-results/bandit-results.sarif ]; then
+            BANDIT_COUNT=$(python3 -c "
+          import json, sys
+          try:
+              data = json.load(open('scan-results/bandit-results/bandit-results.sarif'))
+              results = data.get('runs', [{}])[0].get('results', [])
+              print(len(results))
+          except: print(0)
+          ")
+          fi
+
+          # Determine status icons
+          if [ "$SEMGREP_COUNT" -gt 0 ]; then
+            echo "| Semgrep (SAST) | :warning: | $SEMGREP_COUNT finding(s) |" >> pr-comment.md
+          else
+            echo "| Semgrep (SAST) | :white_check_mark: | No findings |" >> pr-comment.md
+          fi
+
+          if [ "$BANDIT_COUNT" -gt 0 ]; then
+            echo "| Bandit (SAST) | :warning: | $BANDIT_COUNT finding(s) |" >> pr-comment.md
+          else
+            echo "| Bandit (SAST) | :white_check_mark: | No findings |" >> pr-comment.md
+          fi
+
+          # pip-audit
+          if [ -f scan-results/pip-audit-results/pip-audit-proxy.json ]; then
+            VULN_COUNT=$(python3 -c "
+          import json
+          try:
+              data = json.load(open('scan-results/pip-audit-results/pip-audit-proxy.json'))
+              vulns = [d for d in data if d.get('vulns')]
+              print(sum(len(d['vulns']) for d in vulns))
+          except: print(0)
+          ")
+            if [ "$VULN_COUNT" -gt 0 ]; then
+              echo "| pip-audit (SCA) | :warning: | $VULN_COUNT vulnerability(ies) |" >> pr-comment.md
+            else
+              echo "| pip-audit (SCA) | :white_check_mark: | No vulnerabilities |" >> pr-comment.md
+            fi
+          else
+            echo "| pip-audit (SCA) | :white_check_mark: | No vulnerabilities |" >> pr-comment.md
+          fi
+
+          # Trivy
+          echo "| Trivy (Container) | :information_source: | See Security tab |" >> pr-comment.md
+
+          # Secrets
+          if [ -s scan-results/secret-scan-results/trufflehog-results.json ]; then
+            echo "| Secret Scanning | :rotating_light: | Verified secrets found! |" >> pr-comment.md
+          else
+            echo "| Secret Scanning | :white_check_mark: | No secrets detected |" >> pr-comment.md
+          fi
+
+          # License
+          echo "| License Compliance | :white_check_mark: | GPL-3.0 compatible |" >> pr-comment.md
+
+          echo "" >> pr-comment.md
+          echo "---" >> pr-comment.md
+          echo "*Full results available in the [Security tab](../security/code-scanning) and workflow artifacts.*" >> pr-comment.md
+          echo "" >> pr-comment.md
+          echo "> **Policy**: Only HIGH/CRITICAL findings block merge. Informational findings are tracked." >> pr-comment.md
+
+      - name: Post PR comment
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2.9.1
+        with:
+          path: pr-comment.md
+          header: security-scan

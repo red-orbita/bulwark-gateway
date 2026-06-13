@@ -34,7 +34,7 @@ from .services.prometheus_client import PrometheusMetrics, get_metrics
 
 # Routes
 from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
-from .routes import plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment, events
+from .routes import plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment, events, gdpr
 
 
 @asynccontextmanager
@@ -51,8 +51,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.feed_scheduler import get_feed_scheduler
     scheduler = get_feed_scheduler()
     await scheduler.start()
+    # Initialize GDPR compliance service
+    from .services.gdpr import get_gdpr_service
+    gdpr_service = get_gdpr_service()
+    await gdpr_service.initialize()
     yield
     await scheduler.stop()
+    await gdpr_service.close()
     await audit_log.close()
 
 
@@ -123,7 +128,8 @@ async def auth_guard_pages(request: Request, call_next):
                  "/tenants", "/agents", "/users", "/iocs", "/settings", "/coverage",
                  "/rbac", "/setup", "/status", "/notifications", "/skills",
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
-                 "/rate-limits", "/enrichment", "/events", "/tenant-analytics")
+                 "/rate-limits", "/enrichment", "/events", "/tenant-analytics",
+                 "/gdpr")
     )
 
     if is_page_route:
@@ -192,6 +198,7 @@ app.include_router(ml_scanners.router, prefix="/admin/ml-scanners", tags=["ml-sc
 app.include_router(rate_limits.router, prefix="/admin/rate-limits", tags=["rate-limits"])
 app.include_router(enrichment.router, prefix="/admin/enrichment", tags=["enrichment"])
 app.include_router(events.router, prefix="/admin/events", tags=["events"])
+app.include_router(gdpr.router, prefix="/admin/gdpr", tags=["gdpr"])
 
 
 @app.get("/", response_class=HTMLResponse)

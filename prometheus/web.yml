@@ -1,0 +1,3 @@
+# Sentinel Gateway - Prometheus Web Configuration
+# Basic auth disabled in Docker Compose (use network isolation instead)
+{}

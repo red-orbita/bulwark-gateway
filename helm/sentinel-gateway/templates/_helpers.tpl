@@ -113,13 +113,52 @@ Admin image
 
 {{/*
 Redis URL — internal (in-cluster) or external (cloud/on-premise)
+Supports standalone, sentinel, and cluster modes.
 */}}
 {{- define "sentinel-gateway.redis.url" -}}
 {{- if .Values.redis.enabled }}
-{{- printf "redis://redis.%s.svc.cluster.local.:6379/0" (include "sentinel-gateway.namespace" .) }}
+  {{- if eq .Values.redis.mode "sentinel" }}
+    {{- $ns := include "sentinel-gateway.namespace" . -}}
+    {{- $masterName := .Values.redis.sentinel.masterName -}}
+    {{- $replicas := int .Values.redis.sentinel.replicas -}}
+    {{- $nodes := list -}}
+    {{- range $i := until $replicas -}}
+      {{- $nodes = append $nodes (printf "redis-sentinel-%d.redis-sentinel.%s.svc.cluster.local:26379" $i $ns) -}}
+    {{- end -}}
+    {{- printf "redis+sentinel://%s/0?sentinel_master=%s" (join "," $nodes) $masterName }}
+  {{- else if eq .Values.redis.mode "cluster" }}
+    {{- $ns := include "sentinel-gateway.namespace" . -}}
+    {{- $nodeCount := int .Values.redis.cluster.nodes -}}
+    {{- $nodes := list -}}
+    {{- range $i := until $nodeCount -}}
+      {{- $nodes = append $nodes (printf "redis-cluster-%d.redis-cluster.%s.svc.cluster.local:6379" $i $ns) -}}
+    {{- end -}}
+    {{- printf "redis+cluster://%s/0" (join "," $nodes) }}
+  {{- else }}
+    {{- printf "redis://redis.%s.svc.cluster.local.:6379/0" (include "sentinel-gateway.namespace" .) }}
+  {{- end }}
 {{- else }}
-{{- $scheme := ternary "rediss" "redis" .Values.externalRedis.tls }}
-{{- printf "%s://%s:%d/%d" $scheme .Values.externalRedis.host (int .Values.externalRedis.port) (int .Values.externalRedis.db) }}
+  {{- if .Values.externalRedis.sentinel.enabled }}
+    {{- $scheme := ternary "rediss+sentinel" "redis+sentinel" .Values.externalRedis.tls -}}
+    {{- $masterName := .Values.externalRedis.sentinel.masterName -}}
+    {{- printf "%s://%s/%d?sentinel_master=%s" $scheme (join "," .Values.externalRedis.sentinel.nodes) (int .Values.externalRedis.db) $masterName }}
+  {{- else }}
+    {{- $scheme := ternary "rediss" "redis" .Values.externalRedis.tls -}}
+    {{- printf "%s://%s:%d/%d" $scheme .Values.externalRedis.host (int .Values.externalRedis.port) (int .Values.externalRedis.db) }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Redis Sentinel master name — used by application configuration
+*/}}
+{{- define "sentinel-gateway.redis.masterName" -}}
+{{- if and .Values.redis.enabled (eq .Values.redis.mode "sentinel") }}
+{{- .Values.redis.sentinel.masterName }}
+{{- else if and (not .Values.redis.enabled) .Values.externalRedis.sentinel.enabled }}
+{{- .Values.externalRedis.sentinel.masterName }}
+{{- else }}
+{{- printf "" }}
 {{- end }}
 {{- end }}
 
@@ -155,7 +194,19 @@ Validate required values
 {{- if and (eq .Values.backend.type "externalName") (empty .Values.backend.externalName) }}
 {{- fail "backend.externalName is REQUIRED when backend.type is 'externalName'. Set it to your LLM backend DNS name." }}
 {{- end }}
-{{- if and (not .Values.redis.enabled) (empty .Values.externalRedis.host) }}
-{{- fail "externalRedis.host is REQUIRED when redis.enabled=false. Set it to your Redis endpoint (e.g., my-redis.cache.windows.net)." }}
+{{- if and (not .Values.redis.enabled) (not .Values.externalRedis.sentinel.enabled) (empty .Values.externalRedis.host) }}
+{{- fail "externalRedis.host is REQUIRED when redis.enabled=false (unless using externalRedis.sentinel). Set it to your Redis endpoint." }}
+{{- end }}
+{{- if and .Values.redis.enabled (eq .Values.redis.mode "sentinel") (not .Values.redis.sentinel.enabled) }}
+{{- fail "redis.sentinel.enabled must be true when redis.mode is 'sentinel'." }}
+{{- end }}
+{{- if and .Values.redis.enabled (eq .Values.redis.mode "cluster") (not .Values.redis.cluster.enabled) }}
+{{- fail "redis.cluster.enabled must be true when redis.mode is 'cluster'." }}
+{{- end }}
+{{- if and .Values.redis.enabled (eq .Values.redis.mode "cluster") (lt (int .Values.redis.cluster.nodes) 6) }}
+{{- fail "redis.cluster.nodes must be at least 6 (3 masters + 3 replicas) for Redis Cluster mode." }}
+{{- end }}
+{{- if and (not .Values.redis.enabled) .Values.externalRedis.sentinel.enabled (empty .Values.externalRedis.sentinel.nodes) }}
+{{- fail "externalRedis.sentinel.nodes is REQUIRED when externalRedis.sentinel.enabled=true. Provide at least one sentinel host:port pair." }}
 {{- end }}
 {{- end }}

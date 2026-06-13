@@ -5,6 +5,13 @@ defaults:
   health_endpoint: /health
 tenants:
   default-corp:
+    quotas:
+      max_concurrent_requests: 50
+      max_tokens_per_day: 1000000
+      max_request_size_bytes: 102400  # 100KB
+      allowed_models: ["tinyllama", "gpt-4", "claude-3"]
+      priority_weight: 1.0
+      rate_limit_rpm: 120  # Override global rate limit
     agents:
       support-bot:
         path_prefix: /v1
@@ -29,6 +36,13 @@ tenants:
     _meta:
       status: active
   healthcare-corp:
+    quotas:
+      max_concurrent_requests: 30
+      max_tokens_per_day: 500000
+      max_request_size_bytes: 51200  # 50KB
+      allowed_models: ["tinyllama"]
+      priority_weight: 0.8
+      rate_limit_rpm: 60
     agents:
       patient-assistant:
         path_prefix: /v1
