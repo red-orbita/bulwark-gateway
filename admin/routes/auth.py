@@ -124,17 +124,16 @@ async def login(req: LoginRequest, request: Request, response: Response):
         media_type="application/json",
     )
     # Set HttpOnly cookie for browser-based auth
-    # secure=True only when behind HTTPS (respects X-Forwarded-Proto or SENTINEL_HTTPS env)
-    is_secure = (
-        request.headers.get("x-forwarded-proto") == "https"
-        or os.environ.get("SENTINEL_HTTPS", "").lower() in ("1", "true", "yes")
-    )
+    # SECURITY FIX (VULN 1.11): Default to secure=True in production.
+    # Only disable for explicit local development (SENTINEL_HTTPS=false).
+    # Do NOT trust X-Forwarded-Proto from client — it's easily spoofed.
+    is_secure = os.environ.get("SENTINEL_HTTPS", "true").lower() not in ("0", "false", "no")
     response.set_cookie(
         key="admin_token",
         value=token,
         httponly=True,
         secure=is_secure,
-        samesite="lax" if not is_secure else "strict",
+        samesite="strict",
         max_age=28800,  # 8h — aligned with JWT expiry
         path="/",
     )

@@ -22,9 +22,12 @@ from ..models.auth import UserRole, TokenPayload, ROLE_PERMISSIONS
 
 # ─── Session validation cache ─────────────────────────────────────────
 # SQLCipher is slow (50-800ms per operation). Cache session validity
-# in memory with a 30s TTL to avoid hitting the encrypted DB on every request.
+# in memory with a short TTL to avoid hitting the encrypted DB on every request.
+# SECURITY FIX (VULN 1.12): Reduced from 30s to 5s to minimize revocation delay.
+# Tradeoff: ~6x more DB lookups under load; SQLCipher ops are 50-800ms each.
+# If latency is unacceptable, consider Redis pub/sub for instant invalidation.
 _session_cache: dict[str, float] = {}  # token_hash -> last_validated_at (monotonic)
-_SESSION_CACHE_TTL = 30.0  # seconds
+_SESSION_CACHE_TTL = float(os.getenv("ADMIN_SESSION_CACHE_TTL", "5.0"))  # seconds (was 30s)
 from .secrets import read_secret
 
 # Read JWT secret from Docker secret file or env var

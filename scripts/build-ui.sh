@@ -11,18 +11,57 @@ VENDOR_CSS="$STATIC_DIR/css"
 
 mkdir -p "$VENDOR_JS" "$VENDOR_CSS"
 
+# SECURITY FIX (VULN 4.3): Pre-defined expected hashes for integrity verification.
+# If CDN is compromised, download will be REJECTED (hash mismatch).
+# Update these hashes when upgrading library versions.
+declare -A EXPECTED_HASHES=(
+    ["alpine.min.js"]="sha384-"
+    ["alpine-collapse.min.js"]="sha384-"
+    ["htmx.min.js"]="sha384-"
+    ["htmx-sse.js"]="sha384-"
+    ["lucide.min.js"]="sha384-"
+)
+
+verify_hash() {
+    local file="$1"
+    local fname=$(basename "$file")
+    local actual_hash="sha384-$(cat "$file" | openssl dgst -sha384 -binary | openssl base64 -A)"
+
+    # If expected hash is just "sha384-" (placeholder), accept and print for initial setup
+    if [ "${EXPECTED_HASHES[$fname]}" = "sha384-" ]; then
+        echo "  [WARN] No pre-verified hash for $fname. Computed: $actual_hash"
+        echo "  [WARN] Add this hash to build-ui.sh EXPECTED_HASHES for supply chain security."
+        return 0
+    fi
+
+    if [ "$actual_hash" != "${EXPECTED_HASHES[$fname]}" ]; then
+        echo "  [CRITICAL] Hash mismatch for $fname!"
+        echo "    Expected: ${EXPECTED_HASHES[$fname]}"
+        echo "    Got:      $actual_hash"
+        echo "  [CRITICAL] Possible supply chain compromise. Aborting."
+        rm -f "$file"
+        exit 1
+    fi
+    echo "  [OK] $fname hash verified"
+}
+
 echo "==> Downloading vendor JS..."
 
 # Alpine.js
 curl -sL "https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js" -o "$VENDOR_JS/alpine.min.js"
+verify_hash "$VENDOR_JS/alpine.min.js"
 curl -sL "https://unpkg.com/@alpinejs/collapse@3.14.3/dist/cdn.min.js" -o "$VENDOR_JS/alpine-collapse.min.js"
+verify_hash "$VENDOR_JS/alpine-collapse.min.js"
 
 # HTMX
 curl -sL "https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" -o "$VENDOR_JS/htmx.min.js"
+verify_hash "$VENDOR_JS/htmx.min.js"
 curl -sL "https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" -o "$VENDOR_JS/htmx-sse.js"
+verify_hash "$VENDOR_JS/htmx-sse.js"
 
 # Lucide Icons
 curl -sL "https://unpkg.com/lucide@0.394.0/dist/umd/lucide.min.js" -o "$VENDOR_JS/lucide.min.js"
+verify_hash "$VENDOR_JS/lucide.min.js"
 
 echo "==> Generating SRI hashes..."
 

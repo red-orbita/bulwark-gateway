@@ -30,7 +30,7 @@ commonLabels:
 images:
   - name: sentinel-gateway-proxy
     newName: sentinel-gateway-proxy
-    newTag: "0.4.7"
+    newTag: "0.4.9-hardened"
   - name: sentinel-gateway-admin
     newName: sentinel-gateway-admin
-    newTag: "0.5.5"
+    newTag: "0.7.3-hardened"

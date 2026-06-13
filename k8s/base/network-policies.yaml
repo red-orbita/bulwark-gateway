@@ -56,14 +56,20 @@ spec:
       ports:
         - port: 6379
           protocol: TCP
-    # DNS
-    - to: []
+    # DNS — SECURITY FIX (VULN 2.6): Restrict to kube-system only (prevents DNS tunneling exfiltration)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
       ports:
         - port: 53
           protocol: UDP
         - port: 53
           protocol: TCP
-    # External backends (HTTPS)
+    # External backends (HTTPS only)
+    # SECURITY FIX (VULN 2.10): Removed port 8000 egress to any external IP.
+    # Port 8000 to internal backends is handled by the backend ExternalName/ClusterIP service.
+    # If your LLM backend requires port 8000 externally, add a specific ipBlock rule.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -74,7 +80,14 @@ spec:
       ports:
         - port: 443
           protocol: TCP
+    # Allow egress to configured backend service (port 8000, internal only)
+    - to:
+        - podSelector: {}
+      ports:
         - port: 8000
+          protocol: TCP
+        - port: 11434
+          protocol: TCP
           protocol: TCP
 ---
 # NetworkPolicy: Admin — ingress from Ingress controller ONLY (H-01), egress to Redis + Wazuh
@@ -119,8 +132,11 @@ spec:
       ports:
         - port: 55000
           protocol: TCP
-    # DNS
-    - to: []
+    # DNS — SECURITY FIX (VULN 2.6): Restrict to kube-system only
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
       ports:
         - port: 53
           protocol: UDP

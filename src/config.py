@@ -145,10 +145,14 @@ def _build_settings() -> "Settings":
             s.redis_url.startswith("redis://") or s.redis_url.startswith("rediss://")
         )
         if scheme_match:
+            # SECURITY FIX (VULN 1.7): URL-encode the password to prevent injection.
+            # A password containing '@' could redirect the connection to a malicious host.
+            from urllib.parse import quote as url_quote
+            safe_pw = url_quote(redis_pw, safe="")
             if "@" not in s.redis_url:
-                s.redis_url = s.redis_url.replace("://", f"://:{redis_pw}@")
+                s.redis_url = s.redis_url.replace("://", f"://:{safe_pw}@")
             elif ":@" in s.redis_url:
-                s.redis_url = s.redis_url.replace(":@", f":{redis_pw}@")
+                s.redis_url = s.redis_url.replace(":@", f":{safe_pw}@")
 
     return s
 
@@ -158,22 +162,43 @@ settings = _build_settings()
 
 def validate_settings():
     """Validate critical security settings at startup."""
-    insecure_secrets = {"change-me-in-production", "", "secret", "test", "dev"}
+    # SECURITY FIX (VULN 1.5): Expanded blocklist of known-insecure secrets
+    # These are publicly documented in README, .env.example, and now in the pentest report
+    insecure_secrets = {
+        "change-me-in-production",
+        "sentinel-jwt-dev-secret-change-in-prod",
+        "sentinel-admin-change-me-in-production",
+        "",
+        "secret",
+        "test",
+        "dev",
+        "admin",
+        "password",
+        "changeme",
+    }
     jwt = settings.jwt_secret.lower().strip()
 
     # H-02: Check both blocklist AND entropy (minimum 32 bytes of randomness)
     is_insecure = jwt in insecure_secrets or len(settings.jwt_secret) < 32
 
     if is_insecure:
-        if not settings.debug:
+        if settings.debug:
+            # SECURITY FIX: In debug mode, auto-generate a random secret instead of
+            # allowing the insecure default. This prevents the attack vector where
+            # debug=true + known secret = forge arbitrary tokens.
+            import secrets as _secrets
+            import logging
+            generated = _secrets.token_hex(32)
+            settings.jwt_secret = generated  # type: ignore[misc]
+            logging.getLogger(__name__).warning(
+                "INSECURE JWT_SECRET detected in debug mode — auto-generated random secret. "
+                "Set SENTINEL_JWT_SECRET to a strong value for persistent tokens."
+            )
+        else:
             raise SystemExit(
                 "FATAL: SENTINEL_JWT_SECRET is insecure. "
                 "Set a strong secret (32+ chars of random data) via environment variable or Docker secret."
             )
-        import logging
-        logging.getLogger(__name__).warning(
-            "INSECURE JWT_SECRET detected — acceptable only in debug mode"
-        )
 
 
 # Validation is called explicitly by src/main.py at startup, not at import time.

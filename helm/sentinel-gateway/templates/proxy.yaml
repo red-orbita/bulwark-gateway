@@ -93,6 +93,85 @@ spec:
             - name: ml-models
               mountPath: /models
         {{- end }}
+        {{- if .Values.proxy.enrichment.enabled }}
+        - name: init-enrichment-model
+          image: {{ .Values.proxy.enrichment.initImage | default "python:3.12-slim" }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import os, sys, json, urllib.request, urllib.error
+              from pathlib import Path
+
+              MODEL_NAME = os.getenv("SENTINEL_EMBED_MODEL", "{{ .Values.proxy.enrichment.model }}")
+              TARGET_DIR = Path("{{ .Values.proxy.enrichment.modelCachePath }}")
+              HF_BASE = "https://huggingface.co"
+
+              REQUIRED_FILES = [
+                  "config.json", "tokenizer.json", "tokenizer_config.json",
+                  "special_tokens_map.json", "vocab.txt", "modules.json",
+                  "sentence_bert_config.json",
+              ]
+              MODEL_FILES = ["model.safetensors", "pytorch_model.bin"]
+              POOLING_FILES = ["1_Pooling/config.json"]
+
+              model_dir = TARGET_DIR / f"sentence-transformers_{MODEL_NAME}"
+
+              # Check if already downloaded
+              if model_dir.exists() and (model_dir / "config.json").exists():
+                  has_weights = any((model_dir / f).exists() for f in MODEL_FILES)
+                  if has_weights:
+                      print(f"Model already exists at {model_dir}, skipping download")
+                      sys.exit(0)
+
+              print(f"Downloading sentence-transformers/{MODEL_NAME} to {model_dir}...")
+              model_dir.mkdir(parents=True, exist_ok=True)
+
+              files = REQUIRED_FILES + ["model.safetensors"] + POOLING_FILES
+              ok, fail = 0, 0
+              for filename in files:
+                  dest = model_dir / filename
+                  if dest.exists():
+                      ok += 1
+                      continue
+                  url = f"{HF_BASE}/sentence-transformers/{MODEL_NAME}/resolve/main/{filename}"
+                  try:
+                      dest.parent.mkdir(parents=True, exist_ok=True)
+                      req = urllib.request.Request(url, headers={"User-Agent": "sentinel-init/1.0"})
+                      with urllib.request.urlopen(req, timeout=120) as resp:
+                          with open(dest, "wb") as f:
+                              while chunk := resp.read(1048576):
+                                  f.write(chunk)
+                      print(f"  OK: {filename} ({dest.stat().st_size // 1024}KB)")
+                      ok += 1
+                  except Exception as e:
+                      print(f"  SKIP: {filename} ({e})")
+                      fail += 1
+
+              print(f"Download complete: {ok} OK, {fail} skipped")
+              # Non-fatal: proxy starts with graceful degradation if model missing
+              sys.exit(0)
+          env:
+            - name: SENTINEL_EMBED_MODEL
+              value: "{{ .Values.proxy.enrichment.model }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            limits:
+              memory: 256Mi
+              cpu: 500m
+            requests:
+              memory: 64Mi
+              cpu: 100m
+          volumeMounts:
+            - name: enrichment-data
+              mountPath: /app/shared/enrichment
+            - name: tmp
+              mountPath: /tmp
+        {{- end }}
       containers:
         - name: proxy
           image: {{ include "sentinel-gateway.proxy.image" . }}

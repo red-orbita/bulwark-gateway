@@ -198,13 +198,19 @@ spec:
               protocol: TCP
           resources:
             {{- toYaml .Values.monitoring.grafana.resources | nindent 12 }}
+          # SECURITY FIX (VULN 2.8): Added readOnlyRootFilesystem + tmpfs for Grafana sessions
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 472
             capabilities:
               drop: ["ALL"]
           volumeMounts:
             - name: grafana-data
               mountPath: /var/lib/grafana
+            - name: grafana-tmp
+              mountPath: /tmp
           livenessProbe:
             httpGet:
               path: /api/health
@@ -221,6 +227,9 @@ spec:
         - name: grafana-data
           persistentVolumeClaim:
             claimName: grafana-data
+        - name: grafana-tmp
+          emptyDir:
+            sizeLimit: 50Mi
 ---
 # Grafana PVC
 apiVersion: v1

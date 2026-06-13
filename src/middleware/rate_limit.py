@@ -78,14 +78,27 @@ class InMemoryTokenBucket:
     """Fallback in-memory token bucket for single-instance deployments.
 
     Uses TTLCache to auto-evict inactive keys, preventing unbounded memory growth.
+
+    SECURITY NOTE (VULN 1.8): In multi-worker mode, this provides per-PROCESS limits.
+    Effective rate = workers * configured_rate. We compensate by dividing rate by worker count.
+    Production deployments MUST use Redis for accurate distributed rate limiting.
     """
 
     def __init__(self, rate: float, burst: int, max_keys: int = 10000, ttl: int = 300):
-        self.rate = rate
-        self.burst = burst
+        # Compensate for multi-worker over-allowance
+        import os
+        worker_count = int(os.environ.get("SENTINEL_WORKERS", "4"))
+        self.rate = rate / max(worker_count, 1)
+        self.burst = max(1, burst // max(worker_count, 1))
         from cachetools import TTLCache
         self.tokens: TTLCache = TTLCache(maxsize=max_keys, ttl=ttl)
         self.last_time: TTLCache = TTLCache(maxsize=max_keys, ttl=ttl)
+        import logging
+        logging.getLogger(__name__).warning(
+            "Rate limiter using in-memory fallback (no Redis). "
+            f"Per-worker rate: {self.rate:.1f}/s, burst: {self.burst}. "
+            "Use Redis for accurate distributed rate limiting."
+        )
 
     def consume(self, key: str) -> bool:
         now = time.time()
@@ -159,8 +172,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Reload per-tenant config periodically
         self._maybe_reload_config()
 
-        # Red team mode flag (informational only — does NOT bypass rate limiting)
-        request.state.redteam_mode = request.headers.get("X-Redteam-Mode") == "true"
+        # SECURITY FIX (VULN 1.13): Removed X-Redteam-Mode header trust.
+        # Untrusted client headers should never influence application state.
+        # Red team mode should only be enabled via environment variable.
+        import os
+        request.state.redteam_mode = os.environ.get("SENTINEL_REDTEAM_MODE", "").lower() in ("1", "true")
 
         # C-02: Rate limit by authenticated tenant_id (from request.state, set by AuthMiddleware)
         # Falls back to source IP if not authenticated yet (global per-IP limit)

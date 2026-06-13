@@ -111,6 +111,9 @@ proxy:
     suspiciousThreshold: "0.78"
     # -- Threat similarity threshold (0.0-1.0)
     threatThreshold: "0.88"
+    # -- Init container image for model download (lightweight Python image)
+    # Override to use a private registry or pre-built image with models
+    initImage: "python:3.12-slim"
   # -- Response Cache (reduces LLM costs for repeated queries)
   cache:
     # -- Enable response caching
@@ -238,12 +241,12 @@ ingress:
     # -- Admin dashboard hostname
     admin: "admin.sentinel-gateway.local"
   tls:
-    # -- Enable TLS
-    enabled: false
+    # -- Enable TLS (SECURITY FIX VULN 2.7: default changed to true)
+    enabled: true
     # -- TLS secret name (must contain tls.crt and tls.key)
     secretName: "sentinel-gateway-tls"
     # -- Set to true to use cert-manager for auto-provisioning
-    certManager: false
+    certManager: true
     # -- cert-manager ClusterIssuer name
     issuerName: "letsencrypt-prod"
 

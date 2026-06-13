@@ -63,6 +63,16 @@ async def lifespan(app: FastAPI):
     load_transports_from_config(app.state.telemetry_exporter)
     await app.state.telemetry_exporter.start()
 
+    # Initialize session decomposition tracker (multi-turn attack detection)
+    from src.guardrails.session_tracker import get_session_tracker
+
+    session_tracker = get_session_tracker()
+    session_tracker.initialize(
+        redis_url=settings.redis_url,
+        redis_tls_insecure=settings.redis_tls_insecure,
+    )
+    await logger.ainfo("session_decomposition_tracker_initialized", redis=bool(settings.redis_url))
+
     # Register enrichment scanners (async, background only)
     from src.enrichment.manager import get_enrichment_manager, ENRICHMENT_ENABLED
 

@@ -26,6 +26,7 @@ class AuditQuery(BaseModel):
     actor: Optional[str] = None
     action: Optional[str] = None
     resource_type: Optional[str] = None
+    tenant_id: Optional[str] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     limit: int = 100

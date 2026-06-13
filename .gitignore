@@ -22,8 +22,10 @@ node_modules/
 package-lock.json
 
 # --- Secrets (NEVER commit) ---
-secrets/*.txt
-secrets/*.key
+# SECURITY FIX (VULN 3.3): Block ALL files in secrets/ regardless of extension
+secrets/*
+!secrets/init.sh
+!secrets/README.md
 *.key
 *.pem
 *.cert
@@ -32,6 +34,7 @@ secrets.yaml
 .env
 .env.local
 .env.production
+.env.*
 
 # --- Runtime data (generated at runtime) ---
 data/

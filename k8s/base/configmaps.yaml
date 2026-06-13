@@ -23,16 +23,14 @@ data:
   SENTINEL_TELEMETRY_FLUSH_INTERVAL: "1.0"
   SENTINEL_SIEM_STATS_FILE: "/app/shared/siem/siem_stats.json"
   SENTINEL_SIEM_TRANSPORTS_FILE: "/app/shared/siem/siem_transports.json"
+  # SECURITY NOTE (VULN 2.9): Internal Redis uses plaintext by default.
+  # This is acceptable when:
+  #   1. NetworkPolicies restrict Redis access to proxy+admin pods ONLY (enforced)
+  #   2. No untrusted workloads share the namespace
+  # For higher security (e.g., shared cluster), switch to rediss:// with TLS:
+  #   SENTINEL_REDIS_URL: "rediss://redis.sentinel-gateway.svc.cluster.local:6379/0"
+  #   SENTINEL_REDIS_TLS_INSECURE: "true"  (if using self-signed cert on internal Redis)
   SENTINEL_REDIS_URL: "redis://redis.sentinel-gateway.svc.cluster.local:6379/0"
-  # External Redis: change the above URL to point to your managed Redis instance.
-  # Use rediss:// scheme for TLS (Azure, AWS, GCP managed Redis).
-  # Examples:
-  #   Azure:   "rediss://<name>.redis.cache.windows.net:6380/0"
-  #   AWS:     "rediss://<endpoint>.cache.amazonaws.com:6379/0"
-  #   GCP:     "redis://<private-ip>:6379/0"  (or rediss:// with in-transit encryption)
-  #   On-prem: "redis://redis.internal.mycompany.com:6379/0"
-  # Set SENTINEL_REDIS_TLS_INSECURE to "true" only for self-signed certificates.
-  # SENTINEL_REDIS_TLS_INSECURE: "false"
   # File paths for secrets mounted as volumes
   SENTINEL_JWT_SECRET_FILE: "/run/secrets/jwt-secret"
   SENTINEL_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"

@@ -19,14 +19,27 @@ async def query_audit_log(
     actor: str = None,
     action: str = None,
     resource_type: str = None,
+    tenant_id: str = None,
     limit: int = 50,
     offset: int = 0,
     user: TokenPayload = Depends(require_permission("audit:read")),
 ):
-    """Query audit log with filters."""
+    """Query audit log with filters (including optional tenant_id)."""
     audit = get_audit_logger()
-    query = AuditQuery(actor=actor, action=action, resource_type=resource_type, limit=limit, offset=offset)
+    query = AuditQuery(
+        actor=actor, action=action, resource_type=resource_type,
+        tenant_id=tenant_id, limit=limit, offset=offset,
+    )
     entries = await audit.query(query)
+    # If tenant_id filter is set, post-filter entries whose details mention the tenant
+    if tenant_id:
+        filtered = []
+        for e in entries:
+            if e.details and tenant_id in e.details:
+                filtered.append(e)
+            elif e.resource_id and tenant_id in e.resource_id:
+                filtered.append(e)
+        entries = filtered
     return [e.model_dump() for e in entries]
 
 

@@ -86,7 +86,11 @@ data:
   SENTINEL_SKILLSPECTOR_TIMEOUT: {{ .Values.admin.skillspector.timeout | quote }}
   SENTINEL_SKILLSPECTOR_CACHE_TTL: {{ .Values.admin.skillspector.cacheTTL | quote }}
   {{- if .Values.proxy.enrichment.enabled }}
+  SENTINEL_ENRICHMENT_ENABLED: "true"
   SENTINEL_REPLAY_DB_PATH: {{ .Values.proxy.enrichment.replayDbPath | quote }}
+  SENTINEL_EMBED_MODEL: {{ .Values.proxy.enrichment.model | quote }}
+  SENTINEL_EMBED_THRESH_SUSPICIOUS: {{ .Values.proxy.enrichment.suspiciousThreshold | quote }}
+  SENTINEL_EMBED_THRESH_THREAT: {{ .Values.proxy.enrichment.threatThreshold | quote }}
   {{- end }}
 {{- if .Values.redis.enabled }}
 ---
