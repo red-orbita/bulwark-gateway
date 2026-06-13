@@ -53,20 +53,28 @@ logger = structlog.get_logger()
 input_guardrail = InputGuardrail()
 output_filter = OutputFilter()
 
-# C-01/H-01: Complete CIDR blocklist for SSRF prevention
-_BLOCKED_NETWORKS = [
+# C-01/H-01: SSRF prevention — Two-tier approach:
+# 1. _ALWAYS_BLOCKED: Cloud metadata, link-local, loopback — blocked for ALL requests
+# 2. _USER_CONTENT_BLOCKED: Private ranges (10/172/192) — blocked only for user-supplied URLs
+#    Admin-configured backends (agents.yaml) are allowed to use private IPs (cluster-internal).
+#    DNS rebinding protection still applies: we resolve at request-time, not registration-time.
+
+_ALWAYS_BLOCKED_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),       # Loopback
-    ipaddress.ip_network("10.0.0.0/8"),        # Private Class A
-    ipaddress.ip_network("172.16.0.0/12"),     # Private Class B
-    ipaddress.ip_network("192.168.0.0/16"),    # Private Class C
     ipaddress.ip_network("169.254.0.0/16"),    # Link-local / AWS metadata
-    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT (shared address space)
     ipaddress.ip_network("0.0.0.0/8"),         # "This" network
     ipaddress.ip_network("::1/128"),           # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),          # IPv6 unique local
     ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
     ipaddress.ip_network("::ffff:127.0.0.0/104"),  # IPv4-mapped loopback
     ipaddress.ip_network("::ffff:169.254.0.0/112"),  # IPv4-mapped link-local
+]
+
+_USER_CONTENT_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),        # Private Class A
+    ipaddress.ip_network("172.16.0.0/12"),     # Private Class B
+    ipaddress.ip_network("192.168.0.0/16"),    # Private Class C
+    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT (shared address space)
+    ipaddress.ip_network("fc00::/7"),          # IPv6 unique local
     ipaddress.ip_network("::ffff:10.0.0.0/104"),  # IPv4-mapped private
     ipaddress.ip_network("::ffff:172.16.0.0/108"),  # IPv4-mapped private
     ipaddress.ip_network("::ffff:192.168.0.0/112"),  # IPv4-mapped private
@@ -86,19 +94,28 @@ _BLOCKED_IPS = {
 }
 
 
-def _is_ssrf_target(url: str) -> bool:
+def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
     """Validate URL at request-time to prevent SSRF via DNS rebinding (C-01).
 
     Resolves hostname to IP and checks against blocked CIDR ranges.
+
+    Args:
+        url: The URL to validate.
+        allow_private: If True (operator-configured backends), allow RFC1918 private IPs
+                       but still block metadata/loopback/link-local. If False (user content),
+                       block all private and special-use ranges.
     """
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
 
-    # Block known dangerous hostnames
+    # Block known dangerous hostnames (always)
     if hostname.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
         return True
-    if hostname.lower().endswith(".internal") or hostname.lower().endswith(".local"):
-        return True
+    # Block .internal/.local for user content, but allow for operator backends
+    # (K8s services use .svc.cluster.local)
+    if not allow_private:
+        if hostname.lower().endswith(".internal") or hostname.lower().endswith(".local"):
+            return True
 
     # Resolve DNS at request time (prevents DNS rebinding)
     try:
@@ -112,9 +129,15 @@ def _is_ssrf_target(url: str) -> bool:
             return True
         try:
             ip = ipaddress.ip_address(ip_str)
-            for network in _BLOCKED_NETWORKS:
+            # Always-blocked: metadata, loopback, link-local
+            for network in _ALWAYS_BLOCKED_NETWORKS:
                 if ip in network:
                     return True
+            # User-content only: private ranges (10/172/192, CGNAT, ULA)
+            if not allow_private:
+                for network in _USER_CONTENT_BLOCKED_NETWORKS:
+                    if ip in network:
+                        return True
         except ValueError:
             return True  # Fail-closed
 
@@ -313,10 +336,11 @@ async def chat_completions(request: Request):
 
                 # SECURITY FIX (VULN 1.2): ALWAYS perform SSRF check at request-time,
                 # even for operator-configured backends. DNS rebinding can cause a
-                # previously-valid hostname to resolve to internal IPs (169.254.169.254,
-                # 10.x.x.x, etc.) between registration and request time.
-                # The "trusted" field is no longer used to skip SSRF validation.
-                if _is_ssrf_target(backend_url):
+                # previously-valid hostname to resolve to dangerous IPs (169.254.169.254,
+                # loopback, link-local) between registration and request time.
+                # allow_private=True: admin-configured backends CAN use cluster-internal
+                # RFC1918 IPs (10.x, 172.16.x, 192.168.x) but NOT metadata/loopback.
+                if _is_ssrf_target(backend_url, allow_private=True):
                     logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
                     return JSONResponse(
                         status_code=403,

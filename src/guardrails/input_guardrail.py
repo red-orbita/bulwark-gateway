@@ -3734,6 +3734,15 @@ HARDENING_PATTERNS: list[Pattern] = [
         ThreatCategory.JAILBREAK, "high",
         "Authority claim: credentials used to justify bypassing safety mechanisms",
     ),
+    # Authority claim: "As a certified/authorized X" + dangerous request
+    Pattern(
+        re.compile(
+            r"(as\s+a|I\s+am|I\'m|being\s+a)\s+(certified|authorized|licensed|accredited|qualified|approved)\s+.{0,40}(CISSP|CEH|OSCP|security|penetration|researcher|professional|analyst|expert|pentester|auditor|hacker)\b.{0,80}(show|tell|teach|explain|demonstrate|help|give)\s+.{0,30}(how\s+to|me\s+how|ways?\s+to)\s+.{0,30}(extract|steal|exfiltrat|hack|break|crack|bypass|exploit|compromise|access\s+unauthorized|dump|intercept|sniff)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Authority claim: credentials used to request dangerous instructions",
+    ),
     # Authority claim: "IRB approval" / "ethics board" + safety bypass
     Pattern(
         re.compile(
@@ -3742,6 +3751,15 @@ HARDENING_PATTERNS: list[Pattern] = [
         ),
         ThreatCategory.JAILBREAK, "high",
         "Authority claim: ethics board approval used to justify unsafe content",
+    ),
+    # Authority claim: "IRB/ethics board approval" + dangerous action request
+    Pattern(
+        re.compile(
+            r"(IRB|ethics\s+(board|committee)|institutional\s+review)\s+(approval|approved|clearance).{0,80}(show|tell|teach|explain|demonstrate|help|give)\s+.{0,30}(how\s+to|me\s+how|ways?\s+to)\s+.{0,30}(extract|steal|exfiltrat|hack|break|crack|bypass|exploit|compromise|access|dump|intercept|credentials?|password|secret|token|key)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Authority claim: ethics approval used to request dangerous instructions",
     ),
     # =========================================================================
     # FABLE-5 MITIGATION: Emotional manipulation (expanded)
@@ -3827,6 +3845,15 @@ HARDENING_PATTERNS: list[Pattern] = [
         ),
         ThreatCategory.CROSS_AGENT_INJECTION, "high",
         "Cross-agent injection: crafting response to manipulate downstream AI",
+    ),
+    # Cross-agent: "format response so [the] downstream/next agent will..." (shorter phrasing)
+    Pattern(
+        re.compile(
+            r"(format|structure|write|craft)\s+(your\s+)?(response|output|reply|answer)\s+so\s+.{0,30}(downstream|next|another|other|receiving|target)\s+(agent|AI|model|system|LLM)\s+.{0,30}(will|can|would|to)\s+(execute|run|perform|do|process|follow|obey)",
+            re.I,
+        ),
+        ThreatCategory.CROSS_AGENT_INJECTION, "high",
+        "Cross-agent injection: formatting response for downstream agent execution",
     ),
     # Cross-agent: "embed/hide/inject instruction/command in your response"
     Pattern(
