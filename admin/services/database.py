@@ -59,8 +59,18 @@ logger = logging.getLogger(__name__)
 # Default: SQLite in data/ directory (backward compatible, zero-config for dev)
 DEFAULT_DB_URL = "sqlite:///data/admin.db"
 
-# Read from environment
-ADMIN_DB_URL = os.getenv("SENTINEL_ADMIN_DB_URL", DEFAULT_DB_URL)
+
+def _read_db_url() -> str:
+    """Read database URL from env var or file (Docker secrets pattern)."""
+    # Check file-based secret first (Kubernetes-native)
+    url_file = os.getenv("SENTINEL_ADMIN_DB_URL_FILE")
+    if url_file and os.path.isfile(url_file):
+        return open(url_file).read().strip()
+    return os.getenv("SENTINEL_ADMIN_DB_URL", DEFAULT_DB_URL)
+
+
+# Read from environment or file
+ADMIN_DB_URL = _read_db_url()
 ADMIN_DB_POOL_MIN = int(os.getenv("SENTINEL_ADMIN_DB_POOL_MIN", "2"))
 ADMIN_DB_POOL_MAX = int(os.getenv("SENTINEL_ADMIN_DB_POOL_MAX", "20"))
 ADMIN_DB_SSL = os.getenv("SENTINEL_ADMIN_DB_SSL", "false").lower() in ("true", "1")

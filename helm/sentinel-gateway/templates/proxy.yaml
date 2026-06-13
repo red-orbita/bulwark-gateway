@@ -37,8 +37,8 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: "/health/metrics"
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 8 }}
-        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum | trunc 8 }}
+        checksum/config: "{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 8 }}"
+        checksum/secrets: "{{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum | trunc 8 }}"
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

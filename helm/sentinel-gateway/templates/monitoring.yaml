@@ -140,7 +140,7 @@ data:
               team: platform
             annotations:
               summary: "Sentinel proxy target is down"
-              description: "Prometheus cannot scrape proxy instance {{ $labels.instance }}."
+              description: "Prometheus cannot scrape proxy instance {{ "{{" }} $labels.instance {{ "}}" }}."
               runbook_url: "https://sentinel-gateway.internal/runbooks/proxy-target-down"
 
       # ====================================================================
@@ -169,7 +169,7 @@ data:
               team: platform
             annotations:
               summary: "Active scanner count below expected minimum"
-              description: "Only {{ $value }} scanners active (expected >= 3). Detection coverage degraded."
+              description: "Only {{ "{{" }} $value {{ "}}" }} scanners active (expected >= 3). Detection coverage degraded."
               runbook_url: "https://sentinel-gateway.internal/runbooks/scanners-degraded"
 
           - alert: SentinelMemoryPressure
@@ -201,7 +201,7 @@ data:
               team: platform
             annotations:
               summary: "Persistent volume usage above 80%"
-              description: "PVC {{ $labels.persistentvolumeclaim }} at >80% capacity."
+              description: "PVC {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} at >80% capacity."
               runbook_url: "https://sentinel-gateway.internal/runbooks/disk-usage"
 
           - alert: SentinelAuditLogFailures
@@ -296,7 +296,7 @@ data:
               team: security
               mitre_attack: "T1078"
             annotations:
-              summary: "Tenant {{ $labels.tenant_id }} generating >80% of all traffic"
+              summary: "Tenant {{ "{{" }} $labels.tenant_id {{ "}}" }} generating >80% of all traffic"
               description: "Investigate whether traffic concentration is expected."
 
           - alert: SentinelMLScannerSlow
@@ -320,7 +320,7 @@ data:
               severity: info
               team: platform
             annotations:
-              summary: "Pod {{ $labels.pod }} restarted >3 times in 1 hour"
+              summary: "Pod {{ "{{" }} $labels.pod {{ "}}" }} restarted >3 times in 1 hour"
               description: "Check pod events for OOMKill or CrashLoopBackOff."
 
           - alert: SentinelToolPolicyViolations
@@ -725,8 +725,7 @@ spec:
         app.kubernetes.io/part-of: sentinel-gateway
         app.kubernetes.io/component: monitoring
       annotations:
-        checksum/datasources: {{ include (print $.Template.BasePath "/monitoring.yaml") . | sha256sum }}
-        checksum/dashboards: {{ include (print $.Template.BasePath "/monitoring.yaml") . | sha256sum }}
+        checksum/config: "{{ .Values.monitoring | toJson | sha256sum | trunc 8 }}"
     spec:
       automountServiceAccountToken: false
       securityContext:

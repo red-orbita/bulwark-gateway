@@ -173,7 +173,9 @@ admin:
     sqlitePath: "/app/data/admin.db"
     # -- PostgreSQL connection details (used when type=postgresql)
     postgresql:
-      # -- PostgreSQL host
+      # -- Deploy internal PostgreSQL pod (set false to use external)
+      internal: true
+      # -- PostgreSQL host (leave empty for internal; set for external PG)
       host: ""
       # -- PostgreSQL port
       port: 5432
@@ -181,18 +183,33 @@ admin:
       database: "sentinel_admin"
       # -- Database username
       username: "sentinel"
-      # -- Database password (use existingSecret in production)
+      # -- Database password (auto-generated if empty)
       password: ""
       # -- Use existing Kubernetes secret for PostgreSQL password
       existingSecret: ""
       # -- Key within the existing secret
       existingSecretKey: "postgresql-password"
       # -- SSL mode: disable, require, verify-ca, verify-full
-      sslMode: "require"
+      sslMode: "disable"
       # -- Minimum pool connections
       poolMin: 2
       # -- Maximum pool connections
       poolMax: 20
+      # -- Storage size for internal PostgreSQL
+      storage: "2Gi"
+      # -- PostgreSQL image
+      image:
+        repository: postgres
+        tag: "16-alpine"
+        pullPolicy: IfNotPresent
+      # -- Resource limits for internal PostgreSQL
+      resources:
+        limits:
+          memory: 256Mi
+          cpu: 500m
+        requests:
+          memory: 128Mi
+          cpu: 100m
   # -- SkillSpector configuration
   skillspector:
     # -- Enable/disable skill security scanning

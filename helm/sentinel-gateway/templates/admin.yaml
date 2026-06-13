@@ -34,8 +34,8 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8090"
         prometheus.io/path: "/admin/health/metrics"
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 8 }}
-        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum | trunc 8 }}
+        checksum/config: "{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 8 }}"
+        checksum/secrets: "{{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum | trunc 8 }}"
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -50,6 +50,17 @@ spec:
         fsGroup: 999
         seccompProfile:
           type: RuntimeDefault
+      {{- if eq .Values.admin.database.type "postgresql" }}
+      initContainers:
+        - name: wait-postgresql
+          image: "{{ .Values.admin.database.postgresql.image.repository }}:{{ .Values.admin.database.postgresql.image.tag }}"
+          command: ["sh", "-c", "until pg_isready -h postgresql -p {{ .Values.admin.database.postgresql.port }} -U {{ .Values.admin.database.postgresql.username }}; do echo 'Waiting for PostgreSQL...'; sleep 2; done"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      {{- end }}
       containers:
         - name: admin
           image: {{ include "sentinel-gateway.admin.image" . }}
@@ -72,6 +83,11 @@ spec:
             - name: secrets
               mountPath: /run/secrets
               readOnly: true
+            {{- if eq .Values.admin.database.type "postgresql" }}
+            - name: postgresql-secret
+              mountPath: /run/secrets-pg
+              readOnly: true
+            {{- end }}
             {{- if and (not .Values.redis.enabled) .Values.externalRedis.existingSecret }}
             - name: redis-external-secret
               mountPath: /run/secrets/redis-password
@@ -116,6 +132,11 @@ spec:
         - name: secrets
           secret:
             secretName: sentinel-admin-secrets
+        {{- if eq .Values.admin.database.type "postgresql" }}
+        - name: postgresql-secret
+          secret:
+            secretName: postgresql-credentials
+        {{- end }}
         {{- if and (not .Values.redis.enabled) .Values.externalRedis.existingSecret }}
         - name: redis-external-secret
           secret:
