@@ -20,9 +20,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.config import settings, validate_settings
+from src.middleware.api_version import APIVersionMiddleware
 from src.middleware.auth import AuthMiddleware
+from src.middleware.quotas import QuotaMiddleware
 from src.middleware.rate_limit import RateLimitMiddleware
 from src.routes import admin, health, proxy
+from src.routes.v2 import router as v2_router
 
 
 @asynccontextmanager
@@ -31,6 +34,11 @@ async def lifespan(app: FastAPI):
     import structlog
 
     validate_settings()
+
+    # Initialize OpenTelemetry tracing (before other components to capture full lifecycle)
+    from src.telemetry.tracing import init_tracing
+
+    init_tracing()
 
     logger = structlog.get_logger()
     await logger.ainfo("sentinel-gateway starting", version="0.2.0", mode=settings.mode)
@@ -197,6 +205,10 @@ async def lifespan(app: FastAPI):
     await app.state.scanner_pipeline.shutdown()
     await app.state.telemetry_exporter.stop()
     await app.state.policy_loader.stop_hot_reload()
+    # Flush pending trace spans before exit
+    from src.telemetry.tracing import shutdown_tracing
+
+    shutdown_tracing()
     await logger.ainfo("sentinel-gateway shutting down")
 
 
@@ -222,7 +234,7 @@ def create_app() -> FastAPI:
             tenant=getattr(request.state, "tenant_id", "unknown"),
         )
         # Fail-closed: return 403 on unexpected errors in security paths
-        if request.url.path.startswith("/v1/"):
+        if request.url.path.startswith("/v1/") or request.url.path.startswith("/v2/"):
             return JSONResponse(
                 status_code=403,
                 content={
@@ -238,7 +250,8 @@ def create_app() -> FastAPI:
             content={"error": "Internal server error"},
         )
 
-    # Middleware (order matters — outermost first)
+    # Middleware (order matters — last added = outermost = processes request first)
+    # Request flow: Auth → APIVersion → RateLimit → Quota → CORS → Route handler
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -249,14 +262,18 @@ def create_app() -> FastAPI:
             "X-Tenant-ID",
             "X-Agent-ID",
             "X-Redteam-Mode",
+            "X-API-Version",
         ],
     )
+    app.add_middleware(QuotaMiddleware)
     app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(APIVersionMiddleware)
     app.add_middleware(AuthMiddleware)
 
     # Routes
     app.include_router(health.router, tags=["health"])
     app.include_router(proxy.router, prefix="/v1", tags=["proxy"])
+    app.include_router(v2_router, prefix="/v2", tags=["v2"])
     app.include_router(admin.router, prefix="/admin", tags=["admin"])
 
     return app

@@ -127,6 +127,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "plugins:read", "plugins:write",
         "evaluation:read", "evaluation:run",
         "discovery:read", "discovery:scan",
+        "gdpr:read", "gdpr:write", "gdpr:pseudonymize", "gdpr:export",
     },
     UserRole.SECURITY: {
         "policies:read", "policies:write", "policies:apply",
@@ -152,6 +153,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "plugins:read",
         "evaluation:read",
         "discovery:read",
+        "gdpr:read",
     },
     UserRole.VIEWER: {
         "policies:read",

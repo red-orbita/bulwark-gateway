@@ -1,4 +1,10 @@
 {{- if .Values.redis.enabled }}
+{{/*
+=============================================================================
+  MODE: STANDALONE — Single Redis pod (default, backward-compatible)
+=============================================================================
+*/}}
+{{- if eq .Values.redis.mode "standalone" }}
 ---
 # Redis Deployment
 apiVersion: apps/v1
@@ -145,5 +151,609 @@ spec:
   selector:
     matchLabels:
       {{- include "sentinel-gateway.redis.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- end }}
+{{/*
+=============================================================================
+  MODE: SENTINEL — Redis master + replicas + Sentinel monitors
+  Provides automatic failover with sub-second detection.
+=============================================================================
+*/}}
+{{- if eq .Values.redis.mode "sentinel" }}
+---
+# Redis Sentinel ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-sentinel-config
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+data:
+  redis-master.conf: |
+    bind 0.0.0.0
+    port 6379
+    dir /data
+    appendonly yes
+    appendfsync everysec
+    maxmemory {{ .Values.redis.maxMemory }}
+    maxmemory-policy allkeys-lru
+    tcp-keepalive 60
+    timeout 300
+    hz 10
+    # Password set via command-line --requirepass
+  redis-replica.conf: |
+    bind 0.0.0.0
+    port 6379
+    dir /data
+    appendonly yes
+    appendfsync everysec
+    maxmemory {{ .Values.redis.maxMemory }}
+    maxmemory-policy allkeys-lru
+    tcp-keepalive 60
+    timeout 300
+    hz 10
+    # replicaof set dynamically by entrypoint
+    # masterauth and requirepass set via command-line
+  sentinel.conf: |
+    bind 0.0.0.0
+    port 26379
+    dir /tmp
+    sentinel monitor {{ .Values.redis.sentinel.masterName }} redis-data-0.redis-data.{{ include "sentinel-gateway.namespace" . }}.svc.cluster.local 6379 {{ .Values.redis.sentinel.quorum }}
+    sentinel down-after-milliseconds {{ .Values.redis.sentinel.masterName }} {{ .Values.redis.sentinel.downAfterMs }}
+    sentinel failover-timeout {{ .Values.redis.sentinel.masterName }} {{ .Values.redis.sentinel.failoverTimeoutMs }}
+    sentinel parallel-syncs {{ .Values.redis.sentinel.masterName }} 1
+    # sentinel auth-pass set dynamically by entrypoint
+  sentinel-entrypoint.sh: |
+    #!/bin/sh
+    set -e
+    REDIS_PASSWORD=$(cat /run/secrets/redis-password)
+    cp /etc/redis/sentinel.conf /tmp/sentinel.conf
+    echo "sentinel auth-pass {{ .Values.redis.sentinel.masterName }} ${REDIS_PASSWORD}" >> /tmp/sentinel.conf
+    exec redis-server /tmp/sentinel.conf --sentinel
+  data-entrypoint.sh: |
+    #!/bin/sh
+    set -e
+    REDIS_PASSWORD=$(cat /run/secrets/redis-password)
+    ORDINAL=$(echo "$HOSTNAME" | rev | cut -d'-' -f1 | rev)
+    if [ "$ORDINAL" = "0" ]; then
+      exec redis-server /etc/redis/redis-master.conf --requirepass "${REDIS_PASSWORD}" --masterauth "${REDIS_PASSWORD}"
+    else
+      exec redis-server /etc/redis/redis-replica.conf \
+        --requirepass "${REDIS_PASSWORD}" \
+        --masterauth "${REDIS_PASSWORD}" \
+        --replicaof redis-data-0.redis-data.{{ include "sentinel-gateway.namespace" . }}.svc.cluster.local 6379
+    fi
+---
+# Redis Data StatefulSet (1 master + N replicas)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-data
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-data
+spec:
+  serviceName: redis-data
+  replicas: {{ add 1 (int .Values.redis.sentinel.dataReplicas) }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-data
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-data
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: redis-data
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - redis-data
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          command: ["sh", "/etc/redis/data-entrypoint.sh"]
+          ports:
+            - containerPort: 6379
+              protocol: TCP
+              name: redis
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: redis-config
+              mountPath: /etc/redis
+              readOnly: true
+            - name: redis-secret
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$(cat /run/secrets/redis-password)" ping
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$(cat /run/secrets/redis-password)" ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-sentinel-config
+            defaultMode: 0555
+        - name: redis-secret
+          secret:
+            secretName: sentinel-redis-secrets
+            items:
+              - key: redis-password
+                path: redis-password
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage }}
+---
+# Redis Data Headless Service (for StatefulSet DNS)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-data
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-data
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+  selector:
+    app.kubernetes.io/name: redis-data
+---
+# Redis Sentinel StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-sentinel
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-sentinel
+spec:
+  serviceName: redis-sentinel
+  replicas: {{ .Values.redis.sentinel.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-sentinel
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-sentinel
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: redis-sentinel
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - redis-sentinel
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: sentinel
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          command: ["sh", "/etc/redis/sentinel-entrypoint.sh"]
+          ports:
+            - containerPort: 26379
+              protocol: TCP
+              name: sentinel
+          resources:
+            {{- toYaml .Values.redis.sentinel.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
+              readOnly: true
+            - name: redis-secret
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -p 26379 ping
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -p 26379 ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-sentinel-config
+            defaultMode: 0555
+        - name: redis-secret
+          secret:
+            secretName: sentinel-redis-secrets
+            items:
+              - key: redis-password
+                path: redis-password
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+---
+# Redis Sentinel Headless Service (for StatefulSet DNS)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-sentinel
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 26379
+      targetPort: 26379
+      protocol: TCP
+      name: sentinel
+  selector:
+    app.kubernetes.io/name: redis-sentinel
+---
+# Redis Sentinel Client Service (for application connection)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-sentinel
+spec:
+  type: ClusterIP
+  ports:
+    - port: 26379
+      targetPort: 26379
+      protocol: TCP
+      name: sentinel
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+  selector:
+    app.kubernetes.io/name: redis-sentinel
+---
+# Redis Sentinel PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-sentinel-pdb
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-sentinel
+spec:
+  minAvailable: {{ .Values.redis.sentinel.quorum }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-sentinel
+---
+# Redis Data PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-data-pdb
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-data
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-data
+{{- end }}
+{{/*
+=============================================================================
+  MODE: CLUSTER — Redis Cluster with hash-slot sharding
+  Provides horizontal scaling + automatic failover.
+=============================================================================
+*/}}
+{{- if eq .Values.redis.mode "cluster" }}
+---
+# Redis Cluster ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+data:
+  redis-cluster.conf: |
+    bind 0.0.0.0
+    port 6379
+    dir /data
+    appendonly yes
+    appendfsync everysec
+    maxmemory {{ .Values.redis.maxMemory }}
+    maxmemory-policy allkeys-lru
+    cluster-enabled yes
+    cluster-config-file /data/nodes.conf
+    cluster-node-timeout 5000
+    cluster-announce-hostname $(HOSTNAME).redis-cluster.{{ include "sentinel-gateway.namespace" . }}.svc.cluster.local
+    tcp-keepalive 60
+    timeout 300
+    hz 10
+  cluster-entrypoint.sh: |
+    #!/bin/sh
+    set -e
+    REDIS_PASSWORD=$(cat /run/secrets/redis-password)
+    # Substitute hostname into config
+    CONF=$(sed "s/\$(HOSTNAME)/${HOSTNAME}/g" /etc/redis/redis-cluster.conf)
+    echo "$CONF" > /tmp/redis.conf
+    exec redis-server /tmp/redis.conf --requirepass "${REDIS_PASSWORD}" --masterauth "${REDIS_PASSWORD}"
+---
+# Redis Cluster StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+spec:
+  serviceName: redis-cluster
+  replicas: {{ .Values.redis.cluster.nodes }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-cluster
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: redis-cluster
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - redis-cluster
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          command: ["sh", "/etc/redis/cluster-entrypoint.sh"]
+          ports:
+            - containerPort: 6379
+              protocol: TCP
+              name: redis
+            - containerPort: 16379
+              protocol: TCP
+              name: cluster-bus
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: redis-config
+              mountPath: /etc/redis
+              readOnly: true
+            - name: redis-secret
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$(cat /run/secrets/redis-password)" ping
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$(cat /run/secrets/redis-password)" cluster info | grep -q "cluster_state:ok"
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-cluster-config
+            defaultMode: 0555
+        - name: redis-secret
+          secret:
+            secretName: sentinel-redis-secrets
+            items:
+              - key: redis-password
+                path: redis-password
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage }}
+---
+# Redis Cluster Headless Service (for StatefulSet DNS + cluster bus)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+    - port: 16379
+      targetPort: 16379
+      protocol: TCP
+      name: cluster-bus
+  selector:
+    app.kubernetes.io/name: redis-cluster
+---
+# Redis Cluster Client Service (single entry point)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+  selector:
+    app.kubernetes.io/name: redis-cluster
+---
+# Redis Cluster PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-cluster-pdb
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.redis.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-cluster
+spec:
+  maxUnavailable: {{ .Values.redis.cluster.replicasPerMaster }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-cluster
 {{- end }}
 {{- end }}

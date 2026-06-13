@@ -46,6 +46,46 @@ spec:
       {{- end }}
       serviceAccountName: sentinel-proxy
       automountServiceAccountToken: false
+      {{- if .Values.proxy.scheduling.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.proxy.scheduling.podAntiAffinity.type "preferred" }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 20 }}
+                topologyKey: topology.kubernetes.io/zone
+          {{- else }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+      {{- end }}
+      {{- if .Values.proxy.scheduling.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.proxy.scheduling.topologySpreadConstraints.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 14 }}
+        - maxSkew: {{ .Values.proxy.scheduling.topologySpreadConstraints.maxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "sentinel-gateway.proxy.selectorLabels" . | nindent 14 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 999

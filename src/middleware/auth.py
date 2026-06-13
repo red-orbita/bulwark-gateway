@@ -3,10 +3,16 @@ Authentication middleware — validates JWT tokens or API keys.
 
 Security model: fail-closed. If auth is enabled and no valid credential
 is presented, the request is rejected with 401.
+
+Supports:
+  - HS256 (symmetric): shared secret verification (backward compatible)
+  - RS256/ES256 (asymmetric): public key verification (enterprise mode)
+  - JWKS endpoint integration for external IdP (key rotation via 'kid')
 """
 
 import hashlib
 import hmac
+import logging
 import re
 from typing import Optional, Set
 
@@ -17,6 +23,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from src.config import settings
+from src.middleware.jwt_keys import is_asymmetric, get_verification_key, JWTKeyError
+
+logger = logging.getLogger(__name__)
 
 # Regex for valid tenant/agent IDs (alphanumeric, hyphens, underscores, 1-64 chars)
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
@@ -78,6 +87,44 @@ def _init_api_keys() -> Set[str]:
 _API_KEY_HASHES = _init_api_keys()
 
 
+def _get_jwt_verification_key(token: str):
+    """Select the appropriate verification key based on JWT algorithm and headers.
+
+    For HS256 (symmetric): returns the shared secret string.
+    For RS256/ES256 (asymmetric): extracts 'kid' from JWT header and
+    resolves the public key via static file or JWKS endpoint.
+
+    Fail-closed: if asymmetric key resolution fails, raises JWTKeyError
+    which causes the caller to reject the request.
+
+    Args:
+        token: Raw JWT string (used to extract unverified headers).
+
+    Returns:
+        Verification key (str for HS256, public key object for RS256/ES256).
+
+    Raises:
+        JWTKeyError: If asymmetric key cannot be resolved.
+    """
+    algorithm = settings.jwt_algorithm
+
+    if not is_asymmetric(algorithm):
+        # HS256 — use shared secret (backward compatible)
+        return settings.jwt_secret
+
+    # RS256/ES256 — resolve public key
+    # Extract 'kid' from JWT header (unverified) for key rotation support
+    try:
+        unverified_header = jwt.get_unverified_header(token)
+    except Exception:
+        # Malformed token — let jwt.decode() handle the error
+        # Return a key anyway so decode() produces a proper JWTError
+        return get_verification_key(algorithm, kid=None)
+
+    kid = unverified_header.get("kid") or getattr(settings, "jwt_key_id", None) or None
+    return get_verification_key(algorithm, kid=kid)
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip auth for health checks and public paths
@@ -117,9 +164,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     if jwt_issuer:
                         decode_kwargs["issuer"] = jwt_issuer
 
+                    # Select verification key based on algorithm
+                    verification_key = _get_jwt_verification_key(token)
+
                     payload = jwt.decode(
                         token,
-                        settings.jwt_secret,
+                        verification_key,
                         options=decode_options,
                         **decode_kwargs,
                     )
@@ -141,6 +191,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
                             status_code=401,
                             content={"error": "Invalid token or API key"},
                         )
+                except JWTKeyError as e:
+                    # Asymmetric key loading failed — fail-closed
+                    logger.error(
+                        "JWT verification key unavailable (fail-closed)",
+                        extra={"error": str(e)},
+                    )
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "Authentication service unavailable"},
+                    )
             else:
                 # Not a Bearer token — reject
                 return JSONResponse(
@@ -153,15 +213,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if auth_header and auth_header.startswith("Bearer "):
                 token = auth_header[7:]
                 try:
+                    verification_key = _get_jwt_verification_key(token)
                     payload = jwt.decode(
                         token,
-                        settings.jwt_secret,
+                        verification_key,
                         algorithms=[settings.jwt_algorithm],
                         options={"verify_aud": False, "verify_iss": False},
                     )
                     tenant_id = payload.get("tenant_id", tenant_id)
                     agent_id = payload.get("agent_id", agent_id)
-                except JWTError:
+                except (JWTError, JWTKeyError):
                     pass  # In non-auth mode, invalid tokens are ignored
 
         # Sanitize tenant_id and agent_id against path traversal

@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Auth
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
+    # Asymmetric JWT (RS256/ES256) — enterprise mode
+    # When set, takes precedence over jwt_secret for verification
+    jwt_public_key_path: str = ""    # Path to PEM public key file
+    jwt_private_key_path: str = ""   # Path to PEM private key (for token generation)
+    jwt_jwks_url: str = ""           # JWKS endpoint URL (for external IdP integration)
+    jwt_key_id: str = ""             # Key ID (kid) for key rotation
+    jwt_jwks_ttl: int = 3600         # JWKS cache TTL in seconds (default 1h)
     # H-03: JWT audience/issuer for cross-service isolation (set to prevent admin→proxy reuse)
     jwt_audience: str = "sentinel-proxy"
     jwt_issuer: str = "sentinel-gateway"
@@ -104,6 +111,23 @@ class Settings(BaseSettings):
     # Multilingual Detection (Phase 3)
     multilingual_enabled: bool = False  # Master switch for language detection + multilingual patterns
 
+    # mTLS (inter-service communication: proxy ↔ admin)
+    # When enabled, internal endpoints require a valid client certificate
+    # signed by the trusted CA. External endpoints continue using JWT/API key.
+    mtls_enabled: bool = False
+    mtls_ca_cert_path: str = ""       # Trusted CA certificate for client cert verification
+    mtls_server_cert_path: str = ""   # This service's server certificate
+    mtls_server_key_path: str = ""    # This service's server private key
+    mtls_client_cert_path: str = ""   # Client cert for outbound inter-service calls
+    mtls_client_key_path: str = ""    # Client key for outbound inter-service calls
+
+    # OpenTelemetry Distributed Tracing
+    tracing_enabled: bool = False  # Master switch — zero overhead when disabled
+    tracing_endpoint: str = "http://localhost:4317"  # OTLP gRPC endpoint
+    tracing_exporter: str = "otlp"  # "otlp", "zipkin", "console", "none"
+    tracing_sample_rate: float = 1.0  # 1.0 = trace all, 0.1 = 10% sampling
+    tracing_service_name: str = "sentinel-gateway-proxy"
+
     model_config = SettingsConfigDict(
         env_prefix="SENTINEL_",
         env_file=".env",
@@ -162,6 +186,41 @@ settings = _build_settings()
 
 def validate_settings():
     """Validate critical security settings at startup."""
+    # --- Asymmetric JWT validation (RS256/ES256) ---
+    # If using asymmetric algorithms, validate key configuration BEFORE
+    # checking the symmetric secret (asymmetric mode doesn't need jwt_secret).
+    if settings.jwt_algorithm in ("RS256", "ES256"):
+        if not settings.jwt_public_key_path and not settings.jwt_jwks_url:
+            raise SystemExit(
+                f"FATAL: JWT algorithm '{settings.jwt_algorithm}' requires either "
+                f"SENTINEL_JWT_PUBLIC_KEY_PATH or SENTINEL_JWT_JWKS_URL to be set. "
+                f"Without a public key source, token verification is impossible."
+            )
+
+        # Initialize asymmetric key management (fail-closed on error)
+        from src.middleware.jwt_keys import initialize, JWTKeyError
+
+        try:
+            initialize(
+                algorithm=settings.jwt_algorithm,
+                public_key_path=settings.jwt_public_key_path,
+                private_key_path=settings.jwt_private_key_path,
+                jwks_url=settings.jwt_jwks_url,
+                jwks_ttl=settings.jwt_jwks_ttl,
+            )
+        except JWTKeyError as e:
+            raise SystemExit(f"FATAL: JWT key initialization failed: {e}")
+
+        import logging
+        logging.getLogger(__name__).info(
+            f"JWT asymmetric mode enabled: algorithm={settings.jwt_algorithm}, "
+            f"public_key={'configured' if settings.jwt_public_key_path else 'none'}, "
+            f"jwks={'configured' if settings.jwt_jwks_url else 'none'}"
+        )
+        # Skip symmetric secret validation when using asymmetric mode
+        return
+
+    # --- Symmetric JWT validation (HS256) ---
     # SECURITY FIX (VULN 1.5): Expanded blocklist of known-insecure secrets
     # These are publicly documented in README, .env.example, and now in the pentest report
     insecure_secrets = {

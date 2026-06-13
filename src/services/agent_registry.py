@@ -3,6 +3,7 @@ Agent Registry — Resolves backend URLs per tenant/agent.
 
 Loads from config/agents.yaml, hot-reloadable via admin endpoint.
 Provides dynamic routing so sentinel-gateway can proxy to multiple backends.
+Loads per-tenant quota configuration for resource isolation.
 """
 
 import os
@@ -12,6 +13,12 @@ from pathlib import Path
 
 import structlog
 import yaml
+
+from src.middleware.quotas import (
+    TenantQuotaConfig,
+    clear_tenant_quotas,
+    register_tenant_quotas,
+)
 
 logger = structlog.get_logger()
 
@@ -108,10 +115,35 @@ class AgentRegistry:
                 health_endpoint=defaults.get("health_endpoint", "/health"),
             )
 
-            # Parse tenant agents
+            # Parse tenant agents and quotas
             tenants = data.get("tenants", {})
+            clear_tenant_quotas()  # Reset before reload
+            tenants_with_quotas = 0
+
             for tenant_id, tenant_data in tenants.items():
-                agents = tenant_data.get("agents", {}) if isinstance(tenant_data, dict) else {}
+                if not isinstance(tenant_data, dict):
+                    continue
+
+                # Parse per-tenant quotas
+                quotas_cfg = tenant_data.get("quotas")
+                if isinstance(quotas_cfg, dict):
+                    quota = TenantQuotaConfig(
+                        max_concurrent_requests=quotas_cfg.get(
+                            "max_concurrent_requests", 0
+                        ),
+                        max_tokens_per_day=quotas_cfg.get("max_tokens_per_day", 0),
+                        max_request_size_bytes=quotas_cfg.get(
+                            "max_request_size_bytes", 0
+                        ),
+                        allowed_models=quotas_cfg.get("allowed_models"),
+                        priority_weight=quotas_cfg.get("priority_weight", 1.0),
+                        rate_limit_rpm=quotas_cfg.get("rate_limit_rpm", 0),
+                    )
+                    register_tenant_quotas(tenant_id, quota)
+                    tenants_with_quotas += 1
+
+                # Parse agents
+                agents = tenant_data.get("agents", {})
                 for agent_id, agent_cfg in agents.items():
                     if not isinstance(agent_cfg, dict):
                         continue
@@ -152,6 +184,7 @@ class AgentRegistry:
                 "agent_registry_loaded",
                 agents=len(self._agents),
                 tenants=len(tenants),
+                tenants_with_quotas=tenants_with_quotas,
             )
         except Exception as e:
             await logger.aerror("agent_registry_load_error", error=str(e))

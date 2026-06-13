@@ -72,6 +72,18 @@ proxy:
     enabled: true
     # -- Minimum available pods
     minAvailable: 1
+  # -- Scheduling constraints for HA (anti-affinity + topology spread)
+  scheduling:
+    podAntiAffinity:
+      # -- Enable pod anti-affinity to spread pods across nodes/zones
+      enabled: true
+      # -- Anti-affinity type: "preferred" or "required"
+      type: "preferred"
+    topologySpreadConstraints:
+      # -- Enable topology spread constraints
+      enabled: true
+      # -- Maximum allowed skew between topology domains
+      maxSkew: 1
   # -- ML Scanner configuration
   ml:
     # -- Enable ML scanners (requires models volume)
@@ -170,6 +182,8 @@ admin:
 redis:
   # -- Deploy Redis as part of this chart (set to false for external Redis)
   enabled: true
+  # -- High Availability mode: "standalone" (default), "sentinel", "cluster"
+  mode: "standalone"
   image:
     # -- Redis image
     repository: redis
@@ -198,6 +212,38 @@ redis:
     enabled: true
     # -- Max unavailable pods
     maxUnavailable: 1
+  # -- Redis Sentinel HA configuration (requires mode: "sentinel")
+  sentinel:
+    # -- Enable Redis Sentinel (requires mode: sentinel)
+    enabled: false
+    # -- Number of Redis Sentinel replicas
+    replicas: 3
+    # -- Number of Redis data replicas (1 master + N replicas)
+    dataReplicas: 2
+    # -- Sentinel master name
+    masterName: "sentinel-master"
+    # -- Sentinel quorum (minimum sentinels agreeing on failover)
+    quorum: 2
+    # -- Down-after-milliseconds
+    downAfterMs: 5000
+    # -- Failover timeout
+    failoverTimeoutMs: 60000
+    # -- Sentinel container resources
+    resources:
+      limits:
+        memory: 64Mi
+        cpu: 100m
+      requests:
+        memory: 32Mi
+        cpu: 50m
+  # -- Redis Cluster configuration (requires mode: "cluster")
+  cluster:
+    # -- Enable Redis Cluster (requires mode: cluster)
+    enabled: false
+    # -- Number of cluster nodes (minimum 6: 3 masters + 3 replicas)
+    nodes: 6
+    # -- Replicas per master
+    replicasPerMaster: 1
 
 # -- External Redis configuration (used when redis.enabled=false)
 # Supports Azure Cache for Redis, AWS ElastiCache, GCP Memorystore, or on-premise.
@@ -218,6 +264,15 @@ externalRedis:
   tls: false
   # -- Skip TLS certificate verification (for self-signed certs)
   tlsInsecure: false
+  # -- External Redis Sentinel configuration
+  sentinel:
+    # -- Use Sentinel for external Redis
+    enabled: false
+    # -- Sentinel master name
+    masterName: "mymaster"
+    # -- List of sentinel host:port pairs
+    nodes: []
+    # e.g.: ["sentinel-1:26379", "sentinel-2:26379", "sentinel-3:26379"]
 
 # -- Ingress configuration
 ingress:
@@ -392,6 +447,27 @@ persistence:
   notifications:
     # -- Notifications PVC size
     size: 50Mi
+
+# -- mTLS (mutual TLS) for inter-service communication
+mtls:
+  # -- Enable mTLS between services (proxy ↔ admin)
+  enabled: false
+  # -- Use cert-manager for automatic certificate management
+  certManager: false
+  # -- cert-manager issuer name (used when certManager=true)
+  issuerName: "sentinel-internal-ca"
+  # -- Use pre-existing secrets (for customers with their own CA)
+  existingSecrets:
+    # -- Secret containing ca.crt (trusted CA)
+    ca: ""
+    # -- TLS secret for proxy (tls.crt + tls.key)
+    proxyCert: ""
+    # -- TLS secret for admin (tls.crt + tls.key)
+    adminCert: ""
+  # -- Certificate validity in hours (default: 8760 = 1 year)
+  certValidity: 8760
+  # -- Enforce mTLS scope: "inter-service" (admin↔proxy only) or "all" (all internal traffic)
+  scope: "inter-service"
 
 # -- Network policies
 networkPolicies:

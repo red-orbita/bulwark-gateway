@@ -33,7 +33,348 @@ data:
         scrape_interval: 10s
 
   rules.yml: |
-    groups: []
+    # Sentinel Gateway - Prometheus Alerting Rules
+    # SOC 2 CC7.2 Monitoring Compliance
+    # MITRE ATT&CK annotations included where applicable
+    groups:
+      # ====================================================================
+      # CRITICAL ALERTS - Page immediately
+      # ====================================================================
+      - name: sentinel_critical
+        rules:
+          - alert: SentinelHighBlockRate
+            expr: |
+              (
+                sum(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+                /
+                clamp_min(sum(rate(sentinel_requests_total[5m])), 1)
+              ) > 0.10
+            for: 2m
+            labels:
+              severity: critical
+              team: security
+              compliance: "SOC2-CC7.2"
+              mitre_attack: "T1190,T1059"
+            annotations:
+              summary: "High guardrail block rate exceeds 10%"
+              description: "More than 10% of requests blocked in 5min window. Investigate active attacks or guardrail misconfiguration."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/high-block-rate"
+
+          - alert: SentinelGuardrailLatencyHigh
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(sentinel_request_duration_seconds_bucket{phase="input_guardrail"}[5m])) by (le)
+              ) > 0.100
+            for: 3m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Input guardrail P99 latency above 100ms"
+              description: "Guardrail processing latency is degrading request performance."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/guardrail-latency"
+
+          - alert: SentinelRedisDown
+            expr: up{job="sentinel-redis"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Redis instance is unreachable"
+              description: "Rate limiting, pattern sync, and distributed counters are degraded."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/redis-down"
+
+          - alert: SentinelProxyPodsDown
+            expr: |
+              count(up{job="sentinel-proxy"} == 1) < 2
+                or
+              absent(up{job="sentinel-proxy"})
+            for: 2m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Proxy pod count below minimum replicas"
+              description: "Fewer than 2 healthy proxy pods. HA requirement violated."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/proxy-pods-down"
+
+          - alert: SentinelBackendErrorRateHigh
+            expr: |
+              (
+                sum(rate(sentinel_backend_errors_total[5m]))
+                /
+                clamp_min(sum(rate(sentinel_requests_total[5m])), 1)
+              ) > 0.05
+            for: 3m
+            labels:
+              severity: critical
+              team: platform
+            annotations:
+              summary: "Backend error rate exceeds 5%"
+              description: "LLM backend is returning errors for more than 5% of forwarded requests."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/backend-errors"
+
+          - alert: SentinelCertificateExpiringSoon
+            expr: |
+              (probe_ssl_earliest_cert_expiry - time()) / 86400 < 7
+            for: 1h
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC6.1"
+            annotations:
+              summary: "TLS certificate expires in less than 7 days"
+              description: "Renew certificate immediately to prevent outage."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/cert-renewal"
+
+          - alert: SentinelProxyTargetDown
+            expr: up{job="sentinel-proxy"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              team: platform
+            annotations:
+              summary: "Sentinel proxy target is down"
+              description: "Prometheus cannot scrape proxy instance {{ $labels.instance }}."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/proxy-target-down"
+
+      # ====================================================================
+      # WARNING ALERTS - Notify but don't page
+      # ====================================================================
+      - name: sentinel_warning
+        rules:
+          - alert: SentinelRateLimitRejectionsHigh
+            expr: |
+              sum(increase(sentinel_rate_limit_rejected_total[5m])) > 100
+            for: 2m
+            labels:
+              severity: warning
+              team: security
+              mitre_attack: "T1498"
+            annotations:
+              summary: "High rate limit rejections (>100 in 5min)"
+              description: "Possible brute-force or DoS attempt detected."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/rate-limit-high"
+
+          - alert: SentinelScannersLow
+            expr: sentinel_scanners_active < 3
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Active scanner count below expected minimum"
+              description: "Only {{ $value }} scanners active (expected >= 3). Detection coverage degraded."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/scanners-degraded"
+
+          - alert: SentinelMemoryPressure
+            expr: |
+              (
+                container_memory_working_set_bytes{container="sentinel-proxy"}
+                /
+                container_spec_memory_limit_bytes{container="sentinel-proxy"}
+              ) > 0.80
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Proxy container memory usage above 80%"
+              description: "Risk of OOMKill. Consider increasing memory limits."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/memory-pressure"
+
+          - alert: SentinelDiskUsageHigh
+            expr: |
+              (
+                kubelet_volume_stats_used_bytes{namespace=~"sentinel.*"}
+                /
+                kubelet_volume_stats_capacity_bytes{namespace=~"sentinel.*"}
+              ) > 0.80
+            for: 10m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Persistent volume usage above 80%"
+              description: "PVC {{ $labels.persistentvolumeclaim }} at >80% capacity."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/disk-usage"
+
+          - alert: SentinelAuditLogFailures
+            expr: |
+              increase(sentinel_audit_log_errors_total[5m]) > 0
+            for: 1m
+            labels:
+              severity: warning
+              team: security
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Audit log write failures detected"
+              description: "Audit trail integrity may be compromised. SOC 2 CC7.2 violation risk."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/audit-failures"
+
+          - alert: SentinelSIEMExportErrors
+            expr: |
+              increase(sentinel_siem_export_errors_total[5m]) > 0
+            for: 3m
+            labels:
+              severity: warning
+              team: security
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "SIEM export errors detected"
+              description: "Security events may not be reaching the SIEM platform."
+              runbook_url: "https://sentinel-gateway.internal/runbooks/siem-export-errors"
+
+          - alert: SentinelCacheHitRatioLow
+            expr: |
+              (
+                sum(rate(sentinel_cache_hits_total[10m]))
+                /
+                clamp_min(
+                  sum(rate(sentinel_cache_hits_total[10m])) + sum(rate(sentinel_cache_misses_total[10m])),
+                  1
+                )
+              ) < 0.10
+            for: 10m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Cache hit ratio below 10%"
+              description: "Excessive cache misses indicate cold cache or eviction pressure."
+
+          - alert: SentinelNotificationFailures
+            expr: |
+              increase(sentinel_notification_errors_total[15m]) > 3
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Alert notification delivery failures"
+              description: "Security alerts may not be reaching the operations team."
+
+      # ====================================================================
+      # INFO / SLO ALERTS - Informational, trend detection
+      # ====================================================================
+      - name: sentinel_info_slo
+        rules:
+          - alert: SentinelThroughputAnomaly
+            expr: |
+              abs(
+                sum(rate(sentinel_requests_total[5m]))
+                -
+                sum(rate(sentinel_requests_total[1h]))
+              )
+              /
+              clamp_min(sum(rate(sentinel_requests_total[1h])), 0.1)
+              > 3.0
+            for: 5m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1498,T1499"
+            annotations:
+              summary: "Request throughput deviates significantly from baseline"
+              description: "Current rate deviates >3x from 1h baseline. Possible surge or DDoS."
+
+          - alert: SentinelUnusualTenantActivity
+            expr: |
+              (
+                sum by (tenant_id)(rate(sentinel_requests_total[5m]))
+                /
+                clamp_min(sum(rate(sentinel_requests_total[5m])), 0.1)
+              ) > 0.80
+            for: 10m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1078"
+            annotations:
+              summary: "Tenant {{ $labels.tenant_id }} generating >80% of all traffic"
+              description: "Investigate whether traffic concentration is expected."
+
+          - alert: SentinelMLScannerSlow
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(sentinel_request_duration_seconds_bucket{phase="ml_scanner"}[5m])) by (le)
+              ) > 0.500
+            for: 5m
+            labels:
+              severity: info
+              team: platform
+            annotations:
+              summary: "ML scanner P95 inference time above 500ms"
+              description: "Consider model optimization or GPU scaling."
+
+          - alert: SentinelPodRestartsHigh
+            expr: |
+              increase(kube_pod_container_status_restarts_total{namespace=~"sentinel.*"}[1h]) > 3
+            for: 5m
+            labels:
+              severity: info
+              team: platform
+            annotations:
+              summary: "Pod {{ $labels.pod }} restarted >3 times in 1 hour"
+              description: "Check pod events for OOMKill or CrashLoopBackOff."
+
+          - alert: SentinelToolPolicyViolations
+            expr: |
+              sum(increase(sentinel_verdicts_total{verdict="block", category="tool_abuse"}[15m])) > 10
+            for: 5m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1059,T1203"
+            annotations:
+              summary: "Elevated tool policy violations (>10 in 15min)"
+              description: "An agent may be attempting to exceed its allowed tool permissions."
+
+          - alert: SentinelPromptInjectionSpike
+            expr: |
+              sum(increase(sentinel_verdicts_total{verdict="block", category="prompt_injection"}[10m])) > 20
+            for: 3m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1190,T1059.006"
+            annotations:
+              summary: "Prompt injection attempt spike detected"
+              description: "Automated adversarial testing or active attack in progress."
+
+          - alert: SentinelSLORequestSuccessLow
+            expr: |
+              (
+                sum(rate(sentinel_requests_total{verdict!="block"}[30m]))
+                /
+                clamp_min(sum(rate(sentinel_requests_total[30m])), 1)
+              ) < 0.95
+            for: 15m
+            labels:
+              severity: info
+              team: platform
+              slo: "availability"
+            annotations:
+              summary: "Request success rate SLO below 95%"
+              description: "30-minute success rate has dropped below 95% SLO target."
+
+          - alert: SentinelSLOLatencyBreach
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(sentinel_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              ) > 1.0
+            for: 10m
+            labels:
+              severity: info
+              team: platform
+              slo: "latency"
+            annotations:
+              summary: "End-to-end P95 latency SLO breach (>1s)"
+              description: "Total request P95 latency exceeds 1s SLO target."
 
   web.yml: |
     # Basic auth disabled in K8s (use NetworkPolicy instead)

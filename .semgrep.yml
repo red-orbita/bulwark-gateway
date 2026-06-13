@@ -1,0 +1,354 @@
+# Sentinel Gateway — Custom Semgrep Rules
+#
+# These rules detect patterns that are specifically dangerous in the context
+# of a security proxy that handles untrusted input from users and LLM outputs.
+#
+# Categories:
+#   - eval/exec: Code execution vectors (critical in a proxy handling adversarial input)
+#   - pickle: Deserialization attacks
+#   - unsafe-redis: Redis commands that could leak/corrupt security state
+#   - subprocess: Shell injection via untrusted input
+#   - path-traversal: File access outside expected directories
+#   - hardcoded-secrets: Credentials in source code
+
+rules:
+  # ─── Code Execution ──────────────────────────────────────────────────────────
+
+  - id: sentinel-no-eval
+    patterns:
+      - pattern: eval(...)
+    message: >
+      Use of eval() is prohibited in Sentinel Gateway. Adversarial input from
+      users or LLM outputs could achieve code execution. Use ast.literal_eval()
+      for safe parsing of literals, or json.loads() for structured data.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      owasp: "A03:2021 Injection"
+      confidence: HIGH
+      impact: CRITICAL
+      references:
+        - https://cwe.mitre.org/data/definitions/95.html
+
+  - id: sentinel-no-exec
+    patterns:
+      - pattern: exec(...)
+    message: >
+      Use of exec() is prohibited in Sentinel Gateway. This allows arbitrary
+      code execution if any part of the input is attacker-controlled.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      owasp: "A03:2021 Injection"
+      confidence: HIGH
+      impact: CRITICAL
+
+  - id: sentinel-no-compile-exec
+    patterns:
+      - pattern: compile($CODE, ..., "exec")
+      - pattern: compile($CODE, ..., "eval")
+    message: >
+      Compiling code for execution is prohibited. This is equivalent to eval/exec
+      and allows arbitrary code execution with attacker-controlled input.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-95"
+      confidence: HIGH
+      impact: CRITICAL
+
+  # ─── Deserialization ─────────────────────────────────────────────────────────
+
+  - id: sentinel-no-pickle-loads
+    patterns:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: _pickle.loads(...)
+    message: >
+      Pickle deserialization is prohibited in Sentinel Gateway. Pickle allows
+      arbitrary code execution during deserialization. Use json.loads() or
+      Pydantic model_validate_json() instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      owasp: "A08:2021 Software and Data Integrity Failures"
+      confidence: HIGH
+      impact: CRITICAL
+      references:
+        - https://cwe.mitre.org/data/definitions/502.html
+
+  - id: sentinel-no-pickle-dumps
+    patterns:
+      - pattern: pickle.dumps(...)
+      - pattern: pickle.dump(...)
+    message: >
+      Pickle serialization is discouraged. If pickle.dumps() exists, the
+      corresponding loads() is likely nearby or in another service, creating
+      a deserialization attack surface. Use JSON serialization instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-502"
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: sentinel-no-shelve
+    patterns:
+      - pattern: shelve.open(...)
+    message: >
+      shelve uses pickle internally and allows arbitrary code execution
+      during deserialization. Use a JSON file or SQLite database instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-502"
+      confidence: HIGH
+      impact: CRITICAL
+
+  - id: sentinel-no-yaml-unsafe-load
+    patterns:
+      - pattern: yaml.load($DATA, ...)
+      - pattern-not: yaml.load($DATA, Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load($DATA, Loader=yaml.CSafeLoader)
+    message: >
+      Use yaml.safe_load() or yaml.load(data, Loader=yaml.SafeLoader) to
+      prevent arbitrary code execution via YAML deserialization.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-502"
+      confidence: MEDIUM
+      impact: CRITICAL
+
+  # ─── Unsafe Redis Commands ───────────────────────────────────────────────────
+
+  - id: sentinel-redis-no-eval
+    patterns:
+      - pattern: $REDIS.eval(...)
+      - pattern: $REDIS.evalsha(...)
+    message: >
+      Redis EVAL/EVALSHA executes Lua scripts on the Redis server. In Sentinel
+      Gateway, if an attacker can influence the script content, they can execute
+      arbitrary commands on Redis. Use dedicated Redis commands instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-94: Improper Control of Generation of Code"
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: sentinel-redis-no-config-set
+    patterns:
+      - pattern: $REDIS.config_set(...)
+      - pattern: $REDIS.execute_command("CONFIG", "SET", ...)
+    message: >
+      Redis CONFIG SET can be used to modify server behavior (e.g., change
+      persistence settings, load modules, or write arbitrary files via
+      dir/dbfilename manipulation). This is prohibited in Sentinel Gateway.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-284: Improper Access Control"
+      confidence: HIGH
+      impact: HIGH
+
+  - id: sentinel-redis-no-flushall
+    patterns:
+      - pattern: $REDIS.flushall(...)
+      - pattern: $REDIS.flushdb(...)
+      - pattern: $REDIS.execute_command("FLUSHALL", ...)
+      - pattern: $REDIS.execute_command("FLUSHDB", ...)
+    message: >
+      FLUSHALL/FLUSHDB deletes all security state (rate limits, blocklists,
+      counters). This could be exploited to reset rate limits or clear blocked
+      patterns. Never expose this to user-reachable code paths.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-284"
+      confidence: HIGH
+      impact: CRITICAL
+
+  - id: sentinel-redis-no-keys-pattern
+    patterns:
+      - pattern: $REDIS.keys(...)
+    message: >
+      Redis KEYS command blocks the server while scanning all keys. Use SCAN
+      with a cursor for production-safe iteration. In a high-traffic proxy
+      this can cause a denial-of-service.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: performance
+      cwe: "CWE-400: Uncontrolled Resource Consumption"
+      confidence: HIGH
+      impact: MEDIUM
+
+  # ─── Subprocess / Shell Injection ────────────────────────────────────────────
+
+  - id: sentinel-no-shell-true
+    patterns:
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.check_output(..., shell=True, ...)
+      - pattern: subprocess.check_call(..., shell=True, ...)
+    message: >
+      shell=True enables shell injection if any argument is user-controlled.
+      In a security proxy processing adversarial input, this is critical.
+      Use shell=False with a command list instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      owasp: "A03:2021 Injection"
+      confidence: HIGH
+      impact: CRITICAL
+
+  - id: sentinel-no-os-system
+    patterns:
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+    message: >
+      os.system() and os.popen() execute shell commands and are vulnerable
+      to injection. Use subprocess.run() with shell=False instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-78"
+      confidence: HIGH
+      impact: CRITICAL
+
+  # ─── Path Traversal ─────────────────────────────────────────────────────────
+
+  - id: sentinel-path-traversal-open
+    patterns:
+      - pattern: open($PATH + ..., ...)
+      - pattern: open(f"...{$VAR}...", ...)
+    message: >
+      Opening files with user-influenced paths can lead to path traversal.
+      Validate that the resolved path is within the expected directory using
+      os.path.realpath() and startswith() checks.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+      owasp: "A01:2021 Broken Access Control"
+      confidence: MEDIUM
+      impact: HIGH
+
+  # ─── Hardcoded Secrets ───────────────────────────────────────────────────────
+
+  - id: sentinel-no-hardcoded-jwt-secret
+    patterns:
+      - pattern: |
+          $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: ".*(secret|jwt_secret|api_key|password|token).*"
+      - pattern-not: |
+          $VAR = ""
+      - pattern-not: |
+          $VAR = "change-me-in-production"
+    message: >
+      Possible hardcoded secret detected. Sentinel Gateway uses SENTINEL_*
+      environment variables and file-mounted secrets. Never hardcode credentials.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      confidence: LOW
+      impact: HIGH
+
+  # ─── SSRF / Unsafe Network ──────────────────────────────────────────────────
+
+  - id: sentinel-no-requests-unvalidated
+    patterns:
+      - pattern: requests.get($URL, ...)
+      - pattern: requests.post($URL, ...)
+      - pattern-not-inside: |
+          ... # SSRF-SAFE: ...
+    message: >
+      Direct use of 'requests' library without SSRF validation. Sentinel Gateway
+      uses httpx with SSRF protection (RFC1918/CGNAT/metadata blocking). Use the
+      proxy's validated HTTP client instead of raw requests.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-918: Server-Side Request Forgery"
+      owasp: "A10:2021 Server-Side Request Forgery"
+      confidence: LOW
+      impact: HIGH
+
+  # ─── Dangerous Imports ───────────────────────────────────────────────────────
+
+  - id: sentinel-no-marshal
+    patterns:
+      - pattern: import marshal
+      - pattern: from marshal import ...
+    message: >
+      marshal module can execute arbitrary code during deserialization,
+      similar to pickle. Do not use for untrusted data.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-502"
+      confidence: HIGH
+      impact: CRITICAL
+
+  - id: sentinel-no-ctypes
+    patterns:
+      - pattern: import ctypes
+      - pattern: from ctypes import ...
+    message: >
+      ctypes provides raw memory access and can bypass Python's safety
+      guarantees. Not appropriate in a security proxy unless absolutely
+      necessary and thoroughly reviewed.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-119: Improper Restriction of Operations within the Bounds of a Memory Buffer"
+      confidence: MEDIUM
+      impact: HIGH
+
+  # ─── Timing Attacks ─────────────────────────────────────────────────────────
+
+  - id: sentinel-no-string-comparison-secrets
+    patterns:
+      - pattern: |
+          if $SECRET == $INPUT: ...
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: ".*(key|token|secret|password|hash).*"
+    message: >
+      String comparison of secrets is vulnerable to timing attacks. Use
+      hmac.compare_digest() for constant-time comparison of secret values.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-208: Observable Timing Discrepancy"
+      confidence: MEDIUM
+      impact: MEDIUM
+      references:
+        - https://docs.python.org/3/library/hmac.html#hmac.compare_digest
