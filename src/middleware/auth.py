@@ -71,6 +71,17 @@ PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json", "
 # Pre-compute valid API key hashes at startup (constant-time comparison)
 _API_KEY_HASHES: Set[str] = set()
 
+# Tier 2 Multi-Tenancy: allowed tenants for this pod (empty = serve all)
+_ALLOWED_TENANTS: Set[str] = set()
+
+
+def _init_allowed_tenants() -> Set[str]:
+    """Load allowed tenants from config (comma-separated list)."""
+    raw = settings.allowed_tenants
+    if not raw:
+        return set()
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
 
 def _init_api_keys() -> Set[str]:
     """Load API keys from config, store as SHA-256 hashes."""
@@ -85,6 +96,7 @@ def _init_api_keys() -> Set[str]:
 
 # Initialize on module load
 _API_KEY_HASHES = _init_api_keys()
+_ALLOWED_TENANTS = _init_allowed_tenants()
 
 
 def _get_jwt_verification_key(token: str):
@@ -235,6 +247,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid agent_id format"},
+            )
+
+        # Tier 2 Multi-Tenancy: Enforce tenant isolation on dedicated pods.
+        # If SENTINEL_ALLOWED_TENANTS is set, only those tenants are served.
+        # Requests for other tenants are rejected (they should go to their own pods).
+        if _ALLOWED_TENANTS and tenant_id not in _ALLOWED_TENANTS:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Tenant not served by this endpoint",
+                    "detail": f"Tenant '{tenant_id}' is not assigned to this proxy instance.",
+                },
             )
 
         # Attach context to request state

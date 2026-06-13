@@ -1,0 +1,167 @@
+# Sentinel Gateway — Region A (Primary) Helm Values
+#
+# Active region: serves all production traffic.
+# Deploy: helm install sentinel ./helm/sentinel-gateway -f ci/values-region-primary.yaml \
+#           --set backend.ip=<IP> --set externalRedis.password=<PWD> \
+#           --namespace sentinel-gateway --create-namespace --kube-context region-a
+#
+# RTO target: < 5 minutes | RPO target: < 30 seconds
+
+# Backend — primary LLM endpoint
+backend:
+  type: ip
+  ip: ""  # Set via CI/CD: --set backend.ip=<PRIMARY_BACKEND_IP>
+  port: 11434
+
+# Proxy — primary region, high availability
+proxy:
+  replicas: 5
+  logLevel: "WARNING"
+  failMode: "closed"
+  rateLimit: 120
+  workers: 4
+  resources:
+    limits:
+      memory: 1Gi
+      cpu: "2"
+    requests:
+      memory: 512Mi
+      cpu: 500m
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 20
+    targetCPUUtilization: 65
+    targetMemoryUtilization: 75
+  pdb:
+    enabled: true
+    minAvailable: 3
+  scheduling:
+    podAntiAffinity:
+      enabled: true
+      type: "required"
+    topologySpreadConstraints:
+      enabled: true
+      maxSkew: 1
+
+# Admin — primary region, HA
+admin:
+  replicas: 3
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: "1"
+    requests:
+      memory: 256Mi
+      cpu: 250m
+  database:
+    type: "postgresql"
+    postgresql:
+      host: ""  # Set via CI/CD: --set admin.database.postgresql.host=<PG_HOST>
+      port: 5432
+      database: "sentinel_admin"
+      username: "sentinel"
+      existingSecret: "sentinel-postgresql-credentials"
+      existingSecretKey: "password"
+      sslMode: "verify-full"
+      poolMin: 5
+      poolMax: 30
+
+# Redis — external managed with Sentinel (HA)
+redis:
+  enabled: false
+
+externalRedis:
+  host: ""  # Set via CI/CD: --set externalRedis.host=<REDIS_PRIMARY_HOST>
+  port: 6380
+  tls: true
+  db: 0
+  existingSecret: "sentinel-redis-credentials"
+  existingSecretKey: "password"
+  # Sentinel mode for auto-failover within the region
+  sentinel:
+    enabled: true
+    masterName: "sentinel-master"
+    nodes: "redis-sentinel-0:26379,redis-sentinel-1:26379,redis-sentinel-2:26379"
+
+# Ingress — primary region
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Health check annotation for external DNS/LB
+    external-dns.alpha.kubernetes.io/hostname: "region-a.sentinel-gateway.example.com"
+  tls:
+    enabled: true
+    secretName: "sentinel-primary-tls"
+  hosts:
+    proxy: "region-a.sentinel-gateway.example.com"
+    admin: "admin-a.sentinel-gateway.example.com"
+
+# Telemetry — full pipeline
+telemetry:
+  enabled: true
+  batchSize: 200
+  flushInterval: 0.5
+  transport:
+    type: "http"
+    # S3/GCS for durable telemetry storage (cross-region replicated)
+    file:
+      enabled: true
+      path: "/app/shared/telemetry/events.ndjson"
+      rotateSize: "100MB"
+
+# SIEM
+siem:
+  enabled: true
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    retention: "30d"
+  grafana:
+    enabled: true
+    adminPassword: ""  # Set via CI/CD secret
+
+# Notifications
+notifications:
+  enabled: true
+
+# Wazuh
+wazuh:
+  enabled: true
+
+# Persistence — durable storage (replicated)
+persistence:
+  storageClass: "gp3"  # AWS: gp3, Azure: managed-premium, GCP: standard-rwo
+  policies:
+    size: 5Gi
+  telemetryData:
+    size: 50Gi
+  adminData:
+    size: 10Gi
+
+# Network policies — zero trust
+networkPolicies:
+  enabled: true
+
+# Pod topology for cross-AZ spread
+podTopologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: sentinel-gateway
+
+# Region label (for multi-region monitoring)
+global:
+  region: "a"
+  role: "primary"
+  clusterName: "sentinel-region-a"

@@ -15,6 +15,7 @@
 | [Security Hardening](SECURITY-HARDENING.md) | Pentest results, remediations, security posture |
 | [API Reference](API-REFERENCE.md) | Proxy + Admin API endpoints, request/response formats |
 | [Roadmap](ROADMAP.md) | Implementation plan: ML detection, multilingual, SDK mode, plugin hub |
+| [Runbooks](runbooks/README.md) | Incident response plan, alert playbooks, evidence collection |
 
 ## Document Audience
 
@@ -24,7 +25,8 @@
 | **Security Engineer** | [Architecture](ARCHITECTURE.md) → [Security Hardening](SECURITY-HARDENING.md) |
 | **SOC Analyst** | [Notifications](NOTIFICATIONS.md) → [Troubleshooting](TROUBLESHOOTING.md) |
 | **Developer** | [API Reference](API-REFERENCE.md) → [Architecture](ARCHITECTURE.md) → [Roadmap](ROADMAP.md) |
-| **Auditor** | [Security Hardening](SECURITY-HARDENING.md) → [API Reference](API-REFERENCE.md) |
+| **Auditor** | [Security Hardening](SECURITY-HARDENING.md) → [Runbooks/IR Plan](runbooks/ir-plan.md) → [API Reference](API-REFERENCE.md) |
+| **Incident Responder** | [Runbooks](runbooks/README.md) → [Operations](OPERATIONS.md) → [Troubleshooting](TROUBLESHOOTING.md) |
 
 ## Project README
 

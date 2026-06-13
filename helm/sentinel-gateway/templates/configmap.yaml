@@ -53,6 +53,16 @@ data:
   SENTINEL_CACHE_TTL: {{ .Values.proxy.cache.ttl | quote }}
   SENTINEL_CACHE_MAX_SIZE: {{ .Values.proxy.cache.maxSize | quote }}
   {{- end }}
+  {{- if and .Values.dedicatedTenants.enabled .Values.dedicatedTenants.tenants }}
+  # Tier 2 Multi-Tenancy: list of tenants with dedicated proxy pods
+  # The shared proxy pool uses this to route requests to dedicated services
+  {{- $tenantNames := list }}
+  {{- range .Values.dedicatedTenants.tenants }}
+  {{- $tenantNames = append $tenantNames .name }}
+  {{- end }}
+  SENTINEL_DEDICATED_TENANTS: {{ $tenantNames | toJson | quote }}
+  SENTINEL_NAMESPACE: {{ include "sentinel-gateway.namespace" . | quote }}
+  {{- end }}
 ---
 # Admin ConfigMap — environment variables for the admin container
 apiVersion: v1

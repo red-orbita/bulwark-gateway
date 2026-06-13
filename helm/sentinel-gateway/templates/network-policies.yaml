@@ -118,6 +118,16 @@ spec:
           protocol: TCP
         - port: 8000
           protocol: TCP
+    {{- if and .Values.dedicatedTenants.enabled .Values.dedicatedTenants.tenants }}
+    # Tier 2: Shared proxy can forward to dedicated tenant proxy pods
+    - to:
+        - podSelector:
+            matchLabels:
+              sentinel-gateway.io/tier: "dedicated"
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
 ---
 # NetworkPolicy: Admin — ingress from Ingress controller ONLY, egress to Redis + Wazuh
 apiVersion: networking.k8s.io/v1

@@ -1,0 +1,388 @@
+{{- /*
+  Tier 2 Multi-Tenancy: Dedicated Proxy Pods Per Tenant
+  
+  For each tenant in .Values.dedicatedTenants.tenants, this template generates:
+    - Deployment (same proxy image, tenant-specific env overrides)
+    - Service (proxy-<tenant-name>)
+    - HPA (optional, per-tenant scaling)
+    - PDB (ensures availability during rollouts)
+    - NetworkPolicy (tenant isolation — restricts Redis keyspace access)
+  
+  Service naming: proxy-<tenant-name> (must be DNS-safe, max 63 chars)
+  Labels: sentinel-gateway.io/tenant=<name>, sentinel-gateway.io/tier=dedicated
+*/ -}}
+{{- range $tenant := .Values.dedicatedTenants.tenants }}
+{{- $tenantName := $tenant.name }}
+{{- $replicas := $tenant.replicas | default 2 }}
+{{- $ns := include "sentinel-gateway.namespace" $ }}
+---
+# Dedicated Proxy Deployment — Tenant: {{ $tenantName }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy-{{ $tenantName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "sentinel-gateway.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: proxy-{{ $tenantName }}
+    app.kubernetes.io/component: gateway
+    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+    sentinel-gateway.io/tier: "dedicated"
+spec:
+  replicas: {{ $replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proxy-{{ $tenantName }}
+      sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: proxy-{{ $tenantName }}
+        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/component: gateway
+        sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+        sentinel-gateway.io/tier: "dedicated"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/health/metrics"
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum | trunc 8 }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") $ | sha256sum | trunc 8 }}
+    spec:
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: sentinel-proxy
+      automountServiceAccountToken: false
+      {{- with $tenant.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $tenant.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: proxy-{{ $tenantName }}
+                    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+                topologyKey: kubernetes.io/hostname
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: proxy-{{ $tenantName }}
+                    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+                topologyKey: topology.kubernetes.io/zone
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-policies
+          image: {{ include "sentinel-gateway.proxy.image" $ }}
+          imagePullPolicy: {{ $.Values.proxy.image.pullPolicy }}
+          command: ["sh", "-c", "cp -rn /app/config/policies/* /policies/ 2>/dev/null || true"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: policies
+              mountPath: /policies
+      containers:
+        - name: proxy
+          image: {{ include "sentinel-gateway.proxy.image" $ }}
+          imagePullPolicy: {{ $.Values.proxy.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Tenant isolation: this pod only serves requests for this tenant
+            - name: SENTINEL_ALLOWED_TENANTS
+              value: {{ $tenantName | quote }}
+            # Per-tenant rate limit override
+            - name: SENTINEL_RATE_LIMIT_RPM
+              value: {{ $tenant.rateLimit | default $.Values.proxy.rateLimit | quote }}
+            {{- if $tenant.maxConcurrent }}
+            - name: SENTINEL_MAX_CONCURRENT
+              value: {{ $tenant.maxConcurrent | quote }}
+            {{- end }}
+            {{- if $tenant.allowedModels }}
+            - name: SENTINEL_ALLOWED_MODELS
+              value: {{ join "," $tenant.allowedModels | quote }}
+            {{- end }}
+            {{- if $tenant.backendUrl }}
+            - name: SENTINEL_BACKEND_URL
+              value: {{ $tenant.backendUrl | quote }}
+            {{- end }}
+            # Redis keyspace isolation: prefix all keys with tenant name
+            - name: SENTINEL_REDIS_KEY_PREFIX
+              value: {{ printf "sentinel:%s" $tenantName | quote }}
+          envFrom:
+            - configMapRef:
+                name: proxy-config
+          {{- if $tenant.resources }}
+          resources:
+            {{- toYaml $tenant.resources | nindent 12 }}
+          {{- else }}
+          resources:
+            {{- toYaml $.Values.proxy.resources | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            {{- if and (not $.Values.redis.enabled) $.Values.externalRedis.existingSecret }}
+            - name: redis-external-secret
+              mountPath: /run/secrets/redis-password
+              subPath: {{ include "sentinel-gateway.redis.secretKey" $ }}
+              readOnly: true
+            {{- end }}
+            - name: policies
+              mountPath: /app/config/policies
+              readOnly: true
+            - name: notifications-data
+              mountPath: /app/shared/notifications
+              readOnly: true
+            - name: admin-data
+              mountPath: /app/shared/admin
+              readOnly: true
+            - name: telemetry-data
+              mountPath: /app/data
+            - name: siem-stats
+              mountPath: /app/shared/siem
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: secrets
+          secret:
+            secretName: sentinel-proxy-secrets
+        {{- if and (not $.Values.redis.enabled) $.Values.externalRedis.existingSecret }}
+        - name: redis-external-secret
+          secret:
+            secretName: {{ $.Values.externalRedis.existingSecret }}
+        {{- end }}
+        - name: policies
+          persistentVolumeClaim:
+            claimName: policies
+        - name: notifications-data
+          persistentVolumeClaim:
+            claimName: notifications-data
+        - name: admin-data
+          persistentVolumeClaim:
+            claimName: admin-data
+        - name: telemetry-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+        - name: siem-stats
+          persistentVolumeClaim:
+            claimName: siem-stats
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+---
+# Dedicated Proxy Service — Tenant: {{ $tenantName }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-{{ $tenantName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "sentinel-gateway.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: proxy-{{ $tenantName }}
+    app.kubernetes.io/component: gateway
+    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+    sentinel-gateway.io/tier: "dedicated"
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: proxy-{{ $tenantName }}
+    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+{{- if and $tenant.autoscaling $tenant.autoscaling.enabled }}
+---
+# Dedicated Proxy HPA — Tenant: {{ $tenantName }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: proxy-{{ $tenantName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "sentinel-gateway.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: proxy-{{ $tenantName }}
+    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+    sentinel-gateway.io/tier: "dedicated"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: proxy-{{ $tenantName }}
+  minReplicas: {{ $tenant.autoscaling.minReplicas | default $replicas }}
+  maxReplicas: {{ $tenant.autoscaling.maxReplicas | default 20 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $tenant.autoscaling.targetCPUUtilization | default 60 }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $tenant.autoscaling.targetMemoryUtilization | default 80 }}
+{{- end }}
+---
+# Dedicated Proxy PDB — Tenant: {{ $tenantName }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: proxy-{{ $tenantName }}-pdb
+  namespace: {{ $ns }}
+  labels:
+    {{- include "sentinel-gateway.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: proxy-{{ $tenantName }}
+    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+    sentinel-gateway.io/tier: "dedicated"
+spec:
+  minAvailable: {{ if gt (int $replicas) 1 }}1{{ else }}0{{ end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proxy-{{ $tenantName }}
+      sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+{{- if $.Values.networkPolicies.enabled }}
+---
+# Dedicated Proxy NetworkPolicy — Tenant: {{ $tenantName }}
+# Restricts: ingress only from ingress controller, egress only to Redis + backend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: proxy-{{ $tenantName }}-access
+  namespace: {{ $ns }}
+  labels:
+    {{- include "sentinel-gateway.labels" $ | nindent 4 }}
+    sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+    sentinel-gateway.io/tier: "dedicated"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: proxy-{{ $tenantName }}
+      sentinel-gateway.io/tenant: {{ $tenantName | quote }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Allow traffic from shared proxy pool (routing layer)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # Redis access
+    {{- if $.Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- else }}
+    - to: []
+      ports:
+        - port: {{ $.Values.externalRedis.port | default 6379 }}
+          protocol: TCP
+    {{- end }}
+    # DNS resolution
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Backend (LLM) access — HTTPS + custom ports
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 8000
+          protocol: TCP
+    {{- if $tenant.backendUrl }}
+    # Custom backend port (if non-standard)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 11434
+          protocol: TCP
+    {{- end }}
+{{- end }}
+{{- end }}

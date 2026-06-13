@@ -1,0 +1,412 @@
+{
+  "id": null,
+  "uid": "sentinel-security",
+  "title": "Sentinel Gateway — Security Operations",
+  "description": "Security-focused dashboard for SOC teams: attack patterns, IOC matches, scanner performance, and SIEM export health.",
+  "tags": ["sentinel", "security", "soc", "attacks"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "title": "Operational Overview",
+      "url": "/grafana/d/sentinel-overview/sentinel-gateway-operational-overview",
+      "type": "link",
+      "icon": "apps",
+      "targetBlank": false
+    },
+    {
+      "title": "SLO / Error Budget",
+      "url": "/grafana/d/sentinel-slo/sentinel-gateway-slo-error-budget",
+      "type": "link",
+      "icon": "bolt",
+      "targetBlank": false
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Security Alerts",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "ALERTS{alertname=~\"Sentinel(HighBlockRate|PromptInjectionSpike|ExfiltrationAttempts|IOCMatchesElevated)\", alertstate=\"firing\"}",
+        "iconColor": "red",
+        "titleFormat": "{{alertname}}",
+        "tagKeys": "severity,mitre_attack"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(sentinel_requests_total, tenant_id)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "category",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(sentinel_verdicts_total{verdict=\"block\"}, category)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "timerange",
+        "type": "interval",
+        "query": "1m,5m,15m,30m,1h,6h,12h,1d",
+        "current": { "text": "5m", "value": "5m" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Attack Attempts per Minute (by Category)",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (category)(rate(sentinel_verdicts_total{verdict=\"block\", tenant_id=~\"$tenant\", category=~\"$category\"}[$timerange])) * 60",
+          "legendFormat": "{{category}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Notification Delivery Rate",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "red", "value": 0 },
+              { "color": "yellow", "value": 0.9 },
+              { "color": "green", "value": 0.95 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sentinel:notifications:success_ratio_5m",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Total Blocks (24h)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "orange", "value": 500 },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sentinel_verdicts_total{verdict=\"block\", tenant_id=~\"$tenant\"}[24h]))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 4,
+      "title": "SIEM Export Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "evt/s",
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sentinel:siem:export_rate_5m",
+          "legendFormat": "Events/sec exported",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(sentinel_siem_export_errors_total[5m]))",
+          "legendFormat": "Errors/sec",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Blocked Patterns (Top 10)",
+      "type": "barchart",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 80,
+            "gradientMode": "scheme"
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (pattern_id)(increase(sentinel_pattern_matches_total{tenant_id=~\"$tenant\"}[$__range])))",
+          "legendFormat": "{{pattern_id}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" }
+      },
+      "transformations": [
+        { "id": "sortBy", "options": { "sort": [{ "field": "Value", "desc": true }] } }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "IOC Matches",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "spanNulls": false,
+            "showPoints": "auto",
+            "pointSize": 5
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (ioc_type)(rate(sentinel_ioc_matches_total{tenant_id=~\"$tenant\"}[$timerange]))",
+          "legendFormat": "{{ioc_type}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Scanner Verdicts by Type",
+      "description": "Stacked view of verdicts across all scanner engines.",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 80,
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*allow.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*block.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*warn.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (scanner, verdict)(increase(sentinel_scanner_verdicts_total{tenant_id=~\"$tenant\"}[$__range]))",
+          "legendFormat": "{{scanner}} — {{verdict}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "vertical",
+        "legend": { "displayMode": "table", "placement": "right" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Top Attacking Tenants",
+      "description": "Tenants with highest block counts in the selected timeframe.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "filterable": true, "align": "left" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Blocks" }, "properties": [{ "id": "custom.width", "value": 100 }, { "id": "custom.align", "value": "right" }] },
+          { "matcher": { "id": "byName", "options": "Block Rate" }, "properties": [{ "id": "unit", "value": "percentunit" }, { "id": "custom.width", "value": 100 }] }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (tenant_id)(increase(sentinel_verdicts_total{verdict=\"block\"}[$__range])))",
+          "legendFormat": "{{tenant_id}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "topk(10, sum by (tenant_id)(rate(sentinel_verdicts_total{verdict=\"block\"}[5m])) / clamp_min(sum by (tenant_id)(rate(sentinel_requests_total[5m])), 0.001))",
+          "legendFormat": "{{tenant_id}}",
+          "refId": "B",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Value #A", "desc": true }],
+        "footer": { "show": false }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "verdict": true },
+            "renameByName": { "tenant_id": "Tenant", "Value #A": "Blocks", "Value #B": "Block Rate" }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": { "sort": [{ "field": "Blocks", "desc": true }] }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Geographic Attack Distribution",
+      "description": "Attack source analysis by origin. Requires geo-IP labels on metrics (if unavailable, shows by tenant).",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "filterable": true, "align": "left" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Attacks" }, "properties": [{ "id": "custom.width", "value": 100 }, { "id": "custom.align", "value": "right" }] },
+          { "matcher": { "id": "byName", "options": "Top Category" }, "properties": [{ "id": "custom.width", "value": 200 }] }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "topk(20, sum by (source_country, tenant_id, category)(increase(sentinel_verdicts_total{verdict=\"block\"}[$__range])))",
+          "legendFormat": "{{source_country}} — {{tenant_id}}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Value", "desc": true }],
+        "footer": { "show": true, "reducer": ["sum"] }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "verdict": true },
+            "renameByName": { "source_country": "Country", "tenant_id": "Tenant", "category": "Top Category", "Value": "Attacks" }
+          }
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
+  }
+}

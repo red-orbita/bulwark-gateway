@@ -20,6 +20,10 @@ class AuditEntry(BaseModel):
     details: Optional[str] = None
     ip_address: Optional[str] = None
     rollback_ref: Optional[str] = None  # ID of entry this rolled back
+    # Hash-chain fields (Phase 3 — tamper-proof audit trail)
+    sequence_id: Optional[int] = None
+    previous_hash: Optional[str] = None  # Hash of preceding entry
+    entry_hash: Optional[str] = None  # SHA-256 of this entry's canonical fields
 
 
 class AuditQuery(BaseModel):
