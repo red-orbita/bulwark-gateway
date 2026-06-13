@@ -109,8 +109,8 @@ proxy:
         cpu: 500m
   # -- Enrichment Pipeline (background semantic analysis)
   enrichment:
-    # -- Enable async enrichment (embedding similarity detection)
-    enabled: false
+    # -- Enable async enrichment (replay DB always active; ML scanners optional)
+    enabled: true
     # -- Replay DB path inside the container
     replayDbPath: "/app/shared/enrichment/attack_replay.db"
     # -- Enrichment data PVC size

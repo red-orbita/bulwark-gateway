@@ -32,14 +32,24 @@ class EnrichmentManager:
 
     @property
     def enabled(self) -> bool:
-        return self._enabled and len(self.scanners) > 0
+        """Return True if enrichment recording is enabled.
+
+        The replay DB records all payloads regardless of whether ML scanners
+        are available. ML scanners are optional enrichment layers.
+        """
+        return self._enabled
+
+    @property
+    def has_scanners(self) -> bool:
+        """Return True if ML enrichment scanners are registered."""
+        return len(self.scanners) > 0
 
     async def enrich(self, text: str, request_id: str) -> list[EnrichmentResult]:
         """
         Run all scanners in parallel. Fire-and-forget safe.
         Returns results for logging/metrics only.
         """
-        if not self.enabled:
+        if not self.has_scanners:
             return []
 
         results = await asyncio.gather(
