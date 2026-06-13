@@ -114,11 +114,13 @@ class ResponseCache:
         self._stats.entries = len(self._lru)
         return self._stats
 
-    def get(self, request_body: dict[str, Any]) -> dict[str, Any] | None:
+    def get(self, request_body: dict[str, Any], tenant_id: str = "", agent_id: str = "") -> dict[str, Any] | None:
         """Look up cached response for a request.
 
         Args:
             request_body: The original chat completion request body.
+            tenant_id: Tenant identifier for cache isolation.
+            agent_id: Agent identifier for cache isolation.
 
         Returns:
             Cached response dict if hit, None if miss.
@@ -126,7 +128,7 @@ class ResponseCache:
         if not self._enabled:
             return None
 
-        cache_key = self._compute_key(request_body)
+        cache_key = self._compute_key(request_body, tenant_id, agent_id)
 
         # Try Redis first
         if self._redis:
@@ -172,12 +174,14 @@ class ResponseCache:
                 pass
         return None
 
-    def put(self, request_body: dict[str, Any], response_data: dict[str, Any]) -> None:
+    def put(self, request_body: dict[str, Any], response_data: dict[str, Any], tenant_id: str = "", agent_id: str = "") -> None:
         """Store a response in the cache.
 
         Args:
             request_body: The original request (used to compute cache key).
             response_data: The backend response to cache.
+            tenant_id: Tenant identifier for cache isolation.
+            agent_id: Agent identifier for cache isolation.
         """
         if not self._enabled:
             return
@@ -191,7 +195,7 @@ class ResponseCache:
         if not choices:
             return
 
-        cache_key = self._compute_key(request_body)
+        cache_key = self._compute_key(request_body, tenant_id, agent_id)
         total_tokens = response_data.get("usage", {}).get("total_tokens", 0)
 
         # Store in Redis with TTL
@@ -218,12 +222,12 @@ class ResponseCache:
         )
         self._lru[cache_key] = entry
 
-    def invalidate(self, request_body: dict[str, Any]) -> bool:
+    def invalidate(self, request_body: dict[str, Any], tenant_id: str = "", agent_id: str = "") -> bool:
         """Remove a specific entry from cache.
 
         Returns True if entry existed.
         """
-        cache_key = self._compute_key(request_body)
+        cache_key = self._compute_key(request_body, tenant_id, agent_id)
         removed = cache_key in self._lru
         self._lru.pop(cache_key, None)
         if self._redis:
@@ -234,9 +238,14 @@ class ResponseCache:
         return removed
 
     def clear(self) -> None:
-        """Clear all cached entries."""
+        """Clear all cached responses. Called on policy/IOC updates.
+
+        SECURITY FIX (M-01): Invalidate cache when security policies change
+        to prevent stale cached responses from bypassing updated IOC/policy rules.
+        """
         self._lru.clear()
         self._stats = CacheStats()
+        logger.info("response_cache_cleared", extra={"reason": "policy_or_ioc_update"})
         if self._redis:
             try:
                 # Clear cache keys (scan + delete pattern)
@@ -250,10 +259,12 @@ class ResponseCache:
             except Exception:
                 pass
 
-    def _compute_key(self, request_body: dict[str, Any]) -> str:
+    def _compute_key(self, request_body: dict[str, Any], tenant_id: str = "", agent_id: str = "") -> str:
         """Compute deterministic cache key from request.
 
         Key components (order-independent):
+          - tenant_id (isolation boundary)
+          - agent_id (isolation boundary)
           - model
           - messages (sorted by role+content for stability)
           - temperature (affects output randomness)
@@ -264,7 +275,10 @@ class ResponseCache:
           - max_tokens (truncation, not different content)
           - n (number of choices)
         """
+        # SECURITY FIX (C-01): Tenant-isolated cache keys prevent cross-tenant data leakage
         key_parts = {
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
             "model": request_body.get("model", ""),
             "messages": self._normalize_messages(request_body.get("messages", [])),
             "temperature": request_body.get("temperature", 1.0),
@@ -303,7 +317,9 @@ def get_response_cache() -> ResponseCache:
     if _cache is None:
         import os
         enabled = os.environ.get("SENTINEL_CACHE_ENABLED", "false").lower() in ("true", "1")
-        ttl = int(os.environ.get("SENTINEL_CACHE_TTL", "3600"))
+        # SECURITY FIX (M-01): Reduced default TTL from 3600s to 300s to limit
+        # staleness window when IOC/policy updates don't trigger explicit invalidation
+        ttl = int(os.environ.get("SENTINEL_CACHE_TTL", "300"))
         max_size = int(os.environ.get("SENTINEL_CACHE_MAX_SIZE", "10000"))
         _cache = ResponseCache(ttl=ttl, max_size=max_size, enabled=enabled)
     return _cache

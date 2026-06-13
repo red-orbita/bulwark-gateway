@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import socket
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 from fastapi import APIRouter, Body, Depends, HTTPException
 import yaml
 
@@ -18,6 +21,46 @@ router = APIRouter()
 
 SIEM_CONFIG_DIR = Path("config/siem")
 _TRANSPORTS_FILE = Path("shared/siem/siem_transports.json")
+
+# SECURITY FIX (C-07): SSRF blocklist for SIEM transport endpoint validation
+_BLOCKED_SSRF_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+_BLOCKED_HOSTNAMES = {"metadata.google.internal", "localhost", "kubernetes.default", "kubernetes.default.svc"}
+
+
+def _validate_url_no_ssrf(url: str) -> str | None:
+    """Returns error message if URL is an SSRF target, None if safe."""
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname:
+        return "Empty hostname"
+    if hostname in _BLOCKED_HOSTNAMES:
+        return f"Blocked hostname: {hostname}"
+    if hostname.endswith(".internal") or hostname.endswith(".local"):
+        return f"Blocked internal hostname: {hostname}"
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError):
+        return f"Cannot resolve hostname: {hostname}"
+    for info in addr_infos:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            for net in _BLOCKED_SSRF_NETWORKS:
+                if ip in net:
+                    return f"IP {ip_str} in blocked range {net}"
+        except ValueError:
+            return f"Invalid IP: {ip_str}"
+    return None  # Safe
 
 # In-memory transport registry (loaded from disk)
 _transports: list[dict] = []
@@ -126,11 +169,23 @@ async def create_transport(
     user: TokenPayload = Depends(require_permission("siem:write")),
 ):
     """Add a new SIEM transport."""
+    # SECURITY FIX (C-07): Validate SIEM transport endpoints against SSRF blocklist
+    endpoint = config.get("endpoint", "")
+    if endpoint:
+        ssrf_error = _validate_url_no_ssrf(endpoint)
+        if ssrf_error:
+            raise HTTPException(status_code=400, detail=f"Endpoint blocked (SSRF protection): {ssrf_error}")
+    wazuh_api_url = config.get("wazuh_api_url", "")
+    if wazuh_api_url:
+        ssrf_error = _validate_url_no_ssrf(wazuh_api_url)
+        if ssrf_error:
+            raise HTTPException(status_code=400, detail=f"Wazuh API URL blocked (SSRF protection): {ssrf_error}")
+
     transport = {
         "id": str(uuid.uuid4())[:8],
         "platform": config.get("platform", "custom"),
         "transport_type": config.get("transport_type", "http_rest"),
-        "endpoint": config.get("endpoint", ""),
+        "endpoint": endpoint,
         "port": config.get("port", 514),
         "auth_type": config.get("auth_type", "none"),
         "batch_size": config.get("batch_size", 100),
@@ -138,7 +193,7 @@ async def create_transport(
         "format": config.get("format", "ecs_json"),
         "enabled": True,
         "circuit_state": "closed",
-        "wazuh_api_url": config.get("wazuh_api_url", ""),
+        "wazuh_api_url": wazuh_api_url,
         "wazuh_user": config.get("wazuh_user", ""),
         "wazuh_password": config.get("wazuh_password", ""),
     }
@@ -156,6 +211,16 @@ async def update_transport(
     user: TokenPayload = Depends(require_permission("siem:write")),
 ):
     """Update a SIEM transport."""
+    # SECURITY FIX (C-07): Validate SIEM transport endpoints against SSRF blocklist
+    if "endpoint" in config and config["endpoint"]:
+        ssrf_error = _validate_url_no_ssrf(config["endpoint"])
+        if ssrf_error:
+            raise HTTPException(status_code=400, detail=f"Endpoint blocked (SSRF protection): {ssrf_error}")
+    if "wazuh_api_url" in config and config["wazuh_api_url"]:
+        ssrf_error = _validate_url_no_ssrf(config["wazuh_api_url"])
+        if ssrf_error:
+            raise HTTPException(status_code=400, detail=f"Wazuh API URL blocked (SSRF protection): {ssrf_error}")
+
     for t in _transports:
         if t["id"] == transport_id:
             for key in ("platform", "transport_type", "endpoint", "port", "auth_type", "batch_size", "flush_interval", "format", "wazuh_api_url", "wazuh_user", "wazuh_password"):

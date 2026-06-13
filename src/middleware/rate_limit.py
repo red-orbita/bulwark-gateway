@@ -7,6 +7,7 @@ Supports per-tenant rate limit overrides from admin (Redis-synced).
 """
 
 import json
+import threading
 import time
 
 from typing import Optional
@@ -93,6 +94,8 @@ class InMemoryTokenBucket:
         from cachetools import TTLCache
         self.tokens: TTLCache = TTLCache(maxsize=max_keys, ttl=ttl)
         self.last_time: TTLCache = TTLCache(maxsize=max_keys, ttl=ttl)
+        # SECURITY FIX (H-06): Lock prevents concurrent double-spend on token bucket
+        self._lock = threading.Lock()
         import logging
         logging.getLogger(__name__).warning(
             "Rate limiter using in-memory fallback (no Redis). "
@@ -101,17 +104,18 @@ class InMemoryTokenBucket:
         )
 
     def consume(self, key: str) -> bool:
-        now = time.time()
-        last = self.last_time.get(key, now)
-        elapsed = now - last
-        self.last_time[key] = now
-        current = self.tokens.get(key, float(self.burst))
-        current = min(self.burst, current + elapsed * self.rate)
-        if current >= 1.0:
-            self.tokens[key] = current - 1.0
-            return True
-        self.tokens[key] = current
-        return False
+        with self._lock:
+            now = time.time()
+            last = self.last_time.get(key, now)
+            elapsed = now - last
+            self.last_time[key] = now
+            current = self.tokens.get(key, float(self.burst))
+            current = min(self.burst, current + elapsed * self.rate)
+            if current >= 1.0:
+                self.tokens[key] = current - 1.0
+                return True
+            self.tokens[key] = current
+            return False
 
 
 # Per-tenant rate limit config (synced from Redis)

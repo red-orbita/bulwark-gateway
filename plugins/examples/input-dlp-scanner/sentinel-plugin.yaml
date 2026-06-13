@@ -1,0 +1,48 @@
+name: input-dlp-scanner
+version: 1.2.0
+author: sentinel-community
+license: GPL-3.0
+description: >
+  Data Leakage Prevention scanner for user INPUT. Blocks sensitive data
+  (credit cards, IBANs, DNI/NIE, API keys, private keys, bulk PII) from
+  being sent to LLM backends. Uses Luhn algorithm for real CC validation.
+type: input_scanner
+blocking: false
+requires: {}
+models: []
+config:
+  block_credit_cards:
+    name: block_credit_cards
+    type: bool
+    default: true
+    description: Block messages containing valid credit card numbers (Luhn-validated)
+  block_iban:
+    name: block_iban
+    type: bool
+    default: true
+    description: Block messages containing IBAN numbers
+  block_national_id:
+    name: block_national_id
+    type: bool
+    default: true
+    description: Block messages containing national IDs (DNI/NIE/SSN)
+  block_api_keys:
+    name: block_api_keys
+    type: bool
+    default: true
+    description: Block messages containing cloud API keys (AWS/GCP/Azure)
+  block_private_keys:
+    name: block_private_keys
+    type: bool
+    default: true
+    description: Block messages containing private keys (RSA/SSH/PGP)
+  bulk_email_threshold:
+    name: bulk_email_threshold
+    type: int
+    default: 3
+    description: Number of email addresses that triggers a data dump alert
+  severity:
+    name: severity
+    type: str
+    default: high
+    description: Severity level for DLP findings (low/medium/high/critical)

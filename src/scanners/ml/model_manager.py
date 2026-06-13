@@ -24,6 +24,8 @@ Expected structure:
 
 from __future__ import annotations
 
+import hashlib
+import json as _json
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -31,6 +33,31 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# SECURITY FIX (H-08): Verify ONNX model integrity before loading.
+# A model manifest file maps model names to expected SHA-256 hashes.
+_MODEL_MANIFEST_PATH = Path(__file__).parent.parent.parent.parent / "config" / "model_manifest.json"
+
+
+def _verify_model_integrity(model_path: Path) -> bool:
+    """Verify model file matches expected hash from manifest."""
+    if not _MODEL_MANIFEST_PATH.exists():
+        logger.warning("model_manifest_missing", extra={"path": str(_MODEL_MANIFEST_PATH),
+                      "note": "Models loaded without integrity verification"})
+        return True  # Fail-open if no manifest (first deployment)
+
+    manifest = _json.loads(_MODEL_MANIFEST_PATH.read_text())
+    expected_hash = manifest.get(model_path.name)
+    if not expected_hash:
+        logger.warning("model_hash_missing", extra={"model": model_path.name})
+        return True  # Unknown model, allow but warn
+
+    actual_hash = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    if actual_hash != expected_hash:
+        logger.critical("model_integrity_failed", extra={"model": model_path.name,
+                       "expected": expected_hash[:16], "actual": actual_hash[:16]})
+        return False
+    return True
 
 # Optional imports — graceful if not installed
 try:
@@ -146,6 +173,12 @@ class ModelManager:
             return None
 
         try:
+            # SECURITY FIX (H-08): Verify model integrity before loading
+            if not _verify_model_integrity(onnx_path):
+                logger.error("model_load_blocked", extra={"model": name,
+                            "reason": "integrity_check_failed"})
+                return None
+
             # Load ONNX session
             sess_options = ort.SessionOptions()
             sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL

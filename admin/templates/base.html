@@ -518,13 +518,26 @@
             const el = document.createElement('div');
             el.className = 'pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl border backdrop-blur-xl toast-enter';
             el.style.cssText = styles[type] || styles.info;
-            el.innerHTML = `
-                <i data-lucide="${icons[type] || icons.info}" class="w-5 h-5 ${textColors[type] || textColors.info} flex-shrink-0"></i>
-                <span class="text-sm text-gray-200 flex-1">${message}</span>
-                <button onclick="this.parentElement.remove()" class="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-gray-200">
-                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
-                </button>
-            `;
+            // SECURITY FIX (M-05): Use textContent to prevent XSS via plugin/policy error messages
+            const icon = document.createElement('i');
+            icon.setAttribute('data-lucide', icons[type] || icons.info);
+            icon.className = `w-5 h-5 ${textColors[type] || textColors.info} flex-shrink-0`;
+
+            const msgSpan = document.createElement('span');
+            msgSpan.className = 'text-sm text-gray-200 flex-1';
+            msgSpan.textContent = message;
+
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'p-1 rounded hover:bg-white/10 text-gray-400 hover:text-gray-200';
+            closeBtn.addEventListener('click', () => el.remove());
+            const closeIcon = document.createElement('i');
+            closeIcon.setAttribute('data-lucide', 'x');
+            closeIcon.className = 'w-3.5 h-3.5';
+            closeBtn.appendChild(closeIcon);
+
+            el.appendChild(icon);
+            el.appendChild(msgSpan);
+            el.appendChild(closeBtn);
             container.appendChild(el);
             if (window.lucide) lucide.createIcons({ nodes: [el] });
             setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(20px)'; el.style.transition = 'all 0.3s'; setTimeout(() => el.remove(), 300); }, duration);

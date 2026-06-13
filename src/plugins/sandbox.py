@@ -776,6 +776,13 @@ class SandboxConfig:
     allowed_read_paths: list[str] = field(default_factory=list)
 
 
+# SECURITY FIX (H-01): Serialize sandbox to prevent concurrent race condition.
+# The sandbox replaces process-global state (builtins.__import__, socket.socket,
+# builtins.open). Without serialization, concurrent plugin executions corrupt
+# each other's saved originals, allowing sandbox escape.
+_SANDBOX_LOCK = threading.Lock()
+
+
 class PluginSandbox:
     """Complete sandbox that wraps plugin execution with all security layers.
 
@@ -812,7 +819,12 @@ class PluginSandbox:
 
         This is a context manager — protections are automatically
         removed when execution exits the block (even on exception).
+
+        SECURITY FIX (H-01): Serialize sandbox to prevent concurrent race condition.
+        The lock ensures only one sandboxed execution mutates global state at a time,
+        preventing Plugin-B from saving Plugin-A's blockers as "originals".
         """
+        _SANDBOX_LOCK.acquire()
         original_import = builtins.__import__
 
         try:
@@ -854,6 +866,7 @@ class PluginSandbox:
             builtins.__import__ = original_import
             self._network_blocker.deactivate()
             self._fs_blocker.deactivate()
+            _SANDBOX_LOCK.release()
 
 
 # ==========================================================================
@@ -980,6 +993,10 @@ def validate_git_url(url: str) -> list[str]:
 
     Returns list of issues (empty = safe).
     """
+    import socket
+    import ipaddress
+    from urllib.parse import urlparse
+
     issues: list[str] = []
 
     if not url.startswith("https://"):
@@ -994,12 +1011,26 @@ def validate_git_url(url: str) -> list[str]:
     if "--" in url:
         issues.append("URL contains '--' (possible git option injection)")
 
-    # Block local file URLs disguised as HTTPS
-    if "file://" in url.lower() or "127.0.0.1" in url or "localhost" in url:
-        issues.append("URL points to local resource (SSRF)")
+    # SECURITY FIX (H-05): Validate git URL via DNS resolution, not string matching.
+    # Prevents DNS rebinding attacks that bypass simple string checks.
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
 
-    # Block internal network
-    if any(x in url for x in ("169.254", "10.", "192.168.", "172.16.", "172.17.", "172.18.")):
-        issues.append("URL points to internal network (SSRF)")
+    # Block obviously dangerous hostnames
+    if hostname.lower() in {"localhost", "metadata.google.internal", "kubernetes.default"}:
+        issues.append(f"Blocked hostname: {hostname}")
+    elif hostname.endswith(".internal") or hostname.endswith(".local"):
+        issues.append(f"Blocked internal hostname: {hostname}")
+    elif hostname:
+        # DNS resolve and check all addresses
+        try:
+            addrs = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+            for info in addrs:
+                ip = ipaddress.ip_address(info[4][0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    issues.append(f"Git URL resolves to blocked IP: {info[4][0]}")
+                    break
+        except socket.gaierror:
+            issues.append(f"Cannot resolve git hostname: {hostname}")
 
     return issues

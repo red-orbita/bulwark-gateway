@@ -426,6 +426,11 @@ class ScannerPipeline:
         Only affects scanners whose names start with 'ml_'.
         """
         for name, cfg in config.items():
+            # SECURITY FIX (H-09): Only allow ML config to affect ml_* scanners.
+            # Prevents compromised admin from disabling regex/builtin scanners via Redis.
+            if not name.startswith("ml_"):
+                logger.warning("ml_config_rejected", scanner=name, reason="not_ml_prefix")
+                continue
             if name not in self._all_scanners:
                 continue
             registered = self._all_scanners[name]

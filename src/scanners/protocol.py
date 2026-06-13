@@ -173,8 +173,11 @@ class InputScanner(ABC):
                     "request_id": context.request_id,
                 },
             )
-            if self.info.scanner_type == ScannerType.INPUT_BLOCKING:
-                return GuardrailResult(verdict=Verdict.ALLOW)  # Don't block on scanner bugs
+            # SECURITY FIX (C-05): Blocking scanners fail-CLOSED. If a scanner crashes,
+            # the request is blocked rather than allowed through unscanned.
+            # Async/advisory scanners remain fail-open (they don't gate request flow).
+            if self.info.scanner_type in (ScannerType.INPUT_BLOCKING, ScannerType.OUTPUT_BLOCKING):
+                return GuardrailResult(verdict=Verdict.BLOCK)
             return GuardrailResult(verdict=Verdict.ALLOW)
 
 

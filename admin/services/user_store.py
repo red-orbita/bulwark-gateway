@@ -402,10 +402,24 @@ class UserStore:
 
     def create_session(self, user_id: str, token: str, ip: Optional[str], user_agent: Optional[str], expires_at: str) -> dict:
         """Create a new session record."""
+        # SECURITY FIX (M-06): Limit sessions per user to prevent session flood DoS.
+        MAX_SESSIONS_PER_USER = 10
+
         session_id = str(uuid4())
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
+            # Before creating new session, count existing and delete oldest if over limit:
+            cursor = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user_id,)
+            )
+            existing_count = cursor.fetchone()[0]
+            if existing_count >= MAX_SESSIONS_PER_USER:
+                # Delete oldest sessions to make room
+                self._conn.execute(
+                    "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
+                    (user_id, existing_count - MAX_SESSIONS_PER_USER + 1),
+                )
             self._conn.execute(
                 "INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, revoked, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
                 (session_id, user_id, token_hash, now, expires_at, ip, user_agent),
