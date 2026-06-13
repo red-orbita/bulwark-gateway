@@ -89,6 +89,13 @@ data:
   DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
   SENTINEL_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
   SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  {{- if eq .Values.admin.database.type "postgresql" }}
+  # PostgreSQL database configuration
+  SENTINEL_ADMIN_DB_URL_FILE: "/run/secrets-pg/postgresql-url"
+  SENTINEL_ADMIN_DB_POOL_MIN: {{ .Values.admin.database.postgresql.poolMin | quote }}
+  SENTINEL_ADMIN_DB_POOL_MAX: {{ .Values.admin.database.postgresql.poolMax | quote }}
+  SENTINEL_ADMIN_DB_SSL_MODE: {{ .Values.admin.database.postgresql.sslMode | quote }}
+  {{- end }}
   # SkillSpector configuration
   SENTINEL_SKILLSPECTOR_ENABLED: {{ .Values.admin.skillspector.enabled | quote }}
   SENTINEL_SKILLSPECTOR_BLOCK_THRESHOLD: {{ .Values.admin.skillspector.blockThreshold | quote }}

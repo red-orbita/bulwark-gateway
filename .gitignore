@@ -30,7 +30,7 @@ secrets/*
 *.pem
 *.cert
 credentials.json
-secrets.yaml
+/secrets.yaml
 .env
 .env.local
 .env.production
