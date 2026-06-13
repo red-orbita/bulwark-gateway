@@ -1,0 +1,193 @@
+---
+# Chaos Experiment: Proxy Pod Kill
+#
+# Steady-state hypothesis:
+#   - Multiple proxy pods are running (replicas >= 2)
+#   - PodDisruptionBudget allows at most 1 unavailable
+#   - HPA is configured (min 2, max 10)
+#   - All proxy pods pass readiness probes
+#
+# Expected behavior:
+#   - One proxy pod is terminated
+#   - PDB prevents killing both pods simultaneously
+#   - Remaining pod(s) continue serving all traffic
+#   - HPA detects reduced capacity, schedules replacement
+#   - New pod reaches Ready state within 5 seconds
+#   - Zero requests dropped (client retries hit surviving pod)
+#
+# Abort conditions:
+#   - All proxy pods become unavailable simultaneously
+#   - Recovery takes longer than 30 seconds
+#   - Any request returns connection refused (not just timeout)
+#
+# MITRE ATT&CK: T1489 (Service Stop)
+# Pass criteria: <5s recovery, zero dropped connections
+
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: sentinel-proxy-pod-kill
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+    chaos.sentinel.io/experiment: proxy-pod-kill
+    chaos.sentinel.io/category: availability
+  annotations:
+    mitre-attack/technique: T1489
+    mitre-attack/tactic: Impact
+    sentinel.io/steady-state: "proxy-replicas>=2,pdb-configured,hpa-active"
+    sentinel.io/pass-criteria: "recovery<5s,zero-dropped-connections"
+    sentinel.io/expected-behavior: "hpa-recovers,pdb-prevents-total-outage"
+spec:
+  engineState: active
+  appinfo:
+    appns: sentinel-gateway
+    applabel: app.kubernetes.io/component=proxy
+    appkind: deployment
+  chaosServiceAccount: litmus-chaos-sa
+  experiments:
+    - name: pod-delete
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: "30"
+            # Kill only one pod (PDB should protect the other)
+            - name: PODS_AFFECTED_PERC
+              value: "50"
+            - name: FORCE
+              value: "true"
+            - name: CHAOS_INTERVAL
+              value: "10"
+            - name: RAMP_TIME
+              value: "3"
+            - name: SEQUENCE
+              value: "serial"
+        probe:
+          # Service endpoint must remain reachable throughout
+          - name: service-availability
+            type: httpProbe
+            mode: Continuous
+            httpProbe/inputs:
+              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              insecureSkipVerify: true
+              method:
+                get:
+                  criteria: ==
+                  responseCode: "200"
+            runProperties:
+              probeTimeout: 3s
+              interval: 2s
+              retry: 5
+              probePollingInterval: 1s
+          # Verify PDB is respected (at least 1 pod always available)
+          - name: pdb-respected
+            type: k8sProbe
+            mode: Continuous
+            k8sProbe/inputs:
+              group: policy
+              version: v1
+              resource: poddisruptionbudgets
+              namespace: sentinel-gateway
+              fieldSelector: metadata.name=sentinel-proxy-pdb
+              operation: present
+            runProperties:
+              probeTimeout: 5s
+              interval: 5s
+              retry: 2
+          # Verify recovery time
+          - name: recovery-time-check
+            type: cmdProbe
+            mode: OnChaos
+            cmdProbe/inputs:
+              command: |
+                START=$(date +%s)
+                while ! kubectl get pods -n sentinel-gateway \
+                  -l app.kubernetes.io/component=proxy \
+                  -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | \
+                  grep -q "True"; do
+                  sleep 1
+                  NOW=$(date +%s)
+                  ELAPSED=$((NOW - START))
+                  if [ $ELAPSED -gt 5 ]; then
+                    echo "RECOVERY_EXCEEDED_5S"
+                    exit 1
+                  fi
+                done
+                echo "RECOVERED_WITHIN_SLA"
+              comparator:
+                type: string
+                criteria: contains
+                value: "RECOVERED_WITHIN_SLA"
+              source: litmus
+            runProperties:
+              probeTimeout: 10s
+              interval: 10s
+              retry: 1
+          # Verify zero connection errors in proxy logs
+          - name: no-connection-drops
+            type: cmdProbe
+            mode: Edge
+            cmdProbe/inputs:
+              command: |
+                ERROR_COUNT=$(kubectl logs -l app.kubernetes.io/component=proxy \
+                  -n sentinel-gateway --since=40s 2>/dev/null | \
+                  grep -c "connection refused\|connection reset" || echo "0")
+                echo "$ERROR_COUNT"
+              comparator:
+                type: int
+                criteria: <=
+                value: "0"
+              source: litmus
+            runProperties:
+              probeTimeout: 10s
+              interval: 15s
+              retry: 2
+
+---
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: proxy-pod-delete
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  definition:
+    scope: Namespaced
+    permissions:
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["create", "delete", "get", "list", "patch", "update", "deletecollection"]
+      - apiGroups: [""]
+        resources: ["events"]
+        verbs: ["create", "get", "list", "patch", "update"]
+      - apiGroups: [""]
+        resources: ["pods/log"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets"]
+        verbs: ["get", "list"]
+      - apiGroups: ["policy"]
+        resources: ["poddisruptionbudgets"]
+        verbs: ["get", "list"]
+      - apiGroups: ["litmuschaos.io"]
+        resources: ["chaosengines", "chaosexperiments", "chaosresults"]
+        verbs: ["create", "get", "list", "patch", "update"]
+    image: litmuschaos/go-runner:3.0.0
+    imagePullPolicy: Always
+    args:
+      - -c
+      - ./experiments -name pod-delete
+    command:
+      - /bin/bash
+    env:
+      - name: TOTAL_CHAOS_DURATION
+        value: "30"
+      - name: CHAOS_INTERVAL
+        value: "10"
+      - name: FORCE
+        value: "true"
+    labels:
+      name: proxy-pod-delete
+      app.kubernetes.io/part-of: litmus

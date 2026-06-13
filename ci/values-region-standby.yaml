@@ -1,0 +1,168 @@
+# Sentinel Gateway — Region B (Standby) Helm Values
+#
+# Passive region: receives async-replicated data, promoted on failover.
+# Deploy: helm install sentinel ./helm/sentinel-gateway -f ci/values-region-standby.yaml \
+#           --set backend.ip=<IP> --set externalRedis.password=<PWD> \
+#           --namespace sentinel-gateway --create-namespace --kube-context region-b
+#
+# RTO target: < 5 minutes | RPO target: < 30 seconds
+#
+# Post-failover: Scale proxy to 5+ replicas and admin to 3 replicas.
+
+# Backend — standby LLM endpoint (same model, different region)
+backend:
+  type: ip
+  ip: ""  # Set via CI/CD: --set backend.ip=<STANDBY_BACKEND_IP>
+  port: 11434
+
+# Proxy — cold standby (minimal replicas, ready to scale)
+proxy:
+  replicas: 2
+  logLevel: "WARNING"
+  failMode: "closed"
+  rateLimit: 120
+  workers: 4
+  resources:
+    limits:
+      memory: 1Gi
+      cpu: "2"
+    requests:
+      memory: 512Mi
+      cpu: 500m
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilization: 65
+    targetMemoryUtilization: 75
+  pdb:
+    enabled: true
+    minAvailable: 1
+  scheduling:
+    podAntiAffinity:
+      enabled: true
+      type: "preferred"
+    topologySpreadConstraints:
+      enabled: true
+      maxSkew: 1
+
+# Admin — standby (single replica, scales on promotion)
+admin:
+  replicas: 1
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: "1"
+    requests:
+      memory: 256Mi
+      cpu: 250m
+  database:
+    type: "postgresql"
+    postgresql:
+      host: ""  # Set via CI/CD: --set admin.database.postgresql.host=<PG_STANDBY_HOST>
+      port: 5432
+      database: "sentinel_admin"
+      username: "sentinel"
+      existingSecret: "sentinel-postgresql-credentials"
+      existingSecretKey: "password"
+      sslMode: "verify-full"
+      poolMin: 2
+      poolMax: 10
+      # Read-only until promoted
+      # After failover promotion, remove this or set readOnly: false
+      readOnly: true
+
+# Redis — external managed (async replica of Region A)
+redis:
+  enabled: false
+
+externalRedis:
+  host: ""  # Set via CI/CD: --set externalRedis.host=<REDIS_STANDBY_HOST>
+  port: 6380
+  tls: true
+  db: 0
+  existingSecret: "sentinel-redis-credentials"
+  existingSecretKey: "password"
+  sentinel:
+    enabled: true
+    masterName: "sentinel-master"
+    nodes: "redis-sentinel-0:26379,redis-sentinel-1:26379,redis-sentinel-2:26379"
+
+# Ingress — standby region (receives traffic only during failover)
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    external-dns.alpha.kubernetes.io/hostname: "region-b.sentinel-gateway.example.com"
+  tls:
+    enabled: true
+    secretName: "sentinel-standby-tls"
+  hosts:
+    proxy: "region-b.sentinel-gateway.example.com"
+    admin: "admin-b.sentinel-gateway.example.com"
+
+# Telemetry — enabled but lower throughput in standby
+telemetry:
+  enabled: true
+  batchSize: 100
+  flushInterval: 1.0
+  transport:
+    type: "http"
+    file:
+      enabled: true
+      path: "/app/shared/telemetry/events.ndjson"
+      rotateSize: "100MB"
+
+# SIEM — enabled (receives replicated events + local events during failover)
+siem:
+  enabled: true
+
+# Monitoring — lightweight in standby
+monitoring:
+  prometheus:
+    enabled: true
+    retention: "7d"
+  grafana:
+    enabled: false  # Use Region A Grafana or centralized monitoring
+
+# Notifications — enabled (alerts during failover)
+notifications:
+  enabled: true
+
+# Wazuh — disabled in standby (single SIEM collector in primary)
+wazuh:
+  enabled: false
+
+# Persistence — same storage class for consistency
+persistence:
+  storageClass: "gp3"  # AWS: gp3, Azure: managed-premium, GCP: standard-rwo
+  policies:
+    size: 5Gi
+  telemetryData:
+    size: 50Gi
+  adminData:
+    size: 10Gi
+
+# Network policies — zero trust (same as primary)
+networkPolicies:
+  enabled: true
+
+# Pod topology for cross-AZ spread within standby region
+podTopologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: sentinel-gateway
+
+# Region label (for multi-region monitoring)
+global:
+  region: "b"
+  role: "standby"
+  clusterName: "sentinel-region-b"

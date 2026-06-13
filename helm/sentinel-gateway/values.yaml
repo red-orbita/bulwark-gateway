@@ -165,6 +165,34 @@ admin:
   jwtExpiryHours: 8
   # -- CORS allowed origins (comma-separated, empty = all)
   corsOrigins: ""
+  # -- Database configuration for admin service (HA support)
+  database:
+    # -- Database type: "sqlite" (default, dev/small) or "postgresql" (enterprise HA)
+    type: "sqlite"
+    # -- SQLite file path (used when type=sqlite)
+    sqlitePath: "/app/data/admin.db"
+    # -- PostgreSQL connection details (used when type=postgresql)
+    postgresql:
+      # -- PostgreSQL host
+      host: ""
+      # -- PostgreSQL port
+      port: 5432
+      # -- Database name
+      database: "sentinel_admin"
+      # -- Database username
+      username: "sentinel"
+      # -- Database password (use existingSecret in production)
+      password: ""
+      # -- Use existing Kubernetes secret for PostgreSQL password
+      existingSecret: ""
+      # -- Key within the existing secret
+      existingSecretKey: "postgresql-password"
+      # -- SSL mode: disable, require, verify-ca, verify-full
+      sslMode: "require"
+      # -- Minimum pool connections
+      poolMin: 2
+      # -- Maximum pool connections
+      poolMax: 20
   # -- SkillSpector configuration
   skillspector:
     # -- Enable/disable skill security scanning
@@ -473,6 +501,47 @@ mtls:
 networkPolicies:
   # -- Enable network policies (strongly recommended for production)
   enabled: true
+
+# -- Dedicated Tenants (Tier 2 Multi-Tenancy: Pod-level isolation)
+# Each entry deploys a dedicated Proxy Deployment + Service + HPA + PDB + NetworkPolicy
+# for the specified tenant. Requests from these tenants are routed to their
+# dedicated pods instead of the shared proxy pool.
+dedicatedTenants:
+  # -- List of tenant names with dedicated pods (used by shared pool for routing)
+  # Automatically set as SENTINEL_DEDICATED_TENANTS env var on shared proxy
+  enabled: false
+  # -- List of tenants that get dedicated proxy instances
+  tenants: []
+  # Example:
+  # tenants:
+  #   - name: "acme-corp"
+  #     replicas: 3
+  #     resources:
+  #       limits:
+  #         memory: 1Gi
+  #         cpu: "2"
+  #       requests:
+  #         memory: 256Mi
+  #         cpu: 500m
+  #     autoscaling:
+  #       enabled: true
+  #       minReplicas: 3
+  #       maxReplicas: 20
+  #       targetCPUUtilization: 60
+  #       targetMemoryUtilization: 80
+  #     # Tenant-specific settings
+  #     rateLimit: 1000
+  #     maxConcurrent: 100
+  #     allowedModels: ["gpt-4", "claude-3"]
+  #     # Custom backend (optional - override default)
+  #     backendUrl: "https://api.openai.com"
+  #     # Data residency (node selector for regional compliance)
+  #     nodeSelector:
+  #       topology.kubernetes.io/region: "eu-west-1"
+  #     # Tolerations (optional - for dedicated node pools)
+  #     tolerations: []
+  #     # Dedicated Redis (optional - separate keyspace, default: shared with prefix)
+  #     dedicatedRedis: false
 
 # -- Image pull secrets (for private registries)
 imagePullSecrets: []

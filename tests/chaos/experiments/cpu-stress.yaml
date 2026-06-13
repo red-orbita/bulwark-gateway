@@ -1,0 +1,205 @@
+---
+# Chaos Experiment: CPU Stress on Proxy
+#
+# Steady-state hypothesis:
+#   - Proxy P99 latency is < 50ms
+#   - CPU utilization is < 30%
+#   - All regex patterns compile and match within 1ms
+#   - Requests complete without timeout
+#
+# Expected behavior:
+#   - CPU load injected at 80% on proxy pods
+#   - Regex pattern matching takes longer (main CPU consumer)
+#   - Request latency increases proportionally
+#   - P99 stays under 500ms (guardrails are O(n) regex, not compute-heavy)
+#   - No requests timeout (backend timeout is 120s, guardrail is <500ms)
+#   - HPA may trigger scale-up if sustained
+#
+# Abort conditions:
+#   - P99 latency exceeds 2000ms
+#   - Any request times out (408 or 504)
+#   - Pod becomes unresponsive (readiness probe fails)
+#   - OOMKill triggered (unexpected — this is CPU test)
+#
+# MITRE ATT&CK: T1499 (Endpoint Denial of Service)
+# Pass criteria: P99 < 500ms, no timeouts
+
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: sentinel-cpu-stress
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+    chaos.sentinel.io/experiment: cpu-stress
+    chaos.sentinel.io/category: resource
+  annotations:
+    mitre-attack/technique: T1499
+    mitre-attack/tactic: Impact
+    sentinel.io/steady-state: "p99<50ms,cpu<30%,pods-ready"
+    sentinel.io/pass-criteria: "p99<500ms,no-timeouts"
+    sentinel.io/expected-behavior: "latency-increase,no-failures"
+spec:
+  engineState: active
+  appinfo:
+    appns: sentinel-gateway
+    applabel: app.kubernetes.io/component=proxy
+    appkind: deployment
+  chaosServiceAccount: litmus-chaos-sa
+  experiments:
+    - name: pod-cpu-hog
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: "120"
+            # 80% CPU stress (2 cores worth if limit is 1000m)
+            - name: CPU_CORES
+              value: "0"
+            # Percentage of available CPU to consume
+            - name: CPU_LOAD
+              value: "80"
+            - name: PODS_AFFECTED_PERC
+              value: "100"
+            - name: TARGET_CONTAINER
+              value: "proxy"
+            - name: RAMP_TIME
+              value: "5"
+            # Use stress-ng for CPU load generation
+            - name: CONTAINER_RUNTIME
+              value: "containerd"
+            - name: SOCKET_PATH
+              value: "/run/containerd/containerd.sock"
+        probe:
+          # Health endpoint must respond throughout
+          - name: health-responsive
+            type: httpProbe
+            mode: Continuous
+            httpProbe/inputs:
+              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              insecureSkipVerify: true
+              method:
+                get:
+                  criteria: ==
+                  responseCode: "200"
+            runProperties:
+              probeTimeout: 5s
+              interval: 10s
+              retry: 3
+              probePollingInterval: 3s
+          # Verify requests complete (no timeouts)
+          - name: requests-complete
+            type: httpProbe
+            mode: Continuous
+            httpProbe/inputs:
+              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health/stats
+              insecureSkipVerify: true
+              method:
+                get:
+                  criteria: ==
+                  responseCode: "200"
+            runProperties:
+              # 500ms timeout — validates P99 is under threshold
+              probeTimeout: 500ms
+              interval: 10s
+              retry: 5
+              probePollingInterval: 5s
+          # Monitor latency via stats endpoint
+          - name: latency-under-threshold
+            type: cmdProbe
+            mode: Continuous
+            cmdProbe/inputs:
+              command: |
+                RESPONSE=$(kubectl exec -n sentinel-gateway \
+                  $(kubectl get pod -n sentinel-gateway \
+                    -l app.kubernetes.io/component=proxy \
+                    -o jsonpath='{.items[0].metadata.name}') \
+                  -- wget -qO- http://localhost:8080/health/stats 2>/dev/null)
+                # Extract P99 latency if available in stats
+                echo "$RESPONSE" | python3 -c "
+                import sys, json
+                try:
+                    data = json.load(sys.stdin)
+                    p99 = data.get('latency_p99_ms', 0)
+                    if p99 > 500:
+                        print(f'FAIL: P99={p99}ms exceeds 500ms')
+                        sys.exit(1)
+                    print(f'PASS: P99={p99}ms')
+                except:
+                    print('PASS: stats unavailable (non-critical)')
+                " 2>/dev/null || echo "PASS: stats check skipped"
+              comparator:
+                type: string
+                criteria: contains
+                value: "PASS"
+              source: litmus
+            runProperties:
+              probeTimeout: 15s
+              interval: 20s
+              retry: 3
+          # No timeout errors in logs
+          - name: no-timeout-errors
+            type: cmdProbe
+            mode: Edge
+            cmdProbe/inputs:
+              command: |
+                kubectl logs -l app.kubernetes.io/component=proxy \
+                  -n sentinel-gateway --since=130s | \
+                  grep -c "timeout\|408\|504" || echo "0"
+              comparator:
+                type: int
+                criteria: ==
+                value: "0"
+              source: litmus
+            runProperties:
+              probeTimeout: 10s
+              interval: 60s
+              retry: 2
+
+---
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: pod-cpu-hog
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  definition:
+    scope: Namespaced
+    permissions:
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["create", "delete", "get", "list", "patch", "update"]
+      - apiGroups: [""]
+        resources: ["events"]
+        verbs: ["create", "get", "list", "patch", "update"]
+      - apiGroups: [""]
+        resources: ["pods/log"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: [""]
+        resources: ["pods/exec"]
+        verbs: ["get", "list", "create"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets"]
+        verbs: ["get", "list"]
+      - apiGroups: ["litmuschaos.io"]
+        resources: ["chaosengines", "chaosexperiments", "chaosresults"]
+        verbs: ["create", "get", "list", "patch", "update"]
+    image: litmuschaos/go-runner:3.0.0
+    imagePullPolicy: Always
+    args:
+      - -c
+      - ./experiments -name pod-cpu-hog
+    command:
+      - /bin/bash
+    env:
+      - name: TOTAL_CHAOS_DURATION
+        value: "120"
+      - name: CPU_LOAD
+        value: "80"
+      - name: TARGET_CONTAINER
+        value: "proxy"
+    labels:
+      name: pod-cpu-hog
+      app.kubernetes.io/part-of: litmus

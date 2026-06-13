@@ -90,6 +90,19 @@ class Settings(BaseSettings):
     fail_mode: str = "closed"  # "closed" (block on error) or "open" (allow on error)
     cors_origins: List[str] = []  # Empty = no CORS; set explicitly via SENTINEL_CORS_ORIGINS
 
+    # Multi-tenancy (Tier 2: Pod-level isolation)
+    # Comma-separated list of tenant IDs this pod is allowed to serve.
+    # Empty = serve all tenants (shared pool mode).
+    # When set, requests for other tenants are rejected with 403.
+    allowed_tenants: str = ""
+    # JSON list or comma-separated tenant names with dedicated pods.
+    # Used by the shared pool to route requests to dedicated proxy services.
+    dedicated_tenants: str = ""
+    # Kubernetes namespace for internal service discovery (dedicated pod routing)
+    namespace: str = "sentinel-gateway"
+    # Redis key prefix for tenant isolation (dedicated pods use tenant-scoped keys)
+    redis_key_prefix: str = "sentinel"
+
     # Webhook alerts (comma-separated: "type|name|url" or just "url")
     webhook_alert_urls: str = ""
 

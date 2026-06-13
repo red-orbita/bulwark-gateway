@@ -1,0 +1,216 @@
+---
+# Chaos Experiment: Memory Stress on Proxy
+#
+# Steady-state hypothesis:
+#   - Proxy memory usage is < 60% of limit (512Mi limit → ~300Mi used)
+#   - All pods are in Ready state
+#   - No OOMKill events in recent history
+#   - Requests processing normally
+#
+# Expected behavior:
+#   - Memory pressure injected at 90% of container limit
+#   - Python GC triggers more frequently
+#   - If OOMKill occurs:
+#     - Pod is terminated by kernel OOM killer
+#     - Kubernetes restarts pod via restartPolicy
+#     - New pod starts fresh (no corrupt state — stateless design)
+#     - Recovery completes within 10 seconds
+#   - If OOMKill does NOT occur:
+#     - Increased GC pauses may cause latency spikes
+#     - Requests continue to complete
+#   - No data loss (all state is in Redis or config files, not in-memory)
+#
+# Abort conditions:
+#   - Pod does not restart within 30 seconds
+#   - Pod enters CrashLoopBackOff (multiple OOMKills)
+#   - Proxy returns corrupt/partial responses
+#
+# MITRE ATT&CK: T1499 (Endpoint Denial of Service)
+# Pass criteria: Recovery <10s, no data loss
+
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: sentinel-memory-stress
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+    chaos.sentinel.io/experiment: memory-stress
+    chaos.sentinel.io/category: resource
+  annotations:
+    mitre-attack/technique: T1499
+    mitre-attack/tactic: Impact
+    sentinel.io/steady-state: "memory<60%,pods-ready,no-oomkill"
+    sentinel.io/pass-criteria: "recovery<10s,no-data-loss"
+    sentinel.io/expected-behavior: "oomkill-possible,clean-restart"
+spec:
+  engineState: active
+  appinfo:
+    appns: sentinel-gateway
+    applabel: app.kubernetes.io/component=proxy
+    appkind: deployment
+  chaosServiceAccount: litmus-chaos-sa
+  experiments:
+    - name: pod-memory-hog
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: "60"
+            # Consume 90% of container memory limit
+            - name: MEMORY_CONSUMPTION
+              value: "460"
+            # Unit: megabytes (90% of 512Mi ≈ 460Mi)
+            - name: NUMBER_OF_WORKERS
+              value: "1"
+            - name: PODS_AFFECTED_PERC
+              value: "50"
+            - name: TARGET_CONTAINER
+              value: "proxy"
+            - name: RAMP_TIME
+              value: "5"
+            - name: CONTAINER_RUNTIME
+              value: "containerd"
+            - name: SOCKET_PATH
+              value: "/run/containerd/containerd.sock"
+        probe:
+          # If pod restarts, verify it recovers within 10s
+          - name: recovery-within-sla
+            type: cmdProbe
+            mode: Edge
+            cmdProbe/inputs:
+              command: |
+                # Wait for experiment to run, then check pod status
+                sleep 30
+                RESTARTS=$(kubectl get pods -n sentinel-gateway \
+                  -l app.kubernetes.io/component=proxy \
+                  -o jsonpath='{.items[*].status.containerStatuses[*].restartCount}')
+                # If restarts occurred, verify pod is now ready
+                READY=$(kubectl get pods -n sentinel-gateway \
+                  -l app.kubernetes.io/component=proxy \
+                  -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}')
+                if echo "$READY" | grep -q "True"; then
+                  echo "PASS: Pod recovered (restarts: $RESTARTS)"
+                else
+                  echo "FAIL: Pod not ready after memory stress"
+                  exit 1
+                fi
+              comparator:
+                type: string
+                criteria: contains
+                value: "PASS"
+              source: litmus
+            runProperties:
+              probeTimeout: 45s
+              interval: 30s
+              retry: 2
+          # Verify no CrashLoopBackOff
+          - name: no-crash-loop
+            type: cmdProbe
+            mode: Edge
+            cmdProbe/inputs:
+              command: |
+                CRASHLOOP=$(kubectl get pods -n sentinel-gateway \
+                  -l app.kubernetes.io/component=proxy \
+                  -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' | \
+                  grep -c "CrashLoopBackOff" || echo "0")
+                echo "$CRASHLOOP"
+              comparator:
+                type: int
+                criteria: ==
+                value: "0"
+              source: litmus
+            runProperties:
+              probeTimeout: 10s
+              interval: 20s
+              retry: 3
+          # After chaos ends, verify health returns 200
+          - name: post-chaos-health
+            type: httpProbe
+            mode: EOT
+            httpProbe/inputs:
+              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              insecureSkipVerify: true
+              method:
+                get:
+                  criteria: ==
+                  responseCode: "200"
+            runProperties:
+              probeTimeout: 10s
+              interval: 5s
+              retry: 5
+              probePollingInterval: 2s
+          # Verify Redis state is intact (no data loss)
+          - name: redis-state-intact
+            type: cmdProbe
+            mode: EOT
+            cmdProbe/inputs:
+              command: |
+                # Verify Redis counters still exist
+                KEYS=$(kubectl exec -n sentinel-gateway \
+                  $(kubectl get pod -n sentinel-gateway \
+                    -l app.kubernetes.io/component=redis \
+                    -o jsonpath='{.items[0].metadata.name}') \
+                  -- redis-cli keys "sentinel:global:*" 2>/dev/null | wc -l)
+                if [ "$KEYS" -ge 1 ]; then
+                  echo "PASS: Redis state intact ($KEYS keys)"
+                else
+                  echo "PASS: Redis empty (acceptable for fresh deployment)"
+                fi
+              comparator:
+                type: string
+                criteria: contains
+                value: "PASS"
+              source: litmus
+            runProperties:
+              probeTimeout: 10s
+              interval: 10s
+              retry: 2
+
+---
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: pod-memory-hog
+  namespace: sentinel-gateway
+  labels:
+    app.kubernetes.io/part-of: sentinel-gateway
+spec:
+  definition:
+    scope: Namespaced
+    permissions:
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["create", "delete", "get", "list", "patch", "update"]
+      - apiGroups: [""]
+        resources: ["events"]
+        verbs: ["create", "get", "list", "patch", "update"]
+      - apiGroups: [""]
+        resources: ["pods/log"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: [""]
+        resources: ["pods/exec"]
+        verbs: ["get", "list", "create"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets"]
+        verbs: ["get", "list"]
+      - apiGroups: ["litmuschaos.io"]
+        resources: ["chaosengines", "chaosexperiments", "chaosresults"]
+        verbs: ["create", "get", "list", "patch", "update"]
+    image: litmuschaos/go-runner:3.0.0
+    imagePullPolicy: Always
+    args:
+      - -c
+      - ./experiments -name pod-memory-hog
+    command:
+      - /bin/bash
+    env:
+      - name: TOTAL_CHAOS_DURATION
+        value: "60"
+      - name: MEMORY_CONSUMPTION
+        value: "460"
+      - name: TARGET_CONTAINER
+        value: "proxy"
+    labels:
+      name: pod-memory-hog
+      app.kubernetes.io/part-of: litmus

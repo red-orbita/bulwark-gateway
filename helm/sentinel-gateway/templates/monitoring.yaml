@@ -18,6 +18,7 @@ data:
 
     rule_files:
       - "rules.yml"
+      - "recording-rules.yml"
 
     scrape_configs:
       - job_name: "sentinel-proxy"
@@ -376,6 +377,153 @@ data:
               summary: "End-to-end P95 latency SLO breach (>1s)"
               description: "Total request P95 latency exceeds 1s SLO target."
 
+  recording-rules.yml: |
+    # SLO Recording Rules — Pre-computed metrics for dashboard performance
+    groups:
+      - name: sentinel_slo_recording
+        interval: 30s
+        rules:
+          - record: sentinel:slo:availability:ratio_30d
+            expr: |
+              1 - (
+                sum(rate(sentinel_requests_total{status=~"5.."}[30d]))
+                /
+                clamp_min(sum(rate(sentinel_requests_total[30d])), 1)
+              )
+          - record: sentinel:slo:availability:ratio_7d
+            expr: |
+              1 - (
+                sum(rate(sentinel_requests_total{status=~"5.."}[7d]))
+                /
+                clamp_min(sum(rate(sentinel_requests_total[7d])), 1)
+              )
+          - record: sentinel:slo:availability:ratio_1h
+            expr: |
+              1 - (
+                sum(rate(sentinel_requests_total{status=~"5.."}[1h]))
+                /
+                clamp_min(sum(rate(sentinel_requests_total[1h])), 1)
+              )
+          - record: sentinel:slo:latency:ratio_30d
+            expr: |
+              sum(rate(sentinel_request_duration_seconds_bucket{le="0.1"}[30d]))
+              /
+              clamp_min(sum(rate(sentinel_request_duration_seconds_count[30d])), 1)
+          - record: sentinel:slo:latency:ratio_7d
+            expr: |
+              sum(rate(sentinel_request_duration_seconds_bucket{le="0.1"}[7d]))
+              /
+              clamp_min(sum(rate(sentinel_request_duration_seconds_count[7d])), 1)
+          - record: sentinel:slo:latency:ratio_1h
+            expr: |
+              sum(rate(sentinel_request_duration_seconds_bucket{le="0.1"}[1h]))
+              /
+              clamp_min(sum(rate(sentinel_request_duration_seconds_count[1h])), 1)
+          - record: sentinel:slo:false_positive:ratio_30d
+            expr: |
+              sum(rate(sentinel_false_positives_total[30d]))
+              /
+              clamp_min(sum(rate(sentinel_verdicts_total{verdict="allow"}[30d])), 1)
+          - record: sentinel:slo:detection:ratio_30d
+            expr: |
+              sum(rate(sentinel_verdicts_total{verdict="block"}[30d]))
+              /
+              clamp_min(
+                sum(rate(sentinel_verdicts_total{verdict="block"}[30d]))
+                + sum(rate(sentinel_false_negatives_total[30d])),
+                1
+              )
+          - record: sentinel:error_budget:availability:remaining
+            expr: |
+              1 - (
+                (1 - sentinel:slo:availability:ratio_30d)
+                /
+                (1 - 0.999)
+              )
+          - record: sentinel:error_budget:latency:remaining
+            expr: |
+              1 - (
+                (1 - sentinel:slo:latency:ratio_30d)
+                /
+                (1 - 0.99)
+              )
+          - record: sentinel:error_budget:false_positive:remaining
+            expr: |
+              1 - (
+                sentinel:slo:false_positive:ratio_30d
+                /
+                0.001
+              )
+          - record: sentinel:error_budget:detection:remaining
+            expr: |
+              1 - (
+                (1 - sentinel:slo:detection:ratio_30d)
+                /
+                (1 - 0.99)
+              )
+          - record: sentinel:error_budget:availability:burn_rate_1h
+            expr: |
+              (1 - sentinel:slo:availability:ratio_1h)
+              /
+              (1 - 0.999)
+          - record: sentinel:error_budget:availability:burn_rate_6h
+            expr: |
+              (
+                1 - (
+                  1 - (
+                    sum(rate(sentinel_requests_total{status=~"5.."}[6h]))
+                    /
+                    clamp_min(sum(rate(sentinel_requests_total[6h])), 1)
+                  )
+                )
+              )
+              /
+              (1 - 0.999)
+          - record: sentinel:error_budget:latency:burn_rate_1h
+            expr: |
+              (1 - sentinel:slo:latency:ratio_1h)
+              /
+              (1 - 0.99)
+
+      - name: sentinel_operational_recording
+        interval: 30s
+        rules:
+          - record: sentinel:requests:rate5m:by_tenant
+            expr: sum by (tenant_id)(rate(sentinel_requests_total[5m]))
+          - record: sentinel:verdicts:rate5m:by_verdict
+            expr: sum by (verdict)(rate(sentinel_verdicts_total[5m]))
+          - record: sentinel:blocks:rate5m:by_category
+            expr: sum by (category)(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+          - record: sentinel:latency:p50
+            expr: |
+              histogram_quantile(0.50,
+                sum(rate(sentinel_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              )
+          - record: sentinel:latency:p95
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(sentinel_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              )
+          - record: sentinel:latency:p99
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(sentinel_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              )
+          - record: sentinel:backend:error_ratio_5m
+            expr: |
+              sum(rate(sentinel_backend_errors_total[5m]))
+              /
+              clamp_min(sum(rate(sentinel_requests_total[5m])), 1)
+          - record: sentinel:siem:export_rate_5m
+            expr: sum(rate(sentinel_siem_events_exported_total[5m]))
+          - record: sentinel:notifications:success_ratio_5m
+            expr: |
+              1 - (
+                sum(rate(sentinel_notification_errors_total[5m]))
+                /
+                clamp_min(sum(rate(sentinel_notifications_sent_total[5m])), 1)
+              )
+
   web.yml: |
     # Basic auth disabled in K8s (use NetworkPolicy instead)
     {}
@@ -489,6 +637,72 @@ spec:
 {{- end }}
 {{- if .Values.monitoring.grafana.enabled }}
 ---
+# Grafana Provisioning ConfigMap — Datasources
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning-datasources
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus.{{ include "sentinel-gateway.namespace" . }}.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: "10s"
+          httpMethod: POST
+---
+# Grafana Provisioning ConfigMap — Dashboard Provider
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning-dashboards
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+data:
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: Sentinel Gateway
+        orgId: 1
+        folder: Sentinel Gateway
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+# Grafana Dashboard JSON ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: {{ include "sentinel-gateway.namespace" . }}
+  labels:
+    {{- include "sentinel-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+  annotations:
+    sentinel-gateway.io/dashboard-version: "1"
+data:
+  {{- (.Files.Glob "dashboards/sentinel-*.json").AsConfig | nindent 2 }}
+---
 # Grafana Deployment
 apiVersion: apps/v1
 kind: Deployment
@@ -510,6 +724,9 @@ spec:
         app.kubernetes.io/name: grafana
         app.kubernetes.io/part-of: sentinel-gateway
         app.kubernetes.io/component: monitoring
+      annotations:
+        checksum/datasources: {{ include (print $.Template.BasePath "/monitoring.yaml") . | sha256sum }}
+        checksum/dashboards: {{ include (print $.Template.BasePath "/monitoring.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -533,6 +750,8 @@ spec:
               value: "/grafana/"
             - name: GF_SERVER_SERVE_FROM_SUB_PATH
               value: "true"
+            - name: GF_PATHS_PROVISIONING
+              value: "/etc/grafana/provisioning"
           ports:
             - name: http
               containerPort: 3000
@@ -552,6 +771,15 @@ spec:
               mountPath: /var/lib/grafana
             - name: grafana-tmp
               mountPath: /tmp
+            - name: grafana-provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: grafana-provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: grafana-dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /api/health
@@ -571,6 +799,15 @@ spec:
         - name: grafana-tmp
           emptyDir:
             sizeLimit: 50Mi
+        - name: grafana-provisioning-datasources
+          configMap:
+            name: grafana-provisioning-datasources
+        - name: grafana-provisioning-dashboards
+          configMap:
+            name: grafana-provisioning-dashboards
+        - name: grafana-dashboards
+          configMap:
+            name: grafana-dashboards
 ---
 # Grafana PVC
 apiVersion: v1

@@ -24,6 +24,7 @@ from src.middleware.api_version import APIVersionMiddleware
 from src.middleware.auth import AuthMiddleware
 from src.middleware.quotas import QuotaMiddleware
 from src.middleware.rate_limit import RateLimitMiddleware
+from src.middleware.tenant_router import TenantRouterMiddleware
 from src.routes import admin, health, proxy
 from src.routes.v2 import router as v2_router
 
@@ -251,7 +252,7 @@ def create_app() -> FastAPI:
         )
 
     # Middleware (order matters — last added = outermost = processes request first)
-    # Request flow: Auth → APIVersion → RateLimit → Quota → CORS → Route handler
+    # Request flow: Auth → TenantRouter → APIVersion → RateLimit → Quota → CORS → Route handler
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -268,6 +269,10 @@ def create_app() -> FastAPI:
     app.add_middleware(QuotaMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(APIVersionMiddleware)
+    # Tier 2: Route dedicated tenants to their own proxy pods
+    # Only active if SENTINEL_DEDICATED_TENANTS is configured
+    if settings.dedicated_tenants:
+        app.add_middleware(TenantRouterMiddleware)
     app.add_middleware(AuthMiddleware)
 
     # Routes

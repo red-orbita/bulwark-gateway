@@ -40,6 +40,14 @@ from .routes import plugins, evaluation, discovery, ml_scanners, rate_limits, en
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Admin app lifecycle."""
+    # Initialize database abstraction layer (PostgreSQL or SQLite)
+    # This runs schema migrations and provides the async engine for new code.
+    # Existing services (user_store, audit_logger) continue using their own
+    # connections until individually migrated to use the shared engine.
+    from .services.database import init_database, close_database
+    db_engine = await init_database()
+    app.state.db = db_engine
+
     metrics = get_metrics()
     audit_log = get_audit_logger()
     await audit_log.initialize()
@@ -59,6 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     await scheduler.stop()
     await gdpr_service.close()
     await audit_log.close()
+    await close_database()
 
 
 _admin_debug = os.getenv("ADMIN_DEBUG", "false").lower() in ("true", "1")
