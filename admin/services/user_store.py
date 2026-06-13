@@ -411,9 +411,10 @@ class UserStore:
         with self._lock:
             # Before creating new session, count existing and delete oldest if over limit:
             cursor = self._conn.execute(
-                "SELECT COUNT(*) FROM sessions WHERE user_id = ?", (user_id,)
+                "SELECT COUNT(*) as cnt FROM sessions WHERE user_id = ?", (user_id,)
             )
-            existing_count = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            existing_count = row["cnt"] if isinstance(row, dict) else row[0]
             if existing_count >= MAX_SESSIONS_PER_USER:
                 # Delete oldest sessions to make room
                 self._conn.execute(
