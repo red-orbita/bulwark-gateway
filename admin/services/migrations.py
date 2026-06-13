@@ -446,8 +446,9 @@ async def _apply_migration(engine: DatabaseEngine, migration: Migration, sql: st
                     await tx.execute(stmt)
 
             # Record migration
+            # asyncpg requires native datetime objects for TIMESTAMPTZ columns
             elapsed_ms = int((_time.monotonic() - start) * 1000)
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc)
             await tx.execute(
                 "INSERT INTO schema_migrations (version, description, applied_at, execution_ms) "
                 "VALUES ($1, $2, $3, $4)",

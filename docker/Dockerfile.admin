@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 COPY requirements-admin.lock .
 RUN pip install --no-cache-dir --require-hashes -r requirements-admin.lock && \
-    pip install --no-cache-dir PyJWT==2.13.0 redis==8.0.0 python-multipart>=0.0.9
+    pip install --no-cache-dir PyJWT==2.13.0 redis==8.0.0 python-multipart>=0.0.9 && \
+    pip install --no-cache-dir asyncpg==0.31.0 aiosqlite==0.22.1
 
 # Install NVIDIA SkillSpector from GitHub (Apache 2.0)
 # Provides 64 vulnerability patterns, AST analysis, taint tracking, YARA signatures, OSV.dev CVE lookups

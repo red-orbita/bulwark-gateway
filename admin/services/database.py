@@ -48,6 +48,7 @@ import time
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Sequence
 
@@ -215,7 +216,59 @@ class QueryTranslator:
             flags=re.IGNORECASE,
         )
 
-        return translated, params
+        # Coerce parameters: asyncpg requires native types (datetime objects, not strings)
+        coerced_params = self._coerce_params(params) if params else params
+        return translated, coerced_params
+
+    def _coerce_params(self, params: Sequence) -> tuple:
+        """Coerce parameter types for asyncpg compatibility.
+
+        asyncpg requires native Python types for PostgreSQL columns:
+        - TIMESTAMPTZ / TIMESTAMP → datetime.datetime (not ISO strings)
+        - BOOLEAN → bool (not int 0/1)
+
+        This is a no-op for SQLite backend.
+        """
+        if self.is_sqlite:
+            return tuple(params)
+
+        coerced = []
+        for p in params:
+            if isinstance(p, str) and self._looks_like_iso_datetime(p):
+                coerced.append(self._parse_iso_datetime(p))
+            else:
+                coerced.append(p)
+        return tuple(coerced)
+
+    @staticmethod
+    def _looks_like_iso_datetime(s: str) -> bool:
+        """Check if a string looks like an ISO 8601 datetime.
+
+        Matches patterns like:
+        - 2026-06-13T13:00:42.841174+00:00
+        - 2026-06-13T13:00:42Z
+        - 2026-06-13T13:00:42
+        """
+        if len(s) < 19 or len(s) > 35:
+            return False
+        # Quick check: must start with YYYY-MM-DD and have T separator
+        return (
+            s[4:5] == "-" and s[7:8] == "-" and
+            (s[10:11] == "T" or s[10:11] == " ") and
+            s[0:4].isdigit()
+        )
+
+    @staticmethod
+    def _parse_iso_datetime(s: str) -> datetime:
+        """Parse ISO 8601 string to datetime object."""
+        # Handle Z suffix
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(s)
+        except (ValueError, TypeError):
+            # If parsing fails, return the string as-is (let asyncpg raise proper error)
+            return s  # type: ignore[return-value]
 
     def create_table_sql(self, table_name: str, columns: list[tuple[str, str]],
                          indexes: Optional[list[tuple[str, list[str]]]] = None) -> list[str]:
