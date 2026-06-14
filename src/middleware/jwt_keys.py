@@ -186,7 +186,6 @@ class JWKSCache:
                 "Install with: pip install 'pyjwt[crypto]' or pip install cryptography"
             )
 
-        import jwt as pyjwt
 
         jwk_data = self.get_key(kid)
         kty = jwk_data.get("kty", "")

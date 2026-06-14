@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import difflib
 import hashlib
-import os
 import shutil
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
-from ..models.config import PolicyValidationResult, PolicyDiff
+from ..models.config import PolicyValidationResult
 
 POLICIES_DIR = Path("config/policies")
 BACKUP_DIR = POLICIES_DIR / ".backup"
@@ -90,13 +88,10 @@ class ConfigValidator:
             return False, "Pattern too long (max 1000 chars)"
 
         # Test with a stress string to detect catastrophic backtracking (10ms budget)
-        import signal
         import threading
 
         test_input = "a" * 50 + "!" + "a" * 50
         compiled = re.compile(pattern, re.IGNORECASE)
-
-        result: list = [True]
 
         def _test():
             try:

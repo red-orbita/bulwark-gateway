@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from .database import DatabaseEngine, Row
+from .database import DatabaseEngine
 
 logger = logging.getLogger(__name__)
 

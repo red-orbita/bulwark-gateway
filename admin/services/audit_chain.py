@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -19,7 +18,6 @@ from pydantic import BaseModel, Field
 
 from .audit_logger import (
     GENESIS_HASH,
-    AuditLogger,
     compute_entry_hash,
     get_audit_logger,
 )

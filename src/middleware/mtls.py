@@ -36,7 +36,7 @@ import ipaddress
 import logging
 import ssl
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware

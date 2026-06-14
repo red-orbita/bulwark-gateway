@@ -20,8 +20,6 @@ downstream scanners (multilingual patterns, ML classifiers).
 from __future__ import annotations
 
 import logging
-import re
-import unicodedata
 from collections import Counter
 
 from src.config import settings
@@ -117,7 +115,7 @@ class LanguageDetector(InputScanner):
         """Initialize the best available detection backend."""
         if _lingua_available():
             try:
-                from lingua import Language, LanguageDetectorBuilder
+                from lingua import LanguageDetectorBuilder
 
                 self._lingua_detector = (
                     LanguageDetectorBuilder.from_all_languages()
@@ -136,7 +134,6 @@ class LanguageDetector(InputScanner):
         if _fasttext_available():
             try:
                 import fasttext
-                from pathlib import Path
 
                 model_path = settings.ml_model_dir / "lid.176.ftz"
                 if model_path.exists():
@@ -270,14 +267,13 @@ class LanguageDetector(InputScanner):
     def _detect_lingua(self, text: str) -> tuple[str, float]:
         """Detect using lingua-language-detector."""
         try:
-            from lingua import Language
 
-            result = self._lingua_detector.detect_language_of(text)
+            result = self._lingua_detector.detect_language_of(text)  # type: ignore[attr-defined]
             if result is None:
                 return ("unknown", 0.0)
 
             # Get confidence
-            confidences = self._lingua_detector.compute_language_confidence_values(text)
+            confidences = self._lingua_detector.compute_language_confidence_values(text)  # type: ignore[attr-defined]
             confidence = 0.0
             for lang_conf in confidences:
                 if lang_conf.language == result:
@@ -297,7 +293,7 @@ class LanguageDetector(InputScanner):
         try:
             # fasttext needs single line
             clean_text = text.replace("\n", " ").strip()
-            predictions = self._fasttext_model.predict(clean_text, k=1)
+            predictions = self._fasttext_model.predict(clean_text, k=1)  # type: ignore[attr-defined]
             label = predictions[0][0]  # __label__en
             confidence = float(predictions[1][0])
             iso_code = label.replace("__label__", "")

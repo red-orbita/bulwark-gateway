@@ -13,7 +13,6 @@ Detects:
 """
 
 import base64
-import codecs
 import re
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict

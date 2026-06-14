@@ -23,7 +23,7 @@ import re
 import sqlite3
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -190,7 +190,7 @@ class AttackReplayDB:
         )
 
         with self._lock:
-            self._conn.execute(
+            self._conn.execute(  # type: ignore[union-attr]
                 """INSERT OR IGNORE INTO replay_entries
                    (id, payload_hash, payload_prefix, verdict, source, category,
                     enrichment_status, enrichment_confidence, enrichment_scanner,
@@ -205,7 +205,7 @@ class AttackReplayDB:
                     entry.request_id, entry.tenant_id, entry.timestamp,
                 ),
             )
-            self._conn.commit()
+            self._conn.commit()  # type: ignore[union-attr]
 
         # If evasion detected, attempt auto-regex generation
         if is_evasion:
@@ -311,7 +311,7 @@ class AttackReplayDB:
 
         with self._lock:
             # Check if this pattern already exists
-            existing = self._conn.execute(
+            existing = self._conn.execute(  # type: ignore[union-attr]
                 "SELECT id, source_entries FROM regex_candidates WHERE pattern = ?",
                 (pattern,),
             ).fetchone()
@@ -320,12 +320,12 @@ class AttackReplayDB:
                 # Update source entries
                 entries = json.loads(existing["source_entries"])
                 entries.append(source_entry.id)
-                self._conn.execute(
+                self._conn.execute(  # type: ignore[union-attr]
                     "UPDATE regex_candidates SET source_entries = ?, confidence = confidence + 0.1 WHERE id = ?",
                     (json.dumps(entries), existing["id"]),
                 )
             else:
-                self._conn.execute(
+                self._conn.execute(  # type: ignore[union-attr]
                     """INSERT INTO regex_candidates
                        (id, pattern, category, source_entries, confidence, false_positive_risk, status, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
@@ -336,15 +336,15 @@ class AttackReplayDB:
                         fp_risk, now,
                     ),
                 )
-            self._conn.commit()
+            self._conn.commit()  # type: ignore[union-attr]
 
         # Update the replay entry with the regex candidate
         with self._lock:
-            self._conn.execute(
+            self._conn.execute(  # type: ignore[union-attr]
                 "UPDATE replay_entries SET regex_candidate = ? WHERE id = ?",
                 (pattern, source_entry.id),
             )
-            self._conn.commit()
+            self._conn.commit()  # type: ignore[union-attr]
 
         logger.info(
             "regex_candidate_generated",
@@ -356,7 +356,7 @@ class AttackReplayDB:
     def get_evasions(self, limit: int = 50, offset: int = 0) -> list[dict]:
         """Get detected evasion attempts."""
         with self._lock:
-            rows = self._conn.execute(
+            rows = self._conn.execute(  # type: ignore[union-attr]
                 "SELECT * FROM replay_entries WHERE is_evasion = 1 ORDER BY timestamp DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
@@ -365,7 +365,7 @@ class AttackReplayDB:
     def get_regex_candidates(self, status: str = "pending") -> list[dict]:
         """Get regex candidates by status."""
         with self._lock:
-            rows = self._conn.execute(
+            rows = self._conn.execute(  # type: ignore[union-attr]
                 "SELECT * FROM regex_candidates WHERE status = ? ORDER BY confidence DESC",
                 (status,),
             ).fetchall()
@@ -375,39 +375,39 @@ class AttackReplayDB:
         """Approve a regex candidate. Returns the pattern for deployment."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            row = self._conn.execute(
+            row = self._conn.execute(  # type: ignore[union-attr]
                 "SELECT pattern FROM regex_candidates WHERE id = ?", (candidate_id,)
             ).fetchone()
             if not row:
                 return None
-            self._conn.execute(
+            self._conn.execute(  # type: ignore[union-attr]
                 "UPDATE regex_candidates SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ?",
                 (now, reviewer, candidate_id),
             )
-            self._conn.commit()
+            self._conn.commit()  # type: ignore[union-attr]
         return row["pattern"]
 
     def reject_regex(self, candidate_id: str, reviewer: str) -> bool:
         """Reject a regex candidate."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            self._conn.execute(
+            self._conn.execute(  # type: ignore[union-attr]
                 "UPDATE regex_candidates SET status = 'rejected', reviewed_at = ?, reviewed_by = ? WHERE id = ?",
                 (now, reviewer, candidate_id),
             )
-            self._conn.commit()
+            self._conn.commit()  # type: ignore[union-attr]
         return True
 
     def get_stats(self) -> dict:
         """Get replay DB statistics."""
         with self._lock:
-            total = self._conn.execute("SELECT COUNT(*) as cnt FROM replay_entries").fetchone()["cnt"]
-            evasions = self._conn.execute("SELECT COUNT(*) as cnt FROM replay_entries WHERE is_evasion = 1").fetchone()["cnt"]
-            pending_regex = self._conn.execute("SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'pending'").fetchone()["cnt"]
-            approved_regex = self._conn.execute("SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'approved'").fetchone()["cnt"]
+            total = self._conn.execute("SELECT COUNT(*) as cnt FROM replay_entries").fetchone()["cnt"]  # type: ignore[union-attr]
+            evasions = self._conn.execute("SELECT COUNT(*) as cnt FROM replay_entries WHERE is_evasion = 1").fetchone()["cnt"]  # type: ignore[union-attr]
+            pending_regex = self._conn.execute("SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'pending'").fetchone()["cnt"]  # type: ignore[union-attr]
+            approved_regex = self._conn.execute("SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'approved'").fetchone()["cnt"]  # type: ignore[union-attr]
 
             # Category breakdown for evasions
-            category_rows = self._conn.execute(
+            category_rows = self._conn.execute(  # type: ignore[union-attr]
                 "SELECT category, COUNT(*) as cnt FROM replay_entries WHERE is_evasion = 1 GROUP BY category"
             ).fetchall()
             categories = {r["category"] or "unknown": r["cnt"] for r in category_rows}
@@ -423,7 +423,7 @@ class AttackReplayDB:
     def get_replay_payloads(self, category: Optional[str] = None, verdict: Optional[str] = None, limit: int = 100) -> list[dict]:
         """Get payloads for replay testing."""
         query = "SELECT * FROM replay_entries WHERE 1=1"
-        params = []
+        params: list[str | int] = []
         if category:
             query += " AND category = ?"
             params.append(category)
@@ -434,7 +434,7 @@ class AttackReplayDB:
         params.append(limit)
 
         with self._lock:
-            rows = self._conn.execute(query, params).fetchall()
+            rows = self._conn.execute(query, params).fetchall()  # type: ignore[union-attr]
         return [dict(r) for r in rows]
 
     def close(self) -> None:

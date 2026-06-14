@@ -38,7 +38,7 @@ class SyslogFormat(str, Enum):
 
 @dataclass
 class SyslogConfig:
-    host: str = "127.0.0.1"
+    host: str = ""  # Required — must be explicitly configured
     port: int = 514
     protocol: SyslogProtocol = SyslogProtocol.TCP
     format: SyslogFormat = SyslogFormat.JSON

@@ -8,7 +8,6 @@ for legacy SIEMs (QRadar, ArcSight, FortiSIEM).
 from __future__ import annotations
 
 import hashlib
-import time
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
@@ -199,7 +198,7 @@ def from_security_event(
     message = f"Sentinel Gateway {verdict.upper()}: {rule_description or threat_category or 'security event'}"
 
     return SecurityTelemetryEvent(
-        **{"@timestamp": datetime.now(timezone.utc).isoformat()},
+        **{"@timestamp": datetime.now(timezone.utc).isoformat()},  # type: ignore[arg-type]
         message=message,
         event=ECSEvent(
             category=TelemetryEventCategory.INTRUSION_DETECTION,

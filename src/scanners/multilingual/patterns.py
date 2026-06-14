@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType

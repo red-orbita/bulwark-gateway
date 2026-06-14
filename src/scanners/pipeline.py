@@ -148,7 +148,7 @@ class ScannerPipeline:
         if name not in self._all_scanners:
             return False
 
-        registered = self._all_scanners.pop(name)
+        self._all_scanners.pop(name)
         for lane in (self._input_blocking, self._input_async, self._output_blocking, self._output_async):
             lane[:] = [s for s in lane if s.info.name != name]
 
@@ -429,7 +429,7 @@ class ScannerPipeline:
             # SECURITY FIX (H-09): Only allow ML config to affect ml_* scanners.
             # Prevents compromised admin from disabling regex/builtin scanners via Redis.
             if not name.startswith("ml_"):
-                logger.warning("ml_config_rejected", scanner=name, reason="not_ml_prefix")
+                logger.warning("ml_config_rejected", extra={"scanner": name, "reason": "not_ml_prefix"})
                 continue
             if name not in self._all_scanners:
                 continue

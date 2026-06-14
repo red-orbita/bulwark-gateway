@@ -27,7 +27,6 @@ import logging
 import re
 from dataclasses import dataclass
 
-from src.config import settings
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
 

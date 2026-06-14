@@ -12,8 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import random
-import string
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from src.models import ThreatCategory, Verdict

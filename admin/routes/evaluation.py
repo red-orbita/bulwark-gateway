@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field
 
 from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
-from src.evaluation.attacks import AttackGenerator, Attack
+from src.evaluation.attacks import AttackGenerator
 from src.evaluation.runner import EvaluationRunner, EvaluationReport
-from src.evaluation.datasets import STANDARD_BENIGN, get_standard_attacks
+from src.evaluation.datasets import STANDARD_BENIGN
 from src.models import ThreatCategory, Verdict
 from src.scanners.builtin.regex_scanner import RegexInputScanner
 from src.scanners.pipeline import ScannerPipeline

@@ -260,12 +260,12 @@ class CostTracker:
         """In-memory fallback persistence."""
         for key in [f"{record.tenant_id}:tokens", "global"]:
             if key not in self._fallback:
-                self._fallback[key] = {"prompt": 0, "completion": 0, "total": 0, "requests": 0, "cost_usd": 0.0}
+                self._fallback[key] = {"prompt": 0, "completion": 0, "total": 0, "requests": 0, "cost_usd": 0.0}  # type: ignore[dict-item]
             self._fallback[key]["prompt"] += record.prompt_tokens
             self._fallback[key]["completion"] += record.completion_tokens
             self._fallback[key]["total"] += record.total_tokens
             self._fallback[key]["requests"] += 1
-            self._fallback[key]["cost_usd"] += record.estimated_cost_usd
+            self._fallback[key]["cost_usd"] += record.estimated_cost_usd  # type: ignore[assignment]
 
 
 # === Singleton ===

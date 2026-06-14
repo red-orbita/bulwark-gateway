@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
 from typing import Optional
 
@@ -52,7 +51,7 @@ class SkillEnrichmentScanner(BaseEnrichmentScanner):
     def available(self) -> bool:
         if self._available is None:
             self._detect()
-        return self._available
+        return self._available or False
 
     def _detect(self) -> None:
         """Check if SkillSpector is importable or CLI available."""

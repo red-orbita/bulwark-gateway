@@ -377,32 +377,31 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
         try:
             if transport_type == "file":
                 from .transports.file_shipper import FileShipperTransport, FileShipperConfig
-                t = FileShipperTransport(FileShipperConfig(
+                file_t = FileShipperTransport(FileShipperConfig(
                     path=cfg.get("endpoint", "/var/log/sentinel-gateway/events.ndjson"),
                 ))
-                exporter.add_transport(t)
+                exporter.add_transport(file_t)
             elif transport_type == "syslog":
                 from .transports.syslog import SyslogTransport, SyslogConfig
-                t = SyslogTransport(SyslogConfig(
+                syslog_t = SyslogTransport(SyslogConfig(
                     host=cfg.get("endpoint", "localhost"),
                     port=int(cfg.get("port", 514)),
                 ))
-                exporter.add_transport(t)
+                exporter.add_transport(syslog_t)
             elif transport_type == "http":
-                from .transports.http_rest import HttpRestTransport, HttpRestConfig
-                t = HttpRestTransport(HttpRestConfig(
+                from .transports.http_rest import HttpRestTransport, HttpTransportConfig
+                http_t = HttpRestTransport(HttpTransportConfig(
                     url=cfg.get("endpoint", "http://localhost:9200"),
-                    auth_type=cfg.get("auth_type", "none"),
-                    auth_key=cfg.get("auth_key", ""),
+                    token=cfg.get("auth_key", ""),
                 ))
-                exporter.add_transport(t)
+                exporter.add_transport(http_t)
             elif transport_type == "tcp_tls":
                 from .transports.tcp_tls import TcpTlsTransport, TcpTlsConfig
-                t = TcpTlsTransport(TcpTlsConfig(
+                tcp_t = TcpTlsTransport(TcpTlsConfig(
                     host=cfg.get("endpoint", "localhost"),
                     port=int(cfg.get("port", 6514)),
                 ))
-                exporter.add_transport(t)
+                exporter.add_transport(tcp_t)
             else:
                 logger.warning("unknown_transport_type", extra={"type": transport_type})
         except Exception as e:

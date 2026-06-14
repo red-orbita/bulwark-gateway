@@ -183,7 +183,6 @@ class MCPInventory:
         Returns:
             Dict with usage statistics.
         """
-        import httpx
 
         stats: dict = {
             "server_url": server_url,

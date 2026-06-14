@@ -2,7 +2,6 @@
 import logging
 import os
 import shutil
-import tempfile
 import threading
 import time
 from datetime import datetime, timezone

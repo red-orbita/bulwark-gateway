@@ -12,16 +12,13 @@ from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
 from src.discovery.agent_discovery import (
     AgentDiscovery,
-    DiscoveredAgent,
     KNOWN_PORTS,
     KNOWN_PATHS,
 )
-from src.discovery.shadow_ai import ShadowAIMonitor, ShadowAIAlert
+from src.discovery.shadow_ai import ShadowAIMonitor
 from src.discovery.mcp_inventory import (
     MCPInventory,
     MCPTool,
-    MCPServer,
-    RiskAssessment,
 )
 
 logger = logging.getLogger(__name__)

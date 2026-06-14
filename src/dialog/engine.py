@@ -53,7 +53,6 @@ from typing import Any
 
 import yaml
 
-from src.models import Verdict
 from src.scanners.protocol import ScanContext
 
 logger = logging.getLogger(__name__)

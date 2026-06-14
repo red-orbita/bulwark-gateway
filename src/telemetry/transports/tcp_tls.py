@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TcpTlsConfig:
-    host: str = "127.0.0.1"
+    host: str = ""  # Required — must be explicitly configured
     port: int = 6514
     use_tls: bool = True
     tls_cert: Optional[str] = None

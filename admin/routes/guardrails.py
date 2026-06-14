@@ -80,7 +80,7 @@ def _load_patterns() -> list[dict]:
 
     try:
         from src.guardrails.output_filter import (
-            OutputFilter, REDACTION_PATTERNS, DANGEROUS_OUTPUT_PATTERNS, HUMAN_REVIEW_PATTERNS
+            REDACTION_PATTERNS, DANGEROUS_OUTPUT_PATTERNS, HUMAN_REVIEW_PATTERNS
         )
         # REDACTION_PATTERNS: list of (compiled_regex, label) tuples
         for i, p in enumerate(REDACTION_PATTERNS):

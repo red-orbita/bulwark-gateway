@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..models.auth import ROLE_PERMISSIONS, TokenPayload, UserRole
@@ -249,7 +249,7 @@ def reset_role_permissions(
         raise HTTPException(status_code=404, detail=f"Role '{role_name}' not found")
 
     # For custom roles, reset means restore the original custom definition
-    custom_roles = _load_custom_roles()
+    _load_custom_roles()  # Validate custom roles exist
 
     overrides = _load_overrides()
     if role_name in overrides:

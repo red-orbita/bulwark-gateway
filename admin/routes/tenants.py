@@ -1,6 +1,5 @@
 """Admin API routes for tenant and agent management."""
 import ipaddress
-import re
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException

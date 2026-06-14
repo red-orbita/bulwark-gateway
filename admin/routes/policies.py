@@ -5,17 +5,15 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..models.auth import TokenPayload, UserRole
+from ..models.auth import TokenPayload
 from ..models.config import (
     PolicySummary, PolicyDetail, PolicyCreateRequest, PolicyUpdateRequest,
-    PolicyValidationResult, ConfigApplyRequest, ConfigApplyResult,
 )
-from ..services.auth_service import get_current_user, require_permission
+from ..services.auth_service import require_permission
 from ..services.config_validator import ConfigValidator, HotReloader, POLICIES_DIR
 from ..services.audit_logger import get_audit_logger
 

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..models.auth import TokenPayload
-from ..models.config import ConfigApplyRequest, ConfigApplyResult, PolicyValidationResult
+from ..models.config import ConfigApplyRequest, ConfigApplyResult
 from ..services.auth_service import require_permission
 from ..services.config_validator import ConfigValidator, HotReloader
 from ..services.audit_logger import get_audit_logger

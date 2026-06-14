@@ -42,7 +42,7 @@ def discover_entry_point_scanners() -> list[Type[InputScanner | OutputScanner]]:
         if hasattr(eps, "select"):
             scanner_eps = eps.select(group="sentinel.scanners")
         else:
-            scanner_eps = eps.get("sentinel.scanners", [])
+            scanner_eps = eps.get("sentinel.scanners", [])  # type: ignore[attr-defined]
 
         for ep in scanner_eps:
             try:
@@ -167,7 +167,7 @@ def instantiate_scanner(
         if config:
             return cls(**config)  # type: ignore
         return cls()  # type: ignore
-    except TypeError as e:
+    except TypeError:
         # Try without config if constructor doesn't accept kwargs
         if config:
             return cls()  # type: ignore

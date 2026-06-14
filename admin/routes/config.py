@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from ..models.auth import TokenPayload, UserRole
 from ..services.auth_service import require_role
-from ..services.config_manager import get_config_manager, SECTIONS, RESTART_REQUIRED_FIELDS
+from ..services.config_manager import get_config_manager, SECTIONS
 from ..services.audit_logger import get_audit_logger
 from ..models.metrics import AuditQuery
 
