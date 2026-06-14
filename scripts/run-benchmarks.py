@@ -168,7 +168,7 @@ async def run_benchmarks(
     # === Build machine-readable results ===
     results = {
         "benchmark_version": "1.0.0",
-        "sentinel_version": "0.4.3",
+        "sentinel_version": "0.2.0",
         "engine": "regex_input (deterministic, no ML)",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "mode": mode,

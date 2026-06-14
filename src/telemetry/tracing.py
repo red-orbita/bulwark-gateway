@@ -131,7 +131,7 @@ def init_tracing() -> None:
     resource = Resource.create(
         {
             "service.name": settings.tracing_service_name,
-            "service.version": "0.4.3",
+            "service.version": "0.2.0",
             "deployment.environment": "production" if not settings.debug else "development",
             "service.namespace": "sentinel-gateway",
         }
@@ -170,7 +170,7 @@ def init_tracing() -> None:
     trace.set_tracer_provider(provider)
 
     # Create module-level tracer singleton
-    _tracer = trace.get_tracer("sentinel-gateway", "0.4.3")
+    _tracer = trace.get_tracer("sentinel-gateway", "0.2.0")
     _enabled = True
 
     import logging
