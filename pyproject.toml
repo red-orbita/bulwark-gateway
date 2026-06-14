@@ -1,6 +1,6 @@
 [project]
 name = "sentinel-gateway"
-version = "0.1.0"
+version = "0.2.0"
 description = "Security guardrail proxy for AI agents — intercepts, validates, and enforces policies on tool calls between users and LLM agents in cloud environments"
 requires-python = ">=3.11"
 license = "GPL-3.0-or-later"

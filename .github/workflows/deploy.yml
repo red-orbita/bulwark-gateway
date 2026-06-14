@@ -153,12 +153,13 @@ jobs:
             -n ${{ env.NAMESPACE }} --timeout=120s
           kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=admin \
             -n ${{ env.NAMESPACE }} --timeout=120s
-          # Run security smoke test against staging
+
+      - name: Security smoke test (blocking)
+        run: |
           PROXY_IP=$(kubectl get svc proxy -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
           kubectl run smoke-test --rm -i --restart=Never \
             --image=python:3.11-slim -n ${{ env.NAMESPACE }} -- \
-            bash -c "pip install -q httpx && python /dev/stdin" < scripts/security-smoke-test.py \
-            || true
+            bash -c "pip install -q httpx && python /dev/stdin" < scripts/security-smoke-test.py
 
   # ─── Stage 4: Deploy to Production ──────────────────────────────────────────
   deploy-production:
@@ -202,6 +203,13 @@ jobs:
             -n ${{ env.NAMESPACE }} --timeout=180s
           kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=admin \
             -n ${{ env.NAMESPACE }} --timeout=180s
+
+      - name: Production smoke test (health + injection)
+        run: |
+          PROXY_IP=$(kubectl get svc proxy -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
+          kubectl run prod-smoke --rm -i --restart=Never \
+            --image=curlimages/curl:8.6.0 -n ${{ env.NAMESPACE }} -- \
+            sh -c "curl -sf http://${PROXY_IP}:8080/health | grep -q ok"
 
       - name: Notify deployment
         if: success()
