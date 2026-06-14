@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     mtls_server_key_path: str = ""    # This service's server private key
     mtls_client_cert_path: str = ""   # Client cert for outbound inter-service calls
     mtls_client_key_path: str = ""    # Client key for outbound inter-service calls
+    mtls_crl_path: str = ""           # CRL file for certificate revocation (M-13)
+    # SECURITY: Only trust X-Client-Cert-* headers from these proxy CIDRs.
+    # If empty, header-based cert extraction is DISABLED (only direct TLS works).
+    # Typical values: "10.244.0.0/16,10.96.0.0/12" (K8s pod/service CIDRs)
+    mtls_trusted_proxy_cidrs: str = ""
 
     # OpenTelemetry Distributed Tracing
     tracing_enabled: bool = False  # Master switch — zero overhead when disabled

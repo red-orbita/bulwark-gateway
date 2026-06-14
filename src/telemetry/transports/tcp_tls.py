@@ -43,6 +43,14 @@ class TcpTlsTransport:
         if self._writer is not None and not self._writer.is_closing():
             return
 
+        # SECURITY (H-06 fix): Validate destination against SSRF targets
+        from . import is_ssrf_target_host
+        if is_ssrf_target_host(self._config.host, self._config.port):
+            raise ConnectionError(
+                f"TCP transport blocked: {self._config.host}:{self._config.port} "
+                f"resolves to a restricted network (SSRF protection)"
+            )
+
         ssl_context = None
         if self._config.use_tls:
             ssl_context = ssl.create_default_context(cafile=self._config.tls_ca)

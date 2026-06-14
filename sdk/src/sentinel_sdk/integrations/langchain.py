@@ -220,9 +220,14 @@ class SentinelCallbackHandler:
         except SecurityError:
             raise
         except Exception as e:
-            logger.debug(
-                "sentinel_langchain_scan_error",
+            # SECURITY (H-17 fix): Non-SecurityError exceptions in scan path
+            # are treated as fail-closed. If we can't verify content is safe,
+            # we must not silently allow it through.
+            logger.warning(
+                "sentinel_langchain_scan_error: fail-closed",
                 extra={"error": str(e)[:200], "direction": direction},
             )
-            return None
+            raise SecurityError(
+                f"Scan failed (fail-closed): {e}",
+            ) from e
         return None

@@ -34,6 +34,8 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from src.config import settings
+
 logger = logging.getLogger(__name__)
 
 # Internal service URL pattern for dedicated tenant proxies
@@ -158,7 +160,30 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         try:
             raw = r.get("sentinel:dedicated_tenants")
             if raw:
-                tenants = json.loads(raw)
+                # SECURITY (H-03 fix): Verify HMAC before trusting Redis value.
+                # Prevents routing manipulation by attackers with Redis write access.
+                import hmac as _hmac
+                import hashlib as _hashlib
+                data = json.loads(raw)
+                if isinstance(data, dict) and "tenants" in data and "hmac" in data:
+                    # Signed format: {"tenants": [...], "hmac": "<hex>"}
+                    payload = json.dumps(data["tenants"], sort_keys=True).encode()
+                    secret = settings.jwt_secret.encode()  # Reuse JWT secret for HMAC
+                    expected = _hmac.new(secret, payload, _hashlib.sha256).hexdigest()
+                    if not _hmac.compare_digest(expected, data["hmac"]):
+                        logger.warning("dedicated_tenants_hmac_mismatch",
+                                      extra={"note": "Redis value tampered or unsigned"})
+                        return  # Reject tampered value
+                    tenants = data["tenants"]
+                elif isinstance(data, list):
+                    # Legacy unsigned format — log warning but still accept
+                    # (backward compatibility during migration)
+                    logger.warning("dedicated_tenants_unsigned",
+                                  extra={"note": "Migrate to signed format: {tenants: [...], hmac: ...}"})
+                    tenants = data
+                else:
+                    return
+
                 if isinstance(tenants, list):
                     self._dedicated_tenants = {
                         t.strip()
@@ -186,7 +211,19 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
 
         Service naming convention: proxy-<tenant-name>
         Full DNS: proxy-<tenant>.<namespace>.svc.cluster.local:8080
+
+        SECURITY (H-02 fix): Validate tenant_id against strict DNS label pattern.
+        Rejects dots, slashes, colons, and other URL metacharacters that could
+        be used for DNS injection or URL manipulation.
         """
+        import re
+        # RFC 1123 DNS label: lowercase alphanumeric + hyphens, max 63 chars
+        if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', tenant_id):
+            raise ValueError(
+                f"Invalid tenant_id for routing: '{tenant_id}' — "
+                f"must be a valid DNS label (lowercase alphanumeric + hyphens)"
+            )
+
         base = _SERVICE_PATTERN.format(
             tenant=tenant_id, namespace=self._namespace
         )
@@ -222,6 +259,14 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
             if k.lower() not in hop_by_hop
         }
         headers["X-Forwarded-By"] = "sentinel-shared-pool"
+        # SECURITY (M-16 fix): Sign the header so receiving pod can validate authenticity
+        import hmac as _hmac_fwd
+        import hashlib as _hashlib_fwd
+        headers["X-Forwarded-Sig"] = _hmac_fwd.new(
+            settings.jwt_secret.encode(),
+            b"sentinel-shared-pool",
+            _hashlib_fwd.sha256,
+        ).hexdigest()[:16]
         headers["X-Forwarded-For"] = request.client.host if request.client else "unknown"
 
         # Read request body
@@ -333,9 +378,26 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         if request.url.path in public_paths:
             return await call_next(request)
 
-        # Prevent routing loops — if already forwarded, process locally
-        if request.headers.get("X-Forwarded-By") == "sentinel-shared-pool":
-            return await call_next(request)
+        # SECURITY (M-16 fix): Prevent routing loop detection bypass.
+        # X-Forwarded-By is only valid from internal sentinel pods.
+        # Validate using a shared HMAC signature to prevent spoofing.
+        forwarded_by = request.headers.get("X-Forwarded-By")
+        forwarded_sig = request.headers.get("X-Forwarded-Sig")
+        if forwarded_by == "sentinel-shared-pool":
+            import hmac as _hmac
+            import hashlib as _hashlib
+            expected_sig = _hmac.new(
+                settings.jwt_secret.encode(),
+                b"sentinel-shared-pool",
+                _hashlib.sha256,
+            ).hexdigest()[:16]
+            if forwarded_sig and _hmac.compare_digest(forwarded_sig, expected_sig):
+                return await call_next(request)
+            # Unsigned/forged header — ignore and continue routing
+            logger.warning(
+                "spoofed_x_forwarded_by_detected",
+                extra={"client": request.client.host if request.client else "unknown"},
+            )
 
         # Sync from Redis (non-blocking, periodic)
         self._maybe_sync_from_redis()

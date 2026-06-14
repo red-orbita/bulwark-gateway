@@ -65,8 +65,9 @@ def _is_token_revoked(jti: str) -> bool:
         return True
 
 # Paths that don't require auth (H-13: removed /health/stats, /health/telemetry)
-# /internal/* paths are cluster-internal only (NetworkPolicy enforced)
-PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json", "/internal/scanners/status"}
+# SECURITY (L-06 fix): Removed /internal/scanners/status — it exposes scanner
+# configuration and enabled patterns which is sensitive info disclosure.
+PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json"}
 
 # Pre-compute valid API key hashes at startup (constant-time comparison)
 _API_KEY_HASHES: Set[str] = set()
@@ -197,7 +198,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     tenant_id = payload.get("tenant_id", tenant_id)
                     agent_id = payload.get("agent_id", agent_id)
                 except JWTError:
-                    # Not a valid JWT — validate as API key
+                    # SECURITY (L-01 fix): JWT decode failed. Do NOT fall through
+                    # to API key check — this creates a timing oracle that reveals
+                    # whether a string is a malformed JWT vs an invalid API key.
+                    # If it looks like a JWT (has 2 dots), reject immediately.
+                    if token.count(".") == 2:
+                        return JSONResponse(
+                            status_code=401,
+                            content={"error": "Invalid token or API key"},
+                        )
+                    # Otherwise, try as API key
                     if not self._validate_api_key(token):
                         return JSONResponse(
                             status_code=401,

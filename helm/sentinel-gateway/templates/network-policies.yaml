@@ -172,6 +172,16 @@ spec:
         - port: {{ .Values.externalRedis.port | default 6379 }}
           protocol: TCP
     {{- end }}
+    # PostgreSQL (when using database backend)
+    {{- if eq .Values.admin.database.type "postgresql" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - port: {{ .Values.admin.database.postgresql.port | default 5432 }}
+          protocol: TCP
+    {{- end }}
     # Wazuh API
     - to:
         - podSelector:

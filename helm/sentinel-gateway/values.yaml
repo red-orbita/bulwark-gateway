@@ -190,7 +190,7 @@ admin:
       # -- Key within the existing secret
       existingSecretKey: "postgresql-password"
       # -- SSL mode: disable, require, verify-ca, verify-full
-      sslMode: "disable"
+      sslMode: "require"
       # -- Minimum pool connections
       poolMin: 2
       # -- Maximum pool connections
