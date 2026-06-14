@@ -23,7 +23,7 @@ resources:
 # Labels applied to all resources
 commonLabels:
   app.kubernetes.io/managed-by: kustomize
-  app.kubernetes.io/version: "0.4.7"
+  app.kubernetes.io/version: "0.2.0"
 
 # Images — pin to semver tags (NEVER use 'latest' in production)
 # For immutable deploys, use sha256 digests: newTag: sha256:abc123...

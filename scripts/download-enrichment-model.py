@@ -49,7 +49,7 @@ MODEL_FILES = [
 def download_file(url: str, dest: Path, expected_size: int | None = None) -> bool:
     """Download a file with progress indication."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "sentinel-gateway/0.4.3"})
+        req = urllib.request.Request(url, headers={"User-Agent": "sentinel-gateway/0.2.0"})
         with urllib.request.urlopen(req, timeout=120) as resp:
             dest.parent.mkdir(parents=True, exist_ok=True)
             total = int(resp.headers.get("Content-Length", 0))
@@ -81,7 +81,7 @@ def get_model_files(model_name: str) -> list[dict]:
     """Get list of files in the model repository from HuggingFace API."""
     url = f"{HF_API}/sentence-transformers/{model_name}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "sentinel-gateway/0.4.3"})
+        req = urllib.request.Request(url, headers={"User-Agent": "sentinel-gateway/0.2.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
             return data.get("siblings", [])
@@ -178,7 +178,7 @@ def main():
     marker = model_dir / ".sentinel-download-complete"
     marker.write_text(json.dumps({
         "model": MODEL_NAME,
-        "version": "0.4.3",
+        "version": "0.2.0",
         "files": success_count,
     }))
 

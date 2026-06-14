@@ -1,7 +1,7 @@
 openapi: "3.1.0"
 info:
   title: Sentinel Gateway API
-  version: "0.4.3"
+  version: "0.2.0"
   description: |
     Security guardrail proxy for AI agents. Sits between users/applications and LLM
     backends, enforcing security policies on every request in real-time.
