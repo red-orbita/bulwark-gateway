@@ -202,8 +202,8 @@ async def lifespan(app: FastAPI):
                         config = _json.loads(raw)
                         pipeline.apply_ml_config(config)
                         last_version = int(ver)
-            except Exception:
-                pass
+            except Exception as exc:
+                await logger.awarning("ml_config_sync_failed", error=str(exc))
 
     app.state._ml_sync_task = asyncio.create_task(_ml_config_sync_loop())
 

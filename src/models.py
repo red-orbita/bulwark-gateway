@@ -4,7 +4,16 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+# === Strict Base Model ===
+
+
+class StrictModel(BaseModel):
+    """Base model with strict validation: rejects unknown fields."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # === Security Verdicts ===
@@ -41,65 +50,65 @@ class ThreatCategory(str, Enum):
     MEMORY_MANIPULATION = "memory_manipulation"  # RAG/vector store poisoning
 
 
-class SecurityEvent(BaseModel):
+class SecurityEvent(StrictModel):
     """Structured security event for logging/SIEM."""
 
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    tenant_id: str
-    agent_id: str
+    tenant_id: str = Field(..., max_length=128)
+    agent_id: str = Field(..., max_length=128)
     verdict: Verdict
     category: ThreatCategory
-    description: str
-    source: str  # which guardrail triggered
-    severity: str = "medium"  # low, medium, high, critical
-    request_id: str | None = None
-    tool_name: str | None = None
-    matched_pattern: str | None = None
+    description: str = Field(..., max_length=2048)
+    source: str = Field(..., max_length=256)  # which guardrail triggered
+    severity: str = Field(default="medium", max_length=16)  # low, medium, high, critical
+    request_id: str | None = Field(default=None, max_length=128)
+    tool_name: str | None = Field(default=None, max_length=256)
+    matched_pattern: str | None = Field(default=None, max_length=1024)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # === Tool Call Models ===
 
 
-class ToolCall(BaseModel):
+class ToolCall(StrictModel):
     """Represents a single tool call from the agent."""
 
-    id: str | None = None
-    name: str
+    id: str | None = Field(default=None, max_length=256)
+    name: str = Field(..., max_length=256)
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
-class ToolCallResult(BaseModel):
+class ToolCallResult(StrictModel):
     """Result of a tool call execution."""
 
-    tool_call_id: str | None = None
-    content: str
+    tool_call_id: str | None = Field(default=None, max_length=256)
+    content: str = Field(..., max_length=1_048_576)  # 1MB max
     is_error: bool = False
 
 
 # === Proxy Request/Response ===
 
 
-class Message(BaseModel):
-    role: str
-    content: str | None = None
+class Message(StrictModel):
+    role: str = Field(..., max_length=32)
+    content: str | None = Field(default=None, max_length=2_097_152)  # 2MB max
     tool_calls: list[dict[str, Any]] | None = None
-    tool_call_id: str | None = None
+    tool_call_id: str | None = Field(default=None, max_length=256)
 
 
-class ChatRequest(BaseModel):
+class ChatRequest(StrictModel):
     """OpenAI-compatible chat completion request."""
 
-    model: str
-    messages: list[Message]
+    model: str = Field(..., max_length=256)
+    messages: list[Message] = Field(..., max_length=1024)  # max 1024 messages
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict | None = None
-    temperature: float | None = None
-    max_tokens: int | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
     stream: bool = False
 
 
-class GuardrailResult(BaseModel):
+class GuardrailResult(StrictModel):
     """Result of a guardrail check."""
 
     verdict: Verdict
