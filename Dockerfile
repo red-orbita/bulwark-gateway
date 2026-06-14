@@ -20,8 +20,10 @@ RUN if [ "$INSTALL_ML" = "true" ]; then \
     fi
 RUN if [ "$INSTALL_EMBEDDINGS" = "true" ] || [ "$INSTALL_ML" = "true" ]; then \
       pip install --no-cache-dir --prefix=/install \
-        --extra-index-url https://download.pytorch.org/whl/cpu \
-        "torch>=2.2" "sentence-transformers>=2.6" || \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch>=2.2" && \
+      pip install --no-cache-dir --prefix=/install \
+        "sentence-transformers>=2.6" || \
       echo "WARNING: torch/sentence-transformers install failed (non-fatal)"; \
     fi
 
@@ -30,7 +32,7 @@ FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e
 
 LABEL org.opencontainers.image.title="sentinel-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"
-LABEL org.opencontainers.image.version="0.4.7"
+LABEL org.opencontainers.image.version="0.2.0"
 
 # Security: non-root user
 RUN groupadd -r sentinel && useradd -r -g sentinel -s /bin/false sentinel

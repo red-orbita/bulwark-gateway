@@ -480,13 +480,11 @@ async def chat_completions(request: Request):
     if resp.status_code != 200:
         _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
         _record_tenant_usage(tenant_id, "allow")
-        try:
-            error_body = resp.json()
-        except Exception:
-            # M-05 fix: Truncate backend error body to 200 chars (was 500)
-            # to prevent internal info leakage via backend error messages
-            error_body = {"error": resp.text[:200]}
-        return JSONResponse(status_code=resp.status_code, content=error_body)
+        # FASE 5.1: Never forward raw backend error content to client
+        return JSONResponse(
+            status_code=resp.status_code,
+            content={"error": "Backend returned error", "status": resp.status_code},
+        )
 
     try:
         response_data = resp.json()
