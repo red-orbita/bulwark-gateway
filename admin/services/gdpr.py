@@ -872,13 +872,283 @@ class GDPRService:
         return erased
 
 
+# ─── PostgreSQL Backend (CRIT-A fix) ──────────────────────────────────────────
+
+
+class PostgreSQLGDPRService(GDPRService):
+    """PostgreSQL-backed GDPR service for multi-replica HA deployments.
+
+    CRIT-A fix: The base GDPRService uses raw sqlite3 connections which break
+    in HA/PostgreSQL mode (audit._conn is None). This subclass uses the shared
+    DatabaseEngine abstraction (same pattern as PostgreSQLUserStore and
+    PostgreSQLAuditLogger).
+
+    Overrides all methods that access:
+      1. self._requests_conn (sqlite3 for gdpr_requests table)
+      2. audit._conn (sqlite3 for audit_log queries)
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._requests_conn = None  # Not used — kept for interface compat
+        self._db = None
+        # Ensure directories exist (still needed for salt files + archives)
+        GDPR_SALT_DIR.mkdir(parents=True, exist_ok=True)
+        GDPR_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _get_db(self):
+        if self._db is None:
+            from .database import get_database
+            self._db = get_database()
+        return self._db
+
+    async def initialize(self) -> None:
+        """Initialize GDPR requests table in PostgreSQL."""
+        db = self._get_db()
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS gdpr_requests (
+                id TEXT PRIMARY KEY,
+                request_type TEXT NOT NULL,
+                subject_id TEXT,
+                requested_by TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                records_affected INTEGER DEFAULT 0,
+                details TEXT
+            )
+        """)
+        # Indexes (PostgreSQL CREATE INDEX IF NOT EXISTS)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gdpr_subject ON gdpr_requests(subject_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gdpr_type ON gdpr_requests(request_type)"
+        )
+
+    async def _count_subject_records(self, subject_id: str) -> int:
+        """Count audit records that reference the subject (PostgreSQL)."""
+        db = self._get_db()
+        try:
+            escaped_subject = subject_id.replace("%", r"\%").replace("_", r"\_")
+            row = await db.fetch_one(
+                """SELECT COUNT(*) as cnt FROM audit_log
+                   WHERE actor = ? OR ip_address = ?
+                   OR details LIKE ? ESCAPE '\\' OR resource_id LIKE ? ESCAPE '\\'""",
+                (subject_id, subject_id, f"%{escaped_subject}%", f"%{escaped_subject}%")
+            )
+            return row["cnt"] if row else 0
+        except Exception as e:
+            logger.error("PostgreSQL GDPR count failed: %s", e)
+            return 0
+
+    async def _apply_pseudonymization(self, subject_id: str, salt: bytes) -> int:
+        """Replace PII fields with HMAC-SHA256 hashes in audit records (PostgreSQL)."""
+        db = self._get_db()
+        pseudonym = self._hash_value(subject_id, salt)
+        count = 0
+
+        try:
+            escaped_subject = subject_id.replace("%", r"\%").replace("_", r"\_")
+            rows = await db.fetch_all(
+                """SELECT id, actor, ip_address, details, resource_id FROM audit_log
+                   WHERE actor = ? OR ip_address = ?
+                   OR details LIKE ? ESCAPE '\\' OR resource_id LIKE ? ESCAPE '\\'""",
+                (subject_id, subject_id, f"%{escaped_subject}%", f"%{escaped_subject}%")
+            )
+
+            for row in rows:
+                row_dict = row.to_dict() if hasattr(row, 'to_dict') else dict(row)
+                row_id = row_dict["id"]
+                actor = row_dict.get("actor", "")
+                ip_addr = row_dict.get("ip_address", "")
+                details = row_dict.get("details", "")
+                resource_id = row_dict.get("resource_id", "")
+
+                new_actor = pseudonym if actor == subject_id else actor
+                new_ip = self._hash_value(ip_addr, salt) if ip_addr == subject_id else ip_addr
+                new_details = details.replace(subject_id, pseudonym) if details and subject_id in details else details
+                new_resource_id = pseudonym if resource_id == subject_id else resource_id
+
+                await db.execute(
+                    """UPDATE audit_log
+                       SET actor = ?, ip_address = ?, details = ?, resource_id = ?
+                       WHERE id = ?""",
+                    (new_actor, new_ip, new_details, new_resource_id, row_id)
+                )
+                count += 1
+        except Exception as e:
+            logger.error("PostgreSQL GDPR pseudonymization failed: %s", e)
+
+        return count
+
+    async def _find_audit_entries(self, subject_id: str) -> list[dict]:
+        """Find all audit entries related to a subject (PostgreSQL)."""
+        db = self._get_db()
+        try:
+            escaped_subject = subject_id.replace("%", r"\%").replace("_", r"\_")
+            rows = await db.fetch_all(
+                """SELECT id, timestamp, actor, action, resource_type, resource_id,
+                          result, ip_address, details
+                   FROM audit_log
+                   WHERE actor = ? OR ip_address = ?
+                   OR details LIKE ? ESCAPE '\\' OR resource_id LIKE ? ESCAPE '\\'
+                   ORDER BY timestamp DESC""",
+                (subject_id, subject_id, f"%{escaped_subject}%", f"%{escaped_subject}%")
+            )
+            return [
+                {
+                    "id": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("id"),
+                    "timestamp": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("timestamp"),
+                    "actor": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("actor"),
+                    "action": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("action"),
+                    "resource_type": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("resource_type"),
+                    "resource_id": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("resource_id"),
+                    "result": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("result"),
+                    "ip_address": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("ip_address"),
+                    "details": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("details"),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error("PostgreSQL GDPR find entries failed: %s", e)
+            return []
+
+    async def _find_entries_before(self, cutoff: datetime) -> list[dict]:
+        """Find audit entries older than cutoff date (PostgreSQL)."""
+        db = self._get_db()
+        try:
+            rows = await db.fetch_all(
+                "SELECT * FROM audit_log WHERE timestamp < ? ORDER BY timestamp",
+                (cutoff.isoformat(),)
+            )
+            return [
+                {
+                    "id": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("id"),
+                    "timestamp": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("timestamp"),
+                    "actor": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("actor"),
+                    "action": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("action"),
+                    "resource_type": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("resource_type"),
+                    "resource_id": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("resource_id"),
+                    "payload_hash": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("payload_hash"),
+                    "result": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("result"),
+                    "details": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("details"),
+                    "ip_address": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("ip_address"),
+                    "rollback_ref": (r.to_dict() if hasattr(r, 'to_dict') else dict(r)).get("rollback_ref"),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error("PostgreSQL GDPR find entries before failed: %s", e)
+            return []
+
+    async def _delete_entries_before(self, cutoff: datetime) -> int:
+        """Delete audit entries older than cutoff (after archival) (PostgreSQL)."""
+        db = self._get_db()
+        try:
+            # PostgreSQL doesn't return rowcount from execute in our abstraction,
+            # so count first then delete
+            count_row = await db.fetch_one(
+                "SELECT COUNT(*) as cnt FROM audit_log WHERE timestamp < ?",
+                (cutoff.isoformat(),)
+            )
+            count = count_row["cnt"] if count_row else 0
+            if count > 0:
+                await db.execute(
+                    "DELETE FROM audit_log WHERE timestamp < ?",
+                    (cutoff.isoformat(),)
+                )
+            return count
+        except Exception as e:
+            logger.error("PostgreSQL GDPR delete entries failed: %s", e)
+            return 0
+
+    async def _record_request(
+        self, request_id: str, request_type: str, subject_id: Optional[str],
+        requested_by: str, status: str, records_affected: int, details: Optional[str] = None
+    ) -> None:
+        """Record a GDPR request in PostgreSQL.
+
+        SECURITY (H-08 fix): subject_id is pseudonymized before storage.
+        """
+        db = self._get_db()
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Pseudonymize subject_id before storing
+        pseudo_subject = None
+        if subject_id:
+            salt = hashlib.sha256(b"gdpr-request-log-salt").digest()
+            pseudo_subject = hmac.new(
+                salt, subject_id.encode(), hashlib.sha256
+            ).hexdigest()[:32]
+
+        try:
+            await db.execute(
+                "INSERT INTO gdpr_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (request_id, request_type, pseudo_subject, requested_by,
+                 now, status, records_affected, details)
+            )
+        except Exception as e:
+            logger.error("PostgreSQL GDPR record request failed: %s", e)
+
+    async def get_requests(
+        self, limit: int = 50, offset: int = 0, request_type: Optional[str] = None
+    ) -> list[GDPRRequestRecord]:
+        """Get GDPR request history (PostgreSQL)."""
+        db = self._get_db()
+        conditions = []
+        params: list = []
+        if request_type:
+            conditions.append("request_type = ?")
+            params.append(request_type)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        try:
+            rows = await db.fetch_all(sql, tuple(params))
+            records = []
+            for row in rows:
+                d = row.to_dict() if hasattr(row, 'to_dict') else dict(row)
+                records.append(GDPRRequestRecord(
+                    id=d.get("id", ""),
+                    request_type=d.get("request_type", ""),
+                    subject_id=d.get("subject_id"),
+                    requested_by=d.get("requested_by", ""),
+                    requested_at=d.get("requested_at", ""),
+                    status=d.get("status", "pending"),
+                    records_affected=d.get("records_affected", 0) or 0,
+                    details=d.get("details"),
+                ))
+            return records
+        except Exception as e:
+            logger.error("PostgreSQL GDPR get requests failed: %s", e)
+            return []
+
+    async def close(self) -> None:
+        """No-op — database pool is managed by the shared DatabaseEngine."""
+        pass
+
+
 # ─── Singleton ────────────────────────────────────────────────────────────────
 
 _service: Optional[GDPRService] = None
+_service_lock = threading.Lock()
 
 
 def get_gdpr_service() -> GDPRService:
+    """Get or create the singleton GDPR service instance.
+
+    CRIT-A fix: Selects PostgreSQL backend when SENTINEL_ADMIN_DB_URL starts
+    with 'postgresql'. Otherwise uses legacy SQLite (backward compatible).
+    """
     global _service
     if _service is None:
-        _service = GDPRService()
+        with _service_lock:
+            if _service is None:
+                from .database import ADMIN_DB_URL
+                if ADMIN_DB_URL.startswith("postgresql") or ADMIN_DB_URL.startswith("postgres://"):
+                    _service = PostgreSQLGDPRService()
+                else:
+                    _service = GDPRService()
     return _service

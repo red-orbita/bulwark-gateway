@@ -98,8 +98,15 @@ spec:
         - port: {{ .Values.externalRedis.port | default 6379 }}
           protocol: TCP
     {{- end }}
-    # DNS
-    - to: []
+    # DNS — H-06 fix: restrict to kube-dns in kube-system namespace only
+    # (prevents DNS exfiltration via arbitrary resolvers)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP
@@ -190,8 +197,14 @@ spec:
       ports:
         - port: 55000
           protocol: TCP
-    # DNS
-    - to: []
+    # DNS — H-06 fix: restrict to kube-dns in kube-system namespace only
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP

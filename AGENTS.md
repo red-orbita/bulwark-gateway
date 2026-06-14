@@ -1076,6 +1076,7 @@ Full troubleshooting: `docs/TROUBLESHOOTING.md`
 
 | Need | Read |
 |------|------|
+| **Secure coding rules** | **`.opencode/SECURE-CODING-STANDARDS.md`** (MANDATORY before writing ANY code) |
 | System design | `docs/ARCHITECTURE.md` |
 | Deploy to K8s | `docs/DEPLOYMENT.md` |
 | Configure Redis | `docs/DEPLOYMENT.md` → Redis Configuration |
