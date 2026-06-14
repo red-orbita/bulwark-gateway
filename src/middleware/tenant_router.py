@@ -176,11 +176,12 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
                         return  # Reject tampered value
                     tenants = data["tenants"]
                 elif isinstance(data, list):
-                    # Legacy unsigned format — log warning but still accept
-                    # (backward compatibility during migration)
-                    logger.warning("dedicated_tenants_unsigned",
-                                  extra={"note": "Migrate to signed format: {tenants: [...], hmac: ...}"})
-                    tenants = data
+                    # M-02 fix: Reject legacy unsigned format — HMAC signing is now required.
+                    # Unsigned data could be injected by an attacker with Redis write access.
+                    logger.error("dedicated_tenants_unsigned_rejected",
+                                  extra={"note": "Legacy unsigned format rejected. "
+                                         "Use signed format: {tenants: [...], hmac: ...}"})
+                    return  # Reject unsigned data
                 else:
                     return
 

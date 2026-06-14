@@ -1,8 +1,9 @@
 # ============================================================
 # Sentinel Gateway — Proxy (Security Hot Path)
 # Multi-stage build for minimal attack surface
+# H-08 fix: Pin base image to SHA256 digest (prevents supply chain poisoning)
 # ============================================================
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS builder
 
 WORKDIR /build
 
@@ -25,7 +26,7 @@ RUN if [ "$INSTALL_EMBEDDINGS" = "true" ] || [ "$INSTALL_ML" = "true" ]; then \
     fi
 
 # ============================================================
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS runtime
 
 LABEL org.opencontainers.image.title="sentinel-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"

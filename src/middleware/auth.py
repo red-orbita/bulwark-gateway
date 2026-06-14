@@ -35,15 +35,35 @@ _SAFE_ID = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 _revocation_redis = None
 _revocation_redis_init = False
 
+# H-05 fix: Local revocation cache with short TTL to survive Redis outages.
+# On Redis failure, previously-validated tokens get a 30s grace period to
+# prevent full DoS on Redis outage while still maintaining security.
+from cachetools import TTLCache
+_revocation_cache: TTLCache = TTLCache(maxsize=4096, ttl=30.0)  # token_jti -> is_revoked
+_REVOCATION_CACHE_MISS = object()  # sentinel for cache miss
+
 
 def _is_token_revoked(jti: str) -> bool:
     """Check if a JWT ID is in the revocation set (Redis).
 
-    Fail-CLOSED: returns True (revoked/blocked) if Redis is unavailable,
-    rejecting the request. This prevents use of revoked tokens during
-    Redis outages. Short-lived tokens (1h) limit the impact window.
+    H-05 fix: Uses a local cache with 30s TTL to mitigate Redis DoS.
+    - On Redis success: cache the result (True/False) for 30s
+    - On Redis failure: return cached value if available (stale grace period)
+    - If no cached value AND Redis unavailable: fail-closed (reject)
+
+    This prevents Redis being a single point of failure for availability
+    while maintaining security guarantees:
+    - Revoked tokens are blocked within 30s of revocation
+    - New/unknown tokens are rejected if Redis is unavailable (fail-closed)
+    - Known-good tokens get a 30s grace period during Redis outages
     """
     global _revocation_redis, _revocation_redis_init
+
+    # Check local cache first
+    cached = _revocation_cache.get(jti, _REVOCATION_CACHE_MISS)
+    if cached is not _REVOCATION_CACHE_MISS:
+        return cached
+
     if not _revocation_redis_init:
         _revocation_redis_init = True
         try:
@@ -59,9 +79,13 @@ def _is_token_revoked(jti: str) -> bool:
         # Fail-closed: cannot verify revocation → reject token (C-04)
         return True
     try:
-        return _revocation_redis.sismember("sentinel:revoked_tokens", jti)
+        is_revoked = _revocation_redis.sismember("sentinel:revoked_tokens", jti)
+        # Cache the result (both positive and negative)
+        _revocation_cache[jti] = is_revoked
+        return is_revoked
     except Exception:
-        # Fail-closed on Redis error (C-04)
+        # H-05: On Redis error, fail-closed for unknown tokens
+        # (no cached value = never validated before = reject)
         return True
 
 # Paths that don't require auth (H-13: removed /health/stats, /health/telemetry)

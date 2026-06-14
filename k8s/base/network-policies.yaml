@@ -80,14 +80,16 @@ spec:
       ports:
         - port: 443
           protocol: TCP
-    # Allow egress to configured backend service (port 8000, internal only)
+    # Allow egress to configured backend service (port 8000/11434, internal only)
+    # H-07 fix: Restrict to labeled backend pods instead of all pods in namespace
     - to:
-        - podSelector: {}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ollama
       ports:
         - port: 8000
           protocol: TCP
         - port: 11434
-          protocol: TCP
           protocol: TCP
 ---
 # NetworkPolicy: Admin — ingress from Ingress controller ONLY (H-01), egress to Redis + Wazuh
