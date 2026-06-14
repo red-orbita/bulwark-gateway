@@ -366,11 +366,230 @@ class AuditLogger:
                 self._conn = None
 
 
+# ─── PostgreSQL Backend (M-11) ────────────────────────────────────────────────
+
+
+class PostgreSQLAuditLogger(AuditLogger):
+    """PostgreSQL-backed audit logger for multi-replica HA deployments.
+
+    Delegates to the shared DatabaseEngine. Chain state is persisted in Redis
+    and synced across replicas. Each replica maintains a local cache of
+    sequence_id/chain_head and refreshes from Redis on startup.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sequence_id: int = 0
+        self._chain_head: str = GENESIS_HASH
+        self._conn = None  # Not used — kept for interface compat
+        self._path = None
+        self._db = None
+
+    def _get_db(self):
+        if self._db is None:
+            from .database import get_database
+            self._db = get_database()
+        return self._db
+
+    async def initialize(self) -> None:
+        """Restore chain state from Redis or PostgreSQL."""
+        # Try Redis first
+        restored = self._restore_from_redis()
+        if restored:
+            return
+
+        # Fallback: query PostgreSQL for last entry
+        try:
+            db = self._get_db()
+            row = await db.fetch_one(
+                "SELECT sequence_id, entry_hash FROM audit_log "
+                "WHERE sequence_id IS NOT NULL AND entry_hash IS NOT NULL "
+                "ORDER BY sequence_id DESC LIMIT 1"
+            )
+            if row:
+                self._sequence_id = row["sequence_id"] or 0
+                self._chain_head = row["entry_hash"] or GENESIS_HASH
+                logger.info(
+                    "Restored chain state from PostgreSQL: seq=%d",
+                    self._sequence_id,
+                )
+            else:
+                self._sequence_id = 0
+                self._chain_head = GENESIS_HASH
+        except Exception as e:
+            logger.warning("PostgreSQL audit chain restore failed: %s", e)
+            self._sequence_id = 0
+            self._chain_head = GENESIS_HASH
+
+    async def log(
+        self,
+        actor: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        payload: Optional[str] = None,
+        result: str = "success",
+        details: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        rollback_ref: Optional[str] = None,
+    ) -> AuditEntry:
+        """Record an audit entry with hash-chain in PostgreSQL."""
+        now = datetime.now(timezone.utc)
+        payload_hash = hashlib.sha256((payload or "").encode()).hexdigest()[:16]
+
+        with self._lock:
+            self._sequence_id += 1
+            seq_id = self._sequence_id
+            previous_hash = self._chain_head
+
+            resource = f"{resource_type}:{resource_id}"
+            entry_hash = compute_entry_hash(
+                sequence_id=seq_id,
+                timestamp=now.isoformat(),
+                event_type=resource_type,
+                actor=actor,
+                action=action,
+                resource=resource,
+                details=details or "",
+                previous_hash=previous_hash,
+            )
+            self._chain_head = entry_hash
+
+        entry = AuditEntry(
+            id=str(uuid4()),
+            timestamp=now,
+            actor=actor,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            payload_hash=payload_hash,
+            result=result,
+            details=details,
+            ip_address=ip_address,
+            rollback_ref=rollback_ref,
+            sequence_id=seq_id,
+            previous_hash=previous_hash,
+            entry_hash=entry_hash,
+        )
+
+        # Write to PostgreSQL
+        try:
+            db = self._get_db()
+            await db.execute(
+                "INSERT INTO audit_log (id, timestamp, actor, action, resource_type, resource_id, "
+                "payload_hash, result, details, ip_address, rollback_ref, sequence_id, previous_hash, entry_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.id, entry.timestamp.isoformat(), entry.actor,
+                    entry.action, entry.resource_type, entry.resource_id,
+                    entry.payload_hash, entry.result, entry.details,
+                    entry.ip_address, entry.rollback_ref,
+                    entry.sequence_id, entry.previous_hash, entry.entry_hash,
+                ),
+            )
+        except Exception as e:
+            logger.error("Failed to write audit entry to PostgreSQL: %s", e)
+
+        # Persist chain head to Redis
+        self._persist_chain_head(seq_id, entry_hash)
+        return entry
+
+    async def get_entry_by_sequence(self, seq: int) -> Optional[AuditEntry]:
+        try:
+            db = self._get_db()
+            row = await db.fetch_one(
+                "SELECT * FROM audit_log WHERE sequence_id = ?", (seq,)
+            )
+            if not row:
+                return None
+            return self._dict_to_entry(dict(row))
+        except Exception:
+            return None
+
+    async def get_entries_range(self, start_seq: int, end_seq: int) -> list[AuditEntry]:
+        try:
+            db = self._get_db()
+            rows = await db.fetch_all(
+                "SELECT * FROM audit_log WHERE sequence_id >= ? AND sequence_id <= ? ORDER BY sequence_id ASC",
+                (start_seq, end_seq),
+            )
+            return [self._dict_to_entry(dict(r)) for r in rows]
+        except Exception:
+            return []
+
+    async def query(self, q: AuditQuery) -> list[AuditEntry]:
+        conditions = []
+        params: list = []
+        if q.actor:
+            conditions.append("actor = ?")
+            params.append(q.actor)
+        if q.action:
+            conditions.append("action = ?")
+            params.append(q.action)
+        if q.resource_type:
+            conditions.append("resource_type = ?")
+            params.append(q.resource_type)
+        if q.start_date:
+            conditions.append("timestamp >= ?")
+            params.append(q.start_date.isoformat())
+        if q.end_date:
+            conditions.append("timestamp <= ?")
+            params.append(q.end_date.isoformat())
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([q.limit, q.offset])
+
+        try:
+            db = self._get_db()
+            rows = await db.fetch_all(sql, params)
+            return [self._dict_to_entry(dict(r)) for r in rows]
+        except Exception:
+            return []
+
+    def _dict_to_entry(self, row: dict) -> AuditEntry:
+        """Convert a dict row to AuditEntry model."""
+        ts = row.get("timestamp")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts)
+        return AuditEntry(
+            id=row["id"],
+            timestamp=ts,
+            actor=row["actor"],
+            action=row["action"],
+            resource_type=row["resource_type"],
+            resource_id=row["resource_id"],
+            payload_hash=row.get("payload_hash", ""),
+            result=row.get("result", "unknown"),
+            details=row.get("details"),
+            ip_address=row.get("ip_address"),
+            rollback_ref=row.get("rollback_ref"),
+            sequence_id=row.get("sequence_id"),
+            previous_hash=row.get("previous_hash"),
+            entry_hash=row.get("entry_hash"),
+        )
+
+    async def close(self) -> None:
+        """No-op — connection pool managed by database.py."""
+        pass
+
+
+# ─── Singleton ────────────────────────────────────────────────────────────────
+
 _logger: Optional[AuditLogger] = None
 
 
 def get_audit_logger() -> AuditLogger:
+    """Get or create the singleton audit logger.
+
+    M-11: Uses PostgreSQL backend when SENTINEL_ADMIN_DB_URL starts with
+    'postgresql'. Otherwise uses legacy SQLite (backward compatible).
+    """
     global _logger
     if _logger is None:
-        _logger = AuditLogger()
+        from .database import ADMIN_DB_URL
+        if ADMIN_DB_URL.startswith("postgresql") or ADMIN_DB_URL.startswith("postgres://"):
+            _logger = PostgreSQLAuditLogger()
+        else:
+            _logger = AuditLogger()
     return _logger
