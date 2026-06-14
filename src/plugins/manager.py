@@ -32,7 +32,7 @@ from src.plugins.sandbox import (
     StaticAnalysisResult,
 )
 from src.plugins.spec import PluginSpec, PluginType, load_plugin_spec, validate_plugin_spec
-from src.scanners.protocol import InputScanner, OutputScanner, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, OutputScanner, ScannerInfo
 
 logger = logging.getLogger(__name__)
 
@@ -441,9 +441,9 @@ class PluginManager:
 
             if spec.type == PluginType.INPUT_SCANNER and isinstance(instance, InputScanner):
                 # Wrap the scanner in a sandboxed proxy
-                return SandboxedScanner(instance, sandbox, name)
+                return SandboxedScanner(instance, sandbox, name)  # type: ignore[return-value]
             elif spec.type == PluginType.OUTPUT_SCANNER and isinstance(instance, OutputScanner):
-                return SandboxedScanner(instance, sandbox, name)
+                return SandboxedScanner(instance, sandbox, name)  # type: ignore[return-value]
             else:
                 logger.error(
                     "plugin_type_mismatch",

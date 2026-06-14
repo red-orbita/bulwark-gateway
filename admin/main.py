@@ -15,22 +15,18 @@ Features:
 
 from __future__ import annotations
 
-import asyncio
 import os
-import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request, Response, Depends, HTTPException
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .models.auth import UserRole, TokenPayload
-from .services.auth_service import AuthService, get_current_user, require_role
-from .services.audit_logger import AuditLogger, get_audit_logger
-from .services.prometheus_client import PrometheusMetrics, get_metrics
+from .services.audit_logger import get_audit_logger
+from .services.prometheus_client import get_metrics
 
 # Routes
 from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
@@ -48,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     db_engine = await init_database()
     app.state.db = db_engine
 
-    metrics = get_metrics()
+    get_metrics()  # Initialize singleton
     audit_log = get_audit_logger()
     await audit_log.initialize()
     # Initialize user store (create tables + seed defaults)

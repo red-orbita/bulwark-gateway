@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import re
-import signal
 import threading
 import time
 from typing import Optional
@@ -63,7 +62,7 @@ class DynamicPatternRegistry:
     def __init__(self, redis_url: Optional[str] = None):
         self._redis: Optional[redis.Redis] = None
         self._disabled: set[str] = set()
-        self._custom: list[dict] = []
+        self._custom: list[str] = []
         self._compiled_custom: list[tuple[re.Pattern, dict]] = []
         self._last_fetch: float = 0.0
         self._cached_version: int = -1
@@ -109,20 +108,22 @@ class DynamicPatternRegistry:
 
         try:
             # Check version first (cheap)
-            version = self._redis.get(KEY_VERSION)
-            version = int(version) if version else 0
+            raw_version = self._redis.get(KEY_VERSION)
+            version = int(raw_version) if raw_version else 0
             if version == self._cached_version:
                 self._last_fetch = now
                 return
 
             # Version changed — refresh
-            self._disabled = self._redis.smembers(KEY_DISABLED) or set()
+            self._disabled = {s.decode() if isinstance(s, bytes) else s for s in (self._redis.smembers(KEY_DISABLED) or set())}
             raw_custom = self._redis.hgetall(KEY_CUSTOM) or {}
 
             custom_patterns = []
-            for pid, raw in raw_custom.items():
+            for pid_raw, raw in raw_custom.items():
                 try:
-                    data = json.loads(raw)
+                    pid = pid_raw.decode() if isinstance(pid_raw, bytes) else pid_raw
+                    raw_str = raw.decode() if isinstance(raw, bytes) else raw
+                    data = json.loads(raw_str)
                     compiled = _safe_compile(data["regex"])
                     custom_patterns.append((compiled, {
                         "id": pid,
@@ -135,7 +136,7 @@ class DynamicPatternRegistry:
                     continue
 
             self._compiled_custom = custom_patterns
-            self._custom = list(raw_custom.values())
+            self._custom = [v.decode() if isinstance(v, bytes) else v for v in raw_custom.values()]
             self._cached_version = version
             self._last_fetch = now
         except Exception:

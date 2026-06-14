@@ -112,7 +112,7 @@ class TopicScanner(InputScanner):
                 self._executor, self._classify_topics, content, denied_topics
             )
             if scores:
-                max_topic = max(scores, key=scores.get)
+                max_topic = max(scores, key=scores.get)  # type: ignore[arg-type]
                 max_score = scores[max_topic]
                 if max_score >= threshold:
                     return GuardrailResult(
@@ -142,7 +142,7 @@ class TopicScanner(InputScanner):
                 self._executor, self._classify_topics, content, allowed_topics
             )
             if scores:
-                max_topic = max(scores, key=scores.get)
+                max_topic = max(scores, key=scores.get)  # type: ignore[arg-type]
                 max_score = scores[max_topic]
                 if max_score < threshold:
                     return GuardrailResult(

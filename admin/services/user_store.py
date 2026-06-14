@@ -8,8 +8,6 @@ standard SQLite (for development).
 from __future__ import annotations
 
 import hashlib
-import os
-import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -533,7 +531,7 @@ class PostgreSQLUserStore(UserStore):
         # Seed defaults if needed (run in background)
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             loop.create_task(self._async_seed_defaults())
         except RuntimeError:
             # No running loop — we're in sync startup, skip seeding
@@ -563,7 +561,7 @@ class PostgreSQLUserStore(UserStore):
         """Get user by username (sync wrapper)."""
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             # We're in an async context — use thread for sync call
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -585,7 +583,7 @@ class PostgreSQLUserStore(UserStore):
         """Get user by ID (sync wrapper using asyncio)."""
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(lambda: asyncio.run(self._async_get_user_by_id(user_id))).result(timeout=5)
@@ -600,7 +598,7 @@ class PostgreSQLUserStore(UserStore):
     def list_users(self) -> list[dict]:
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(lambda: asyncio.run(self._async_list_users())).result(timeout=5)
@@ -631,7 +629,7 @@ class PostgreSQLUserStore(UserStore):
             )
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 pool.submit(lambda: asyncio.run(_create())).result(timeout=5)
@@ -654,7 +652,7 @@ class PostgreSQLUserStore(UserStore):
             await db.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 pool.submit(lambda: asyncio.run(_update())).result(timeout=5)
@@ -672,7 +670,7 @@ class PostgreSQLUserStore(UserStore):
             return result > 0 if isinstance(result, int) else True
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(lambda: asyncio.run(_delete())).result(timeout=5)
@@ -694,7 +692,7 @@ class PostgreSQLUserStore(UserStore):
             )
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 pool.submit(lambda: asyncio.run(_change())).result(timeout=5)
@@ -725,7 +723,7 @@ class PostgreSQLUserStore(UserStore):
             )
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 pool.submit(lambda: asyncio.run(_create())).result(timeout=5)
@@ -746,7 +744,7 @@ class PostgreSQLUserStore(UserStore):
             return row is not None
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(lambda: asyncio.run(_check())).result(timeout=5)
@@ -761,7 +759,7 @@ class PostgreSQLUserStore(UserStore):
             await db.execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 pool.submit(lambda: asyncio.run(_revoke())).result(timeout=5)
@@ -780,7 +778,7 @@ class PostgreSQLUserStore(UserStore):
             return result if isinstance(result, int) else 0
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(lambda: asyncio.run(_revoke_all())).result(timeout=5)
@@ -800,7 +798,7 @@ class PostgreSQLUserStore(UserStore):
             return [dict(r) for r in rows]
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(lambda: asyncio.run(_get())).result(timeout=5)
@@ -836,7 +834,7 @@ class PostgreSQLUserStore(UserStore):
             return True
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # Check if in async context
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(lambda: asyncio.run(_check())).result(timeout=5)

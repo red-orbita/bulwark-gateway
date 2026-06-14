@@ -410,7 +410,6 @@ class IOCStore:
 
     def create_feed(self, req: FeedCreate) -> FeedConfig:
         self._ensure_default_feeds()
-        import secrets as _secrets
         feed_id = req.name.lower().replace(" ", "_").replace("-", "_")[:32]
         # Ensure unique id
         base_id = feed_id

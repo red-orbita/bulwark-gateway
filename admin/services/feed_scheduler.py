@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 
 logger = logging.getLogger("sentinel.feed_scheduler")

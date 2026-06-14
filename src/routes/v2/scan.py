@@ -191,7 +191,6 @@ def _run_scan(
 
         # SECURITY (H-05 fix): Also run IOC check on input content
         try:
-            from fastapi import Request as _Req
             from src.main import app as _app
             ioc_mgr = getattr(_app.state, "ioc_manager", None)
             if ioc_mgr and input_result.verdict != Verdict.BLOCK:

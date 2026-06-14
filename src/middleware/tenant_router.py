@@ -22,7 +22,6 @@ Architecture:
                            └── tenant not in list → process locally
 """
 
-import asyncio
 import json
 import logging
 import os

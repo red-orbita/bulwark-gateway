@@ -39,7 +39,6 @@ class PrometheusMetrics:
         uptime = time.time() - self._start_time
         rps = self._requests_total / max(uptime, 1)
 
-        total_decisions = self._blocks_total + self._warns_total + self._allows_total
         bypass_rate = 0.0  # TODO: compute from red team results
         fp_rate = 0.0  # TODO: compute from QA results
 

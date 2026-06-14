@@ -19,7 +19,6 @@ All analysis is static (use_llm=False) — no LLM calls during scanning.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -1065,7 +1064,6 @@ class SkillScanner:
         if not instruction_text.strip() or not tools:
             return findings
 
-        instruction_lower = instruction_text.lower()
         tools_lower = {t.lower() for t in tools}
 
         # ── Data Flow Rule 1: Read capability + sensitive paths ──

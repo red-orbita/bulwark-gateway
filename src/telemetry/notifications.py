@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 
@@ -373,7 +373,6 @@ class NotificationEngine:
 
     async def _send_teams(self, channel: NotificationChannel, alert: AlertPayload):
         """Microsoft Teams Incoming Webhook with Adaptive Card."""
-        color = {"critical": "FF0000", "high": "FF8C00", "medium": "FFD700", "low": "4169E1"}.get(alert.severity, "808080")
         patterns = ", ".join(alert.matched_patterns[:3]) or "N/A"
 
         body = {

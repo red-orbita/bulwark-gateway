@@ -14,7 +14,6 @@ Genesis entry uses previous_hash = "sha256:" + "0"*64.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import sqlite3
 import threading

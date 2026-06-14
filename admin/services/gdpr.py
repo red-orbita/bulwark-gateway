@@ -17,10 +17,8 @@ import hmac
 import json
 import logging
 import os
-import shutil
 import sqlite3
 import threading
-import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -28,7 +26,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .audit_logger import get_audit_logger, AUDIT_DB_PATH
+from .audit_logger import get_audit_logger
 from .redis_sync import get_redis_client
 
 logger = logging.getLogger(__name__)

@@ -148,7 +148,7 @@ class IntentScanner(InputScanner):
             return GuardrailResult(verdict=Verdict.ALLOW)
 
         # Find the highest adversarial intent
-        max_intent = max(adversarial_scores, key=adversarial_scores.get)
+        max_intent = max(adversarial_scores, key=adversarial_scores.get)  # type: ignore[arg-type]
         max_score = adversarial_scores[max_intent]
 
         # Check 1: Single intent above block threshold

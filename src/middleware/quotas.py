@@ -14,7 +14,6 @@ Degrades gracefully: falls back to in-memory if Redis unavailable.
 
 import asyncio
 import json
-import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -398,7 +397,7 @@ class QuotaMiddleware(BaseHTTPMiddleware):
         # Note: For streaming responses, token tracking happens at stream end
         try:
             body_chunks = []
-            async for chunk in response.body_iterator:
+            async for chunk in response.body_iterator:  # type: ignore[attr-defined]
                 if isinstance(chunk, bytes):
                     body_chunks.append(chunk)
                 else:

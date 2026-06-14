@@ -155,8 +155,8 @@ async def lifespan(app: FastAPI):
         discovered = discover_all_scanners(settings.scanners_dir)
         for cls in discovered:
             try:
-                scanner = instantiate_scanner(cls)
-                pipeline.register(scanner)
+                plugin_scanner = instantiate_scanner(cls)
+                pipeline.register(plugin_scanner)  # type: ignore[arg-type]
             except Exception as e:
                 await logger.awarn("plugin_instantiation_failed", cls=cls.__name__, error=str(e))
 

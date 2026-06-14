@@ -21,15 +21,10 @@ from __future__ import annotations
 
 import ast
 import builtins
-import importlib
-import io
 import logging
-import os
 import signal
 import socket
-import sys
 import threading
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -407,7 +402,7 @@ class PluginASTAnalyzer(ast.NodeVisitor):
             current = node.func
             while isinstance(current, ast.Attribute):
                 parts.append(current.attr)
-                current = current.value
+                current = current.value  # type: ignore[assignment]
             if isinstance(current, ast.Name):
                 parts.append(current.id)
             return ".".join(reversed(parts))
@@ -639,11 +634,11 @@ class NetworkBlocker:
 
     def activate(self) -> None:
         """Block socket creation."""
-        socket.socket = self.blocked_socket  # type: ignore[assignment]
+        socket.socket = self.blocked_socket  # type: ignore[assignment,misc]
 
     def deactivate(self) -> None:
         """Restore original socket."""
-        socket.socket = self._original_socket
+        socket.socket = self._original_socket  # type: ignore[misc]
 
 
 # ==========================================================================

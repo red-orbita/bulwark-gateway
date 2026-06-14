@@ -21,7 +21,7 @@ from src.evaluation.datasets import (
     get_exhaustive_attacks,
     get_standard_attacks,
 )
-from src.evaluation.runner import EvaluationReport, EvaluationRunner
+from src.evaluation.runner import EvaluationRunner
 
 
 def _build_parser() -> argparse.ArgumentParser:

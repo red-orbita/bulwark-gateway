@@ -26,22 +26,21 @@ from __future__ import annotations
 
 import functools
 import time
-from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Callable, Optional, TypeVar, cast
 
 # Lazy imports — OpenTelemetry is OPTIONAL.
 # If not installed, the module provides no-op stubs with zero overhead.
 try:
     from opentelemetry import trace
-    from opentelemetry.context import Context
+    from opentelemetry.context import Context  # noqa: F401 (re-export)
     from opentelemetry.trace import (
-        NonRecordingSpan,
-        Span,
+        NonRecordingSpan,  # noqa: F401 (re-export)
+        Span,  # noqa: F401 (re-export)
         SpanKind,
         StatusCode,
-        Tracer,
+        Tracer,  # noqa: F401 (re-export)
     )
-    from opentelemetry.trace.propagation import get_current_span
+    from opentelemetry.trace.propagation import get_current_span  # noqa: F401 (re-export)
 
     OTEL_AVAILABLE = True
 except ImportError:
@@ -124,11 +123,9 @@ def init_tracing() -> None:
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import (
-        BatchSpanProcessor,
         ConsoleSpanExporter,
         SimpleSpanProcessor,
     )
-    from opentelemetry.trace.propagation import set_span_in_context
 
     # Build resource attributes
     resource = Resource.create(
@@ -359,7 +356,7 @@ def trace_span(
 
                 @functools.wraps(func)
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    with _tracer.start_as_current_span(
+                    with _tracer.start_as_current_span(  # type: ignore[union-attr]
                         name, kind=span_kind, attributes=attributes
                     ) as span:
                         start = time.perf_counter()
@@ -384,7 +381,7 @@ def trace_span(
 
                 @functools.wraps(func)
                 def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    with _tracer.start_as_current_span(
+                    with _tracer.start_as_current_span(  # type: ignore[union-attr]
                         name, kind=span_kind, attributes=attributes
                     ) as span:
                         start = time.perf_counter()
@@ -405,7 +402,7 @@ def trace_span(
                 return cast(_F, sync_wrapper)
 
         def __enter__(self) -> Any:
-            self._span = _tracer.start_span(name, kind=span_kind, attributes=attributes)
+            self._span = _tracer.start_span(name, kind=span_kind, attributes=attributes)  # type: ignore[union-attr]
             self._token = trace.context_api.attach(
                 trace.set_span_in_context(self._span)
             )
@@ -515,7 +512,6 @@ def inject_trace_context(headers: dict[str, str]) -> dict[str, str]:
         return headers
 
     try:
-        from opentelemetry.propagators import textmap
         from opentelemetry.propagate import inject
 
         inject(headers)

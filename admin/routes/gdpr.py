@@ -11,12 +11,11 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from ..models.auth import UserRole, TokenPayload
-from ..services.auth_service import require_role, require_permission
+from ..services.auth_service import require_role
 from ..services.gdpr import (
-    GDPRService,
     PseudonymizeRequest,
     ExportRequest,
     get_gdpr_service,

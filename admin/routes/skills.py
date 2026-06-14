@@ -12,8 +12,6 @@ from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
 from admin.services.skill_scanner import (
     ScanResult,
-    ScanVerdict,
-    SkillScanner,
     get_skill_scanner,
 )
 

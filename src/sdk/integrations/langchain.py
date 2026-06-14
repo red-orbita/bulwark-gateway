@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Any, TYPE_CHECKING
 
-from src.sdk.guard import Guard, ScanResult, SecurityError
+from src.sdk.guard import Guard, SecurityError
 
 if TYPE_CHECKING:
     pass  # LangChain types would go here if available

@@ -15,9 +15,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseEnrichmentScanner, EnrichmentResult, EnrichmentStatus
 
@@ -204,7 +202,7 @@ class EmbeddingScanner(BaseEnrichmentScanner):
         start = time.perf_counter()
 
         # Encode input
-        input_vector = self._model.encode([text], normalize_embeddings=True)[0]
+        input_vector = self._model.encode([text], normalize_embeddings=True)[0]  # type: ignore[attr-defined]
 
         # Compute cosine similarity against all attack vectors
         max_similarity = 0.0

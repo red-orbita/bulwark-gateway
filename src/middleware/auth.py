@@ -14,7 +14,7 @@ import hashlib
 import hmac
 import logging
 import re
-from typing import Optional, Set
+from typing import Set
 
 from fastapi import Request
 import jwt
@@ -79,7 +79,7 @@ def _is_token_revoked(jti: str) -> bool:
         # Fail-closed: cannot verify revocation → reject token (C-04)
         return True
     try:
-        is_revoked = _revocation_redis.sismember("sentinel:revoked_tokens", jti)
+        is_revoked = bool(_revocation_redis.sismember("sentinel:revoked_tokens", jti))
         # Cache the result (both positive and negative)
         _revocation_cache[jti] = is_revoked
         return is_revoked
@@ -188,7 +188,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     # H-03: Validate audience/issuer to prevent cross-service token reuse
                     # SECURITY FIX (VULN 1.3+1.4): Require both exp AND jti claims.
                     # Tokens without jti cannot be revoked. Tokens without exp never expire.
-                    decode_options = {"require": ["exp", "jti"]}
+                    decode_options = {"require": ["exp", "jti"]}  # type: ignore[var-annotated]
                     decode_kwargs = {
                         "algorithms": [settings.jwt_algorithm],
                     }
@@ -207,8 +207,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     payload = jwt.decode(
                         token,
                         verification_key,
-                        options=decode_options,
-                        **decode_kwargs,
+                        options=decode_options,  # type: ignore[arg-type]
+                        **decode_kwargs,  # type: ignore[arg-type]
                     )
                     # SECURITY FIX (VULN 1.3): jti is now mandatory (required above),
                     # so this check always runs. No more skip-if-absent bypass.

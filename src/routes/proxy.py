@@ -304,7 +304,7 @@ async def chat_completions(request: Request):
         )
         if user_content_for_session:
             session_result = _session_tracker.check_and_update(
-                user_content_for_session, tenant_id, agent_id, source_ip
+                user_content_for_session, tenant_id, agent_id, source_ip or ""
             )
             if session_result.verdict == Verdict.BLOCK:
                 await _log_events(session_result.events, source_ip)
@@ -395,7 +395,6 @@ async def chat_completions(request: Request):
     # Build ordered list of backends to try (primary + fallbacks)
     backends_to_try = [backend] + backend.fallback_backends
 
-    last_error = None
     for attempt_idx, current_backend in enumerate(backends_to_try):
         try:
             async with httpx.AsyncClient(timeout=current_backend.timeout) as client:
@@ -459,7 +458,6 @@ async def chat_completions(request: Request):
                 break
 
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            last_error = exc
             if attempt_idx < len(backends_to_try) - 1:
                 # Log failover and try next backend
                 await logger.awarn(

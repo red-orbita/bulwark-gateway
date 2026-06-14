@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from ..models.auth import TokenPayload, ROLE_PERMISSIONS
-from ..services.auth_service import AuthService, get_current_user, require_permission
+from ..services.auth_service import AuthService, require_permission
 from ..services.prometheus_client import get_metrics
 
 router = APIRouter()

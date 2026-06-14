@@ -675,7 +675,6 @@ class ToolPolicyEngine:
             # Strategy: if contains glob, also check without trailing partial + wildcard
             value_deglobbed = value_normalized.replace("*", "").replace("?", "")
             # Also try expanding glob by treating * as regex .*
-            import re as _re
             value_glob_regex = None
             if "*" in value_normalized or "?" in value_normalized:
                 glob_re = value_normalized.replace(".", r"\.").replace("*", ".*").replace("?", ".")
