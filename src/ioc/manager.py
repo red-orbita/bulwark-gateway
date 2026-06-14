@@ -27,11 +27,30 @@ _DOMAIN_RE = re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b")
 
 
 # SECURITY FIX (C-02): Unicode/IDN normalization prevents IOC bypass via homoglyphs
+# Zero-width characters that must be stripped before IOC matching
+_ZERO_WIDTH_CHARS = frozenset([
+    '\u200b',  # zero-width space
+    '\u200c',  # zero-width non-joiner
+    '\u200d',  # zero-width joiner
+    '\u2060',  # word joiner
+    '\ufeff',  # BOM / zero-width no-break space
+    '\u00ad',  # soft hyphen
+    '\u180e',  # Mongolian vowel separator
+    '\u200e',  # left-to-right mark
+    '\u200f',  # right-to-left mark
+    '\u2061',  # function application
+    '\u2062',  # invisible times
+    '\u2063',  # invisible separator
+    '\u2064',  # invisible plus
+])
+
+
 def _normalize_for_ioc(content: str) -> str:
     """Normalize content before IOC extraction to prevent Unicode/IDN bypass.
 
     Handles:
     - Fullwidth ASCII and homoglyphs (NFKC normalization)
+    - Zero-width invisible characters (stripped before matching)
     - URL-encoded characters (%2E → ., %2F → /, etc.)
     - Uppercase evasion
     - Punycode/IDN domains (xn-- prefixed)
@@ -39,10 +58,15 @@ def _normalize_for_ioc(content: str) -> str:
     # 1. NFKC normalization — collapses fullwidth chars, compatibility decompositions
     content = unicodedata.normalize("NFKC", content)
 
-    # 2. Decode URL-encoded characters (handles %2E, %2F, %3A, etc.)
+    # 2. SECURITY FIX (C-02): Strip zero-width and invisible characters
+    # These can be inserted between IOC characters to evade matching:
+    # e.g., "ev\u200bil.com" would not match "evil.com" without this step
+    content = "".join(c for c in content if c not in _ZERO_WIDTH_CHARS)
+
+    # 3. Decode URL-encoded characters (handles %2E, %2F, %3A, etc.)
     content = unquote(content)
 
-    # 3. Lowercase everything
+    # 4. Lowercase everything
     content = content.lower()
 
     # 4. Decode punycode/IDN domains inline

@@ -83,7 +83,9 @@ class IOCFeedService:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=FEED_TIMEOUT, follow_redirects=True)
+            # SECURITY (C-03 fix): Disable redirect following to prevent SSRF
+            # via open redirects in compromised feed endpoints.
+            self._client = httpx.AsyncClient(timeout=FEED_TIMEOUT, follow_redirects=False)
         return self._client
 
     async def close(self):

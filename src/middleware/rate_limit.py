@@ -45,6 +45,9 @@ class RedisRateLimiter:
     def consume(self, key: str, limit: int | None = None) -> bool:
         """Check rate limit using Redis sliding window. Returns True if allowed.
 
+        SECURITY (H-04 fix): Uses Lua script for atomic check-and-add.
+        Unique member IDs prevent same-microsecond overwrites.
+
         Args:
             key: Rate limit key (e.g., "ip:1.2.3.4" or "tenant:acme-corp")
             limit: Per-key limit override (RPM). Defaults to self.rate_rpm.
@@ -57,20 +60,28 @@ class RedisRateLimiter:
         now = time.time()
         window_start = now - 60.0  # 1-minute sliding window
 
-        try:
-            pipe = self._redis.pipeline()
-            # Remove expired entries
-            pipe.zremrangebyscore(redis_key, 0, window_start)
-            # Count current window
-            pipe.zcard(redis_key)
-            # Add current request
-            pipe.zadd(redis_key, {f"{now}": now})
-            # Set TTL to auto-cleanup
-            pipe.expire(redis_key, 120)
-            results = pipe.execute()
+        # Lua script: atomic ZREMRANGEBYSCORE + ZCARD + conditional ZADD + EXPIRE
+        # Uses unique member (timestamp:counter) to prevent same-microsecond overwrites
+        lua_script = """
+        redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1])
+        local count = redis.call('ZCARD', KEYS[1])
+        if count < tonumber(ARGV[2]) then
+            redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
+            redis.call('EXPIRE', KEYS[1], 120)
+            return 1
+        else
+            redis.call('EXPIRE', KEYS[1], 120)
+            return 0
+        end
+        """
 
-            count = results[1]  # zcard result
-            return count < effective_limit
+        try:
+            import uuid
+            member = f"{now}:{uuid.uuid4().hex[:8]}"
+            result = self._redis.eval(lua_script, 1, redis_key,
+                                      str(window_start), str(effective_limit),
+                                      str(now), member)
+            return result == 1
         except Exception:
             return False  # Fail-CLOSED on Redis error (C-05)
 
@@ -103,14 +114,31 @@ class InMemoryTokenBucket:
             "Use Redis for accurate distributed rate limiting."
         )
 
-    def consume(self, key: str) -> bool:
+    def consume(self, key: str, limit: int | None = None) -> bool:
+        """Consume one token. Supports per-key rate override (L-07 fix).
+
+        Args:
+            key: Rate limit key
+            limit: Per-key RPM override. If provided, adjusts rate for this key.
+        """
         with self._lock:
             now = time.time()
             last = self.last_time.get(key, now)
             elapsed = now - last
             self.last_time[key] = now
-            current = self.tokens.get(key, float(self.burst))
-            current = min(self.burst, current + elapsed * self.rate)
+
+            # L-07 fix: Use per-key rate if limit override provided
+            import os
+            worker_count = int(os.environ.get("SENTINEL_WORKERS", "4"))
+            if limit is not None:
+                effective_rate = (limit / 60.0) / max(worker_count, 1)
+                effective_burst = max(1, (limit // 6) // max(worker_count, 1))
+            else:
+                effective_rate = self.rate
+                effective_burst = self.burst
+
+            current = self.tokens.get(key, float(effective_burst))
+            current = min(effective_burst, current + elapsed * effective_rate)
             if current >= 1.0:
                 self.tokens[key] = current - 1.0
                 return True
@@ -212,7 +240,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if self._redis_limiter.available:
                 allowed = self._redis_limiter.consume(tenant_key, limit=effective_rpm)
             else:
-                allowed = self._fallback.consume(tenant_key)
+                allowed = self._fallback.consume(tenant_key, limit=effective_rpm)
 
             if not allowed:
                 return JSONResponse(

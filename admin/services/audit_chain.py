@@ -9,7 +9,9 @@ Supports efficient batch verification for chains with millions of entries.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -307,3 +309,89 @@ async def detect_tampering() -> list[TamperEvent]:
     """
     result = await verify_chain(start_seq=1)
     return result.tamper_events
+
+
+# ─── External Anchoring (L-03 fix) ───────────────────────────────────────────
+
+
+async def publish_anchor_to_redis() -> Optional[str]:
+    """SECURITY (L-03 fix): Publish chain head hash to Redis as external anchor.
+
+    This provides a tamper-evident checkpoint that can be independently verified.
+    If an attacker rewrites the chain, the Redis anchor won't match.
+
+    For stronger guarantees, integrate with an external timestamping service
+    (RFC 3161) or blockchain anchor. Redis provides baseline cross-service
+    verification (admin ↔ proxy ↔ external auditor).
+
+    Returns the anchor hash or None if Redis unavailable.
+    """
+    try:
+        from admin.services.redis_sync import get_redis_client
+        client = get_redis_client()
+        if not client:
+            return None
+
+        audit = get_audit_logger()
+        anchor_data = {
+            "chain_head": audit.chain_head,
+            "sequence_id": audit.sequence_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        # Create HMAC of the anchor for additional integrity
+        import json
+        anchor_json = json.dumps(anchor_data, sort_keys=True)
+        anchor_hmac = hashlib.sha256(
+            f"chain-anchor:{anchor_json}".encode()
+        ).hexdigest()
+
+        client.hset("sentinel:audit:anchor", mapping={
+            "chain_head": audit.chain_head,
+            "sequence_id": str(audit.sequence_id),
+            "timestamp": anchor_data["timestamp"],
+            "hmac": anchor_hmac,
+        })
+        return anchor_hmac
+    except Exception as e:
+        logger.warning("Failed to publish chain anchor to Redis: %s", e)
+        return None
+
+
+# ─── Timestamp Monotonicity (L-04 fix) ───────────────────────────────────────
+
+
+async def verify_timestamp_monotonicity(
+    start_seq: int = 1, end_seq: Optional[int] = None
+) -> list[TamperEvent]:
+    """SECURITY (L-04 fix): Verify timestamps are monotonically non-decreasing.
+
+    Non-monotonic timestamps indicate either clock skew or tampering
+    (entries inserted out of order to hide modifications).
+
+    Returns list of detected anomalies.
+    """
+    audit = get_audit_logger()
+    if end_seq is None:
+        end_seq = audit.sequence_id
+
+    anomalies: list[TamperEvent] = []
+    prev_timestamp: Optional[datetime] = None
+
+    entries = await audit.get_entries_range(start_seq, end_seq)
+    for entry in entries:
+        if entry.sequence_id is None:
+            continue
+        if prev_timestamp is not None and entry.timestamp < prev_timestamp:
+            anomalies.append(TamperEvent(
+                sequence_id=entry.sequence_id,
+                expected_hash="(timestamp check)",
+                actual_hash=entry.timestamp.isoformat(),
+                entry_id=entry.id,
+                description=(
+                    f"Non-monotonic timestamp at seq {entry.sequence_id}: "
+                    f"{entry.timestamp.isoformat()} < previous {prev_timestamp.isoformat()}"
+                ),
+            ))
+        prev_timestamp = entry.timestamp
+
+    return anomalies

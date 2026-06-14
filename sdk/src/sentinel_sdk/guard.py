@@ -302,14 +302,41 @@ class SentinelGuard:
 
         if custom_patterns:
             for p in custom_patterns:
+                # SECURITY (L-08 fix): Validate custom regex for catastrophic
+                # backtracking (ReDoS). Reject patterns with nested quantifiers
+                # or excessive repetition that could cause exponential matching.
+                raw_regex = p["regex"]
+                if self._is_redos_risky(raw_regex):
+                    raise ValueError(
+                        f"Custom pattern rejected (ReDoS risk): {raw_regex[:50]}..."
+                    )
                 pattern = _Pattern(
-                    regex=re.compile(p["regex"], re.IGNORECASE),
+                    regex=re.compile(raw_regex, re.IGNORECASE),
                     category=ThreatCategory(p.get("category", "prompt_injection")),
                     severity=Severity(p.get("severity", "medium")),
                     description=p.get("description", "Custom pattern match"),
                     pattern_id=p.get("pattern_id", "SDK-CUSTOM"),
                 )
                 self._input_patterns.append(pattern)
+
+    @staticmethod
+    def _is_redos_risky(pattern: str) -> bool:
+        """Check if regex pattern has ReDoS risk indicators.
+
+        Detects: nested quantifiers, overlapping alternations with quantifiers,
+        and repetition of groups containing repetition.
+        """
+        # Nested quantifiers: (a+)+, (a*)+, (a{1,})*
+        if re.search(r'[+*}]\s*[)]\s*[+*{]', pattern):
+            return True
+        # Quantifier on group with internal quantifier
+        if re.search(r'\([^)]*[+*][^)]*\)[+*{]', pattern):
+            return True
+        # {min,max} with large max
+        match = re.search(r'\{(\d+),(\d+)\}', pattern)
+        if match and int(match.group(2)) > 100:
+            return True
+        return False
 
     def scan(
         self,

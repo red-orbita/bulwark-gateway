@@ -116,19 +116,25 @@ class SandboxedScanner:
                 "plugin_scan_timeout",
                 extra={"plugin": self._plugin_name},
             )
-            return GuardrailResult(verdict=Verdict.ALLOW)  # Fail-open on timeout (configurable)
+            # SECURITY (H-10 fix): Fail-CLOSED. A timed-out plugin cannot
+            # guarantee content safety. Block rather than allow unscanned.
+            return GuardrailResult(verdict=Verdict.BLOCK)
         except (PermissionError, ImportError) as e:
             logger.critical(
                 "plugin_scan_sandbox_violation",
                 extra={"plugin": self._plugin_name, "error": str(e)},
             )
-            return GuardrailResult(verdict=Verdict.ALLOW)  # Fail-open on sandbox violation
+            # SECURITY (H-10 fix): Sandbox escape attempt = immediate BLOCK.
+            # This indicates the plugin is actively trying to break out.
+            return GuardrailResult(verdict=Verdict.BLOCK)
         except Exception as e:
             logger.error(
                 "plugin_scan_error",
                 extra={"plugin": self._plugin_name, "error": str(e)},
             )
-            return GuardrailResult(verdict=Verdict.ALLOW)
+            # SECURITY (H-10 fix): Unhandled crash = BLOCK (fail-closed).
+            # A malicious plugin could auto-crash to disable detection.
+            return GuardrailResult(verdict=Verdict.BLOCK)
 
     async def startup(self) -> None:
         """Delegate startup (sandboxed)."""

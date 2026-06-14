@@ -368,8 +368,12 @@ def trace_span(
                             span.set_status(StatusCode.OK)
                             return result
                         except Exception as exc:
-                            span.set_status(StatusCode.ERROR, str(exc))
-                            span.record_exception(exc)
+                            # SECURITY (M-20 fix): Only record exception type and
+                            # sanitized message — NOT full stack trace which may
+                            # contain credentials in error messages.
+                            span.set_status(StatusCode.ERROR, type(exc).__name__)
+                            span.set_attribute("error.type", type(exc).__name__)
+                            span.set_attribute("error.message", str(exc)[:200])
                             raise
                         finally:
                             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -389,8 +393,10 @@ def trace_span(
                             span.set_status(StatusCode.OK)
                             return result
                         except Exception as exc:
-                            span.set_status(StatusCode.ERROR, str(exc))
-                            span.record_exception(exc)
+                            # SECURITY (M-20 fix): Sanitized error — no stack trace
+                            span.set_status(StatusCode.ERROR, type(exc).__name__)
+                            span.set_attribute("error.type", type(exc).__name__)
+                            span.set_attribute("error.message", str(exc)[:200])
                             raise
                         finally:
                             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -446,8 +452,15 @@ def create_request_span(
     if not _enabled or _tracer is None:
         return _NOOP_SPAN
 
+    # SECURITY (M-19 fix): Hash tenant_id before including in traces exported
+    # to external OTEL backends. Prevents PII/tenant correlation by third parties.
+    import hashlib as _hashlib_tr
+    hashed_tenant = _hashlib_tr.sha256(
+        f"sentinel-trace:{tenant_id}".encode()
+    ).hexdigest()[:12]
+
     attrs: dict[str, Any] = {
-        "sentinel.tenant_id": tenant_id,
+        "sentinel.tenant_id": hashed_tenant,
         "sentinel.agent_id": agent_id,
     }
     if model:
@@ -515,10 +528,20 @@ def inject_trace_context(headers: dict[str, str]) -> dict[str, str]:
 def extract_trace_context(headers: dict[str, str]) -> Optional[Any]:
     """Extract trace context from incoming request headers.
 
-    Used to continue a trace started by the upstream caller.
+    SECURITY (L-05 fix): Only extract trace context from trusted internal
+    headers. External trace context is ignored to prevent cross-tenant
+    correlation attacks where an attacker injects trace IDs to link
+    requests across different tenants.
+
     Returns a Context object (or None if no trace context found or disabled).
     """
     if not _enabled or not OTEL_AVAILABLE:
+        return None
+
+    # L-05 fix: Only accept trace context if request has internal marker.
+    # External requests should NOT propagate their trace context into our system.
+    internal_marker = headers.get("x-sentinel-internal")
+    if not internal_marker:
         return None
 
     try:

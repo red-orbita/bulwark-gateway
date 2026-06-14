@@ -298,12 +298,18 @@ class SentinelClient:
     # === Internal methods ===
 
     def _create_client(self) -> httpx.AsyncClient:
-        """Create a new httpx AsyncClient with default configuration."""
+        """Create a new httpx AsyncClient with default configuration.
+
+        SECURITY (H-13 fix): Redirects are disabled to prevent Authorization
+        header from leaking to external hosts if the gateway is compromised
+        and responds with a redirect.
+        """
         transport = httpx.AsyncHTTPTransport(retries=self._max_retries)
         return httpx.AsyncClient(
             timeout=httpx.Timeout(self._timeout),
             transport=transport,
             headers=self._default_headers(),
+            follow_redirects=False,
         )
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -388,7 +394,9 @@ class SentinelClient:
                 retry_after=float(retry_after) if retry_after else None,
             )
         elif resp.status_code >= 500:
-            body_text = resp.text
+            # SECURITY (L-09 fix): Truncate response body to prevent
+            # leaking sensitive server-side information via GatewayError.
+            body_text = resp.text[:256] if resp.text else ""
             raise GatewayError(
                 f"Sentinel Gateway returned {resp.status_code}",
                 status_code=resp.status_code,
@@ -418,7 +426,9 @@ class SentinelClient:
         try:
             verdict = Verdict(verdict_str)
         except ValueError:
-            verdict = Verdict.ALLOW
+            # SECURITY (CRIT-02 fix): Unknown verdict = BLOCK (fail-closed).
+            # A corrupted/MitM response must never default to ALLOW.
+            verdict = Verdict.BLOCK
 
         events = []
         for evt_data in response.get("events", []):

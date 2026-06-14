@@ -49,6 +49,11 @@ class JWKSCache:
     Supports key rotation via 'kid' (Key ID) lookup.
     """
 
+    # SECURITY (H-07 fix): Maximum time to use stale keys after fetch failure.
+    # After this period, fail-closed (reject all JWTs). Prevents indefinite
+    # use of potentially compromised/revoked keys.
+    MAX_STALE_SECONDS = 300  # 5 minutes max staleness
+
     def __init__(self, jwks_url: str, ttl_seconds: int = 3600):
         self._jwks_url = jwks_url
         self._ttl_seconds = ttl_seconds
@@ -70,8 +75,9 @@ class JWKSCache:
         try:
             import httpx
 
-            # Timeout aggressively — this is in the auth hot path
-            response = httpx.get(self._jwks_url, timeout=10.0, follow_redirects=True)
+            # SECURITY (M-14 fix): Disable redirects to prevent DNS poisoning
+            # attacks that redirect JWKS fetch to attacker-controlled endpoint.
+            response = httpx.get(self._jwks_url, timeout=10.0, follow_redirects=False)
             response.raise_for_status()
             data = response.json()
 
@@ -105,8 +111,21 @@ class JWKSCache:
                 "JWKS fetch failed (fail-closed: rejecting all JWT tokens)",
                 extra={"url": self._jwks_url, "error": str(e)},
             )
-            # Do NOT clear existing keys on transient failure —
-            # use stale keys until TTL expires, then fail-closed
+            # SECURITY (H-07 fix): Enforce max staleness. If keys are older than
+            # MAX_STALE_SECONDS, clear them to fail-closed. Prevents indefinite
+            # use of potentially compromised keys when JWKS endpoint is unreachable.
+            stale_age = time.time() - self._last_fetch
+            if self._keys and stale_age > self.MAX_STALE_SECONDS:
+                logger.critical(
+                    "JWKS keys exceeded max staleness — clearing (fail-closed)",
+                    extra={
+                        "stale_seconds": stale_age,
+                        "max_stale_seconds": self.MAX_STALE_SECONDS,
+                    },
+                )
+                self._keys = {}
+                self._all_keys = []
+
             if not self._keys:
                 raise JWTKeyError(
                     f"JWKS fetch failed and no cached keys available: {e}"

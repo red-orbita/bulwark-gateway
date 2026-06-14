@@ -59,6 +59,14 @@ class SyslogTransport:
         self._socket: Optional[socket.socket] = None
 
     async def _ensure_connection(self) -> None:
+        # SECURITY (H-06 fix): Validate destination against SSRF targets
+        from . import is_ssrf_target_host
+        if is_ssrf_target_host(self._config.host, self._config.port):
+            raise ConnectionError(
+                f"Syslog transport blocked: {self._config.host}:{self._config.port} "
+                f"resolves to a restricted network (SSRF protection)"
+            )
+
         if self._config.protocol == SyslogProtocol.UDP:
             if self._socket is None:
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

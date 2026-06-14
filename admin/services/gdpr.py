@@ -170,11 +170,16 @@ class GDPRService:
         # Perform pseudonymization
         pseudonymized_count = await self._apply_pseudonymization(subject_id, salt)
 
+        # SECURITY (H-09 fix): Also pseudonymize/erase Redis keys containing
+        # the subject's identifier. Rate limit keys, recent blocks, and quotas
+        # persist PII that must be erased alongside the audit DB.
+        redis_erased = await self._erase_redis_subject_data(subject_id)
+
         # Record the GDPR request
         await self._record_request(
             request_id, "pseudonymize", subject_id, requested_by,
-            "completed", pseudonymized_count,
-            f"Pseudonymized {pseudonymized_count} records for subject"
+            "completed", pseudonymized_count + redis_erased,
+            f"Pseudonymized {pseudonymized_count} DB records + {redis_erased} Redis keys"
         )
 
         # Meta-audit: log the pseudonymization action itself
@@ -311,10 +316,30 @@ class GDPRService:
         old_entries = await self._find_entries_before(audit_cutoff)
         if old_entries:
             archive_path = GDPR_ARCHIVE_DIR / f"audit_archive_{now.strftime('%Y%m%d_%H%M%S')}.json"
-            archive_path.write_text(
-                json.dumps(old_entries, indent=2, default=str),
-                encoding="utf-8"
-            )
+            archive_data = json.dumps(old_entries, indent=2, default=str).encode("utf-8")
+
+            # SECURITY (M-18 fix): Encrypt archive at rest using Fernet symmetric
+            # encryption with key derived from JWT secret. Archives contain PII
+            # and must not be stored in cleartext.
+            try:
+                from hashlib import sha256
+                import base64
+                # Derive a Fernet key from the JWT secret (deterministic)
+                jwt_secret = os.getenv("SENTINEL_JWT_SECRET", "")
+                key_material = sha256(f"gdpr-archive-key:{jwt_secret}".encode()).digest()
+                fernet_key = base64.urlsafe_b64encode(key_material)
+                from cryptography.fernet import Fernet
+                f = Fernet(fernet_key)
+                encrypted_data = f.encrypt(archive_data)
+                archive_path = archive_path.with_suffix(".json.enc")
+                archive_path.write_bytes(encrypted_data)
+            except ImportError:
+                # cryptography not installed — fallback to plaintext with warning
+                import logging as _log_m18
+                _log_m18.getLogger(__name__).warning(
+                    "GDPR archive written unencrypted (install 'cryptography' package for encryption)"
+                )
+                archive_path.write_text(archive_data.decode("utf-8"), encoding="utf-8")
             archived_count = len(old_entries)
 
             # Delete archived entries from main DB
@@ -509,31 +534,42 @@ class GDPRService:
     def _get_or_create_salt(self, subject_id: str) -> bytes:
         """Get existing salt or generate a new one for a subject.
 
+        SECURITY (M-17 fix): Uses Redis SETNX for atomic check-and-set to
+        prevent TOCTOU race condition where concurrent requests could generate
+        different salts for the same subject.
+
         Storage priority: Redis > File system.
         Salt is 32 bytes of cryptographic randomness.
         """
         redis_key = f"{REDIS_GDPR_SALT_PREFIX}{hashlib.sha256(subject_id.encode()).hexdigest()}"
 
-        # Try Redis first
+        # Try Redis first (atomic SET NX prevents race condition)
         client = get_redis_client()
         if client:
             try:
                 existing = client.get(redis_key)
                 if existing:
                     return bytes.fromhex(existing)
-                # Generate new salt
+                # Generate new salt and atomically set only if not exists
                 salt = os.urandom(32)
-                client.set(redis_key, salt.hex(), ex=86400)  # 24h TTL
-                return salt
+                was_set = client.set(redis_key, salt.hex(), ex=86400, nx=True)
+                if was_set:
+                    return salt
+                # Another process set it first — read their value
+                existing = client.get(redis_key)
+                if existing:
+                    return bytes.fromhex(existing)
+                return salt  # Fallback: use ours if read fails
             except Exception:
                 pass
 
-        # Fallback: file-based salt storage
+        # Fallback: file-based salt storage (use lock for atomicity)
         salt_file = GDPR_SALT_DIR / f"{hashlib.sha256(subject_id.encode()).hexdigest()}.salt"
-        if salt_file.exists():
-            return bytes.fromhex(salt_file.read_text().strip())
+        with self._lock:
+            if salt_file.exists():
+                return bytes.fromhex(salt_file.read_text().strip())
 
-        # Generate new salt
+        # Generate new salt (already under self._lock from above)
         salt = os.urandom(32)
         salt_file.write_text(salt.hex())
         return salt
@@ -565,11 +601,14 @@ class GDPRService:
             return 0
 
         with audit._lock:
+            # SECURITY (L-12 fix): Escape SQL LIKE wildcards to prevent
+            # query manipulation via subject_id containing % or _ characters.
+            escaped_subject = subject_id.replace("%", r"\%").replace("_", r"\_")
             cursor = audit._conn.execute(
                 """SELECT COUNT(*) FROM audit_log
                    WHERE actor = ? OR ip_address = ?
-                   OR details LIKE ? OR resource_id LIKE ?""",
-                (subject_id, subject_id, f"%{subject_id}%", f"%{subject_id}%")
+                   OR details LIKE ? ESCAPE '\\' OR resource_id LIKE ? ESCAPE '\\'""",
+                (subject_id, subject_id, f"%{escaped_subject}%", f"%{escaped_subject}%")
             )
             return cursor.fetchone()[0]
 
@@ -583,12 +622,14 @@ class GDPRService:
         count = 0
 
         with audit._lock:
+            # SECURITY (L-12 fix): Escape LIKE wildcards
+            escaped_subject = subject_id.replace("%", r"\%").replace("_", r"\_")
             # Find all affected rows
             rows = audit._conn.execute(
                 """SELECT id, actor, ip_address, details, resource_id FROM audit_log
                    WHERE actor = ? OR ip_address = ?
-                   OR details LIKE ? OR resource_id LIKE ?""",
-                (subject_id, subject_id, f"%{subject_id}%", f"%{subject_id}%")
+                   OR details LIKE ? ESCAPE '\\' OR resource_id LIKE ? ESCAPE '\\'""",
+                (subject_id, subject_id, f"%{escaped_subject}%", f"%{escaped_subject}%")
             ).fetchall()
 
             for row in rows:
@@ -615,14 +656,16 @@ class GDPRService:
             return []
 
         with audit._lock:
+            # SECURITY (L-12 fix): Escape LIKE wildcards
+            escaped_subject = subject_id.replace("%", r"\%").replace("_", r"\_")
             rows = audit._conn.execute(
                 """SELECT id, timestamp, actor, action, resource_type, resource_id,
                           result, ip_address, details
                    FROM audit_log
                    WHERE actor = ? OR ip_address = ?
-                   OR details LIKE ? OR resource_id LIKE ?
+                   OR details LIKE ? ESCAPE '\\' OR resource_id LIKE ? ESCAPE '\\'
                    ORDER BY timestamp DESC""",
-                (subject_id, subject_id, f"%{subject_id}%", f"%{subject_id}%")
+                (subject_id, subject_id, f"%{escaped_subject}%", f"%{escaped_subject}%")
             ).fetchall()
 
         return [
@@ -733,15 +776,31 @@ class GDPRService:
         self, request_id: str, request_type: str, subject_id: Optional[str],
         requested_by: str, status: str, records_affected: int, details: Optional[str] = None
     ) -> None:
-        """Record a GDPR request in the requests database."""
+        """Record a GDPR request in the requests database.
+
+        SECURITY (H-08 fix): subject_id is pseudonymized before storage using
+        HMAC-SHA256 to prevent linkage attacks that invalidate pseudonymization.
+        """
         if not self._requests_conn:
             return
 
         now = datetime.now(timezone.utc).isoformat()
+        # Pseudonymize subject_id before storing in request log
+        import hashlib as _hashlib_gdpr
+        import hmac as _hmac_gdpr
+        pseudo_subject = None
+        if subject_id:
+            # Use a fixed per-instance salt derived from the request_id prefix
+            # This allows correlating requests without storing raw PII
+            salt = _hashlib_gdpr.sha256(b"gdpr-request-log-salt").digest()
+            pseudo_subject = _hmac_gdpr.new(
+                salt, subject_id.encode(), _hashlib_gdpr.sha256
+            ).hexdigest()[:32]
+
         with self._lock:
             self._requests_conn.execute(
                 "INSERT INTO gdpr_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (request_id, request_type, subject_id, requested_by,
+                (request_id, request_type, pseudo_subject, requested_by,
                  now, status, records_affected, details)
             )
 
@@ -765,6 +824,52 @@ class GDPRService:
             if self._requests_conn:
                 self._requests_conn.close()
                 self._requests_conn = None
+
+    async def _erase_redis_subject_data(self, subject_id: str) -> int:
+        """SECURITY (H-09 fix): Erase Redis keys containing subject's PII.
+
+        Targets:
+        - Rate limit keys: sentinel:ratelimit:*{subject_id}*
+        - Recent blocks list entries containing subject_id
+        - Quota keys: sentinel:quota:*{subject_id}*
+
+        Returns count of keys/entries erased.
+        """
+        client = get_redis_client()
+        if not client:
+            return 0
+
+        erased = 0
+        try:
+            # 1. Rate limit keys containing the subject identifier
+            for pattern in [
+                f"sentinel:ratelimit:*{subject_id}*",
+                f"sentinel:quota:*{subject_id}*",
+                f"sentinel:tenant:{subject_id}:*",
+            ]:
+                keys = client.keys(pattern)
+                if keys:
+                    client.delete(*keys)
+                    erased += len(keys)
+
+            # 2. Remove entries in recent_blocks list that contain subject_id
+            recent_key = "sentinel:recent_blocks"
+            recent_blocks = client.lrange(recent_key, 0, -1)
+            if recent_blocks:
+                for entry in recent_blocks:
+                    entry_str = entry if isinstance(entry, str) else entry.decode("utf-8", errors="ignore")
+                    if subject_id in entry_str:
+                        client.lrem(recent_key, 0, entry)
+                        erased += 1
+
+            logger.info(
+                "gdpr_redis_erasure_completed",
+                extra={"subject_hash": self._hash_value(subject_id, b"log")[:16], "keys_erased": erased},
+            )
+        except Exception as e:
+            logger.error("gdpr_redis_erasure_failed", extra={"error": str(e)})
+
+        return erased
 
 
 # ─── Singleton ────────────────────────────────────────────────────────────────

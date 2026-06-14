@@ -93,6 +93,11 @@ _BLOCKED_IPS = {
     "100.100.100.200",   # Alibaba Cloud metadata
 }
 
+# PERFORMANCE (M-03 fix): Cache DNS resolutions for SSRF checks (5s TTL).
+# Prevents blocking the event loop on repeated getaddrinfo() calls.
+from cachetools import TTLCache
+_DNS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=5.0)
+
 
 def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
     """Validate URL at request-time to prevent SSRF via DNS rebinding (C-01).
@@ -118,8 +123,14 @@ def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
             return True
 
     # Resolve DNS at request time (prevents DNS rebinding)
+    # PERFORMANCE (M-03 fix): Use short-TTL cache to avoid blocking on repeated lookups.
+    cache_key = (hostname, parsed.port or 443)
     try:
-        addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+        if cache_key in _DNS_CACHE:
+            addr_infos = _DNS_CACHE[cache_key]
+        else:
+            addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+            _DNS_CACHE[cache_key] = addr_infos
     except (socket.gaierror, OSError):
         return True  # Fail-closed: cannot resolve → block
 
@@ -638,12 +649,17 @@ async def _handle_streaming(
     BUFFER_SIZE = 256  # chars before flushing to client
     # SECURITY FIX (C-04): 50% overlapping window prevents boundary-split secret leakage
     OVERLAP_SIZE = 128
+    # SECURITY FIX (M-07): Max stream duration and body size to prevent worker starvation
+    MAX_STREAM_DURATION_SECONDS = 300  # 5 minutes
+    MAX_STREAM_BYTES = 50 * 1024 * 1024  # 50MB
 
     async def stream_generator():
         content_buffer = ""
         tool_call_buffer: dict[int, dict] = {}  # index -> {name, arguments}
         tool_call_lines: list[str] = []  # C-01: Buffer raw SSE lines until policy validated
         blocked = False
+        stream_start = time.monotonic()
+        total_bytes = 0
 
         try:
             async with client.stream("POST", url, json=body, headers=headers) as resp:
@@ -654,6 +670,17 @@ async def _handle_streaming(
 
                 async for line in resp.aiter_lines():
                     if blocked:
+                        break
+
+                    # SECURITY (M-07): Enforce max stream duration
+                    if time.monotonic() - stream_start > MAX_STREAM_DURATION_SECONDS:
+                        yield _make_error_event("Stream terminated: max duration exceeded")
+                        break
+
+                    # SECURITY (M-07): Enforce max response body size
+                    total_bytes += len(line.encode("utf-8"))
+                    if total_bytes > MAX_STREAM_BYTES:
+                        yield _make_error_event("Stream terminated: max body size exceeded")
                         break
 
                     if not line.startswith("data: "):

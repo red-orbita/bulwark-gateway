@@ -242,6 +242,26 @@ class QuotaMiddleware(BaseHTTPMiddleware):
                         }
                     },
                 )
+            # SECURITY (M-15 fix): Also check actual body size for chunked
+            # transfer encoding which omits Content-Length header.
+            if not content_length:
+                # Chunked or missing Content-Length — read and verify actual size
+                body = await request.body()
+                if len(body) > quota.max_request_size_bytes:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": {
+                                "message": "Request payload too large (chunked)",
+                                "type": "quota_exceeded",
+                                "code": "payload_too_large",
+                                "detail": (
+                                    f"Max request size: {quota.max_request_size_bytes} bytes. "
+                                    f"Actual body: {len(body)} bytes."
+                                ),
+                            }
+                        },
+                    )
 
         # --- Check 2: Allowed models ---
         if quota.allowed_models is not None and path.startswith("/v"):
@@ -298,9 +318,15 @@ class QuotaMiddleware(BaseHTTPMiddleware):
         semaphore: asyncio.Semaphore | None = None
         if quota.max_concurrent_requests > 0:
             semaphore = self._get_semaphore(tenant_id, quota.max_concurrent_requests)
-            # Non-blocking acquire attempt
-            acquired = semaphore._value > 0  # noqa: SLF001 — check without blocking
-            if not acquired:
+            # SECURITY (L-02 fix): Use atomic try-acquire pattern instead of
+            # separate check + acquire (TOCTOU race condition).
+            try:
+                acquired = semaphore._value > 0  # noqa: SLF001
+                if not acquired:
+                    raise asyncio.QueueEmpty()  # Signal: limit reached
+                # Attempt non-blocking acquire (atomic with check)
+                await asyncio.wait_for(semaphore.acquire(), timeout=0.001)
+            except (asyncio.TimeoutError, asyncio.QueueEmpty):
                 concurrent_remaining = self._concurrent_remaining(
                     tenant_id, quota.max_concurrent_requests
                 )
@@ -323,8 +349,6 @@ class QuotaMiddleware(BaseHTTPMiddleware):
                     },
                 )
 
-            # Acquire the semaphore
-            await semaphore.acquire()
             self._concurrent_counts[tenant_id] = (
                 self._concurrent_counts.get(tenant_id, 0) + 1
             )

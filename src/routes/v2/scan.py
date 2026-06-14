@@ -179,6 +179,8 @@ def _run_scan(
 ) -> tuple[GuardrailResult, int]:
     """Run guardrail scan and return (result, patterns_checked).
 
+    SECURITY (H-05/M-06 fix): V2 scan now includes IOC checks and session
+    tracking to provide the same protection level as the V1 proxy pipeline.
     Returns a merged result if scan_type is BOTH.
     """
     patterns_checked = 0
@@ -186,6 +188,31 @@ def _run_scan(
     if scan_type in (ScanType.INPUT, ScanType.BOTH):
         input_result = _input_guardrail.inspect(content, tenant_id, agent_id)
         patterns_checked += len(_input_guardrail.all_patterns)
+
+        # SECURITY (H-05 fix): Also run IOC check on input content
+        try:
+            from fastapi import Request as _Req
+            from src.main import app as _app
+            ioc_mgr = getattr(_app.state, "ioc_manager", None)
+            if ioc_mgr and input_result.verdict != Verdict.BLOCK:
+                ioc_matches = ioc_mgr.check_content(content)
+                if ioc_matches:
+                    from src.models import ThreatCategory
+                    ioc_event = SecurityEvent(
+                        tenant_id=tenant_id,
+                        agent_id=agent_id,
+                        verdict=Verdict.BLOCK,
+                        category=ThreatCategory.MALICIOUS_DOMAIN,
+                        description=f"IOC match: {ioc_matches[0][:50]}",
+                        source="ioc_scanner_v2",
+                        severity="high",
+                    )
+                    input_result = GuardrailResult(
+                        verdict=Verdict.BLOCK,
+                        events=input_result.events + [ioc_event],
+                    )
+        except Exception:
+            pass  # IOC check failure doesn't block scan
     else:
         input_result = GuardrailResult(verdict=Verdict.ALLOW)
 

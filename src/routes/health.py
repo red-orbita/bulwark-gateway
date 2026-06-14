@@ -89,11 +89,36 @@ async def cost_usage(request: Request):
 
 @router.get("/ready")
 async def ready(request: Request):
-    """Readiness check — minimal response for load balancers."""
+    """Readiness check — validates core dependencies are functional.
+
+    RELIABILITY (M-12 fix): Now checks Redis connectivity and IOC database
+    in addition to policy loading, providing meaningful readiness signal.
+    """
     policy_count = getattr(request.app.state, "policy_loader", None)
     ioc_count = getattr(request.app.state, "ioc_manager", None)
-    is_ready = (policy_count and policy_count.count > 0) and (ioc_count and ioc_count.count > 0)
-    return {"status": "ready" if is_ready else "not_ready"}
+    policies_ok = policy_count and policy_count.count > 0
+    iocs_ok = ioc_count and ioc_count.count > 0
+
+    # Check Redis connectivity (if configured)
+    redis_ok = True
+    try:
+        from src.config import settings
+        if settings.redis_url:
+            import redis as _redis_mod
+            r = _redis_mod.from_url(str(settings.redis_url), socket_timeout=2)
+            r.ping()
+    except Exception:
+        redis_ok = False
+
+    is_ready = bool(policies_ok and iocs_ok and redis_ok)
+    return {
+        "status": "ready" if is_ready else "not_ready",
+        "checks": {
+            "policies": bool(policies_ok),
+            "iocs": bool(iocs_ok),
+            "redis": redis_ok,
+        },
+    }
 
 
 @router.get("/internal/scanners/status")

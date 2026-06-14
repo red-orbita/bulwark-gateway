@@ -65,6 +65,11 @@ func NewClient(opts ...Option) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{
 			Timeout: cfg.timeout,
+			// SECURITY (H-16 fix): Disable redirects to prevent Authorization
+			// header from leaking to external hosts via redirect.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		}
 	}
 
@@ -178,10 +183,15 @@ func (c *Client) do(req *http.Request, v any) error {
 			}
 			return lastErr
 		}
-		defer resp.Body.Close()
 
-		// Read response body
-		respBody, err := io.ReadAll(resp.Body)
+		// SECURITY (H-14 fix): Close body immediately in this iteration,
+		// not deferred to function return (would leak N bodies in retry loop).
+		// SECURITY (H-15 fix): Limit response body to 10MB to prevent OOM
+		// from a malicious/compromised gateway sending unbounded data.
+		const maxResponseSize = 10 * 1024 * 1024 // 10MB
+		limitedReader := io.LimitReader(resp.Body, maxResponseSize)
+		respBody, err := io.ReadAll(limitedReader)
+		resp.Body.Close() // Close immediately, not defer
 		if err != nil {
 			lastErr = fmt.Errorf("sentinel: failed to read response: %w", err)
 			continue

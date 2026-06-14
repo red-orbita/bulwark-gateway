@@ -5,6 +5,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Guard provides local (offline) regex-based scanning without network calls.
@@ -156,13 +159,15 @@ var defaultPatterns = []struct {
 
 // NewGuard creates a new local Guard with the default pattern set.
 // Patterns are compiled once and safe for concurrent use.
-// This function panics if a pattern fails to compile (indicates a bug).
-func NewGuard() *Guard {
+// Returns an error if any pattern fails to compile.
+func NewGuard() (*Guard, error) {
 	patterns := make([]guardPattern, 0, len(defaultPatterns))
 	for _, p := range defaultPatterns {
 		compiled, err := regexp.Compile(p.pattern)
 		if err != nil {
-			panic(fmt.Sprintf("sentinel: failed to compile pattern %s: %v", p.patternID, err))
+			// SECURITY (L-10 fix): Return error instead of panicking.
+			// A panic in production on invalid regex is a DoS vector.
+			return nil, fmt.Errorf("sentinel: failed to compile pattern %s: %w", p.patternID, err)
 		}
 		patterns = append(patterns, guardPattern{
 			regex:       compiled,
@@ -173,7 +178,7 @@ func NewGuard() *Guard {
 		})
 	}
 
-	return &Guard{patterns: patterns}
+	return &Guard{patterns: patterns}, nil
 }
 
 // Scan checks the input text against all local patterns and returns a ScanResult.
@@ -256,10 +261,26 @@ func (g *Guard) Categories() []string {
 	return cats
 }
 
-// normalizeInput performs basic normalization to resist evasion techniques.
+// normalizeInput performs Unicode normalization to resist evasion techniques.
+// SECURITY (H-18 fix): Applies NFKC normalization (resolves homoglyphs,
+// compatibility decomposition) and strips zero-width/invisible characters
+// before collapsing whitespace. Matches Python proxy behavior.
 func normalizeInput(s string) string {
-	// Collapse multiple spaces/tabs/newlines into single space
-	// This prevents evasion via whitespace insertion
+	// Step 1: NFKC normalization (homoglyph resolution, compatibility decomposition)
+	s = norm.NFKC.String(s)
+
+	// Step 2: Strip zero-width and invisible characters
+	var cleaned strings.Builder
+	cleaned.Grow(len(s))
+	for _, r := range s {
+		if isInvisibleChar(r) {
+			continue
+		}
+		cleaned.WriteRune(r)
+	}
+	s = cleaned.String()
+
+	// Step 3: Collapse multiple spaces/tabs/newlines into single space
 	var b strings.Builder
 	b.Grow(len(s))
 	prevSpace := false
@@ -274,7 +295,29 @@ func normalizeInput(s string) string {
 			prevSpace = false
 		}
 	}
-	return b.String()
+	return strings.ToLower(b.String())
+}
+
+// isInvisibleChar returns true for zero-width and invisible Unicode characters
+// commonly used in evasion attacks.
+func isInvisibleChar(r rune) bool {
+	switch r {
+	case '\u200B', // zero-width space
+		'\u200C', // zero-width non-joiner
+		'\u200D', // zero-width joiner
+		'\uFEFF', // BOM / zero-width no-break space
+		'\u00AD', // soft hyphen
+		'\u200E', // left-to-right mark
+		'\u200F', // right-to-left mark
+		'\u2060', // word joiner
+		'\u2061', // function application
+		'\u2062', // invisible times
+		'\u2063', // invisible separator
+		'\u2064': // invisible plus
+		return true
+	}
+	// Also strip characters in Unicode category "Format" (Cf) not already handled
+	return unicode.Is(unicode.Cf, r) && r != '\n' && r != '\r' && r != '\t'
 }
 
 // severityRank returns a numeric rank for severity comparison.

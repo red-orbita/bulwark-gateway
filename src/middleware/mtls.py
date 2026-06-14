@@ -14,6 +14,14 @@ Trust chain:
   - The receiving service verifies the client cert against the trusted CA
   - Service identity is extracted from the certificate CN or SAN
 
+SECURITY (CRIT-01 fix):
+  - X-Client-Cert-* headers are ONLY trusted if the request originates from
+    a known reverse proxy CIDR (SENTINEL_MTLS_TRUSTED_PROXY_CIDRS).
+  - If the request comes from an untrusted IP, headers are stripped/ignored
+    and only direct TLS cert verification (Method 2/3) is used.
+  - If no trusted proxy CIDRs are configured, header-based extraction is
+    completely disabled.
+
 Paths requiring mTLS (when enabled):
   - /admin/policies/reload    (admin→proxy)
   - /internal/*               (any inter-service call)
@@ -24,6 +32,7 @@ Paths NOT requiring mTLS (use JWT/API key):
   - /health, /ready           (probes, unauthenticated)
 """
 
+import ipaddress
 import logging
 import ssl
 from pathlib import Path
@@ -46,6 +55,7 @@ MTLS_REQUIRED_PREFIXES = (
 
 # Trusted service identities (CN values from client certificates).
 # Only these services are allowed to make internal calls.
+# SECURITY (H-01 fix): No wildcard matching. Only exact identities.
 TRUSTED_SERVICE_IDENTITIES = {
     "proxy.sentinel-gateway.svc.cluster.local",
     "admin.sentinel-gateway.svc.cluster.local",
@@ -55,6 +65,56 @@ TRUSTED_SERVICE_IDENTITIES = {
     "sentinel-proxy",
     "sentinel-admin",
 }
+
+# SECURITY (CRIT-01 fix): Parse trusted proxy CIDRs at module load.
+# Only requests from these networks can set X-Client-Cert-* headers.
+_TRUSTED_PROXY_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+
+
+def _parse_trusted_proxy_cidrs() -> list:
+    """Parse SENTINEL_MTLS_TRUSTED_PROXY_CIDRS into network objects."""
+    raw = settings.mtls_trusted_proxy_cidrs.strip()
+    if not raw:
+        return []
+    networks = []
+    for cidr in raw.split(","):
+        cidr = cidr.strip()
+        if not cidr:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError as e:
+            logger.error("Invalid trusted proxy CIDR '%s': %s", cidr, e)
+    return networks
+
+
+def _is_from_trusted_proxy(request: Request) -> bool:
+    """Check if the request originates from a trusted reverse proxy.
+
+    Returns True only if:
+      1. Trusted proxy CIDRs are configured (non-empty)
+      2. The request's client IP is within one of those CIDRs
+
+    If no CIDRs are configured, returns False (header-based cert
+    extraction is disabled entirely).
+    """
+    global _TRUSTED_PROXY_NETWORKS
+    if not _TRUSTED_PROXY_NETWORKS:
+        # Lazy initialization (settings available after app startup)
+        _TRUSTED_PROXY_NETWORKS = _parse_trusted_proxy_cidrs()
+        if not _TRUSTED_PROXY_NETWORKS:
+            return False
+
+    client_host = request.client.host if request.client else None
+    if not client_host:
+        return False
+
+    try:
+        client_ip = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+
+    return any(client_ip in network for network in _TRUSTED_PROXY_NETWORKS)
 
 
 class MTLSError(Exception):
@@ -114,6 +174,18 @@ def build_ssl_context() -> Optional[ssl.SSLContext]:
             "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS"
         )
 
+        # SECURITY (M-13 fix): Enable CRL checking if CRL file is configured.
+        # This rejects certificates that have been revoked by the CA.
+        crl_path = getattr(settings, "mtls_crl_path", None)
+        if crl_path:
+            crl_file = Path(crl_path)
+            if crl_file.is_file():
+                ctx.verify_flags |= ssl.VERIFY_CRL_CHECK_LEAF
+                ctx.load_verify_locations(cafile=str(crl_file))
+                logger.info("mTLS CRL checking enabled (CRL: %s)", crl_path)
+            else:
+                logger.warning("mTLS CRL path configured but file not found: %s", crl_path)
+
         logger.info(
             "mTLS SSL context initialized successfully (CA: %s)", ca_path
         )
@@ -145,6 +217,11 @@ def _path_requires_mtls(path: str) -> bool:
 def _extract_client_identity(request: Request) -> Optional[str]:
     """Extract the client service identity from the request.
 
+    SECURITY (CRIT-01 fix): Header-based extraction (Method 1) is ONLY used
+    if the request comes from a trusted reverse proxy CIDR. This prevents
+    attackers from spoofing X-Client-Cert-* headers when the gateway is
+    directly accessible.
+
     In production (behind nginx/envoy with mTLS termination), the client
     certificate info is passed via headers:
       - X-Client-Cert-CN: Common Name from the client certificate
@@ -158,22 +235,32 @@ def _extract_client_identity(request: Request) -> Optional[str]:
         The service identity (CN or SAN DNS name), or None if not available.
     """
     # Method 1: Headers from reverse proxy (nginx, envoy, istio)
-    # This is the most common pattern in Kubernetes with ingress mTLS
-    cert_verified = request.headers.get("X-Client-Cert-Verified", "")
-    if cert_verified.upper() == "SUCCESS":
-        # CN from verified certificate
-        cn = request.headers.get("X-Client-Cert-CN", "")
-        if cn:
-            return cn
+    # SECURITY: Only trust these headers if request is from a known proxy IP.
+    if _is_from_trusted_proxy(request):
+        cert_verified = request.headers.get("X-Client-Cert-Verified", "")
+        if cert_verified.upper() == "SUCCESS":
+            # CN from verified certificate
+            cn = request.headers.get("X-Client-Cert-CN", "")
+            if cn:
+                return cn
 
-        # SAN DNS names (comma-separated)
-        san = request.headers.get("X-Client-Cert-SAN", "")
-        if san:
-            # Return first DNS SAN
-            for name in san.split(","):
-                name = name.strip()
-                if name:
-                    return name
+            # SAN DNS names (comma-separated)
+            san = request.headers.get("X-Client-Cert-SAN", "")
+            if san:
+                # Return first DNS SAN
+                for name in san.split(","):
+                    name = name.strip()
+                    if name:
+                        return name
+    else:
+        # Log spoofing attempt if headers are present but source is untrusted
+        if request.headers.get("X-Client-Cert-Verified"):
+            client_host = request.client.host if request.client else "unknown"
+            logger.warning(
+                "mTLS header spoofing attempt: X-Client-Cert-* headers from "
+                "untrusted source %s (not in SENTINEL_MTLS_TRUSTED_PROXY_CIDRS)",
+                client_host,
+            )
 
     # Method 2: Direct TLS (app-level termination)
     # Available when uvicorn is running with ssl_certfile + ssl_ca_certs
@@ -211,6 +298,10 @@ def _extract_client_identity(request: Request) -> Optional[str]:
 def _is_trusted_identity(identity: str) -> bool:
     """Verify the client identity is a known Sentinel service.
 
+    SECURITY (H-01 fix): Only exact matches against known identities.
+    No wildcard/suffix matching — a compromised service in the same
+    namespace could forge a certificate with a matching suffix.
+
     Args:
         identity: The CN or SAN extracted from the client certificate.
 
@@ -220,19 +311,8 @@ def _is_trusted_identity(identity: str) -> bool:
     if not identity:
         return False
 
-    # Exact match against known identities
-    if identity in TRUSTED_SERVICE_IDENTITIES:
-        return True
-
-    # Pattern match: allow any *.sentinel-gateway.svc.cluster.local
-    if identity.endswith(".sentinel-gateway.svc.cluster.local"):
-        return True
-
-    # Pattern match: allow namespace-qualified names
-    if identity.endswith(".sentinel-gateway"):
-        return True
-
-    return False
+    # Exact match only — no wildcard patterns
+    return identity in TRUSTED_SERVICE_IDENTITIES
 
 
 class MTLSMiddleware(BaseHTTPMiddleware):

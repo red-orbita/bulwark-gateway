@@ -222,7 +222,13 @@ class OutputScanner(ABC):
     async def safe_scan(
         self, content: str, context: ScanContext, timeout_ms: float = 5000.0
     ) -> GuardrailResult:
-        """Scan with timeout and exception safety."""
+        """Scan with timeout and exception safety.
+
+        SECURITY FIX (C-05): OUTPUT_BLOCKING scanners fail-CLOSED on error/timeout.
+        If a scanner crashes or times out, potentially dangerous content (secrets,
+        PII, malicious instructions) must NOT pass through to the user unscanned.
+        OUTPUT_ASYNC scanners remain fail-open (advisory only).
+        """
         try:
             return await asyncio.wait_for(
                 self.scan(content, context),
@@ -233,10 +239,16 @@ class OutputScanner(ABC):
                 "output_scanner_timeout",
                 extra={"scanner": self.info.name, "timeout_ms": timeout_ms},
             )
+            # Fail-closed for blocking output scanners
+            if self.info.scanner_type == ScannerType.OUTPUT_BLOCKING:
+                return GuardrailResult(verdict=Verdict.BLOCK)
             return GuardrailResult(verdict=Verdict.ALLOW)
         except Exception as e:
             logger.error(
                 "output_scanner_error",
                 extra={"scanner": self.info.name, "error": str(e)[:200]},
             )
+            # SECURITY FIX (C-05): Blocking output scanners fail-CLOSED.
+            if self.info.scanner_type == ScannerType.OUTPUT_BLOCKING:
+                return GuardrailResult(verdict=Verdict.BLOCK)
             return GuardrailResult(verdict=Verdict.ALLOW)

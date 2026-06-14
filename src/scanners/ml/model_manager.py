@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json as _json
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,20 +38,44 @@ logger = logging.getLogger(__name__)
 # SECURITY FIX (H-08): Verify ONNX model integrity before loading.
 # A model manifest file maps model names to expected SHA-256 hashes.
 _MODEL_MANIFEST_PATH = Path(__file__).parent.parent.parent.parent / "config" / "model_manifest.json"
+_MODEL_DIR = Path(os.environ.get("SENTINEL_ML_MODEL_DIR",
+                                  str(Path(__file__).parent.parent.parent.parent / "models")))
 
 
 def _verify_model_integrity(model_path: Path) -> bool:
-    """Verify model file matches expected hash from manifest."""
+    """Verify model file matches expected hash from manifest.
+
+    SECURITY (H-11 fix): Fail-CLOSED when manifest is missing or model is unknown.
+    First deployment requires SENTINEL_ML_SKIP_INTEGRITY=true to opt-in to unverified loading.
+    """
+    import os
+    skip_integrity = os.getenv("SENTINEL_ML_SKIP_INTEGRITY", "false").lower() == "true"
+
     if not _MODEL_MANIFEST_PATH.exists():
-        logger.warning("model_manifest_missing", extra={"path": str(_MODEL_MANIFEST_PATH),
-                      "note": "Models loaded without integrity verification"})
-        return True  # Fail-open if no manifest (first deployment)
+        if skip_integrity:
+            logger.warning("model_manifest_missing_skip_integrity",
+                          extra={"path": str(_MODEL_MANIFEST_PATH),
+                                 "note": "Loading without verification (SENTINEL_ML_SKIP_INTEGRITY=true)"})
+            return True
+        logger.error("model_manifest_missing_blocked",
+                    extra={"path": str(_MODEL_MANIFEST_PATH),
+                           "note": "Set SENTINEL_ML_SKIP_INTEGRITY=true for first deployment"})
+        return False  # Fail-closed: no manifest = no trust
 
     manifest = _json.loads(_MODEL_MANIFEST_PATH.read_text())
-    expected_hash = manifest.get(model_path.name)
+    # SECURITY (L-11 fix): Use relative path from model directory as key
+    # instead of just filename to prevent hash collisions when models with
+    # the same name exist in different subdirectories.
+    model_key = str(model_path.resolve().relative_to(_MODEL_DIR.resolve())) \
+        if model_path.is_relative_to(_MODEL_DIR) else model_path.name
+    expected_hash = manifest.get(model_key) or manifest.get(model_path.name)
     if not expected_hash:
-        logger.warning("model_hash_missing", extra={"model": model_path.name})
-        return True  # Unknown model, allow but warn
+        if skip_integrity:
+            logger.warning("model_hash_missing_skip", extra={"model": model_key})
+            return True
+        logger.error("model_hash_missing_blocked", extra={"model": model_key,
+                    "note": "Model not in manifest — cannot verify integrity"})
+        return False  # Fail-closed: unknown model = untrusted
 
     actual_hash = hashlib.sha256(model_path.read_bytes()).hexdigest()
     if actual_hash != expected_hash:
@@ -156,6 +181,19 @@ class ModelManager:
 
         subdir = model_subdir or name
         model_path = self._model_dir / subdir
+
+        # SECURITY (H-12 fix): Prevent path traversal via model_subdir.
+        # Resolved path must be within model_dir (blocks ../../etc attacks).
+        try:
+            resolved = model_path.resolve()
+            model_dir_resolved = self._model_dir.resolve()
+            if not str(resolved).startswith(str(model_dir_resolved) + "/") and resolved != model_dir_resolved:
+                logger.critical("model_path_traversal_blocked",
+                              extra={"model": name, "subdir": subdir,
+                                     "resolved": str(resolved)})
+                return None
+        except (OSError, ValueError):
+            return None
 
         if not model_path.exists():
             logger.info("model_dir_not_found", extra={"model": name, "path": str(model_path)})
