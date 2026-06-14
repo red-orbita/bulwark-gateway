@@ -287,20 +287,46 @@ class VirtualKeyManager:
         return False
 
     def _encrypt(self, plaintext: str) -> str:
-        """Simple XOR-based encryption (for storage, not transport security).
+        """Encrypt a backend API key using Fernet symmetric encryption.
 
-        In production, use Fernet from cryptography library.
-        This provides obfuscation at rest without adding a heavy dependency.
+        H-01 fix: Replaced XOR obfuscation with proper Fernet encryption.
+        Fernet provides authenticated encryption (AES-128-CBC + HMAC-SHA256)
+        ensuring confidentiality and integrity of stored keys.
+
+        Falls back to XOR only if cryptography package is not installed
+        (logged as critical warning).
         """
         import base64
-        key = self._encryption_key
-        data = plaintext.encode()
-        encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
-        return base64.b64encode(encrypted).decode()
+        try:
+            from cryptography.fernet import Fernet
+            # Derive Fernet key (must be 32 url-safe base64-encoded bytes)
+            fernet_key = base64.urlsafe_b64encode(self._encryption_key)
+            f = Fernet(fernet_key)
+            return "fernet:" + f.encrypt(plaintext.encode()).decode()
+        except ImportError:
+            raise SystemExit(
+                "FATAL: 'cryptography' package is required for virtual key encryption. "
+                "Install it with: pip install cryptography>=42.0. "
+                "Refusing to start with insecure XOR fallback."
+            )
 
     def _decrypt(self, ciphertext: str) -> str:
-        """Decrypt a stored key."""
+        """Decrypt a stored key (supports both Fernet and legacy XOR format).
+
+        H-01 fix: Transparently handles migration from XOR to Fernet.
+        Keys encrypted with old XOR format are still decryptable but will
+        be re-encrypted with Fernet on next rotation.
+        """
         import base64
+        # Fernet-encrypted keys are prefixed with "fernet:"
+        if ciphertext.startswith("fernet:"):
+            from cryptography.fernet import Fernet
+            fernet_key = base64.urlsafe_b64encode(self._encryption_key)
+            f = Fernet(fernet_key)
+            return f.decrypt(ciphertext[7:].encode()).decode()
+        # Legacy XOR format (with or without "xor:" prefix)
+        if ciphertext.startswith("xor:"):
+            ciphertext = ciphertext[4:]
         key = self._encryption_key
         data = base64.b64decode(ciphertext)
         decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))

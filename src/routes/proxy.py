@@ -19,6 +19,7 @@ Streaming:
 import asyncio
 import ipaddress
 import json
+import os
 import socket
 import time
 from urllib.parse import urlparse
@@ -98,11 +99,39 @@ _BLOCKED_IPS = {
 from cachetools import TTLCache
 _DNS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=5.0)
 
+# H-04 fix: Maximum size for accumulated tool call arguments in streaming responses.
+# Prevents memory exhaustion from malicious/compromised backends streaming infinite data.
+_MAX_TOOL_ARGS_BYTES = int(os.environ.get("SENTINEL_MAX_TOOL_ARGS_BYTES", str(1024 * 1024)))  # 1MB default
+
+
+def _check_ips_blocked(addr_infos: list, *, allow_private: bool = False) -> bool:
+    """Check resolved IP addresses against blocked CIDR ranges."""
+    for addr_info in addr_infos:
+        ip_str = addr_info[4][0]
+        if ip_str in _BLOCKED_IPS:
+            return True
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            # Always-blocked: metadata, loopback, link-local
+            for network in _ALWAYS_BLOCKED_NETWORKS:
+                if ip in network:
+                    return True
+            # User-content only: private ranges (10/172/192, CGNAT, ULA)
+            if not allow_private:
+                for network in _USER_CONTENT_BLOCKED_NETWORKS:
+                    if ip in network:
+                        return True
+        except ValueError:
+            return True  # Fail-closed
+    return False
+
 
 def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
     """Validate URL at request-time to prevent SSRF via DNS rebinding (C-01).
 
     Resolves hostname to IP and checks against blocked CIDR ranges.
+    Uses sync DNS resolution with TTL cache — prefer async_is_ssrf_target
+    in async contexts for non-blocking behavior.
 
     Args:
         url: The URL to validate.
@@ -134,25 +163,39 @@ def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
     except (socket.gaierror, OSError):
         return True  # Fail-closed: cannot resolve → block
 
-    for addr_info in addr_infos:
-        ip_str = addr_info[4][0]
-        if ip_str in _BLOCKED_IPS:
-            return True
-        try:
-            ip = ipaddress.ip_address(ip_str)
-            # Always-blocked: metadata, loopback, link-local
-            for network in _ALWAYS_BLOCKED_NETWORKS:
-                if ip in network:
-                    return True
-            # User-content only: private ranges (10/172/192, CGNAT, ULA)
-            if not allow_private:
-                for network in _USER_CONTENT_BLOCKED_NETWORKS:
-                    if ip in network:
-                        return True
-        except ValueError:
-            return True  # Fail-closed
+    return _check_ips_blocked(addr_infos, allow_private=allow_private)
 
-    return False
+
+async def _async_is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
+    """H-03 fix: Async SSRF validation using event loop DNS resolution.
+
+    Uses asyncio.get_event_loop().getaddrinfo() which runs DNS resolution
+    in a thread pool, preventing the async event loop from stalling on
+    slow DNS responses (DoS vector when cache is cold).
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+
+    if hostname.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
+        return True
+    if not allow_private:
+        if hostname.lower().endswith(".internal") or hostname.lower().endswith(".local"):
+            return True
+
+    cache_key = (hostname, parsed.port or 443)
+    try:
+        if cache_key in _DNS_CACHE:
+            addr_infos = _DNS_CACHE[cache_key]
+        else:
+            loop = asyncio.get_event_loop()
+            addr_infos = await loop.getaddrinfo(
+                hostname, parsed.port or 443, proto=socket.IPPROTO_TCP
+            )
+            _DNS_CACHE[cache_key] = addr_infos
+    except (socket.gaierror, OSError):
+        return True  # Fail-closed
+
+    return _check_ips_blocked(addr_infos, allow_private=allow_private)
 
 
 @router.post("/chat/completions")
@@ -372,7 +415,8 @@ async def chat_completions(request: Request):
                 # loopback, link-local) between registration and request time.
                 # allow_private=True: admin-configured backends CAN use cluster-internal
                 # RFC1918 IPs (10.x, 172.16.x, 192.168.x) but NOT metadata/loopback.
-                if _is_ssrf_target(backend_url, allow_private=True):
+                # H-03 fix: Use async DNS resolution to avoid blocking the event loop.
+                if await _async_is_ssrf_target(backend_url, allow_private=True):
                     logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
                     return JSONResponse(
                         status_code=403,
@@ -441,7 +485,9 @@ async def chat_completions(request: Request):
         try:
             error_body = resp.json()
         except Exception:
-            error_body = {"error": resp.text[:500]}
+            # M-05 fix: Truncate backend error body to 200 chars (was 500)
+            # to prevent internal info leakage via backend error messages
+            error_body = {"error": resp.text[:200]}
         return JSONResponse(status_code=resp.status_code, content=error_body)
 
     try:
@@ -724,6 +770,16 @@ async def _handle_streaming(
                                         tool_call_buffer[idx]["name"] = fn["name"]
                                     if "arguments" in fn:
                                         tool_call_buffer[idx]["arguments"] += fn["arguments"]
+                                        # H-04 fix: Bound tool call buffer to prevent memory
+                                        # exhaustion from malicious/compromised backends streaming
+                                        # infinite tool call arguments.
+                                        if len(tool_call_buffer[idx]["arguments"]) > _MAX_TOOL_ARGS_BYTES:
+                                            logger.warning(
+                                                "tool_call_buffer_overflow",
+                                                extra={"index": idx, "size": len(tool_call_buffer[idx]["arguments"])},
+                                            )
+                                            yield _make_error_event("Tool call arguments exceeded maximum size")
+                                            return
                             # Buffer the SSE line — NOT yielded yet
                             tool_call_lines.append(f"{line}\n\n")
                             continue
@@ -851,8 +907,8 @@ async def _emit_streaming_events(
     try:
         await _log_events(events, source_ip)
         await _fire_webhook_alert(events, tenant_id, agent_id)
-    except Exception:
-        pass  # Never let telemetry errors affect streaming
+    except Exception as exc:
+        logger.warning("streaming_telemetry_emit_failed", error=str(exc))
 
 
 def _make_content_event(content: str) -> str:
@@ -977,8 +1033,8 @@ def _push_recent_block(events: list[SecurityEvent], tenant_id: str, agent_id: st
             })
             r.lpush("sentinel:recent_blocks", entry)
             r.ltrim("sentinel:recent_blocks", 0, 49)  # Keep last 50
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("recent_blocks_push_failed", error=str(exc))
 
 
 def _record_tenant_usage(tenant_id: str, verdict: str):
@@ -994,8 +1050,8 @@ def _record_tenant_usage(tenant_id: str, verdict: str):
         # Global counters (persist across pod restarts)
         r.incrby("sentinel:global:requests_total", 1)
         r.incrby(f"sentinel:global:{verdict}", 1)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("tenant_usage_counter_failed", error=str(exc), tenant_id=tenant_id)
 
 
 async def _enrich_and_record(

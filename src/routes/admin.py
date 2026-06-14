@@ -14,16 +14,44 @@ router = APIRouter()
 
 
 async def require_admin(request: Request):
-    """Dependency: require valid JWT with admin role for all admin endpoints."""
+    """Dependency: require valid JWT with admin role for all admin endpoints.
+
+    H-02 fix: Added audience and issuer validation to prevent cross-service
+    token reuse. Also checks token revocation via Redis.
+    """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     token = auth_header[7:]
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            audience=settings.jwt_audience,
+            issuer=settings.jwt_issuer,
+            options={"require": ["exp", "iss", "aud", "jti"]},
+        )
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Check token revocation (fail-closed: if Redis unavailable, reject)
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(status_code=401, detail="Token missing required jti claim")
+    try:
+        import redis as _redis
+        url = getattr(settings, "redis_url", None)
+        if url:
+            r = _redis.from_url(url, decode_responses=True, socket_timeout=0.1)
+            if r.sismember("sentinel:revoked_tokens", jti):
+                raise HTTPException(status_code=401, detail="Token has been revoked")
+    except HTTPException:
+        raise
+    except Exception:
+        # Fail-closed: cannot verify revocation → reject
+        raise HTTPException(status_code=401, detail="Cannot verify token revocation status")
 
     role = payload.get("role", "")
     if role != "admin":
