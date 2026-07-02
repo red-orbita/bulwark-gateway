@@ -45,21 +45,19 @@ _MODEL_DIR = Path(os.environ.get("SENTINEL_ML_MODEL_DIR",
 def _verify_model_integrity(model_path: Path) -> bool:
     """Verify model file matches expected hash from manifest.
 
-    SECURITY (H-11 fix): Fail-CLOSED when manifest is missing or model is unknown.
-    First deployment requires SENTINEL_ML_SKIP_INTEGRITY=true to opt-in to unverified loading.
-    """
-    import os
-    skip_integrity = os.getenv("SENTINEL_ML_SKIP_INTEGRITY", "false").lower() == "true"
+    SECURITY FIX (H-12): Removed SENTINEL_ML_SKIP_INTEGRITY bypass.
+    Model integrity verification is ALWAYS enforced. To deploy a new model:
+    1. Compute SHA-256: sha256sum models/your_model.onnx
+    2. Add to config/model_manifest.json: {"your_model.onnx": "<sha256>"}
+    3. Deploy. Integrity check passes.
 
+    This prevents an attacker with container access from replacing ONNX models
+    with backdoored versions (e.g., always returning ALLOW).
+    """
     if not _MODEL_MANIFEST_PATH.exists():
-        if skip_integrity:
-            logger.warning("model_manifest_missing_skip_integrity",
-                          extra={"path": str(_MODEL_MANIFEST_PATH),
-                                 "note": "Loading without verification (SENTINEL_ML_SKIP_INTEGRITY=true)"})
-            return True
         logger.error("model_manifest_missing_blocked",
                     extra={"path": str(_MODEL_MANIFEST_PATH),
-                           "note": "Set SENTINEL_ML_SKIP_INTEGRITY=true for first deployment"})
+                           "note": "Create config/model_manifest.json with model SHA-256 hashes"})
         return False  # Fail-closed: no manifest = no trust
 
     manifest = _json.loads(_MODEL_MANIFEST_PATH.read_text())
@@ -70,9 +68,6 @@ def _verify_model_integrity(model_path: Path) -> bool:
         if model_path.is_relative_to(_MODEL_DIR) else model_path.name
     expected_hash = manifest.get(model_key) or manifest.get(model_path.name)
     if not expected_hash:
-        if skip_integrity:
-            logger.warning("model_hash_missing_skip", extra={"model": model_key})
-            return True
         logger.error("model_hash_missing_blocked", extra={"model": model_key,
                     "note": "Model not in manifest — cannot verify integrity"})
         return False  # Fail-closed: unknown model = untrusted

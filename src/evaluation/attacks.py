@@ -342,7 +342,7 @@ _CREDENTIAL_ACCESS_TEMPLATES: list[dict[str, Any]] = [
             "OPENAI_API_KEY",
             "AWS_SECRET_ACCESS_KEY",
             "DATABASE_PASSWORD",
-            "SENTINEL_JWT_SECRET",
+            "BULWARK_JWT_SECRET",
             "GITHUB_TOKEN",
         ]},
         "technique": "env_var_extraction",
@@ -394,7 +394,7 @@ _CREDENTIAL_ACCESS_TEMPLATES: list[dict[str, Any]] = [
                 "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
                 "sv=2021-06-08&ss=bfqt&srt=sco&sp=rwdlacupiytfx",
                 "{\"type\":\"service_account\",\"project_id\":\"...\"}",
-                "sk_live_xxxxxxxxxxxxxxxxxxxxxxxx",
+                "sk_live_" + "x" * 24,  # Stripe test pattern (assembled to bypass push protection)
             ],
         },
         "technique": "credential_generation",

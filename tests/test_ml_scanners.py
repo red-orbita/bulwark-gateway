@@ -334,7 +334,8 @@ class TestIntentScanner:
 
         scanner = IntentScanner()
         assert scanner.info.name == "ml_intent_detector"
-        assert scanner.info.scanner_type == ScannerType.INPUT_ASYNC
+        # H-07 fix: Default ml_blocking=True, so default mode is INPUT_BLOCKING
+        assert scanner.info.scanner_type == ScannerType.INPUT_BLOCKING
 
     @pytest.mark.asyncio
     async def test_info_blocking_mode(self):

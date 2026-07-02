@@ -112,9 +112,12 @@ class Settings(BaseSettings):
 
     # ML Scanner Settings (Phase 2+)
     ml_enabled: bool = False  # Master switch for ML-based scanners
-    ml_blocking: bool = False  # If True, ML scanners can block requests (adds latency)
-    ml_block_threshold: float = 0.9  # Confidence threshold for ML to auto-block
-    ml_warn_threshold: float = 0.7  # Confidence threshold for ML to warn
+    # SECURITY FIX (H-07): Default ml_blocking=True when ML is enabled.
+    # Previously ml_blocking=False meant ML detections fired AFTER the request
+    # was already forwarded to the backend — completely useless for blocking.
+    ml_blocking: bool = True  # If True, ML scanners can block requests (adds latency)
+    ml_block_threshold: float = 0.85  # Confidence threshold for ML to auto-block (H-08: lowered from 0.9)
+    ml_warn_threshold: float = 0.6  # Confidence threshold for ML to warn (H-08: lowered from 0.7)
     ml_timeout_ms: int = 10000  # Max ML inference time in milliseconds (CPU: ~1-5s)
     ml_model_dir: Path = Path("models")  # Directory for ML model files
 

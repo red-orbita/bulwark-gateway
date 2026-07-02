@@ -66,6 +66,14 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b__globals__\b"), "Access to __globals__ is forbidden"),
     (re.compile(r"\b__code__\b"), "Access to __code__ is forbidden"),
     (re.compile(r"^\s*import\s+importlib\b", re.MULTILINE), "Use of importlib is forbidden"),
+    # SECURITY FIX (M-07): Block frame object access patterns
+    (re.compile(r"\bgi_frame\b"), "Access to generator frame (gi_frame) is forbidden"),
+    (re.compile(r"\bcr_frame\b"), "Access to coroutine frame (cr_frame) is forbidden"),
+    (re.compile(r"\bag_frame\b"), "Access to async generator frame (ag_frame) is forbidden"),
+    (re.compile(r"\bf_builtins\b"), "Access to frame builtins (f_builtins) is forbidden"),
+    (re.compile(r"\bf_globals\b"), "Access to frame globals (f_globals) is forbidden"),
+    (re.compile(r"\bf_locals\b"), "Access to frame locals (f_locals) is forbidden"),
+    (re.compile(r"\btb_frame\b"), "Access to traceback frame (tb_frame) is forbidden"),
 ]
 
 # State file tracking enabled/disabled plugins

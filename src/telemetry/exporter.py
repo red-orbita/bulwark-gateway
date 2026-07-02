@@ -101,6 +101,10 @@ class TransportWithCircuitBreaker:
     circuit: CircuitBreaker = field(default_factory=CircuitBreaker)
     retry_delay: float = 1.0
     max_retry_delay: float = 30.0
+    # SECURITY FIX (CRIT-04): Per-transport tenant scope.
+    # "global" = receives ALL events (admin-only SIEM endpoints)
+    # set of tenant_ids = only receives events from those tenants
+    tenant_scope: str | set[str] = "global"
 
 
 class TelemetryExporter:
@@ -128,9 +132,21 @@ class TelemetryExporter:
             "export_errors": 0,
         }
 
-    def add_transport(self, transport: TransportProtocol) -> None:
-        self._transports.append(TransportWithCircuitBreaker(transport=transport))
-        logger.info("telemetry_transport_added", extra={"transport": transport.name})
+    def add_transport(self, transport: TransportProtocol, tenant_scope: str | set[str] = "global") -> None:
+        """Add a transport with optional tenant scope filtering.
+
+        Args:
+            transport: The transport implementation.
+            tenant_scope: "global" for admin SIEM (receives all events),
+                         or a set of tenant_ids that this transport is allowed to receive.
+        """
+        self._transports.append(TransportWithCircuitBreaker(
+            transport=transport, tenant_scope=tenant_scope
+        ))
+        logger.info("telemetry_transport_added", extra={
+            "transport": transport.name,
+            "tenant_scope": "global" if tenant_scope == "global" else str(tenant_scope),
+        })
 
     async def start(self) -> None:
         """Start the background exporter loop."""
@@ -280,18 +296,36 @@ class TelemetryExporter:
         pipe.execute()
 
     async def _send_to_transports(self, batch: list[SecurityTelemetryEvent]) -> None:
-        """Fan-out batch to all registered transports with circuit breaker."""
+        """Fan-out batch to registered transports with circuit breaker and tenant filtering.
+
+        SECURITY FIX (CRIT-04): Each transport only receives events matching its
+        tenant_scope. This prevents cross-tenant information disclosure where a
+        tenant-configured SIEM endpoint receives events from ALL tenants.
+        """
         for tw in self._transports:
             if not tw.circuit.can_execute():
                 continue
 
+            # SECURITY FIX (CRIT-04): Filter events by transport's tenant scope
+            if tw.tenant_scope == "global":
+                filtered_batch = batch
+            else:
+                # Only send events belonging to this transport's allowed tenants
+                allowed_tenants = tw.tenant_scope if isinstance(tw.tenant_scope, set) else {tw.tenant_scope}
+                filtered_batch = [
+                    event for event in batch
+                    if getattr(event, "tenant_id", None) in allowed_tenants
+                ]
+                if not filtered_batch:
+                    continue  # No events for this transport in this batch
+
             try:
-                success = await tw.transport.send_batch(batch)
+                success = await tw.transport.send_batch(filtered_batch)
                 if success:
                     tw.circuit.record_success()
                     tw.retry_delay = 1.0  # Reset backoff
                     self._stats["batches_sent"] += 1
-                    self._stats["events_exported"] += len(batch)
+                    self._stats["events_exported"] += len(filtered_batch)
                 else:
                     tw.circuit.record_failure()
                     tw.retry_delay = min(tw.retry_delay * 2, tw.max_retry_delay)

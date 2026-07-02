@@ -142,6 +142,16 @@ _BLOCKED_ATTRIBUTES: set[str] = {
     "exec_module", "load_module",  # importlib
     "connect", "bind", "listen", "accept",  # socket
     "Popen", "call", "run", "check_output",  # subprocess
+    # SECURITY FIX (M-07): Block frame object access.
+    # Attackers use type() + generator/function frame objects to escape sandbox:
+    #   gen = (x for x in [1]); gen.gi_frame.f_builtins['__import__']('os')
+    "gi_frame", "gi_code", "gi_yieldfrom",  # generator internals
+    "cr_frame", "cr_code",  # coroutine internals
+    "ag_frame", "ag_code",  # async generator internals
+    "f_builtins", "f_globals", "f_locals", "f_back",  # frame attributes
+    "tb_frame", "tb_next",  # traceback frame access
+    "__wrapped__", "__func__",  # function wrapper bypass
+    "cell_contents",  # closure cell access
 }
 
 # Dangerous function calls (fully qualified)
