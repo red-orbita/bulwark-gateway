@@ -229,15 +229,93 @@ class InputGuardrail:
         length = len(text)
         return -sum((count / length) * math.log2(count / length) for count in freq.values())
 
+    def _check_encoding_window(
+        self, content: str, tenant_id: str, agent_id: str
+    ) -> list[SecurityEvent]:
+        """Apply encoding checks to a bounded content window.
+
+        SECURITY FIX (PENTEST-DEEP CRIT-2): Extracted to allow encoding checks
+        on head/tail windows of large inputs without processing full content.
+        Checks: encoding indicators, high-entropy blocks, base64 decode.
+        """
+        events: list[SecurityEvent] = []
+        if not content:
+            return events
+
+        # Encoding indicators
+        if self._ENCODING_INDICATOR_RE.search(content):
+            events.append(
+                SecurityEvent(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    verdict=Verdict.BLOCK,
+                    category=ThreatCategory.PROMPT_INJECTION,
+                    description="Explicit encoding indicator with suspicious payload",
+                    source="input_guardrail_encoding",
+                    severity="high",
+                )
+            )
+
+        # High-entropy blocks
+        for match in self._ENCODED_BLOCK_RE.finditer(content):
+            segment = match.group(0)
+            if len(segment) >= self.ENTROPY_MIN_LENGTH:
+                entropy = self._shannon_entropy(segment)
+                if entropy > self.ENTROPY_THRESHOLD:
+                    events.append(
+                        SecurityEvent(
+                            tenant_id=tenant_id,
+                            agent_id=agent_id,
+                            verdict=Verdict.BLOCK,
+                            category=ThreatCategory.PROMPT_INJECTION,
+                            description=f"High-entropy block (entropy={entropy:.2f}, len={len(segment)})",
+                            source="input_guardrail_encoding",
+                            severity="high",
+                        )
+                    )
+                    break
+            # Try base64 decode
+            if 12 <= len(segment) <= 64 and ("=" in segment or len(segment) % 4 == 0):
+                try:
+                    decoded = base64.b64decode(segment).decode("utf-8", errors="ignore")
+                    if decoded and len(decoded) >= 6:
+                        for pattern in self.all_patterns:
+                            if pattern.regex.search(decoded):
+                                events.append(
+                                    SecurityEvent(
+                                        tenant_id=tenant_id,
+                                        agent_id=agent_id,
+                                        verdict=Verdict.BLOCK,
+                                        category=pattern.category,
+                                        description=f"Encoded payload (base64→decode→match: {pattern.description})",
+                                        source="input_guardrail_encoding",
+                                        severity=pattern.severity,
+                                        matched_pattern=pattern.pattern_id,
+                                    )
+                                )
+                                return events
+                except Exception:
+                    pass
+
+        return events
+
     def _check_encoding_evasion(
         self, content: str, tenant_id: str, agent_id: str
     ) -> list[SecurityEvent]:
-        """Multi-layer encoding evasion detection."""
+        """Multi-layer encoding evasion detection.
+
+        SECURITY FIX (M-01): Recursive decoding (2 layers) to catch double-encoding
+        attacks like base64(base64(payload)) that previously evaded single-pass decode.
+        """
         events = []
 
-        # Skip expensive encoding checks for large inputs (DoS prevention)
+        # SECURITY FIX (PENTEST-DEEP CRIT-2): For large inputs, apply encoding
+        # checks to head + tail windows instead of skipping entirely.
+        # Previous behavior: skip ALL encoding checks for >5000 chars.
+        # New behavior: check invisible chars on full first 5KB, then apply
+        # encoding detection on head(2500) + tail(2500) windows.
         if len(content) > 5000:
-            # Only check invisible chars for large inputs
+            # Check invisible chars on first 5KB
             invisible_matches = self._INVISIBLE_RE.findall(content[:5000])
             if len(invisible_matches) >= 3:
                 events.append(
@@ -250,6 +328,13 @@ class InputGuardrail:
                         source="input_guardrail_encoding",
                         severity="high",
                     )
+                )
+            # Apply encoding detection on head + tail windows
+            head_window = content[:2500]
+            tail_window = content[-2500:]
+            for window in (head_window, tail_window):
+                events.extend(
+                    self._check_encoding_window(window, tenant_id, agent_id)
                 )
             return events
         # 1. Invisible/zero-width characters (threshold: 2+)
@@ -304,33 +389,50 @@ class InputGuardrail:
                 try:
                     decoded = base64.b64decode(segment).decode("utf-8", errors="ignore")
                     if decoded and len(decoded) >= 6:
-                        for pattern in self.all_patterns:
-                            if pattern.regex.search(decoded):
+                        # SECURITY FIX (M-01): Recursive decoding — try decoding the
+                        # decoded result again (catches base64(base64(payload)))
+                        decode_layers = [decoded]
+                        try:
+                            if len(decoded) >= 8 and ("=" in decoded or len(decoded) % 4 == 0):
+                                second_decode = base64.b64decode(decoded).decode("utf-8", errors="ignore")
+                                if second_decode and len(second_decode) >= 4:
+                                    decode_layers.append(second_decode)
+                        except Exception:
+                            pass
+
+                        for decoded_layer in decode_layers:
+                            for pattern in self.all_patterns:
+                                if pattern.regex.search(decoded_layer):
+                                    events.append(
+                                        SecurityEvent(
+                                            tenant_id=tenant_id,
+                                            agent_id=agent_id,
+                                            verdict=Verdict.BLOCK,
+                                            category=ThreatCategory.PROMPT_INJECTION,
+                                            description=f"Base64-encoded payload decoded to malicious content (depth={decode_layers.index(decoded_layer)+1})",
+                                            source="input_guardrail_encoding",
+                                            severity="high",
+                                        )
+                                    )
+                                    break
+                            else:
+                                continue
+                            break
+                        # Also check for sensitive file paths in all decoded layers
+                        for decoded_layer in decode_layers:
+                            if re.search(r"/etc/(shadow|passwd|hosts)|\.env|\.aws|id_rsa", decoded_layer):
                                 events.append(
                                     SecurityEvent(
                                         tenant_id=tenant_id,
                                         agent_id=agent_id,
                                         verdict=Verdict.BLOCK,
                                         category=ThreatCategory.PROMPT_INJECTION,
-                                        description="Base64-encoded payload decoded to malicious content",
+                                        description="Base64-encoded sensitive path",
                                         source="input_guardrail_encoding",
                                         severity="high",
                                     )
                                 )
                                 break
-                        # Also check for sensitive file paths
-                        if re.search(r"/etc/(shadow|passwd|hosts)|\.env|\.aws|id_rsa", decoded):
-                            events.append(
-                                SecurityEvent(
-                                    tenant_id=tenant_id,
-                                    agent_id=agent_id,
-                                    verdict=Verdict.BLOCK,
-                                    category=ThreatCategory.PROMPT_INJECTION,
-                                    description="Base64-encoded sensitive path",
-                                    source="input_guardrail_encoding",
-                                    severity="high",
-                                )
-                            )
                         break
                 except Exception:
                     pass
@@ -1318,8 +1420,34 @@ class InputGuardrail:
         from src.guardrails.dynamic_registry import get_pattern_registry, safe_regex_search
         _registry = get_pattern_registry()
 
+        # SECURITY FIX (H-09): Per-request CPU budget for regex evaluation.
+        # Prevents algorithmic complexity DoS where crafted near-miss inputs
+        # cause excessive backtracking across 441 patterns × N text variants.
+        import time as _time
+        _REGEX_BUDGET_SECONDS = 2.0  # Max 2 seconds of regex CPU per request
+        _regex_start = _time.monotonic()
+        _budget_exceeded = False
+
         for text in texts_to_check:
+            if _budget_exceeded:
+                break
             for pattern in self.all_patterns:
+                # Check time budget every 50 patterns
+                if not _budget_exceeded and (hash(pattern.description) % 50 == 0):
+                    if _time.monotonic() - _regex_start > _REGEX_BUDGET_SECONDS:
+                        _budget_exceeded = True
+                        events.append(
+                            SecurityEvent(
+                                tenant_id=tenant_id,
+                                agent_id=agent_id,
+                                verdict=Verdict.WARN,
+                                category=ThreatCategory.PROMPT_INJECTION,
+                                description=f"Regex budget exceeded ({_REGEX_BUDGET_SECONDS}s) — possible evasion via complexity",
+                                source="input_guardrail_budget",
+                                severity="medium",
+                            )
+                        )
+                        break
                 if pattern.description in matched_descriptions:
                     continue
                 # Skip disabled patterns (toggled off via admin)
@@ -1479,7 +1607,13 @@ class InputGuardrail:
         self, messages: list[dict], tenant_id: str = "", agent_id: str = ""
     ) -> GuardrailResult:
         """Inspect all user messages in a conversation with cross-turn escalation detection
-        and cumulative threat scoring."""
+        and cumulative threat scoring.
+
+        SECURITY FIX (CRIT-05): In addition to scanning individual messages, we now
+        scan the CONCATENATED content of all messages. This prevents semantic splitting
+        attacks where injection commands are divided across multiple messages (e.g.,
+        "ignore all previous" in msg 1, "instructions" in msg 2).
+        """
         all_events: list[SecurityEvent] = []
         final_verdict = Verdict.ALLOW
 
@@ -1514,6 +1648,42 @@ class InputGuardrail:
                     cumulative_score += 0.3
                 elif ev.severity == "low":
                     cumulative_score += 0.1
+
+        # SECURITY FIX (CRIT-05): Scan concatenated messages to detect
+        # semantic splitting attacks. If multiple messages exist, join them
+        # and run inspection on the combined text. This catches injection
+        # phrases split across messages that individually appear benign.
+        if final_verdict != Verdict.BLOCK and len(user_contents) >= 2:
+            concatenated = " ".join(user_contents)
+            concat_result = self.inspect(concatenated, tenant_id, agent_id)
+            if concat_result.verdict == Verdict.BLOCK:
+                # Add a specific event indicating the split was detected
+                all_events.append(
+                    SecurityEvent(
+                        tenant_id=tenant_id,
+                        agent_id=agent_id,
+                        verdict=Verdict.BLOCK,
+                        category=ThreatCategory.PROMPT_INJECTION,
+                        description="Cross-message semantic splitting attack detected (concatenated scan)",
+                        source="input_guardrail_concat",
+                        severity="high",
+                    )
+                )
+                all_events.extend(concat_result.events)
+                final_verdict = Verdict.BLOCK
+            elif concat_result.verdict == Verdict.WARN and final_verdict == Verdict.ALLOW:
+                all_events.extend(concat_result.events)
+                final_verdict = Verdict.WARN
+                # Add concatenated WARN events to cumulative score
+                for ev in concat_result.events:
+                    if ev.severity == "critical":
+                        cumulative_score += 1.0
+                    elif ev.severity == "high":
+                        cumulative_score += 0.6
+                    elif ev.severity == "medium":
+                        cumulative_score += 0.3
+                    elif ev.severity == "low":
+                        cumulative_score += 0.1
 
         # Cumulative threshold: if multiple turns contribute warnings, block
         if final_verdict != Verdict.BLOCK and cumulative_score >= 1.5:

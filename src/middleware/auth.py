@@ -93,8 +93,11 @@ def _is_token_revoked(jti: str) -> bool:
 # configuration and enabled patterns which is sensitive info disclosure.
 PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json"}
 
-# Pre-compute valid API key hashes at startup (constant-time comparison)
-_API_KEY_HASHES: Set[str] = set()
+# SECURITY FIX (CRIT-01): API keys are now bound to tenant_id.
+# Format: "key:tenant_id" pairs in SENTINEL_API_KEYS.
+# Keys without explicit tenant binding default to "default" tenant.
+# This prevents cross-tenant impersonation via X-Tenant-ID header spoofing.
+_API_KEY_BINDINGS: dict[str, str] = {}  # key_hash -> bound_tenant_id
 
 # Tier 2 Multi-Tenancy: allowed tenants for this pod (empty = serve all)
 _ALLOWED_TENANTS: Set[str] = set()
@@ -108,19 +111,40 @@ def _init_allowed_tenants() -> Set[str]:
     return {t.strip() for t in raw.split(",") if t.strip()}
 
 
-def _init_api_keys() -> Set[str]:
-    """Load API keys from config, store as SHA-256 hashes."""
-    keys = set()
+def _init_api_keys() -> dict[str, str]:
+    """Load API keys from config, store as SHA-256 hashes bound to tenant_ids.
+
+    SECURITY FIX (CRIT-01): API keys are now bound to a specific tenant.
+    Format options in SENTINEL_API_KEYS:
+      - "key1:tenant1,key2:tenant2"   (explicit tenant binding)
+      - "key1,key2"                    (backward-compat: binds to "default")
+
+    Returns dict mapping key_hash -> bound_tenant_id.
+    """
+    bindings: dict[str, str] = {}
     if settings.api_keys:
-        for key in settings.api_keys.split(","):
-            key = key.strip()
+        for entry in settings.api_keys.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            # Parse "key:tenant_id" or just "key" (defaults to "default")
+            if ":" in entry:
+                # Last colon separates key from tenant (keys may contain colons)
+                last_colon = entry.rfind(":")
+                key = entry[:last_colon]
+                tenant = entry[last_colon + 1:]
+                if not tenant:
+                    tenant = "default"
+            else:
+                key = entry
+                tenant = "default"
             if len(key) >= 16:
-                keys.add(hashlib.sha256(key.encode()).hexdigest())
-    return keys
+                bindings[hashlib.sha256(key.encode()).hexdigest()] = tenant
+    return bindings
 
 
 # Initialize on module load
-_API_KEY_HASHES = _init_api_keys()
+_API_KEY_BINDINGS = _init_api_keys()
 _ALLOWED_TENANTS = _init_allowed_tenants()
 
 
@@ -219,7 +243,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
                             content={"error": "Token has been revoked"},
                         )
                     # Use authenticated tenant/agent from JWT (H-04: prevents header spoofing)
-                    tenant_id = payload.get("tenant_id", tenant_id)
+                    # SECURITY FIX (PENTEST-DEEP CRIT-1): Require tenant_id in JWT.
+                    # Without this, a JWT missing tenant_id falls back to the header,
+                    # enabling cross-tenant impersonation.
+                    if "tenant_id" not in payload:
+                        return JSONResponse(
+                            status_code=401,
+                            content={"error": "JWT missing required tenant_id claim"},
+                        )
+                    tenant_id = payload["tenant_id"]
                     agent_id = payload.get("agent_id", agent_id)
                 except JWTError:
                     # SECURITY (L-01 fix): JWT decode failed. Do NOT fall through
@@ -232,11 +264,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
                             content={"error": "Invalid token or API key"},
                         )
                     # Otherwise, try as API key
-                    if not self._validate_api_key(token):
+                    # SECURITY FIX (CRIT-01): Use bound tenant from API key,
+                    # ignoring X-Tenant-ID header to prevent impersonation.
+                    bound_tenant = self._validate_api_key(token)
+                    if bound_tenant is None:
                         return JSONResponse(
                             status_code=401,
                             content={"error": "Invalid token or API key"},
                         )
+                    tenant_id = bound_tenant
                 except JWTKeyError as e:
                     # Asymmetric key loading failed — fail-closed
                     logger.error(
@@ -301,20 +337,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
-    def _validate_api_key(self, key: str) -> bool:
-        """Validate API key using constant-time comparison against stored hashes.
+    def _validate_api_key(self, key: str) -> str | None:
+        """Validate API key and return its bound tenant_id.
 
-        Returns True only if the key matches a pre-configured API key.
-        If no API keys are configured (SENTINEL_API_KEYS is empty),
-        API key auth is disabled — only JWT auth works.
+        SECURITY FIX (CRIT-01): Returns the tenant_id that this API key is
+        bound to, or None if the key is invalid. The caller MUST use the
+        returned tenant_id (ignoring X-Tenant-ID header) to prevent
+        cross-tenant impersonation.
+
+        Returns:
+            Bound tenant_id if key is valid, None otherwise.
         """
-        if not _API_KEY_HASHES:
+        if not _API_KEY_BINDINGS:
             # No API keys configured — reject API key auth attempts
-            return False
+            return None
 
         if len(key) < 16:
-            return False
+            return None
 
         key_hash = hashlib.sha256(key.encode()).hexdigest()
-        # Use hmac.compare_digest for constant-time comparison
-        return any(hmac.compare_digest(key_hash, stored_hash) for stored_hash in _API_KEY_HASHES)
+        # Use constant-time comparison against each stored hash
+        for stored_hash, bound_tenant in _API_KEY_BINDINGS.items():
+            if hmac.compare_digest(key_hash, stored_hash):
+                return bound_tenant
+        return None

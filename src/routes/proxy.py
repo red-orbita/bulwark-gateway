@@ -34,6 +34,7 @@ from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
 from src.guardrails.session_tracker import get_session_tracker
+from src.guardrails.tool_policy import _normalize_tool_name
 from src.models import (
     GuardrailResult,
     SecurityEvent,
@@ -102,6 +103,64 @@ _DNS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=5.0)
 # H-04 fix: Maximum size for accumulated tool call arguments in streaming responses.
 # Prevents memory exhaustion from malicious/compromised backends streaming infinite data.
 _MAX_TOOL_ARGS_BYTES = int(os.environ.get("SENTINEL_MAX_TOOL_ARGS_BYTES", str(1024 * 1024)))  # 1MB default
+
+# SECURITY FIX (H-04): Limit concurrent streaming connections per tenant
+# to prevent worker starvation (4 connections = full DoS previously)
+_MAX_CONCURRENT_STREAMS = int(os.environ.get("SENTINEL_MAX_CONCURRENT_STREAMS", "50"))
+_stream_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_STREAMS)
+
+
+def _sanitize_backend_error(status_code: int, raw_body: bytes) -> dict:
+    """Sanitize backend error responses before forwarding to client.
+
+    SECURITY FIX (H-13): Never forward raw backend error bodies to clients.
+    They may contain stack traces, internal URLs, database errors, or secrets.
+    Return a safe, generic error message instead.
+    """
+    # Map common HTTP errors to safe messages
+    safe_messages = {
+        400: "Backend rejected the request (invalid format)",
+        401: "Backend authentication failed",
+        403: "Backend access denied",
+        404: "Backend endpoint not found",
+        429: "Backend rate limit exceeded",
+        500: "Backend internal error",
+        502: "Backend unavailable (bad gateway)",
+        503: "Backend temporarily unavailable",
+        504: "Backend request timed out",
+    }
+    message = safe_messages.get(status_code, f"Backend returned error {status_code}")
+    return {
+        "error": {
+            "message": message,
+            "type": "backend_error",
+            "code": f"backend_{status_code}",
+        }
+    }
+
+
+# SECURITY FIX (H-05): Shared httpx.AsyncClient with connection pooling.
+# Previously, each request created a new client (new TCP connection + FD),
+# making file descriptor exhaustion trivial. A shared pool limits total
+# outbound connections and reuses TCP connections for performance.
+_HTTP_POOL_LIMITS = httpx.Limits(
+    max_connections=int(os.environ.get("SENTINEL_MAX_BACKEND_CONNECTIONS", "100")),
+    max_keepalive_connections=int(os.environ.get("SENTINEL_MAX_KEEPALIVE", "20")),
+    keepalive_expiry=30.0,
+)
+_shared_client: httpx.AsyncClient | None = None
+
+
+def _get_shared_client(timeout: float = 120.0) -> httpx.AsyncClient:
+    """Get or create the shared httpx client with connection pooling."""
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            limits=_HTTP_POOL_LIMITS,
+            timeout=httpx.Timeout(timeout, connect=10.0),
+            follow_redirects=False,
+        )
+    return _shared_client
 
 
 def _check_ips_blocked(addr_infos: list, *, allow_private: bool = False) -> bool:
@@ -225,7 +284,31 @@ async def chat_completions(request: Request):
                 status_code=413,
                 content={"error": {"message": "Request body too large (max 10MB)", "type": "validation_error", "code": "body_too_large"}},
             )
-        body = json.loads(raw_body)
+        # SECURITY FIX (H-06): Use object_pairs_hook to detect and reject
+        # duplicate JSON keys. Duplicate keys create parser differentials
+        # between the proxy (last-wins) and backends (first-wins or error),
+        # enabling guardrail bypass.
+        # SECURITY FIX (M-06): Limit JSON nesting depth to prevent
+        # stack overflow / memory exhaustion from deeply nested payloads.
+        _MAX_JSON_DEPTH = 50
+        _current_depth = [0]
+
+        def _reject_duplicate_keys(pairs):
+            _current_depth[0] += 1
+            if _current_depth[0] > _MAX_JSON_DEPTH:
+                raise json.JSONDecodeError(
+                    f"JSON nesting depth exceeds limit ({_MAX_JSON_DEPTH})", "", 0
+                )
+            keys = {}
+            for key, value in pairs:
+                if key in keys:
+                    raise json.JSONDecodeError(
+                        f"Duplicate key: '{key}'", "", 0
+                    )
+                keys[key] = value
+            _current_depth[0] -= 1
+            return keys
+        body = json.loads(raw_body, object_pairs_hook=_reject_duplicate_keys)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
     except Exception as exc:
@@ -397,32 +480,42 @@ async def chat_completions(request: Request):
 
     for attempt_idx, current_backend in enumerate(backends_to_try):
         try:
-            async with httpx.AsyncClient(timeout=current_backend.timeout) as client:
-                backend_headers = {
-                    "Content-Type": "application/json",
-                }
-                # Use agent-specific auth if configured
-                # H-04: Only forward auth from pre-configured backend auth, NOT from client headers
-                if current_backend.auth_header and current_backend.auth_token:
-                    backend_headers[current_backend.auth_header] = current_backend.auth_token
+            # SECURITY FIX (H-05): Use shared client with connection pool
+            # instead of creating a new client per request (FD exhaustion)
+            client = _get_shared_client(timeout=current_backend.timeout)
+            backend_headers = {
+                "Content-Type": "application/json",
+            }
+            # Use agent-specific auth if configured
+            # H-04: Only forward auth from pre-configured backend auth, NOT from client headers
+            if current_backend.auth_header and current_backend.auth_token:
+                backend_headers[current_backend.auth_header] = current_backend.auth_token
 
-                backend_url = f"{current_backend.backend_url.rstrip('/')}{current_backend.path_prefix}/chat/completions"
+            backend_url = f"{current_backend.backend_url.rstrip('/')}{current_backend.path_prefix}/chat/completions"
 
-                # SECURITY FIX (VULN 1.2): ALWAYS perform SSRF check at request-time,
-                # even for operator-configured backends. DNS rebinding can cause a
-                # previously-valid hostname to resolve to dangerous IPs (169.254.169.254,
-                # loopback, link-local) between registration and request time.
-                # allow_private=True: admin-configured backends CAN use cluster-internal
-                # RFC1918 IPs (10.x, 172.16.x, 192.168.x) but NOT metadata/loopback.
-                # H-03 fix: Use async DNS resolution to avoid blocking the event loop.
-                if await _async_is_ssrf_target(backend_url, allow_private=True):
-                    logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
+            # SECURITY FIX (VULN 1.2): ALWAYS perform SSRF check at request-time,
+            # even for operator-configured backends. DNS rebinding can cause a
+            # previously-valid hostname to resolve to dangerous IPs (169.254.169.254,
+            # loopback, link-local) between registration and request time.
+            # allow_private=True: admin-configured backends CAN use cluster-internal
+            # RFC1918 IPs (10.x, 172.16.x, 192.168.x) but NOT metadata/loopback.
+            # H-03 fix: Use async DNS resolution to avoid blocking the event loop.
+            if await _async_is_ssrf_target(backend_url, allow_private=True):
+                logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": {"message": "Backend URL resolves to blocked address", "type": "security_violation", "code": "ssrf_block"}},
+                )
+
+            if is_streaming:
+                # SECURITY FIX (H-04): Limit concurrent streams to prevent
+                # worker starvation (previously 4 connections = full DoS)
+                if _stream_semaphore.locked():
                     return JSONResponse(
-                        status_code=403,
-                        content={"error": {"message": "Backend URL resolves to blocked address", "type": "security_violation", "code": "ssrf_block"}},
+                        status_code=503,
+                        content={"error": {"message": "Too many concurrent streaming connections", "type": "capacity_error", "code": "stream_limit"}},
                     )
-
-                if is_streaming:
+                async with _stream_semaphore:
                     # Streaming path: forward SSE with chunk-level guardrails
                     policy_engine = request.app.state.policy_loader.engine
                     return await _handle_streaming(
@@ -437,25 +530,25 @@ async def chat_completions(request: Request):
                         policy_engine,
                     )
 
-                resp = await client.post(
-                    backend_url,
-                    json=body,
-                    headers=backend_headers,
+            resp = await client.post(
+                backend_url,
+                json=body,
+                headers=backend_headers,
+            )
+
+            # If we got a server error (5xx) and have fallbacks, try next
+            if resp.status_code >= 500 and attempt_idx < len(backends_to_try) - 1:
+                await logger.awarn(
+                    "backend_failover",
+                    primary=current_backend.backend_url,
+                    status=resp.status_code,
+                    attempt=attempt_idx + 1,
+                    next_backend=backends_to_try[attempt_idx + 1].backend_url,
                 )
+                continue
 
-                # If we got a server error (5xx) and have fallbacks, try next
-                if resp.status_code >= 500 and attempt_idx < len(backends_to_try) - 1:
-                    await logger.awarn(
-                        "backend_failover",
-                        primary=current_backend.backend_url,
-                        status=resp.status_code,
-                        attempt=attempt_idx + 1,
-                        next_backend=backends_to_try[attempt_idx + 1].backend_url,
-                    )
-                    continue
-
-                # Success or client error — stop trying
-                break
+            # Success or client error — stop trying
+            break
 
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
             if attempt_idx < len(backends_to_try) - 1:
@@ -501,18 +594,45 @@ async def chat_completions(request: Request):
 
         if tool_calls_raw:
             tool_calls = []
+            malformed_arg_tools: list[str] = []
             for tc in tool_calls_raw:
+                tc_name = tc.get("function", {}).get("name", "")
                 try:
                     args = json.loads(tc.get("function", {}).get("arguments", "{}"))
                 except (json.JSONDecodeError, TypeError):
+                    # SECURITY FIX (PENTEST-DEEP CRIT-4): Fail-closed on malformed
+                    # tool arguments. An adversary can embed blocked argument patterns
+                    # in deliberately broken JSON to bypass denied_arguments checks.
+                    malformed_arg_tools.append(tc_name)
                     args = {}
                 tool_calls.append(
                     ToolCall(
                         id=tc.get("id"),
-                        name=tc.get("function", {}).get("name", ""),
+                        name=tc_name,
                         arguments=args,
                     )
                 )
+
+            # Block tools with malformed arguments (fail-closed)
+            if malformed_arg_tools:
+                logger.warning(
+                    "tool_call_malformed_arguments",
+                    extra={
+                        "tools": malformed_arg_tools,
+                        "tenant_id": tenant_id,
+                        "agent_id": agent_id,
+                    },
+                )
+                # Remove malformed tool calls from response
+                message["tool_calls"] = [
+                    tc for tc in tool_calls_raw
+                    if tc.get("function", {}).get("name", "") not in malformed_arg_tools
+                ]
+                if not message.get("tool_calls"):
+                    message.pop("tool_calls", None)
+                    message["content"] = (
+                        "Tool call blocked: malformed arguments detected."
+                    )
 
             policy_result = policy_engine.evaluate_tool_calls(tool_calls, tenant_id, agent_id)
 
@@ -521,10 +641,12 @@ async def chat_completions(request: Request):
                 asyncio.create_task(_fire_webhook_alert(policy_result.events, tenant_id, agent_id))
                 _push_recent_block(policy_result.events, tenant_id, agent_id)
                 # Remove blocked tool calls from response
+                # SECURITY FIX (PENTEST-DEEP CRIT-3): Normalize tool names before
+                # comparison to prevent Unicode confusable bypass (F-01).
                 message["tool_calls"] = [
                     tc
                     for tc in tool_calls_raw
-                    if tc.get("function", {}).get("name") not in policy_result.blocked_tools
+                    if _normalize_tool_name(tc.get("function", {}).get("name", "")) not in policy_result.blocked_tools
                 ]
                 # If all tools blocked, return a text response instead
                 if not message["tool_calls"]:
@@ -707,7 +829,11 @@ async def _handle_streaming(
             async with client.stream("POST", url, json=body, headers=headers) as resp:
                 if resp.status_code != 200:
                     error_body = await resp.aread()
-                    yield f"data: {error_body.decode()}\n\n"
+                    # SECURITY FIX (H-13): Sanitize backend error responses.
+                    # Do NOT forward raw error bodies — they may contain internal
+                    # infrastructure details, stack traces, or secrets.
+                    safe_error = _sanitize_backend_error(resp.status_code, error_body)
+                    yield f"data: {json.dumps(safe_error)}\n\n"
                     return
 
                 async for line in resp.aiter_lines():
@@ -726,7 +852,18 @@ async def _handle_streaming(
                         break
 
                     if not line.startswith("data: "):
-                        yield f"{line}\n"
+                        # SECURITY FIX (CRIT-03): Scan ALL SSE lines through output filter,
+                        # not just data lines. SSE comments (:), event types, and IDs can
+                        # be used by compromised backends to exfiltrate secrets.
+                        filtered_line = _filter_chunk(line, tenant_id, agent_id, source_ip)
+                        if filtered_line is None:
+                            # Secret detected in non-data line — strip it silently
+                            logger.warning(
+                                "sse_nondata_secret_stripped",
+                                extra={"tenant": tenant_id, "line_type": line[:10]},
+                            )
+                            continue
+                        yield f"{filtered_line}\n"
                         continue
 
                     data = line[6:]
@@ -746,7 +883,16 @@ async def _handle_streaming(
                     try:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
-                        yield f"{line}\n"
+                        # SECURITY FIX (CRIT-03): Malformed JSON in data lines must also
+                        # be scanned. A compromised backend could send secrets as non-JSON.
+                        filtered_data = _filter_chunk(data, tenant_id, agent_id, source_ip)
+                        if filtered_data is None:
+                            logger.warning(
+                                "sse_malformed_json_secret_stripped",
+                                extra={"tenant": tenant_id},
+                            )
+                            continue
+                        yield f"data: {filtered_data}\n\n"
                         continue
 
                     choices = chunk.get("choices", [])

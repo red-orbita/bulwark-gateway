@@ -82,14 +82,38 @@ class VirtualKeyManager:
     def _derive_encryption_key(self) -> bytes:
         """Derive encryption key from environment.
 
-        Uses SENTINEL_KEY_ENCRYPTION_KEY if set, otherwise derives from JWT_SECRET.
-        Returns 32-byte key suitable for Fernet-like encryption.
+        SECURITY FIX (CRIT-02): SENTINEL_KEY_ENCRYPTION_KEY is now MANDATORY.
+        Refusing to start if not set — prevents accidental use of JWT_SECRET
+        as the single point of compromise for all backend API keys.
+
+        Uses HKDF (HMAC-based Key Derivation Function) with a fixed salt
+        for proper key derivation instead of bare SHA-256.
+
+        Returns 32-byte key suitable for Fernet encryption.
         """
-        key_source = os.environ.get(
-            "SENTINEL_KEY_ENCRYPTION_KEY",
-            os.environ.get("SENTINEL_JWT_SECRET", "default-insecure-key")
-        )
-        return hashlib.sha256(key_source.encode()).digest()
+        key_source = os.environ.get("SENTINEL_KEY_ENCRYPTION_KEY", "")
+        if not key_source:
+            raise SystemExit(
+                "FATAL: SENTINEL_KEY_ENCRYPTION_KEY environment variable is REQUIRED.\n"
+                "This key encrypts all backend API keys at rest.\n"
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\"\n"
+                "NEVER reuse JWT_SECRET as the encryption key."
+            )
+        # HKDF derivation with fixed context (ensures consistent key across restarts)
+        import hmac as _hmac
+        # HKDF-Extract
+        prk = _hmac.new(
+            b"sentinel-vkey-encryption-v1",  # salt (fixed, public)
+            key_source.encode(),
+            "sha256",
+        ).digest()
+        # HKDF-Expand (single block is enough for 32 bytes)
+        okm = _hmac.new(
+            prk,
+            b"sentinel-virtual-keys-fernet\x01",  # info + counter
+            "sha256",
+        ).digest()
+        return okm
 
     def create_key(
         self,
@@ -311,11 +335,13 @@ class VirtualKeyManager:
             )
 
     def _decrypt(self, ciphertext: str) -> str:
-        """Decrypt a stored key (supports both Fernet and legacy XOR format).
+        """Decrypt a stored key.
 
-        H-01 fix: Transparently handles migration from XOR to Fernet.
-        Keys encrypted with old XOR format are still decryptable but will
-        be re-encrypted with Fernet on next rotation.
+        SECURITY FIX (H-11): Legacy XOR decryption path REMOVED.
+        Only Fernet-encrypted keys are supported. Any legacy XOR keys
+        must be re-encrypted via the admin key rotation endpoint.
+
+        Raises ValueError if the key is in legacy format (requires migration).
         """
         import base64
         # Fernet-encrypted keys are prefixed with "fernet:"
@@ -324,13 +350,12 @@ class VirtualKeyManager:
             fernet_key = base64.urlsafe_b64encode(self._encryption_key)
             f = Fernet(fernet_key)
             return f.decrypt(ciphertext[7:].encode()).decode()
-        # Legacy XOR format (with or without "xor:" prefix)
-        if ciphertext.startswith("xor:"):
-            ciphertext = ciphertext[4:]
-        key = self._encryption_key
-        data = base64.b64decode(ciphertext)
-        decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
-        return decrypted.decode()
+        # SECURITY FIX (H-11): Refuse to decrypt legacy XOR keys.
+        # They must be migrated via key rotation.
+        raise ValueError(
+            "Legacy XOR-encrypted key detected. This format is no longer supported. "
+            "Rotate the key using: POST /admin/virtual-keys/{tenant}/rotate"
+        )
 
     def _audit(self, action: str, tenant_id: str, key_id: str, provider: str):
         """Record audit event."""
