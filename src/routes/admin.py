@@ -45,7 +45,7 @@ async def require_admin(request: Request):
         url = getattr(settings, "redis_url", None)
         if url:
             r = _redis.from_url(url, decode_responses=True, socket_timeout=0.1)
-            if r.sismember("sentinel:revoked_tokens", jti):
+            if r.sismember("bulwark:revoked_tokens", jti):
                 raise HTTPException(status_code=401, detail="Token has been revoked")
     except HTTPException:
         raise
@@ -103,11 +103,11 @@ async def ioc_stats(request: Request, _=Depends(require_admin)):
 async def update_iocs(request: Request, _=Depends(require_admin)):
     """Trigger IOC feed update from all configured threat intel sources.
 
-    Requires API keys configured via SENTINEL_* environment variables:
-    - SENTINEL_URLHAUS_KEY
-    - SENTINEL_THREATFOX_KEY
-    - SENTINEL_OTX_KEY
-    - SENTINEL_ABUSEIPDB_KEY
+    Requires API keys configured via BULWARK_* environment variables:
+    - BULWARK_URLHAUS_KEY
+    - BULWARK_THREATFOX_KEY
+    - BULWARK_OTX_KEY
+    - BULWARK_ABUSEIPDB_KEY
     """
     from src.services.ioc_feeds import IOCFeedService
 

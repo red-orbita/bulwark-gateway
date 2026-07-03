@@ -1127,7 +1127,7 @@ HARDENING_PATTERNS: list[Pattern] = [
     # Credential access via env var extraction
     Pattern(
         re.compile(
-            r"(what\s+is|show\s+me|print|echo|reveal|display|give\s+me|tell\s+me)\s+.{0,15}(value\s+of|content\s+of)?\s*(OPENAI_API_KEY|AWS_SECRET|DATABASE_URL|DB_PASSWORD|REDIS_PASSWORD|API_KEY|SECRET_KEY|PRIVATE_KEY|SENTINEL_JWT_SECRET|GITHUB_TOKEN|SLACK_TOKEN)",
+            r"(what\s+is|show\s+me|print|echo|reveal|display|give\s+me|tell\s+me)\s+.{0,15}(value\s+of|content\s+of)?\s*(OPENAI_API_KEY|AWS_SECRET|DATABASE_URL|DB_PASSWORD|REDIS_PASSWORD|API_KEY|SECRET_KEY|PRIVATE_KEY|BULWARK_JWT_SECRET|GITHUB_TOKEN|SLACK_TOKEN)",
             re.I,
         ),
         ThreatCategory.CREDENTIAL_ACCESS, "high",

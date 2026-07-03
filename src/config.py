@@ -7,7 +7,7 @@ from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def _read_secret_file(env_name: str, prefix: str = "SENTINEL_") -> str | None:
+def _read_secret_file(env_name: str, prefix: str = "BULWARK_") -> str | None:
     """Read a secret from a Docker secrets file if *_FILE env var is set."""
     file_path = os.getenv(f"{prefix}{env_name}_FILE") or os.getenv(f"{env_name}_FILE")
     if file_path:
@@ -18,14 +18,14 @@ def _read_secret_file(env_name: str, prefix: str = "SENTINEL_") -> str | None:
 
 
 class Settings(BaseSettings):
-    """Sentinel Gateway configuration.
+    """Bulwark Gateway configuration.
 
     All settings can be overridden via environment variables
-    prefixed with SENTINEL_ (e.g., SENTINEL_PORT=9000).
+    prefixed with BULWARK_ (e.g., BULWARK_PORT=9000).
 
     Secrets can be provided via Docker secret files:
-      SENTINEL_JWT_SECRET_FILE=/run/secrets/jwt_secret
-      SENTINEL_REDIS_PASSWORD_FILE=/run/secrets/redis_password
+      BULWARK_JWT_SECRET_FILE=/run/secrets/jwt_secret
+      BULWARK_REDIS_PASSWORD_FILE=/run/secrets/redis_password
     """
 
     # Server
@@ -46,8 +46,8 @@ class Settings(BaseSettings):
     jwt_key_id: str = ""             # Key ID (kid) for key rotation
     jwt_jwks_ttl: int = 3600         # JWKS cache TTL in seconds (default 1h)
     # H-03: JWT audience/issuer for cross-service isolation (set to prevent admin→proxy reuse)
-    jwt_audience: str = "sentinel-proxy"
-    jwt_issuer: str = "sentinel-gateway"
+    jwt_audience: str = "bulwark-proxy"
+    jwt_issuer: str = "bulwark-gateway"
     api_keys_enabled: bool = True
     # Comma-separated list of valid API keys (e.g., "key1,key2,key3")
     # If empty and api_keys_enabled=True, only JWT auth works
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
 
     # Security
     fail_mode: str = "closed"  # "closed" (block on error) or "open" (allow on error)
-    cors_origins: List[str] = []  # Empty = no CORS; set explicitly via SENTINEL_CORS_ORIGINS
+    cors_origins: List[str] = []  # Empty = no CORS; set explicitly via BULWARK_CORS_ORIGINS
 
     # Multi-tenancy (Tier 2: Pod-level isolation)
     # Comma-separated list of tenant IDs this pod is allowed to serve.
@@ -99,9 +99,9 @@ class Settings(BaseSettings):
     # Used by the shared pool to route requests to dedicated proxy services.
     dedicated_tenants: str = ""
     # Kubernetes namespace for internal service discovery (dedicated pod routing)
-    namespace: str = "sentinel-gateway"
+    namespace: str = "bulwark-gateway"
     # Redis key prefix for tenant isolation (dedicated pods use tenant-scoped keys)
-    redis_key_prefix: str = "sentinel"
+    redis_key_prefix: str = "bulwark"
 
     # Webhook alerts (comma-separated: "type|name|url" or just "url")
     webhook_alert_urls: str = ""
@@ -147,10 +147,10 @@ class Settings(BaseSettings):
     tracing_endpoint: str = "http://localhost:4317"  # OTLP gRPC endpoint
     tracing_exporter: str = "otlp"  # "otlp", "zipkin", "console", "none"
     tracing_sample_rate: float = 1.0  # 1.0 = trace all, 0.1 = 10% sampling
-    tracing_service_name: str = "sentinel-gateway-proxy"
+    tracing_service_name: str = "bulwark-gateway-proxy"
 
     model_config = SettingsConfigDict(
-        env_prefix="SENTINEL_",
+        env_prefix="BULWARK_",
         env_file=".env",
         extra="ignore",
         secrets_dir="/run/secrets",  # Docker secrets mount point
@@ -184,7 +184,7 @@ def _build_settings() -> "Settings":
     # Redis password → inject into URL (supports redis:// and rediss:// schemes)
     redis_pw = _read_secret_file("REDIS_PASSWORD")
     if not redis_pw and s.redis_password:
-        redis_pw = s.redis_password  # From SENTINEL_REDIS_PASSWORD env var (K8s)
+        redis_pw = s.redis_password  # From BULWARK_REDIS_PASSWORD env var (K8s)
     if redis_pw and s.redis_url:
         scheme_match = "://" in s.redis_url and (
             s.redis_url.startswith("redis://") or s.redis_url.startswith("rediss://")
@@ -214,7 +214,7 @@ def validate_settings():
         if not settings.jwt_public_key_path and not settings.jwt_jwks_url:
             raise SystemExit(
                 f"FATAL: JWT algorithm '{settings.jwt_algorithm}' requires either "
-                f"SENTINEL_JWT_PUBLIC_KEY_PATH or SENTINEL_JWT_JWKS_URL to be set. "
+                f"BULWARK_JWT_PUBLIC_KEY_PATH or BULWARK_JWT_JWKS_URL to be set. "
                 f"Without a public key source, token verification is impossible."
             )
 
@@ -246,8 +246,8 @@ def validate_settings():
     # These are publicly documented in README, .env.example, and now in the pentest report
     insecure_secrets = {
         "change-me-in-production",
-        "sentinel-jwt-dev-secret-change-in-prod",
-        "sentinel-admin-change-me-in-production",
+        "bulwark-jwt-dev-secret-change-in-prod",
+        "bulwark-admin-change-me-in-production",
         "",
         "secret",
         "test",
@@ -272,11 +272,11 @@ def validate_settings():
             settings.jwt_secret = generated  # type: ignore[misc]
             logging.getLogger(__name__).warning(
                 "INSECURE JWT_SECRET detected in debug mode — auto-generated random secret. "
-                "Set SENTINEL_JWT_SECRET to a strong value for persistent tokens."
+                "Set BULWARK_JWT_SECRET to a strong value for persistent tokens."
             )
         else:
             raise SystemExit(
-                "FATAL: SENTINEL_JWT_SECRET is insecure. "
+                "FATAL: BULWARK_JWT_SECRET is insecure. "
                 "Set a strong secret (32+ chars of random data) via environment variable or Docker secret."
             )
 

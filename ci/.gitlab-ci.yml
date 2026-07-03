@@ -1,4 +1,4 @@
-# Sentinel Gateway — GitLab CI/CD Pipeline
+# Bulwark Gateway — GitLab CI/CD Pipeline
 #
 # Prerequisites:
 #   - CI/CD Variables (Settings > CI/CD > Variables):
@@ -22,10 +22,10 @@ stages:
   - deploy-production
 
 variables:
-  IMAGE_PROXY: sentinel-gateway-proxy
-  IMAGE_ADMIN: sentinel-gateway-admin
-  HELM_RELEASE: sentinel-gateway
-  NAMESPACE: sentinel-gateway
+  IMAGE_PROXY: bulwark-gateway-proxy
+  IMAGE_ADMIN: bulwark-gateway-admin
+  HELM_RELEASE: bulwark-gateway
+  NAMESPACE: bulwark-gateway
   HELM_VERSION: "3.14.0"
 
 # ─── Stage 1: Test ────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ deploy-staging:
   image: alpine/helm:3.14.0
   environment:
     name: staging
-    url: https://staging.sentinel-gateway.mycompany.com
+    url: https://staging.bulwark-gateway.mycompany.com
   before_script:
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
@@ -104,7 +104,7 @@ deploy-staging:
     - chmod 600 ~/.kube/config
   script:
     - |
-      helm upgrade --install $HELM_RELEASE ./helm/sentinel-gateway \
+      helm upgrade --install $HELM_RELEASE ./helm/bulwark-gateway \
         --namespace $NAMESPACE \
         --create-namespace \
         --values ci/values-staging.yaml \
@@ -124,7 +124,7 @@ deploy-production:
   image: alpine/helm:3.14.0
   environment:
     name: production
-    url: https://sentinel-gateway.mycompany.com
+    url: https://bulwark-gateway.mycompany.com
   when: manual  # Requires manual approval
   before_script:
     - export VERSION="${CI_COMMIT_TAG#v}"
@@ -133,7 +133,7 @@ deploy-production:
     - chmod 600 ~/.kube/config
   script:
     - |
-      helm upgrade --install $HELM_RELEASE ./helm/sentinel-gateway \
+      helm upgrade --install $HELM_RELEASE ./helm/bulwark-gateway \
         --namespace $NAMESPACE \
         --create-namespace \
         --values ci/values-production.yaml \

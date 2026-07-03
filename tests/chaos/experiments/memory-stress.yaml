@@ -31,22 +31,22 @@
 apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosEngine
 metadata:
-  name: sentinel-memory-stress
-  namespace: sentinel-gateway
+  name: bulwark-memory-stress
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
-    chaos.sentinel.io/experiment: memory-stress
-    chaos.sentinel.io/category: resource
+    app.kubernetes.io/part-of: bulwark-gateway
+    chaos.bulwark.io/experiment: memory-stress
+    chaos.bulwark.io/category: resource
   annotations:
     mitre-attack/technique: T1499
     mitre-attack/tactic: Impact
-    sentinel.io/steady-state: "memory<60%,pods-ready,no-oomkill"
-    sentinel.io/pass-criteria: "recovery<10s,no-data-loss"
-    sentinel.io/expected-behavior: "oomkill-possible,clean-restart"
+    bulwark.io/steady-state: "memory<60%,pods-ready,no-oomkill"
+    bulwark.io/pass-criteria: "recovery<10s,no-data-loss"
+    bulwark.io/expected-behavior: "oomkill-possible,clean-restart"
 spec:
   engineState: active
   appinfo:
-    appns: sentinel-gateway
+    appns: bulwark-gateway
     applabel: app.kubernetes.io/component=proxy
     appkind: deployment
   chaosServiceAccount: litmus-chaos-sa
@@ -82,11 +82,11 @@ spec:
               command: |
                 # Wait for experiment to run, then check pod status
                 sleep 30
-                RESTARTS=$(kubectl get pods -n sentinel-gateway \
+                RESTARTS=$(kubectl get pods -n bulwark-gateway \
                   -l app.kubernetes.io/component=proxy \
                   -o jsonpath='{.items[*].status.containerStatuses[*].restartCount}')
                 # If restarts occurred, verify pod is now ready
-                READY=$(kubectl get pods -n sentinel-gateway \
+                READY=$(kubectl get pods -n bulwark-gateway \
                   -l app.kubernetes.io/component=proxy \
                   -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}')
                 if echo "$READY" | grep -q "True"; then
@@ -110,7 +110,7 @@ spec:
             mode: Edge
             cmdProbe/inputs:
               command: |
-                CRASHLOOP=$(kubectl get pods -n sentinel-gateway \
+                CRASHLOOP=$(kubectl get pods -n bulwark-gateway \
                   -l app.kubernetes.io/component=proxy \
                   -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' | \
                   grep -c "CrashLoopBackOff" || echo "0")
@@ -129,7 +129,7 @@ spec:
             type: httpProbe
             mode: EOT
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/health
               insecureSkipVerify: true
               method:
                 get:
@@ -147,11 +147,11 @@ spec:
             cmdProbe/inputs:
               command: |
                 # Verify Redis counters still exist
-                KEYS=$(kubectl exec -n sentinel-gateway \
-                  $(kubectl get pod -n sentinel-gateway \
+                KEYS=$(kubectl exec -n bulwark-gateway \
+                  $(kubectl get pod -n bulwark-gateway \
                     -l app.kubernetes.io/component=redis \
                     -o jsonpath='{.items[0].metadata.name}') \
-                  -- redis-cli keys "sentinel:global:*" 2>/dev/null | wc -l)
+                  -- redis-cli keys "bulwark:global:*" 2>/dev/null | wc -l)
                 if [ "$KEYS" -ge 1 ]; then
                   echo "PASS: Redis state intact ($KEYS keys)"
                 else
@@ -172,9 +172,9 @@ apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosExperiment
 metadata:
   name: pod-memory-hog
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   definition:
     scope: Namespaced

@@ -1,7 +1,7 @@
 """
-Sentinel SDK Integrations — Framework adapters for LangChain, LlamaIndex, etc.
+Bulwark SDK Integrations — Framework adapters for LangChain, LlamaIndex, etc.
 
-Provides thin wrappers that plug Sentinel security scanning into
+Provides thin wrappers that plug Bulwark security scanning into
 popular LLM orchestration frameworks without tight coupling.
 
 Usage:

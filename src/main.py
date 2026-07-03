@@ -1,5 +1,5 @@
 """
-Sentinel Gateway — Main application entry point.
+Bulwark Gateway — Main application entry point.
 
 Architecture:
   User Request → Auth → Input Guardrail → Tool Policy → LLM/Agent Backend
@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     init_tracing()
 
     logger = structlog.get_logger()
-    await logger.ainfo("sentinel-gateway starting", version="0.2.0", mode=settings.mode)
+    await logger.ainfo("bulwark-gateway starting", version="0.2.0", mode=settings.mode)
 
     # Load policies on startup
     from src.policies.loader import PolicyLoader
@@ -195,9 +195,9 @@ async def lifespan(app: FastAPI):
             if not r:
                 continue
             try:
-                ver = r.get("sentinel:ml_scanners:version")
+                ver = r.get("bulwark:ml_scanners:version")
                 if ver and int(ver) > last_version:
-                    raw = r.get("sentinel:ml_scanners:config")
+                    raw = r.get("bulwark:ml_scanners:config")
                     if raw:
                         config = _json.loads(raw)
                         pipeline.apply_ml_config(config)
@@ -208,7 +208,7 @@ async def lifespan(app: FastAPI):
     app.state._ml_sync_task = asyncio.create_task(_ml_config_sync_loop())
 
     await logger.ainfo(
-        "sentinel-gateway ready",
+        "bulwark-gateway ready",
         policies=app.state.policy_loader.count,
         iocs=app.state.ioc_manager.count,
         agents=app.state.agent_registry.count,
@@ -223,12 +223,12 @@ async def lifespan(app: FastAPI):
     from src.telemetry.tracing import shutdown_tracing
 
     shutdown_tracing()
-    await logger.ainfo("sentinel-gateway shutting down")
+    await logger.ainfo("bulwark-gateway shutting down")
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Sentinel Gateway",
+        title="Bulwark Gateway",
         description="Security guardrail proxy for AI agents",
         version="0.2.0",
         lifespan=lifespan,
@@ -283,7 +283,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(APIVersionMiddleware)
     # Tier 2: Route dedicated tenants to their own proxy pods
-    # Only active if SENTINEL_DEDICATED_TENANTS is configured
+    # Only active if BULWARK_DEDICATED_TENANTS is configured
     if settings.dedicated_tenants:
         app.add_middleware(TenantRouterMiddleware)
     app.add_middleware(AuthMiddleware)

@@ -21,7 +21,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-MODEL_NAME = os.getenv("SENTINEL_EMBED_MODEL", sys.argv[1] if len(sys.argv) > 1 else "all-MiniLM-L6-v2")
+MODEL_NAME = os.getenv("BULWARK_EMBED_MODEL", sys.argv[1] if len(sys.argv) > 1 else "all-MiniLM-L6-v2")
 TARGET_DIR = Path(os.getenv("SENTENCE_TRANSFORMERS_HOME", sys.argv[2] if len(sys.argv) > 2 else "/app/shared/enrichment/sentence-transformers"))
 
 # HuggingFace Hub API
@@ -49,7 +49,7 @@ MODEL_FILES = [
 def download_file(url: str, dest: Path, expected_size: int | None = None) -> bool:
     """Download a file with progress indication."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "sentinel-gateway/0.2.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "bulwark-gateway/0.2.0"})
         with urllib.request.urlopen(req, timeout=120) as resp:
             dest.parent.mkdir(parents=True, exist_ok=True)
             total = int(resp.headers.get("Content-Length", 0))
@@ -81,7 +81,7 @@ def get_model_files(model_name: str) -> list[dict]:
     """Get list of files in the model repository from HuggingFace API."""
     url = f"{HF_API}/sentence-transformers/{model_name}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "sentinel-gateway/0.2.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "bulwark-gateway/0.2.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
             return data.get("siblings", [])
@@ -112,7 +112,7 @@ def model_already_downloaded(model_dir: Path) -> bool:
 
 
 def main():
-    print(f"=== Sentinel Gateway Model Download ===")
+    print(f"=== Bulwark Gateway Model Download ===")
     print(f"Model: sentence-transformers/{MODEL_NAME}")
     print(f"Target: {TARGET_DIR}")
     print()
@@ -175,7 +175,7 @@ def main():
         return 1
 
     # Write a marker file so we know this was a clean download
-    marker = model_dir / ".sentinel-download-complete"
+    marker = model_dir / ".bulwark-download-complete"
     marker.write_text(json.dumps({
         "model": MODEL_NAME,
         "version": "0.2.0",

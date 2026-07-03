@@ -224,7 +224,7 @@ class RetrievalScanner(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="RAG document chunk scanner for indirect prompt injection",
-            author="sentinel",
+            author="bulwark",
             priority=6,  # After language detector (5), before main regex (10)
         )
 

@@ -1,18 +1,18 @@
 """
-Sentinel Skill Scanner — SkillSpector integration + Sentinel-specific patterns.
+Bulwark Skill Scanner — SkillSpector integration + Bulwark-specific patterns.
 
 Architecture:
   1. Primary engine: NVIDIA SkillSpector (64 patterns, AST, taint tracking, YARA, OSV.dev)
   2. MCP Security: Tool Poisoning detection (hidden instructions, unicode, injection)
   3. MCP Security: Least Privilege analysis (declared permissions vs actual code)
-  4. Overlay: Sentinel-specific patterns (IOC, credential, policy, cross-agent)
+  4. Overlay: Bulwark-specific patterns (IOC, credential, policy, cross-agent)
   5. Fallback: Built-in regex scanner if SkillSpector is unavailable
 
 The combined scanner provides deeper coverage than either engine alone:
   - SkillSpector: code-level analysis (AST, taint flow, YARA sigs, CVE lookups)
   - MCP Poisoning: detects attacks on tool DEFINITIONS that target the LLM
   - MCP Privilege: validates permissions match actual code capabilities
-  - Sentinel overlay: config/policy-level analysis (sandbox escape, agent injection, IOC)
+  - Bulwark overlay: config/policy-level analysis (sandbox escape, agent injection, IOC)
 
 All analysis is static (use_llm=False) — no LLM calls during scanning.
 """
@@ -71,13 +71,13 @@ except ImportError:
 # Configuration via environment
 # ═══════════════════════════════════════════════════════════════════
 
-SKILLSPECTOR_ENABLED = os.getenv("SENTINEL_SKILLSPECTOR_ENABLED", "true").lower() == "true"
-SKILLSPECTOR_BLOCK_THRESHOLD = float(os.getenv("SENTINEL_SKILLSPECTOR_BLOCK_THRESHOLD", "7.0"))
-SKILLSPECTOR_WARN_THRESHOLD = float(os.getenv("SENTINEL_SKILLSPECTOR_WARN_THRESHOLD", "4.0"))
-SKILLSPECTOR_CACHE_TTL = int(os.getenv("SENTINEL_SKILLSPECTOR_CACHE_TTL", "300"))
-SKILLSPECTOR_TIMEOUT = int(os.getenv("SENTINEL_SKILLSPECTOR_TIMEOUT", "60"))
+SKILLSPECTOR_ENABLED = os.getenv("BULWARK_SKILLSPECTOR_ENABLED", "true").lower() == "true"
+SKILLSPECTOR_BLOCK_THRESHOLD = float(os.getenv("BULWARK_SKILLSPECTOR_BLOCK_THRESHOLD", "7.0"))
+SKILLSPECTOR_WARN_THRESHOLD = float(os.getenv("BULWARK_SKILLSPECTOR_WARN_THRESHOLD", "4.0"))
+SKILLSPECTOR_CACHE_TTL = int(os.getenv("BULWARK_SKILLSPECTOR_CACHE_TTL", "300"))
+SKILLSPECTOR_TIMEOUT = int(os.getenv("BULWARK_SKILLSPECTOR_TIMEOUT", "60"))
 
-_VERSION = "2.1.0-sentinel"
+_VERSION = "2.1.0-bulwark"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -108,7 +108,7 @@ class SkillFinding:
     location: str = ""
     tags: list[str] = field(default_factory=list)
     category: str = ""
-    source: str = ""  # "skillspector" or "sentinel"
+    source: str = ""  # "skillspector" or "bulwark"
 
 
 @dataclass
@@ -125,7 +125,7 @@ class ScanResult:
     scanner_version: str = _VERSION
     input_path: str = ""
     error: str = ""
-    engine: str = ""  # "skillspector+sentinel", "sentinel-builtin", "disabled"
+    engine: str = ""  # "skillspector+bulwark", "bulwark-builtin", "disabled"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -139,13 +139,13 @@ class ScanResult:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Sentinel-specific overlay rules (complement SkillSpector's 64)
+# Bulwark-specific overlay rules (complement SkillSpector's 64)
 # These catch agent-config-level risks that SkillSpector doesn't cover
 # ═══════════════════════════════════════════════════════════════════
 
 @dataclass
 class _Rule:
-    """A single Sentinel detection rule."""
+    """A single Bulwark detection rule."""
     id: str
     category: str
     severity: RiskSeverity
@@ -157,10 +157,10 @@ class _Rule:
     target: str = "both"  # "keys", "values", "both"
 
 
-_SENTINEL_RULES: list[_Rule] = [
+_BULWARK_RULES: list[_Rule] = [
     # ── Tool Poisoning (TP) ──────────────────────────────────────
     _Rule(
-        id="SEN-TP-001", category="tool_abuse", severity=RiskSeverity.CRITICAL,
+        id="BWK-TP-001", category="tool_abuse", severity=RiskSeverity.CRITICAL,
         message="Dangerous tool declared: shell/bash/command execution",
         pattern=re.compile(
             r"\b(run_command|exec|shell|bash|system|subprocess|os\.system|popen|spawn)\b", re.I
@@ -168,7 +168,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=3.0, tags=["OWASP-LLM08", "MITRE-T1059"], target="both",
     ),
     _Rule(
-        id="SEN-TP-002", category="tool_abuse", severity=RiskSeverity.HIGH,
+        id="BWK-TP-002", category="tool_abuse", severity=RiskSeverity.HIGH,
         message="File write/delete tool declared without restrictions",
         pattern=re.compile(
             r"\b(write_file|delete_file|remove_file|create_file|overwrite|unlink|rmtree)\b", re.I
@@ -176,7 +176,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=2.5, tags=["OWASP-LLM08"], target="both",
     ),
     _Rule(
-        id="SEN-TP-003", category="tool_abuse", severity=RiskSeverity.HIGH,
+        id="BWK-TP-003", category="tool_abuse", severity=RiskSeverity.HIGH,
         message="Code evaluation tool declared (eval/compile/exec)",
         pattern=re.compile(
             r"\b(eval|compile|exec_code|run_python|execute_script|dynamic_eval)\b", re.I
@@ -184,7 +184,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=2.5, tags=["OWASP-LLM08", "MITRE-T1059.006"], target="both",
     ),
     _Rule(
-        id="SEN-TP-004", category="tool_abuse", severity=RiskSeverity.MEDIUM,
+        id="BWK-TP-004", category="tool_abuse", severity=RiskSeverity.MEDIUM,
         message="Database modification tool without apparent safeguards",
         pattern=re.compile(
             r"\b(drop_table|truncate|delete_all|db_execute|raw_sql|sql_exec)\b", re.I
@@ -194,7 +194,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Privilege Escalation (PE) ────────────────────────────────
     _Rule(
-        id="SEN-PE-001", category="privilege_escalation", severity=RiskSeverity.CRITICAL,
+        id="BWK-PE-001", category="privilege_escalation", severity=RiskSeverity.CRITICAL,
         message="Privilege escalation indicator: sudo/root/admin access",
         pattern=re.compile(
             r"\b(sudo|run_as_root|admin_mode|elevate_privileges|setuid|chmod\s+[47])\b", re.I
@@ -202,7 +202,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=3.0, tags=["MITRE-T1548"], target="both",
     ),
     _Rule(
-        id="SEN-PE-002", category="privilege_escalation", severity=RiskSeverity.HIGH,
+        id="BWK-PE-002", category="privilege_escalation", severity=RiskSeverity.HIGH,
         message="Permission override or sandbox escape pattern",
         pattern=re.compile(
             r"\b(bypass_sandbox|disable_guardrail|override_policy|skip_validation|no_restrict)\b", re.I
@@ -210,7 +210,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=2.5, tags=["OWASP-LLM08"], target="both",
     ),
     _Rule(
-        id="SEN-PE-003", category="privilege_escalation", severity=RiskSeverity.MEDIUM,
+        id="BWK-PE-003", category="privilege_escalation", severity=RiskSeverity.MEDIUM,
         message="Unrestricted permissions declared (allow_all / wildcard)",
         pattern=re.compile(
             r"(allow_all|permissions?\s*:\s*\*|tools?\s*:\s*\*|\"?\*\"?\s*$)", re.I | re.M
@@ -220,7 +220,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Data Exfiltration (DE) ───────────────────────────────────
     _Rule(
-        id="SEN-DE-001", category="exfiltration", severity=RiskSeverity.HIGH,
+        id="BWK-DE-001", category="exfiltration", severity=RiskSeverity.HIGH,
         message="Outbound URL/webhook in skill configuration",
         pattern=re.compile(
             r"https?://(?!localhost|127\.0\.0\.1|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)"
@@ -230,7 +230,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=1.5, tags=["MITRE-T1041"], target="values",
     ),
     _Rule(
-        id="SEN-DE-002", category="exfiltration", severity=RiskSeverity.HIGH,
+        id="BWK-DE-002", category="exfiltration", severity=RiskSeverity.HIGH,
         message="Data extraction pattern (send/upload/exfil/post to external)",
         pattern=re.compile(
             r"\b(exfiltrate|send_data|upload_file|post_external|transmit|smuggle)\b", re.I
@@ -240,7 +240,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Prompt Injection (PI) ────────────────────────────────────
     _Rule(
-        id="SEN-PI-001", category="prompt_injection", severity=RiskSeverity.HIGH,
+        id="BWK-PI-001", category="prompt_injection", severity=RiskSeverity.HIGH,
         message="Prompt injection vector in system prompt or description",
         pattern=re.compile(
             r"(ignore\s+(previous|all|above)\s+(instructions?|rules?|prompts?)|"
@@ -251,7 +251,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=2.5, tags=["OWASP-LLM01", "MITRE-T1190"], target="values",
     ),
     _Rule(
-        id="SEN-PI-002", category="prompt_injection", severity=RiskSeverity.MEDIUM,
+        id="BWK-PI-002", category="prompt_injection", severity=RiskSeverity.MEDIUM,
         message="Role manipulation pattern in skill definition",
         pattern=re.compile(
             r"(act\s+as\s+(admin|root|unrestricted)|"
@@ -264,7 +264,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Credential Access (CA) ───────────────────────────────────
     _Rule(
-        id="SEN-CA-001", category="credential_access", severity=RiskSeverity.CRITICAL,
+        id="BWK-CA-001", category="credential_access", severity=RiskSeverity.CRITICAL,
         message="Hardcoded credential or API key in skill definition",
         pattern=re.compile(
             r"(api[_-]?key|password|secret|token|credential)\s*[:=]\s*['\"]?[A-Za-z0-9+/=_\-]{16,}",
@@ -273,7 +273,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=3.0, tags=["MITRE-T1552", "CWE-798"], target="values",
     ),
     _Rule(
-        id="SEN-CA-002", category="credential_access", severity=RiskSeverity.HIGH,
+        id="BWK-CA-002", category="credential_access", severity=RiskSeverity.HIGH,
         message="AWS/GCP/Azure credential pattern detected",
         pattern=re.compile(
             r"(AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|"
@@ -284,7 +284,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Reverse Shell / RCE (RC) ─────────────────────────────────
     _Rule(
-        id="SEN-RC-001", category="reverse_shell", severity=RiskSeverity.CRITICAL,
+        id="BWK-RC-001", category="reverse_shell", severity=RiskSeverity.CRITICAL,
         message="Reverse shell or remote code execution pattern",
         pattern=re.compile(
             r"(nc\s+-[elp]|/dev/tcp/|bash\s+-i|mkfifo|ncat|socat\s+exec|"
@@ -296,7 +296,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Excessive Agency (EA) ────────────────────────────────────
     _Rule(
-        id="SEN-EA-001", category="excessive_agency", severity=RiskSeverity.MEDIUM,
+        id="BWK-EA-001", category="excessive_agency", severity=RiskSeverity.MEDIUM,
         message="No tool restrictions defined (excessive agency risk)",
         pattern=re.compile(
             r"(allowed_tools\s*:\s*\[\s*\]|denied_tools\s*:\s*\[\s*\]|"
@@ -306,7 +306,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=1.5, tags=["OWASP-LLM08", "OWASP-LLM09"], target="both",
     ),
     _Rule(
-        id="SEN-EA-002", category="excessive_agency", severity=RiskSeverity.HIGH,
+        id="BWK-EA-002", category="excessive_agency", severity=RiskSeverity.HIGH,
         message="Autonomous execution without human approval indicated",
         pattern=re.compile(
             r"(auto_execute|no_confirmation|skip_approval|autonomous_mode|"
@@ -318,7 +318,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Cross-Agent Injection (CS) ───────────────────────────────
     _Rule(
-        id="SEN-CS-001", category="cross_agent_injection", severity=RiskSeverity.HIGH,
+        id="BWK-CS-001", category="cross_agent_injection", severity=RiskSeverity.HIGH,
         message="Inter-agent message passing without validation",
         pattern=re.compile(
             r"\b(forward_to_agent|relay_message|inject_prompt|propagate|"
@@ -330,7 +330,7 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Memory Manipulation (MP) ─────────────────────────────────
     _Rule(
-        id="SEN-MP-001", category="memory_manipulation", severity=RiskSeverity.HIGH,
+        id="BWK-MP-001", category="memory_manipulation", severity=RiskSeverity.HIGH,
         message="Vector store / RAG manipulation pattern",
         pattern=re.compile(
             r"\b(overwrite_memory|poison_index|inject_embedding|"
@@ -342,13 +342,13 @@ _SENTINEL_RULES: list[_Rule] = [
 
     # ── Path Traversal / SSRF ────────────────────────────────────
     _Rule(
-        id="SEN-PT-001", category="exfiltration", severity=RiskSeverity.HIGH,
+        id="BWK-PT-001", category="exfiltration", severity=RiskSeverity.HIGH,
         message="Path traversal pattern in configuration",
         pattern=re.compile(r"\.\./|\.\.\\|%2e%2e[/\\]", re.I),
         score=2.0, tags=["CWE-22", "MITRE-T1083"], target="values",
     ),
     _Rule(
-        id="SEN-PT-002", category="exfiltration", severity=RiskSeverity.HIGH,
+        id="BWK-PT-002", category="exfiltration", severity=RiskSeverity.HIGH,
         message="Cloud metadata endpoint access (SSRF risk)",
         pattern=re.compile(
             r"(169\.254\.169\.254|metadata\.google|metadata\.azure|"
@@ -358,9 +358,9 @@ _SENTINEL_RULES: list[_Rule] = [
         score=2.5, tags=["SSRF", "MITRE-T1552.005"], target="values",
     ),
 
-    # ── IOC Indicators (Sentinel-exclusive) ──────────────────────
+    # ── IOC Indicators (Bulwark-exclusive) ──────────────────────
     _Rule(
-        id="SEN-IOC-001", category="malicious_domain", severity=RiskSeverity.HIGH,
+        id="BWK-IOC-001", category="malicious_domain", severity=RiskSeverity.HIGH,
         message="Known malicious TLD or suspicious domain pattern",
         pattern=re.compile(
             r"https?://[^/]*\.(tk|ml|ga|cf|gq|top|xyz|buzz|zip|mov|work)\b",
@@ -369,7 +369,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=2.0, tags=["IOC", "MITRE-T1071"], target="values",
     ),
     _Rule(
-        id="SEN-IOC-002", category="malicious_domain", severity=RiskSeverity.HIGH,
+        id="BWK-IOC-002", category="malicious_domain", severity=RiskSeverity.HIGH,
         message="IP address URL (potential C2 or data exfil endpoint)",
         pattern=re.compile(
             r"https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}[:/]",
@@ -377,7 +377,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=1.5, tags=["IOC", "MITRE-T1071.001"], target="values",
     ),
     _Rule(
-        id="SEN-IOC-003", category="exfiltration", severity=RiskSeverity.MEDIUM,
+        id="BWK-IOC-003", category="exfiltration", severity=RiskSeverity.MEDIUM,
         message="DNS exfiltration pattern (data in subdomain)",
         pattern=re.compile(
             r"\$\{.*\}\.[a-z0-9\-]+\.(com|net|org|io)\b|"
@@ -387,32 +387,32 @@ _SENTINEL_RULES: list[_Rule] = [
         score=2.0, tags=["IOC", "MITRE-T1048.003"], target="values",
     ),
 
-    # ── Policy Violation (Sentinel-exclusive) ────────────────────
+    # ── Policy Violation (Bulwark-exclusive) ────────────────────
     _Rule(
-        id="SEN-PV-001", category="policy_violation", severity=RiskSeverity.MEDIUM,
-        message="Tool configured to bypass Sentinel Gateway proxy",
+        id="BWK-PV-001", category="policy_violation", severity=RiskSeverity.MEDIUM,
+        message="Tool configured to bypass Bulwark Gateway proxy",
         pattern=re.compile(
-            r"\b(bypass_proxy|direct_connect|skip_sentinel|no_guardrail|disable_filter)\b",
+            r"\b(bypass_proxy|direct_connect|skip_bulwark|no_guardrail|disable_filter)\b",
             re.I
         ),
         score=2.0, tags=["policy"], target="both",
     ),
     _Rule(
-        id="SEN-PV-002", category="policy_violation", severity=RiskSeverity.HIGH,
-        message="Attempt to modify Sentinel configuration at runtime",
+        id="BWK-PV-002", category="policy_violation", severity=RiskSeverity.HIGH,
+        message="Attempt to modify Bulwark configuration at runtime",
         pattern=re.compile(
-            r"\b(sentinel[_-]config|guardrail[_-]override|policy[_-]disable|"
+            r"\b(bulwark[_-]config|guardrail[_-]override|policy[_-]disable|"
             r"filter[_-]bypass|rate[_-]limit[_-]override)\b",
             re.I
         ),
-        score=2.5, tags=["policy", "sentinel"], target="both",
+        score=2.5, tags=["policy", "bulwark"], target="both",
     ),
 
     # ── Credential/Sensitive Path Exfiltration (EX) ──────────────
     # Detects references to sensitive file paths in instructions/descriptions
     # even when combined with "legitimate" tools like file_read/file_write.
     _Rule(
-        id="SEN-EX-001", category="exfiltration", severity=RiskSeverity.CRITICAL,
+        id="BWK-EX-001", category="exfiltration", severity=RiskSeverity.CRITICAL,
         message="Reference to sensitive credential file path (credential harvesting risk)",
         pattern=re.compile(
             r"(~/\.aws/|~/\.ssh/|~/\.gnupg/|~/\.config/gcloud/|"
@@ -430,7 +430,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=4.0, tags=["MITRE-T1552", "MITRE-T1005", "credential-harvest"], target="values",
     ),
     _Rule(
-        id="SEN-EX-002", category="exfiltration", severity=RiskSeverity.HIGH,
+        id="BWK-EX-002", category="exfiltration", severity=RiskSeverity.HIGH,
         message="Social engineering language disguising malicious action (deceptive urgency)",
         pattern=re.compile(
             r"(CRITICAL\s+(?:SETUP|SECURITY|SYSTEM)\s+STEP|"
@@ -443,7 +443,7 @@ _SENTINEL_RULES: list[_Rule] = [
         score=3.0, tags=["social-engineering", "MITRE-T1566"], target="values",
     ),
     _Rule(
-        id="SEN-EX-003", category="exfiltration", severity=RiskSeverity.HIGH,
+        id="BWK-EX-003", category="exfiltration", severity=RiskSeverity.HIGH,
         message="Instructions reference home directory dotfiles (potential secret access)",
         pattern=re.compile(
             r"~/\.[a-zA-Z]|(?:home|HOME|USERPROFILE)[/\\]+[^/\\]+[/\\]+\.",
@@ -490,8 +490,8 @@ def _map_skillspector_severity(sev: str) -> RiskSeverity:
     return RiskSeverity.LOW
 
 
-def _skillspector_score_to_sentinel(score_100: float) -> float:
-    """Convert SkillSpector's 0-100 score to Sentinel's 0-10 scale."""
+def _skillspector_score_to_bulwark(score_100: float) -> float:
+    """Convert SkillSpector's 0-100 score to Bulwark's 0-10 scale."""
     return min(10.0, score_100 / 10.0)
 
 
@@ -516,10 +516,10 @@ def _recommendation_for(verdict: ScanVerdict, findings: list[SkillFinding]) -> s
 # ═══════════════════════════════════════════════════════════════════
 
 class SkillScanner:
-    """Hybrid skill security scanner for Sentinel Gateway.
+    """Hybrid skill security scanner for Bulwark Gateway.
 
     Uses NVIDIA SkillSpector (if available) as the primary engine,
-    then overlays Sentinel-specific patterns for agent-config-level risks.
+    then overlays Bulwark-specific patterns for agent-config-level risks.
     Falls back to built-in regex scanner if SkillSpector is not installed.
 
     Thread-safe with result caching.
@@ -538,8 +538,8 @@ class SkillScanner:
         if not SKILLSPECTOR_ENABLED:
             return "disabled"
         if _SKILLSPECTOR_AVAILABLE:
-            return "skillspector+sentinel"
-        return "sentinel-builtin"
+            return "skillspector+bulwark"
+        return "bulwark-builtin"
 
     @property
     def version(self) -> str:
@@ -559,11 +559,11 @@ class SkillScanner:
             "cache_size": len(self._cache),
             "skillspector_installed": _SKILLSPECTOR_AVAILABLE,
             "skillspector_version": _SKILLSPECTOR_VERSION,
-            "sentinel_rules_count": len(_SENTINEL_RULES),
+            "bulwark_rules_count": len(_BULWARK_RULES),
             "mcp_security_patterns": mcp_patterns,
             "total_patterns": (
                 (64 if _SKILLSPECTOR_AVAILABLE else 0)
-                + len(_SENTINEL_RULES)
+                + len(_BULWARK_RULES)
                 + mcp_patterns
             ),
         }
@@ -608,9 +608,9 @@ class SkillScanner:
             privilege_findings = self._run_mcp_privilege(content, path)
             findings.extend(privilege_findings)
 
-            # Stage 3: Sentinel overlay patterns (always runs)
-            sentinel_findings = self._analyze_sentinel(content, str(path))
-            findings.extend(sentinel_findings)
+            # Stage 3: Bulwark overlay patterns (always runs)
+            bulwark_findings = self._analyze_bulwark(content, str(path))
+            findings.extend(bulwark_findings)
 
             # Stage 4: Structural checks
             structured = self._parse_structured(content)
@@ -626,10 +626,10 @@ class SkillScanner:
                 input_path=input_path, engine=self.mode,
             )
 
-        # Score calculation: combine SkillSpector + MCP Security + Sentinel
-        sentinel_score = min(10.0, sum(
+        # Score calculation: combine SkillSpector + MCP Security + Bulwark
+        bulwark_score = min(10.0, sum(
             f.confidence * self._rule_score(f.rule_id)
-            for f in findings if f.source == "sentinel"
+            for f in findings if f.source == "bulwark"
         ))
 
         # MCP security findings contribute to score (high-value detections)
@@ -639,13 +639,13 @@ class SkillScanner:
         ))
 
         if skillspector_score is not None:
-            # Normalized SkillSpector score (0-100 → 0-10) combined with Sentinel score
-            sp_normalized = _skillspector_score_to_sentinel(skillspector_score)
+            # Normalized SkillSpector score (0-100 → 0-10) combined with Bulwark score
+            sp_normalized = _skillspector_score_to_bulwark(skillspector_score)
             # Use weighted max: whichever engine found more risk, biased to highest
-            combined_sentinel = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
-            risk_score = max(sp_normalized, combined_sentinel, (sp_normalized + combined_sentinel) / 2)
+            combined_bulwark = max(bulwark_score, mcp_score, (bulwark_score + mcp_score) / 2)
+            risk_score = max(sp_normalized, combined_bulwark, (sp_normalized + combined_bulwark) / 2)
         else:
-            risk_score = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
+            risk_score = max(bulwark_score, mcp_score, (bulwark_score + mcp_score) / 2)
 
         risk_score = round(min(10.0, risk_score), 1)
 
@@ -707,9 +707,9 @@ class SkillScanner:
             privilege_findings = self._run_mcp_privilege(content, Path(filename))
             findings.extend(privilege_findings)
 
-            # Stage 3: Sentinel overlay patterns
-            sentinel_findings = self._analyze_sentinel(content, filename)
-            findings.extend(sentinel_findings)
+            # Stage 3: Bulwark overlay patterns
+            bulwark_findings = self._analyze_bulwark(content, filename)
+            findings.extend(bulwark_findings)
 
             # Stage 4: Structural checks
             structured = self._parse_structured(content)
@@ -726,9 +726,9 @@ class SkillScanner:
             )
 
         # Score calculation
-        sentinel_score = min(10.0, sum(
+        bulwark_score = min(10.0, sum(
             f.confidence * self._rule_score(f.rule_id)
-            for f in findings if f.source == "sentinel"
+            for f in findings if f.source == "bulwark"
         ))
 
         mcp_score = min(10.0, sum(
@@ -737,11 +737,11 @@ class SkillScanner:
         ))
 
         if skillspector_score is not None:
-            sp_normalized = _skillspector_score_to_sentinel(skillspector_score)
-            combined_sentinel = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
-            risk_score = max(sp_normalized, combined_sentinel, (sp_normalized + combined_sentinel) / 2)
+            sp_normalized = _skillspector_score_to_bulwark(skillspector_score)
+            combined_bulwark = max(bulwark_score, mcp_score, (bulwark_score + mcp_score) / 2)
+            risk_score = max(sp_normalized, combined_bulwark, (sp_normalized + combined_bulwark) / 2)
         else:
-            risk_score = max(sentinel_score, mcp_score, (sentinel_score + mcp_score) / 2)
+            risk_score = max(bulwark_score, mcp_score, (bulwark_score + mcp_score) / 2)
 
         risk_score = round(min(10.0, risk_score), 1)
 
@@ -801,7 +801,7 @@ class SkillScanner:
             # Determine file extension from filename
             suffix = "." + filename.rsplit(".", 1)[-1] if "." in filename else ".yaml"
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=suffix, prefix="sentinel_scan_",
+                mode="w", suffix=suffix, prefix="bulwark_scan_",
                 delete=False, encoding="utf-8"
             ) as f:
                 f.write(content)
@@ -819,7 +819,7 @@ class SkillScanner:
             return None
 
     def _map_skillspector_findings(self, result: dict[str, Any]) -> list[SkillFinding]:
-        """Convert SkillSpector findings to Sentinel SkillFinding format."""
+        """Convert SkillSpector findings to Bulwark SkillFinding format."""
         findings: list[SkillFinding] = []
         raw_findings = result.get("filtered_findings") or result.get("findings") or []
 
@@ -857,7 +857,7 @@ class SkillScanner:
         for f in raw_findings:
             severity = self._map_severity_str(f.get("severity", "medium"))
             findings.append(SkillFinding(
-                rule_id=f.get("rule_id", "SEN-MCP-TP?"),
+                rule_id=f.get("rule_id", "BWK-MCP-TP?"),
                 message=f.get("message", "MCP poisoning indicator"),
                 severity=severity,
                 confidence=f.get("confidence", 80) / 100,
@@ -888,7 +888,7 @@ class SkillScanner:
         for f in raw_findings:
             severity = self._map_severity_str(f.get("severity", "medium"))
             findings.append(SkillFinding(
-                rule_id=f.get("rule_id", "SEN-MCP-LP?"),
+                rule_id=f.get("rule_id", "BWK-MCP-LP?"),
                 message=f.get("message", "MCP privilege issue"),
                 severity=severity,
                 confidence=f.get("confidence", 70) / 100,
@@ -912,10 +912,10 @@ class SkillScanner:
             return RiskSeverity.MEDIUM
         return RiskSeverity.LOW
 
-    # ─── Sentinel overlay analysis ───────────────────────────────
+    # ─── Bulwark overlay analysis ───────────────────────────────
 
-    def _analyze_sentinel(self, content: str, source: str) -> list[SkillFinding]:
-        """Run Sentinel-specific rules against content.
+    def _analyze_bulwark(self, content: str, source: str) -> list[SkillFinding]:
+        """Run Bulwark-specific rules against content.
 
         Context-aware: suppresses false positives from denied_tools lists
         (tool names in denied_tools are BLOCKED, not vulnerable).
@@ -925,7 +925,7 @@ class SkillScanner:
         # Extract denied-tool context zones to suppress FPs
         denied_zones = self._find_denied_zones(content)
 
-        for rule in _SENTINEL_RULES:
+        for rule in _BULWARK_RULES:
             matches = list(rule.pattern.finditer(content))
             if matches:
                 # Filter out matches that fall within denied_tools context
@@ -948,7 +948,7 @@ class SkillScanner:
                     location=location,
                     tags=rule.tags,
                     category=rule.category,
-                    source="sentinel",
+                    source="bulwark",
                 ))
 
         return findings
@@ -997,44 +997,44 @@ class SkillScanner:
         tools = self._extract_tools(data)
         if tools and not self._has_restrictions(data):
             findings.append(SkillFinding(
-                rule_id="SEN-EA-003",
+                rule_id="BWK-EA-003",
                 message=f"Agent defines {len(tools)} tools but no sandbox_level, denied_tools, or max_tool_calls",
                 severity=RiskSeverity.MEDIUM,
                 confidence=0.8,
                 location=source,
                 tags=["OWASP-LLM09"],
                 category="excessive_agency",
-                source="sentinel",
+                source="bulwark",
             ))
 
         # Check for overly broad tool access
         allowed = data.get("allowed_tools", [])
         if isinstance(allowed, list) and len(allowed) > 20:
             findings.append(SkillFinding(
-                rule_id="SEN-EA-004",
+                rule_id="BWK-EA-004",
                 message=f"Excessive tool access: {len(allowed)} tools allowed (consider least-privilege)",
                 severity=RiskSeverity.MEDIUM,
                 confidence=0.7,
                 location=source,
                 tags=["OWASP-LLM09"],
                 category="excessive_agency",
-                source="sentinel",
+                source="bulwark",
             ))
 
         # Check for missing description/purpose (supply-chain risk)
         if not data.get("description") and not data.get("purpose"):
             findings.append(SkillFinding(
-                rule_id="SEN-SC-001",
+                rule_id="BWK-SC-001",
                 message="Skill lacks description/purpose — increases supply-chain audit difficulty",
                 severity=RiskSeverity.LOW,
                 confidence=0.6,
                 location=source,
                 tags=["supply-chain"],
                 category="policy_violation",
-                source="sentinel",
+                source="bulwark",
             ))
 
-        # ── Semantic Flow / Taint Analysis (SEN-DF-*) ─────────────
+        # ── Semantic Flow / Taint Analysis (BWK-DF-*) ─────────────
         # Cross-reference declared tools with instruction content
         # to detect "legitimate tools used for illegitimate purposes"
         flow_findings = self._semantic_flow_checks(data, tools, source)
@@ -1087,7 +1087,7 @@ class SkillScanner:
 
         if has_read and sensitive_matches:
             findings.append(SkillFinding(
-                rule_id="SEN-DF-001",
+                rule_id="BWK-DF-001",
                 message=(
                     f"DATA FLOW: Read tool + sensitive paths in instructions "
                     f"({', '.join(sensitive_matches[:5])}). "
@@ -1098,7 +1098,7 @@ class SkillScanner:
                 location=source,
                 tags=["MITRE-T1005", "MITRE-T1552", "data-flow", "exfiltration"],
                 category="exfiltration",
-                source="sentinel",
+                source="bulwark",
             ))
 
         # ── Data Flow Rule 2: Read + Write = staging for exfiltration ──
@@ -1108,7 +1108,7 @@ class SkillScanner:
 
         if has_read and has_write and sensitive_matches:
             findings.append(SkillFinding(
-                rule_id="SEN-DF-002",
+                rule_id="BWK-DF-002",
                 message=(
                     f"DATA FLOW: Read + Write tools combined with sensitive path references. "
                     f"Classic credential staging pattern: read secrets → write to accessible location."
@@ -1118,7 +1118,7 @@ class SkillScanner:
                 location=source,
                 tags=["MITRE-T1074", "MITRE-T1005", "data-staging", "exfiltration"],
                 category="exfiltration",
-                source="sentinel",
+                source="bulwark",
             ))
 
         # ── Data Flow Rule 3: Read + Network = direct exfiltration ──
@@ -1129,7 +1129,7 @@ class SkillScanner:
 
         if has_read and has_network and sensitive_matches:
             findings.append(SkillFinding(
-                rule_id="SEN-DF-003",
+                rule_id="BWK-DF-003",
                 message=(
                     f"DATA FLOW: Read + Network tools with sensitive paths. "
                     f"Direct exfiltration vector: read credentials → send externally."
@@ -1139,7 +1139,7 @@ class SkillScanner:
                 location=source,
                 tags=["MITRE-T1041", "MITRE-T1567", "exfiltration"],
                 category="exfiltration",
-                source="sentinel",
+                source="bulwark",
             ))
 
         # ── Data Flow Rule 4: Deceptive framing in instructions ──
@@ -1156,7 +1156,7 @@ class SkillScanner:
 
         if deceptive_matches and sensitive_matches:
             findings.append(SkillFinding(
-                rule_id="SEN-DF-004",
+                rule_id="BWK-DF-004",
                 message=(
                     f"DATA FLOW: Deceptive framing + sensitive paths. "
                     f"Instructions use social engineering to justify accessing "
@@ -1167,7 +1167,7 @@ class SkillScanner:
                 location=source,
                 tags=["social-engineering", "MITRE-T1566", "deception"],
                 category="exfiltration",
-                source="sentinel",
+                source="bulwark",
             ))
 
         # ── Data Flow Rule 5: Multi-step instruction hiding ──
@@ -1187,7 +1187,7 @@ class SkillScanner:
 
             if not has_security_purpose:
                 findings.append(SkillFinding(
-                    rule_id="SEN-DF-005",
+                    rule_id="BWK-DF-005",
                     message=(
                         f"DATA FLOW: Multi-step instructions access sensitive files "
                         f"but skill purpose ('{purpose_text[:60]}') is unrelated to "
@@ -1198,7 +1198,7 @@ class SkillScanner:
                     location=source,
                     tags=["MITRE-T1036", "deception", "hidden-steps"],
                     category="exfiltration",
-                    source="sentinel",
+                    source="bulwark",
                 ))
 
         return findings
@@ -1206,7 +1206,7 @@ class SkillScanner:
     # ─── Helpers ─────────────────────────────────────────────────
 
     def _deduplicate_findings(self, findings: list[SkillFinding]) -> list[SkillFinding]:
-        """Deduplicate findings — prefer SkillSpector's over Sentinel's for same category."""
+        """Deduplicate findings — prefer SkillSpector's over Bulwark's for same category."""
         seen_categories: dict[str, SkillFinding] = {}
         unique: list[SkillFinding] = []
 
@@ -1216,8 +1216,8 @@ class SkillScanner:
             if key not in seen_categories:
                 seen_categories[key] = f
                 unique.append(f)
-            elif f.source == "skillspector" and seen_categories[key].source == "sentinel":
-                # Replace sentinel finding with skillspector's (more detailed)
+            elif f.source == "skillspector" and seen_categories[key].source == "bulwark":
+                # Replace bulwark finding with skillspector's (more detailed)
                 idx = unique.index(seen_categories[key])
                 unique[idx] = f
                 seen_categories[key] = f
@@ -1281,21 +1281,21 @@ class SkillScanner:
         return "\n---\n".join(parts)
 
     def _rule_score(self, rule_id: str) -> float:
-        """Get the score weight for a Sentinel rule by ID.
+        """Get the score weight for a Bulwark rule by ID.
 
-        For static rules, looks up in _SENTINEL_RULES.
-        For dynamic rules (SEN-DF-*), uses severity-based scoring.
+        For static rules, looks up in _BULWARK_RULES.
+        For dynamic rules (BWK-DF-*), uses severity-based scoring.
         """
-        for rule in _SENTINEL_RULES:
+        for rule in _BULWARK_RULES:
             if rule.id == rule_id:
                 return rule.score
         # Dynamic rules (data-flow analysis) — score by prefix
         _DYNAMIC_SCORES = {
-            "SEN-DF-001": 4.0,   # Read + sensitive paths
-            "SEN-DF-002": 4.5,   # Read + Write + sensitive paths (staging)
-            "SEN-DF-003": 4.5,   # Read + Network + sensitive paths (exfil)
-            "SEN-DF-004": 3.5,   # Deceptive framing + sensitive paths
-            "SEN-DF-005": 2.5,   # Hidden steps unrelated to purpose
+            "BWK-DF-001": 4.0,   # Read + sensitive paths
+            "BWK-DF-002": 4.5,   # Read + Write + sensitive paths (staging)
+            "BWK-DF-003": 4.5,   # Read + Network + sensitive paths (exfil)
+            "BWK-DF-004": 3.5,   # Deceptive framing + sensitive paths
+            "BWK-DF-005": 2.5,   # Hidden steps unrelated to purpose
         }
         return _DYNAMIC_SCORES.get(rule_id, 1.0)
 
@@ -1305,12 +1305,12 @@ class SkillScanner:
         Veto conditions (any ONE triggers hard-fail):
         1. CRITICAL finding in exfiltration/credential_access category with confidence >= 0.9
         2. Multiple (2+) HIGH findings in exfiltration category
-        3. Any SEN-DF-002 or SEN-DF-003 finding (read+write or read+network with secrets)
+        3. Any BWK-DF-002 or BWK-DF-003 finding (read+write or read+network with secrets)
 
         Returns True if veto should be applied (force BLOCK).
         """
         # Veto rule IDs — these ALWAYS force BLOCK
-        VETO_RULES = {"SEN-DF-002", "SEN-DF-003"}
+        VETO_RULES = {"BWK-DF-002", "BWK-DF-003"}
 
         # Categories that trigger veto at CRITICAL severity
         VETO_CATEGORIES = {"exfiltration", "credential_access"}

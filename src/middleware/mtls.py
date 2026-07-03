@@ -9,14 +9,14 @@ Security model: fail-closed. If mTLS is enabled and an internal path is
 accessed without a valid client certificate, the request is rejected with 403.
 
 Trust chain:
-  - A shared internal CA (sentinel-internal-ca) signs all service certificates
+  - A shared internal CA (bulwark-internal-ca) signs all service certificates
   - Each service presents its client cert when calling another service
   - The receiving service verifies the client cert against the trusted CA
   - Service identity is extracted from the certificate CN or SAN
 
 SECURITY (CRIT-01 fix):
   - X-Client-Cert-* headers are ONLY trusted if the request originates from
-    a known reverse proxy CIDR (SENTINEL_MTLS_TRUSTED_PROXY_CIDRS).
+    a known reverse proxy CIDR (BULWARK_MTLS_TRUSTED_PROXY_CIDRS).
   - If the request comes from an untrusted IP, headers are stripped/ignored
     and only direct TLS cert verification (Method 2/3) is used.
   - If no trusted proxy CIDRs are configured, header-based extraction is
@@ -47,7 +47,7 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 # Internal paths that require mTLS when enabled.
-# These are only accessed by other Sentinel services, never by external clients.
+# These are only accessed by other Bulwark services, never by external clients.
 MTLS_REQUIRED_PREFIXES = (
     "/admin/policies/reload",
     "/internal/",
@@ -57,13 +57,13 @@ MTLS_REQUIRED_PREFIXES = (
 # Only these services are allowed to make internal calls.
 # SECURITY (H-01 fix): No wildcard matching. Only exact identities.
 TRUSTED_SERVICE_IDENTITIES = {
-    "proxy.sentinel-gateway.svc.cluster.local",
-    "admin.sentinel-gateway.svc.cluster.local",
-    "proxy.sentinel-gateway",
-    "admin.sentinel-gateway",
+    "proxy.bulwark-gateway.svc.cluster.local",
+    "admin.bulwark-gateway.svc.cluster.local",
+    "proxy.bulwark-gateway",
+    "admin.bulwark-gateway",
     # Development/localhost identities
-    "sentinel-proxy",
-    "sentinel-admin",
+    "bulwark-proxy",
+    "bulwark-admin",
 }
 
 # SECURITY (CRIT-01 fix): Parse trusted proxy CIDRs at module load.
@@ -72,7 +72,7 @@ _TRUSTED_PROXY_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
 
 
 def _parse_trusted_proxy_cidrs() -> list:
-    """Parse SENTINEL_MTLS_TRUSTED_PROXY_CIDRS into network objects."""
+    """Parse BULWARK_MTLS_TRUSTED_PROXY_CIDRS into network objects."""
     raw = settings.mtls_trusted_proxy_cidrs.strip()
     if not raw:
         return []
@@ -141,7 +141,7 @@ def build_ssl_context() -> Optional[ssl.SSLContext]:
     if not ca_path:
         logger.warning(
             "mTLS enabled but no CA certificate configured "
-            "(SENTINEL_MTLS_CA_CERT_PATH). Internal paths will reject all requests."
+            "(BULWARK_MTLS_CA_CERT_PATH). Internal paths will reject all requests."
         )
         return None
 
@@ -258,7 +258,7 @@ def _extract_client_identity(request: Request) -> Optional[str]:
             client_host = request.client.host if request.client else "unknown"
             logger.warning(
                 "mTLS header spoofing attempt: X-Client-Cert-* headers from "
-                "untrusted source %s (not in SENTINEL_MTLS_TRUSTED_PROXY_CIDRS)",
+                "untrusted source %s (not in BULWARK_MTLS_TRUSTED_PROXY_CIDRS)",
                 client_host,
             )
 
@@ -296,7 +296,7 @@ def _extract_client_identity(request: Request) -> Optional[str]:
 
 
 def _is_trusted_identity(identity: str) -> bool:
-    """Verify the client identity is a known Sentinel service.
+    """Verify the client identity is a known Bulwark service.
 
     SECURITY (H-01 fix): Only exact matches against known identities.
     No wildcard/suffix matching — a compromised service in the same
@@ -306,7 +306,7 @@ def _is_trusted_identity(identity: str) -> bool:
         identity: The CN or SAN extracted from the client certificate.
 
     Returns:
-        True if the identity belongs to a trusted Sentinel service.
+        True if the identity belongs to a trusted Bulwark service.
     """
     if not identity:
         return False
@@ -320,7 +320,7 @@ class MTLSMiddleware(BaseHTTPMiddleware):
 
     When mTLS is enabled:
       - Internal paths (/internal/*, /admin/policies/reload) require a valid
-        client certificate from a trusted Sentinel service.
+        client certificate from a trusted Bulwark service.
       - External paths (/v1/*, /v2/*) are unaffected — they use JWT/API key.
       - Health/readiness probes are always allowed through.
 
@@ -367,7 +367,7 @@ class MTLSMiddleware(BaseHTTPMiddleware):
                 status_code=403,
                 content={
                     "error": "mTLS required for internal endpoints",
-                    "detail": "A valid client certificate signed by the Sentinel internal CA is required.",
+                    "detail": "A valid client certificate signed by the Bulwark internal CA is required.",
                     "path": path,
                 },
             )
@@ -386,7 +386,7 @@ class MTLSMiddleware(BaseHTTPMiddleware):
                 status_code=403,
                 content={
                     "error": "mTLS required for internal endpoints",
-                    "detail": f"Client identity '{identity}' is not a trusted Sentinel service.",
+                    "detail": f"Client identity '{identity}' is not a trusted Bulwark service.",
                     "path": path,
                 },
             )

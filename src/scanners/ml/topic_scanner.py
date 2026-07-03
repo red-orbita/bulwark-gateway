@@ -66,7 +66,7 @@ class TopicScanner(InputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="ML-based topic boundary enforcement (zero-shot NLI)",
-            author="sentinel",
+            author="bulwark",
             priority=30,
         )
 
@@ -77,7 +77,7 @@ class TopicScanner(InputScanner):
             return
 
         if not settings.ml_enabled:
-            logger.info("ml_topic_skipped", extra={"reason": "SENTINEL_ML_ENABLED=false"})
+            logger.info("ml_topic_skipped", extra={"reason": "BULWARK_ML_ENABLED=false"})
             return
 
         manager = get_model_manager()
@@ -95,7 +95,19 @@ class TopicScanner(InputScanner):
         3. If allowed_topics: classify against allowed list → WARN if no match
         """
         if not self._model_loaded:
-            return GuardrailResult(verdict=Verdict.ALLOW)
+            # SECURITY FIX (P7-01): Fail-closed when ML model unavailable.
+            return GuardrailResult(
+                verdict=Verdict.BLOCK,
+                events=[SecurityEvent(
+                    tenant_id="system",
+                    agent_id="ml_scanner",
+                    verdict=Verdict.BLOCK,
+                    category=ThreatCategory.PROMPT_INJECTION,
+                    description="ML topic scanner unavailable — fail-closed (model not loaded)",
+                    source="ml_topic_scanner",
+                    severity="high",
+                )],
+            )
 
         # Get topic policy for this agent
         denied_topics = context.metadata.get("denied_topics", [])

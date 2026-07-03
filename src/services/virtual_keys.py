@@ -14,9 +14,9 @@ Virtual keys decouple tenants from raw backend API keys:
   - Key rotation doesn't require tenant reconfiguration
 
 Redis keys:
-  sentinel:vkeys:{tenant_id}:{key_id}   — Encrypted backend key + metadata
-  sentinel:vkeys:{tenant_id}:active      — Currently active key ID
-  sentinel:vkeys:audit                   — List of key operations
+  bulwark:vkeys:{tenant_id}:{key_id}   — Encrypted backend key + metadata
+  bulwark:vkeys:{tenant_id}:active      — Currently active key ID
+  bulwark:vkeys:audit                   — List of key operations
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ class VirtualKeyManager:
 
     Provides abstraction layer between tenants and actual API keys.
     Keys are encrypted at rest using a master key derived from
-    SENTINEL_JWT_SECRET (or a dedicated SENTINEL_KEY_ENCRYPTION_KEY).
+    BULWARK_JWT_SECRET (or a dedicated BULWARK_KEY_ENCRYPTION_KEY).
     """
 
     def __init__(self):
@@ -82,7 +82,7 @@ class VirtualKeyManager:
     def _derive_encryption_key(self) -> bytes:
         """Derive encryption key from environment.
 
-        SECURITY FIX (CRIT-02): SENTINEL_KEY_ENCRYPTION_KEY is now MANDATORY.
+        SECURITY FIX (CRIT-02): BULWARK_KEY_ENCRYPTION_KEY is now MANDATORY.
         Refusing to start if not set — prevents accidental use of JWT_SECRET
         as the single point of compromise for all backend API keys.
 
@@ -91,10 +91,10 @@ class VirtualKeyManager:
 
         Returns 32-byte key suitable for Fernet encryption.
         """
-        key_source = os.environ.get("SENTINEL_KEY_ENCRYPTION_KEY", "")
+        key_source = os.environ.get("BULWARK_KEY_ENCRYPTION_KEY", "")
         if not key_source:
             raise SystemExit(
-                "FATAL: SENTINEL_KEY_ENCRYPTION_KEY environment variable is REQUIRED.\n"
+                "FATAL: BULWARK_KEY_ENCRYPTION_KEY environment variable is REQUIRED.\n"
                 "This key encrypts all backend API keys at rest.\n"
                 "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\"\n"
                 "NEVER reuse JWT_SECRET as the encryption key."
@@ -103,14 +103,14 @@ class VirtualKeyManager:
         import hmac as _hmac
         # HKDF-Extract
         prk = _hmac.new(
-            b"sentinel-vkey-encryption-v1",  # salt (fixed, public)
+            b"bulwark-vkey-encryption-v1",  # salt (fixed, public)
             key_source.encode(),
             "sha256",
         ).digest()
         # HKDF-Expand (single block is enough for 32 bytes)
         okm = _hmac.new(
             prk,
-            b"sentinel-virtual-keys-fernet\x01",  # info + counter
+            b"bulwark-virtual-keys-fernet\x01",  # info + counter
             "sha256",
         ).digest()
         return okm
@@ -170,13 +170,13 @@ class VirtualKeyManager:
                     "is_active": True,
                 }
                 self._redis.hset(
-                    f"sentinel:vkeys:{tenant_id}",
+                    f"bulwark:vkeys:{tenant_id}",
                     key_id,
                     json.dumps(key_data),
                 )
                 # Set as active key for this tenant/provider
                 self._redis.hset(
-                    f"sentinel:vkeys:{tenant_id}:active",
+                    f"bulwark:vkeys:{tenant_id}:active",
                     provider,
                     key_id,
                 )
@@ -203,7 +203,7 @@ class VirtualKeyManager:
         if self._redis:
             try:
                 active_key_id = self._redis.hget(
-                    f"sentinel:vkeys:{tenant_id}:active", provider
+                    f"bulwark:vkeys:{tenant_id}:active", provider
                 )
                 if isinstance(active_key_id, bytes):
                     active_key_id = active_key_id.decode()
@@ -225,7 +225,7 @@ class VirtualKeyManager:
         encrypted = self._backend_keys.get(active_key_id)
         if not encrypted and self._redis:
             try:
-                key_data_raw = self._redis.hget(f"sentinel:vkeys:{tenant_id}", active_key_id)
+                key_data_raw = self._redis.hget(f"bulwark:vkeys:{tenant_id}", active_key_id)
                 if key_data_raw:
                     key_data = json.loads(key_data_raw)
                     encrypted = key_data.get("encrypted_key")
@@ -304,7 +304,7 @@ class VirtualKeyManager:
             self._audit("revoke", tenant_id, key_id, tenant_keys[key_id].provider)
             if self._redis:
                 try:
-                    self._redis.hdel(f"sentinel:vkeys:{tenant_id}", key_id)
+                    self._redis.hdel(f"bulwark:vkeys:{tenant_id}", key_id)
                 except Exception:
                     pass
             return True
@@ -368,8 +368,8 @@ class VirtualKeyManager:
         })
         if self._redis:
             try:
-                self._redis.lpush("sentinel:vkeys:audit", entry)
-                self._redis.ltrim("sentinel:vkeys:audit", 0, 999)  # Keep last 1000
+                self._redis.lpush("bulwark:vkeys:audit", entry)
+                self._redis.ltrim("bulwark:vkeys:audit", 0, 999)  # Keep last 1000
             except Exception:
                 pass
         logger.info("vkey_audit", extra={"action": action, "tenant": tenant_id, "provider": provider})

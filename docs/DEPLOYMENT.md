@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Complete guide for deploying Sentinel Gateway in production and development environments.
+Complete guide for deploying Bulwark Gateway in production and development environments.
 
 ## Table of Contents
 
@@ -49,27 +49,27 @@ This creates random, cryptographically secure secrets for:
 
 ```bash
 # Build the proxy image
-docker build -t sentinel-gateway-proxy:latest -f Dockerfile .
+docker build -t bulwark-gateway-proxy:latest -f Dockerfile .
 
 # Build the admin image
-docker build -t sentinel-gateway-admin:latest -f docker/Dockerfile.admin .
+docker build -t bulwark-gateway-admin:latest -f docker/Dockerfile.admin .
 ```
 
 If using a remote registry (ECR, GCR, Docker Hub):
 
 ```bash
-docker tag sentinel-gateway-proxy:latest your-registry/sentinel-gateway-proxy:v0.2.0
-docker push your-registry/sentinel-gateway-proxy:v0.2.0
+docker tag bulwark-gateway-proxy:latest your-registry/bulwark-gateway-proxy:v0.2.0
+docker push your-registry/bulwark-gateway-proxy:v0.2.0
 
-docker tag sentinel-gateway-admin:latest your-registry/sentinel-gateway-admin:v0.2.0
-docker push your-registry/sentinel-gateway-admin:v0.2.0
+docker tag bulwark-gateway-admin:latest your-registry/bulwark-gateway-admin:v0.2.0
+docker push your-registry/bulwark-gateway-admin:v0.2.0
 ```
 
 For minikube (local testing):
 
 ```bash
-minikube image load sentinel-gateway-proxy:latest
-minikube image load sentinel-gateway-admin:latest
+minikube image load bulwark-gateway-proxy:latest
+minikube image load bulwark-gateway-admin:latest
 ```
 
 ### Step 3: Deploy to Kubernetes
@@ -89,22 +89,22 @@ kubectl apply -f k8s/namespace.yaml
 bash k8s/secrets/generate-secrets.sh | kubectl apply -f -
 
 # 3. Create ConfigMap with config files
-kubectl create configmap sentinel-static-config \
+kubectl create configmap bulwark-static-config \
   --from-file=agents.yaml=config/agents.yaml \
-  -n sentinel-gateway --dry-run=client -o yaml | kubectl apply -f -
+  -n bulwark-gateway --dry-run=client -o yaml | kubectl apply -f -
 
 # 4. Apply all manifests
 kubectl apply -k k8s/
 
 # 5. Verify deployment
-kubectl get pods -n sentinel-gateway
+kubectl get pods -n bulwark-gateway
 ```
 
 ---
 
 ## Helm Chart (Recommended)
 
-The recommended way to deploy Sentinel Gateway in production.
+The recommended way to deploy Bulwark Gateway in production.
 
 ### Prerequisites
 
@@ -116,18 +116,18 @@ The recommended way to deploy Sentinel Gateway in production.
 ### Minimal Deploy
 
 ```bash
-helm install sentinel-gateway ./helm/sentinel-gateway \
+helm install bulwark-gateway ./helm/bulwark-gateway \
   --set backend.ip=<YOUR_LLM_BACKEND_IP> \
   --set backend.port=11434 \
-  --namespace sentinel-gateway --create-namespace
+  --namespace bulwark-gateway --create-namespace
 ```
 
 ### Production Deploy (with all features)
 
 ```bash
-helm install sentinel-gateway ./helm/sentinel-gateway \
+helm install bulwark-gateway ./helm/bulwark-gateway \
   --values my-values.yaml \
-  --namespace sentinel-gateway --create-namespace
+  --namespace bulwark-gateway --create-namespace
 ```
 
 ### Required Configuration
@@ -147,7 +147,7 @@ helm install sentinel-gateway ./helm/sentinel-gateway \
 
 ### Backend Configuration
 
-Sentinel Gateway supports multiple backend connectivity patterns depending on your infrastructure.
+Bulwark Gateway supports multiple backend connectivity patterns depending on your infrastructure.
 
 #### IP-Based Backends (On-Prem GPU Clusters)
 
@@ -203,16 +203,16 @@ Each agent can target a different LLM backend, enabling multi-model architecture
 
 ```bash
 # Proxy (API gateway)
-kubectl port-forward svc/proxy 8080:8080 -n sentinel-gateway
+kubectl port-forward svc/proxy 8080:8080 -n bulwark-gateway
 
 # Admin Portal (Web UI)
-kubectl port-forward svc/admin 8090:8090 -n sentinel-gateway
+kubectl port-forward svc/admin 8090:8090 -n bulwark-gateway
 
 # Prometheus (metrics)
-kubectl port-forward svc/prometheus 9090:9090 -n sentinel-gateway
+kubectl port-forward svc/prometheus 9090:9090 -n bulwark-gateway
 
 # Grafana (dashboards)
-kubectl port-forward svc/grafana 3000:3000 -n sentinel-gateway
+kubectl port-forward svc/grafana 3000:3000 -n bulwark-gateway
 ```
 
 **Option B: Ingress (production)**
@@ -220,13 +220,13 @@ kubectl port-forward svc/grafana 3000:3000 -n sentinel-gateway
 Add to `/etc/hosts` (replace IP with your ingress controller IP):
 
 ```
-192.168.49.2  sentinel-gateway.local admin.sentinel-gateway.local
+192.168.49.2  bulwark-gateway.local admin.bulwark-gateway.local
 ```
 
 Then access:
-- **Proxy API**: `https://sentinel-gateway.local/v1/chat/completions`
-- **Admin Portal**: `https://admin.sentinel-gateway.local/`
-- **Grafana**: `https://sentinel-gateway.local/grafana/`
+- **Proxy API**: `https://bulwark-gateway.local/v1/chat/completions`
+- **Admin Portal**: `https://admin.bulwark-gateway.local/`
+- **Grafana**: `https://bulwark-gateway.local/grafana/`
 
 For production, update `k8s/base/ingress.yaml` with your real domain and TLS certificate (cert-manager recommended).
 
@@ -234,12 +234,12 @@ For production, update `k8s/base/ingress.yaml` with your real domain and TLS cer
 
 ```bash
 # Get your API key
-API_KEY=$(kubectl get secret sentinel-proxy-secrets -n sentinel-gateway \
+API_KEY=$(kubectl get secret bulwark-proxy-secrets -n bulwark-gateway \
   -o jsonpath='{.data.api-keys}' | base64 -d)
 
 # Test health endpoint
 curl http://localhost:8080/health
-# Expected: {"status":"ok","service":"sentinel-gateway"}
+# Expected: {"status":"ok","service":"bulwark-gateway"}
 
 # Test guardrail (should be BLOCKED)
 curl -X POST http://localhost:8080/v1/chat/completions \
@@ -264,29 +264,29 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 Wazuh Manager provides real-time log analysis of security events generated by the proxy.
 
 ```bash
-# 1. Apply the sentinel-siem namespace + Wazuh StatefulSet
+# 1. Apply the bulwark-siem namespace + Wazuh StatefulSet
 kubectl apply -f k8s/monitoring/namespace-siem.yaml
 kubectl apply -f k8s/monitoring/wazuh.yaml
 
 # 2. Wait for Wazuh to become ready (~2 minutes)
-kubectl wait --for=condition=ready pod/wazuh-0 -n sentinel-siem --timeout=180s
+kubectl wait --for=condition=ready pod/wazuh-0 -n bulwark-siem --timeout=180s
 
-# 3. Add localfile monitoring for Sentinel Gateway events
-kubectl exec -n sentinel-siem wazuh-0 -- sh -c '
+# 3. Add localfile monitoring for Bulwark Gateway events
+kubectl exec -n bulwark-siem wazuh-0 -- sh -c '
 sed -i "/<\/ossec_config>/i\\
   <localfile>\\
     <log_format>json</log_format>\\
-    <location>/var/log/sentinel-gateway/events.ndjson</location>\\
+    <location>/var/log/bulwark-gateway/events.ndjson</location>\\
   </localfile>" /var/ossec/etc/ossec.conf && \
 /var/ossec/bin/wazuh-control restart'
 
 # 4. Verify Wazuh API is accessible from admin pod
-kubectl exec -n sentinel-gateway deployment/admin -- python -c "
+kubectl exec -n bulwark-gateway deployment/admin -- python -c "
 import urllib.request, ssl
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
-r = urllib.request.urlopen('https://wazuh.sentinel-siem.svc.cluster.local:55000/', context=ctx, timeout=5)
+r = urllib.request.urlopen('https://wazuh.bulwark-siem.svc.cluster.local:55000/', context=ctx, timeout=5)
 print('Wazuh API reachable' if r.status == 401 else 'ERROR')
 "
 ```
@@ -295,11 +295,11 @@ print('Wazuh API reachable' if r.status == 401 else 'ERROR')
 
 | Field | Value |
 |-------|-------|
-| Wazuh API URL | `https://wazuh.sentinel-siem.svc.cluster.local:55000` |
+| Wazuh API URL | `https://wazuh.bulwark-siem.svc.cluster.local:55000` |
 | Username | `wazuh-wui` |
 | Password | `wazuh-wui` |
 
-> **Note**: Wazuh runs in a separate namespace (`sentinel-siem`) with `baseline` Pod Security Standard because it requires elevated privileges. The Filebeat component is disabled (replaced by a no-op) since we don't deploy Wazuh Indexer — logs are collected via file shipper only.
+> **Note**: Wazuh runs in a separate namespace (`bulwark-siem`) with `baseline` Pod Security Standard because it requires elevated privileges. The Filebeat component is disabled (replaced by a no-op) since we don't deploy Wazuh Indexer — logs are collected via file shipper only.
 
 > **Important**: If Wazuh enters CrashLoopBackOff, see [Troubleshooting: Wazuh](#wazuh-crashloopbackoff).
 
@@ -325,7 +325,7 @@ k8s/
 │   └── pdb.yaml                # PodDisruptionBudgets
 └── monitoring/
     ├── prometheus-grafana.yaml # Prometheus + Grafana
-    └── wazuh.yaml              # Wazuh StatefulSet (in sentinel-siem namespace)
+    └── wazuh.yaml              # Wazuh StatefulSet (in bulwark-siem namespace)
 ```
 
 Security features in K8s deployment:
@@ -340,7 +340,7 @@ Security features in K8s deployment:
 
 ## Redis Configuration
 
-Sentinel Gateway uses Redis for distributed rate limiting, guardrail pattern synchronization, and persistent metrics. By default, the Helm chart deploys a single-replica Redis instance inside the cluster. For production environments, you can configure an external managed Redis service.
+Bulwark Gateway uses Redis for distributed rate limiting, guardrail pattern synchronization, and persistent metrics. By default, the Helm chart deploys a single-replica Redis instance inside the cluster. For production environments, you can configure an external managed Redis service.
 
 ### Internal Redis (Default)
 
@@ -351,7 +351,7 @@ No additional configuration needed. The chart deploys Redis 7 (Alpine) with:
 - PodDisruptionBudget
 
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<YOUR_BACKEND_IP>
   # redis.enabled=true is the default
 ```
@@ -361,7 +361,7 @@ helm install sentinel ./helm/sentinel-gateway \
 To use an external Redis, disable the internal instance and configure the connection:
 
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<YOUR_BACKEND_IP> \
   --set redis.enabled=false \
   --set externalRedis.host=<REDIS_HOST> \
@@ -392,10 +392,10 @@ If you manage secrets externally (Vault, Sealed Secrets, External Secrets Operat
 # Create the secret first
 kubectl create secret generic my-redis-creds \
   --from-literal=password='<YOUR_REDIS_PASSWORD>' \
-  -n sentinel-gateway
+  -n bulwark-gateway
 
 # Reference it in the Helm install
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set redis.enabled=false \
   --set externalRedis.host=my-redis.example.com \
   --set externalRedis.port=6380 \
@@ -411,7 +411,7 @@ helm install sentinel ./helm/sentinel-gateway \
 Azure Cache for Redis enforces TLS on port 6380 (non-SSL port is disabled by default in production tiers).
 
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<BACKEND_IP> \
   --set redis.enabled=false \
   --set externalRedis.host=<NAME>.redis.cache.windows.net \
@@ -437,10 +437,10 @@ helm install sentinel ./helm/sentinel-gateway \
 
 ### AWS ElastiCache for Redis
 
-AWS ElastiCache supports both cluster-mode-disabled (single endpoint) and cluster-mode-enabled. Sentinel Gateway requires **cluster-mode-disabled** (single primary endpoint).
+AWS ElastiCache supports both cluster-mode-disabled (single endpoint) and cluster-mode-enabled. Bulwark Gateway requires **cluster-mode-disabled** (single primary endpoint).
 
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<BACKEND_IP> \
   --set redis.enabled=false \
   --set externalRedis.host=<REPLICATION_GROUP>.abc123.euw1.cache.amazonaws.com \
@@ -468,7 +468,7 @@ ElastiCache supports IAM-based auth with Redis 7+. This requires a sidecar or in
 GCP Memorystore provides a fully managed Redis instance accessible via private IP within your VPC.
 
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<BACKEND_IP> \
   --set redis.enabled=false \
   --set externalRedis.host=<MEMORYSTORE_IP> \
@@ -500,7 +500,7 @@ helm install sentinel ./helm/sentinel-gateway \
 For self-managed Redis instances running on physical servers or VMs.
 
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<BACKEND_IP> \
   --set redis.enabled=false \
   --set externalRedis.host=redis.internal.mycompany.com \
@@ -510,7 +510,7 @@ helm install sentinel ./helm/sentinel-gateway \
 
 **On-premise with TLS (self-signed certificates):**
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<BACKEND_IP> \
   --set redis.enabled=false \
   --set externalRedis.host=redis.internal.mycompany.com \
@@ -553,10 +553,10 @@ If deploying without Helm (Docker Compose, systemd, or bare metal), configure Re
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `SENTINEL_REDIS_URL` | Full Redis URL | `rediss://redis.cache.windows.net:6380/0` |
-| `SENTINEL_REDIS_PASSWORD` | Redis password (plain) | `MySecretPass` |
-| `SENTINEL_REDIS_PASSWORD_FILE` | Path to file containing password | `/run/secrets/redis-password` |
-| `SENTINEL_REDIS_TLS_INSECURE` | Skip TLS cert verification (`true`/`false`) | `false` |
+| `BULWARK_REDIS_URL` | Full Redis URL | `rediss://redis.cache.windows.net:6380/0` |
+| `BULWARK_REDIS_PASSWORD` | Redis password (plain) | `MySecretPass` |
+| `BULWARK_REDIS_PASSWORD_FILE` | Path to file containing password | `/run/secrets/redis-password` |
+| `BULWARK_REDIS_TLS_INSECURE` | Skip TLS cert verification (`true`/`false`) | `false` |
 
 **URL scheme determines TLS:**
 - `redis://` — plain TCP connection (internal/private network)
@@ -564,9 +564,9 @@ If deploying without Helm (Docker Compose, systemd, or bare metal), configure Re
 
 **Example .env file:**
 ```bash
-SENTINEL_REDIS_URL=rediss://my-redis.cache.windows.net:6380/0
-SENTINEL_REDIS_PASSWORD_FILE=/run/secrets/redis-password
-SENTINEL_REDIS_TLS_INSECURE=false
+BULWARK_REDIS_URL=rediss://my-redis.cache.windows.net:6380/0
+BULWARK_REDIS_PASSWORD_FILE=/run/secrets/redis-password
+BULWARK_REDIS_TLS_INSECURE=false
 ```
 
 ---
@@ -580,7 +580,7 @@ After deployment, verify Redis connectivity:
 ./scripts/validate-deployment.sh
 
 # Via the admin API
-curl -s https://admin.sentinel-gateway.local/admin/health/detailed \
+curl -s https://admin.bulwark-gateway.local/admin/health/detailed \
   -H "Cookie: session=<TOKEN>" | jq '.redis'
 # Expected: {"status": "connected", "latency_ms": 1.2, "version": "7.2.4", ...}
 ```
@@ -655,7 +655,7 @@ docker compose down && docker compose up -d
 
 ```bash
 # 1. Clone and install
-git clone <repo-url> && cd sentinel-gateway
+git clone <repo-url> && cd bulwark-gateway
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
@@ -663,9 +663,9 @@ pip install -e ".[dev]"
 redis-server --port 6379 &
 
 # 3. Set minimal environment
-export SENTINEL_BACKEND_URL=http://localhost:11434  # Your LLM backend
-export SENTINEL_JWT_SECRET=dev-secret-change-me
-export SENTINEL_REDIS_URL=redis://localhost:6379/0
+export BULWARK_BACKEND_URL=http://localhost:11434  # Your LLM backend
+export BULWARK_JWT_SECRET=dev-secret-change-me
+export BULWARK_REDIS_URL=redis://localhost:6379/0
 
 # 4. Run proxy
 python -m uvicorn src.main:app --reload --port 8080
@@ -689,7 +689,7 @@ In production, the **proxy** (data plane) and **admin portal** (control plane) M
                          └────────────┬───────────────┬────────────────┘
                                       │               │
                     ┌─────────────────▼───┐   ┌──────▼──────────────────┐
-                    │  sentinel.corp.com   │   │  admin.sentinel.corp.com │
+                    │  bulwark.corp.com   │   │  admin.bulwark.corp.com │
                     │  (Proxy - Data Plane)│   │  (Admin - Control Plane) │
                     │  Port 443 (TLS)      │   │  Port 443 (TLS)          │
                     │                      │   │                           │
@@ -720,7 +720,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: admin-ip-allowlist
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector:
     matchLabels:
@@ -750,8 +750,8 @@ metadata:
 ```yaml
 # Cloudflare Access policy for admin subdomain
 application:
-  name: "Sentinel Gateway Admin"
-  domain: "admin.sentinel.corp.com"
+  name: "Bulwark Gateway Admin"
+  domain: "admin.bulwark.corp.com"
   type: self_hosted
   policies:
     - name: "Security Team Only"
@@ -787,7 +787,7 @@ For the highest security, require client certificates for admin access:
 metadata:
   annotations:
     nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
-    nginx.ingress.kubernetes.io/auth-tls-secret: "sentinel-gateway/admin-client-ca"
+    nginx.ingress.kubernetes.io/auth-tls-secret: "bulwark-gateway/admin-client-ca"
     nginx.ingress.kubernetes.io/auth-tls-verify-depth: "1"
 ```
 
@@ -796,7 +796,7 @@ metadata:
 ```bash
 # Create CA
 openssl req -x509 -newkey rsa:4096 -keyout ca-key.pem -out ca-cert.pem -days 365 -nodes \
-  -subj "/CN=Sentinel Admin CA/O=Corp Security"
+  -subj "/CN=Bulwark Admin CA/O=Corp Security"
 
 # Create client cert for security team
 openssl req -newkey rsa:2048 -keyout client-key.pem -out client-csr.pem -nodes \
@@ -806,7 +806,7 @@ openssl x509 -req -in client-csr.pem -CA ca-cert.pem -CAkey ca-key.pem \
 
 # Create K8s secret with CA cert
 kubectl create secret generic admin-client-ca \
-  -n sentinel-gateway --from-file=ca.crt=ca-cert.pem
+  -n bulwark-gateway --from-file=ca.crt=ca-cert.pem
 ```
 
 ---
@@ -821,8 +821,8 @@ kubectl create secret generic admin-client-ca \
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: sentinel-gateway
-  namespace: sentinel-gateway
+  name: bulwark-gateway
+  namespace: bulwark-gateway
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
@@ -836,12 +836,12 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - sentinel.corp.com
-        - admin.sentinel.corp.com
-      secretName: sentinel-gateway-tls
+        - bulwark.corp.com
+        - admin.bulwark.corp.com
+      secretName: bulwark-gateway-tls
   rules:
     # Data Plane — proxy API
-    - host: sentinel.corp.com
+    - host: bulwark.corp.com
       http:
         paths:
           - path: /v1
@@ -859,7 +859,7 @@ spec:
                 port:
                   number: 8080
     # Control Plane — admin portal (separate subdomain)
-    - host: admin.sentinel.corp.com
+    - host: admin.bulwark.corp.com
       http:
         paths:
           - path: /
@@ -878,7 +878,7 @@ resource "aws_lb_listener_rule" "proxy" {
   listener_arn = aws_lb_listener.https.arn
   priority     = 100
   condition {
-    host_header { values = ["sentinel.corp.com"] }
+    host_header { values = ["bulwark.corp.com"] }
   }
   action {
     type             = "forward"
@@ -890,7 +890,7 @@ resource "aws_lb_listener_rule" "admin" {
   listener_arn = aws_lb_listener.https.arn
   priority     = 200
   condition {
-    host_header { values = ["admin.sentinel.corp.com"] }
+    host_header { values = ["admin.bulwark.corp.com"] }
   }
   # Restrict to VPN CIDR
   condition {
@@ -911,24 +911,24 @@ resource "aws_lb_listener_rule" "admin" {
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: sentinel-gateway-tls
-  namespace: sentinel-gateway
+  name: bulwark-gateway-tls
+  namespace: bulwark-gateway
 spec:
-  secretName: sentinel-gateway-tls
+  secretName: bulwark-gateway-tls
   issuerRef:
     name: letsencrypt-prod
     kind: ClusterIssuer
   dnsNames:
-    - sentinel.corp.com
-    - admin.sentinel.corp.com
+    - bulwark.corp.com
+    - admin.bulwark.corp.com
   renewBefore: 360h    # Renew 15 days before expiry
 ```
 
 **Option B: Corporate CA (internal PKI):**
 
 ```bash
-kubectl create secret tls sentinel-gateway-tls \
-  -n sentinel-gateway \
+kubectl create secret tls bulwark-gateway-tls \
+  -n bulwark-gateway \
   --cert=/path/to/corp-signed-cert.pem \
   --key=/path/to/private-key.pem
 ```
@@ -937,7 +937,7 @@ kubectl create secret tls sentinel-gateway-tls \
 
 ## Secrets Management
 
-Sentinel Gateway supports multiple secrets backends for enterprise environments. Choose based on your cloud provider and compliance requirements.
+Bulwark Gateway supports multiple secrets backends for enterprise environments. Choose based on your cloud provider and compliance requirements.
 
 | Method | Best For | Auto-Rotation | Audit Trail | Integration |
 |--------|----------|---------------|-------------|-------------|
@@ -951,17 +951,17 @@ Sentinel Gateway supports multiple secrets backends for enterprise environments.
 | 1Password Connect | Teams already using 1Password | Manual | 1Password events | External Secrets Operator |
 | Doppler | Developer-friendly SaaS | Yes | Full | CLI / K8s operator |
 
-### How Secrets Work in Sentinel Gateway
+### How Secrets Work in Bulwark Gateway
 
 All secrets support the **`*_FILE` pattern** — point an env var to a mounted file:
 
 ```yaml
 env:
-  - name: SENTINEL_JWT_SECRET_FILE
+  - name: BULWARK_JWT_SECRET_FILE
     value: /mnt/secrets/jwt-secret
-  - name: SENTINEL_REDIS_PASSWORD_FILE
+  - name: BULWARK_REDIS_PASSWORD_FILE
     value: /mnt/secrets/redis-password
-  - name: SENTINEL_API_KEYS_FILE
+  - name: BULWARK_API_KEYS_FILE
     value: /mnt/secrets/api-keys
   - name: DB_ENCRYPTION_KEY_FILE
     value: /mnt/secrets/db-encryption-key
@@ -969,7 +969,7 @@ env:
 
 This means **any** secrets provider that can mount a file or create a Kubernetes Secret works automatically — no code changes needed.
 
-**Secrets consumed by Sentinel Gateway:**
+**Secrets consumed by Bulwark Gateway:**
 
 | Secret | Used By | Purpose | Rotation Impact |
 |--------|---------|---------|-----------------|
@@ -1007,7 +1007,7 @@ echo "new-jwt-secret-value" > secrets/jwt_secret.txt
 
 # 3. Apply + restart
 kubectl apply -f k8s/secrets/sealed-secrets.yaml
-kubectl rollout restart deployment -n sentinel-gateway
+kubectl rollout restart deployment -n bulwark-gateway
 ```
 
 **Limitations:**
@@ -1027,41 +1027,41 @@ Best for: Multi-cloud, multi-cluster, financial services, strict compliance (PCI
 
 ```bash
 # Enable KV v2 engine
-vault secrets enable -path=sentinel-gateway kv-v2
+vault secrets enable -path=bulwark-gateway kv-v2
 
 # Store proxy secrets
-vault kv put sentinel-gateway/proxy \
+vault kv put bulwark-gateway/proxy \
   jwt_secret="$(openssl rand -base64 32)" \
   api_keys="key1-xxxxx,key2-yyyyy" \
   redis_password="$(openssl rand -base64 24)"
 
 # Store admin secrets
-vault kv put sentinel-gateway/admin \
+vault kv put bulwark-gateway/admin \
   admin_password="$(openssl rand -base64 16)" \
   db_encryption_key="$(openssl rand -hex 32)"
 
 # Store monitoring secrets
-vault kv put sentinel-gateway/monitoring \
+vault kv put bulwark-gateway/monitoring \
   grafana_password="$(openssl rand -base64 16)"
 ```
 
 **Step 2: Create Vault policy**
 
 ```hcl
-# vault-policy-sentinel.hcl
-path "sentinel-gateway/data/proxy" {
+# vault-policy-bulwark.hcl
+path "bulwark-gateway/data/proxy" {
   capabilities = ["read"]
 }
-path "sentinel-gateway/data/admin" {
+path "bulwark-gateway/data/admin" {
   capabilities = ["read"]
 }
-path "sentinel-gateway/data/monitoring" {
+path "bulwark-gateway/data/monitoring" {
   capabilities = ["read"]
 }
 ```
 
 ```bash
-vault policy write sentinel-gateway vault-policy-sentinel.hcl
+vault policy write bulwark-gateway vault-policy-bulwark.hcl
 ```
 
 **Step 3a: Via External Secrets Operator (Recommended)**
@@ -1079,65 +1079,65 @@ spec:
   provider:
     vault:
       server: "https://vault.corp.com:8200"
-      path: "sentinel-gateway"
+      path: "bulwark-gateway"
       version: "v2"
       auth:
         kubernetes:
           mountPath: "kubernetes"
-          role: "sentinel-gateway"
+          role: "bulwark-gateway"
           serviceAccountRef:
-            name: sentinel-proxy
-            namespace: sentinel-gateway
+            name: bulwark-proxy
+            namespace: bulwark-gateway
 ---
 # ExternalSecret — syncs Vault → K8s Secret
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 1h        # Auto-sync from Vault every hour
   secretStoreRef:
     name: vault-backend
     kind: ClusterSecretStore
   target:
-    name: sentinel-proxy-secrets
+    name: bulwark-proxy-secrets
     creationPolicy: Owner
   data:
     - secretKey: jwt-secret
       remoteRef:
-        key: sentinel-gateway/proxy
+        key: bulwark-gateway/proxy
         property: jwt_secret
     - secretKey: api-keys
       remoteRef:
-        key: sentinel-gateway/proxy
+        key: bulwark-gateway/proxy
         property: api_keys
     - secretKey: redis-password
       remoteRef:
-        key: sentinel-gateway/proxy
+        key: bulwark-gateway/proxy
         property: redis_password
 ---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-admin-secrets
-  namespace: sentinel-gateway
+  name: bulwark-admin-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: vault-backend
     kind: ClusterSecretStore
   target:
-    name: sentinel-admin-secrets
+    name: bulwark-admin-secrets
     creationPolicy: Owner
   data:
     - secretKey: admin-password
       remoteRef:
-        key: sentinel-gateway/admin
+        key: bulwark-gateway/admin
         property: admin_password
     - secretKey: db-encryption-key
       remoteRef:
-        key: sentinel-gateway/admin
+        key: bulwark-gateway/admin
         property: db_encryption_key
 ```
 
@@ -1148,22 +1148,22 @@ spec:
 apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
 metadata:
-  name: vault-sentinel-proxy
-  namespace: sentinel-gateway
+  name: vault-bulwark-proxy
+  namespace: bulwark-gateway
 spec:
   provider: vault
   parameters:
     vaultAddress: "https://vault.corp.com:8200"
-    roleName: "sentinel-gateway"
+    roleName: "bulwark-gateway"
     objects: |
       - objectName: "jwt-secret"
-        secretPath: "sentinel-gateway/data/proxy"
+        secretPath: "bulwark-gateway/data/proxy"
         secretKey: "jwt_secret"
       - objectName: "redis-password"
-        secretPath: "sentinel-gateway/data/proxy"
+        secretPath: "bulwark-gateway/data/proxy"
         secretKey: "redis_password"
       - objectName: "api-keys"
-        secretPath: "sentinel-gateway/data/proxy"
+        secretPath: "bulwark-gateway/data/proxy"
         secretKey: "api_keys"
 ```
 
@@ -1176,21 +1176,21 @@ volumes:
       driver: secrets-store.csi.k8s.io
       readOnly: true
       volumeAttributes:
-        secretProviderClass: vault-sentinel-proxy
+        secretProviderClass: vault-bulwark-proxy
 ```
 
 **Rotation with Vault:**
 
 ```bash
 # Update secret in Vault
-vault kv put sentinel-gateway/proxy jwt_secret="$(openssl rand -base64 32)"
+vault kv put bulwark-gateway/proxy jwt_secret="$(openssl rand -base64 32)"
 
 # ESO auto-syncs within refreshInterval (1h)
 # Or force immediate sync:
-kubectl annotate externalsecret sentinel-proxy-secrets -n sentinel-gateway force-sync=$(date +%s) --overwrite
+kubectl annotate externalsecret bulwark-proxy-secrets -n bulwark-gateway force-sync=$(date +%s) --overwrite
 
 # Restart pods to pick up new secrets
-kubectl rollout restart deployment/proxy -n sentinel-gateway
+kubectl rollout restart deployment/proxy -n bulwark-gateway
 ```
 
 ### Option 3: AWS Secrets Manager
@@ -1206,17 +1206,17 @@ Best for: EKS deployments, AWS-native organizations.
 ```bash
 # Create proxy secrets
 aws secretsmanager create-secret \
-  --name sentinel-gateway/proxy \
+  --name bulwark-gateway/proxy \
   --secret-string '{
     "jwt_secret": "'$(openssl rand -base64 32)'",
     "api_keys": "key1-xxxxx,key2-yyyyy",
     "redis_password": "'$(openssl rand -base64 24)'"
   }' \
-  --tags Key=Environment,Value=production Key=Service,Value=sentinel-gateway
+  --tags Key=Environment,Value=production Key=Service,Value=bulwark-gateway
 
 # Create admin secrets
 aws secretsmanager create-secret \
-  --name sentinel-gateway/admin \
+  --name bulwark-gateway/admin \
   --secret-string '{
     "admin_password": "'$(openssl rand -base64 16)'",
     "db_encryption_key": "'$(openssl rand -hex 32)'"
@@ -1236,7 +1236,7 @@ aws secretsmanager create-secret \
         "secretsmanager:DescribeSecret"
       ],
       "Resource": [
-        "arn:aws:secretsmanager:eu-west-1:123456789012:secret:sentinel-gateway/*"
+        "arn:aws:secretsmanager:eu-west-1:123456789012:secret:bulwark-gateway/*"
       ]
     }
   ]
@@ -1246,15 +1246,15 @@ aws secretsmanager create-secret \
 ```bash
 # Create IAM policy
 aws iam create-policy \
-  --policy-name SentinelGatewaySecretsRead \
+  --policy-name BulwarkGatewaySecretsRead \
   --policy-document file://iam-policy.json
 
 # Create IRSA service account
 eksctl create iamserviceaccount \
-  --name sentinel-proxy \
-  --namespace sentinel-gateway \
+  --name bulwark-proxy \
+  --namespace bulwark-gateway \
   --cluster my-cluster \
-  --attach-policy-arn arn:aws:iam::123456789012:policy/SentinelGatewaySecretsRead \
+  --attach-policy-arn arn:aws:iam::123456789012:policy/BulwarkGatewaySecretsRead \
   --approve
 ```
 
@@ -1274,42 +1274,42 @@ spec:
       auth:
         jwt:
           serviceAccountRef:
-            name: sentinel-proxy
-            namespace: sentinel-gateway
+            name: bulwark-proxy
+            namespace: bulwark-gateway
 ---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: aws-secrets-manager
     kind: ClusterSecretStore
   target:
-    name: sentinel-proxy-secrets
+    name: bulwark-proxy-secrets
     creationPolicy: Owner
   dataFrom:
     - extract:
-        key: sentinel-gateway/proxy
+        key: bulwark-gateway/proxy
 ---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-admin-secrets
-  namespace: sentinel-gateway
+  name: bulwark-admin-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: aws-secrets-manager
     kind: ClusterSecretStore
   target:
-    name: sentinel-admin-secrets
+    name: bulwark-admin-secrets
     creationPolicy: Owner
   dataFrom:
     - extract:
-        key: sentinel-gateway/admin
+        key: bulwark-gateway/admin
 ```
 
 **Auto-rotation with AWS Lambda:**
@@ -1317,7 +1317,7 @@ spec:
 ```bash
 # Enable rotation (rotates every 30 days automatically)
 aws secretsmanager rotate-secret \
-  --secret-id sentinel-gateway/proxy \
+  --secret-id bulwark-gateway/proxy \
   --rotation-lambda-arn arn:aws:lambda:eu-west-1:123456789012:function:SecretsRotator \
   --rotation-rules AutomaticallyAfterDays=30
 ```
@@ -1336,16 +1336,16 @@ Best for: Cost-sensitive AWS deployments (Parameter Store is free for standard p
 ```bash
 # Store as SecureString (encrypted with KMS)
 aws ssm put-parameter \
-  --name "/sentinel-gateway/prod/jwt-secret" \
+  --name "/bulwark-gateway/prod/jwt-secret" \
   --value "$(openssl rand -base64 32)" \
   --type SecureString \
-  --key-id alias/sentinel-gateway-key
+  --key-id alias/bulwark-gateway-key
 
 aws ssm put-parameter \
-  --name "/sentinel-gateway/prod/redis-password" \
+  --name "/bulwark-gateway/prod/redis-password" \
   --value "$(openssl rand -base64 24)" \
   --type SecureString \
-  --key-id alias/sentinel-gateway-key
+  --key-id alias/bulwark-gateway-key
 ```
 
 ```yaml
@@ -1362,29 +1362,29 @@ spec:
       auth:
         jwt:
           serviceAccountRef:
-            name: sentinel-proxy
-            namespace: sentinel-gateway
+            name: bulwark-proxy
+            namespace: bulwark-gateway
 ---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: aws-parameter-store
     kind: ClusterSecretStore
   target:
-    name: sentinel-proxy-secrets
+    name: bulwark-proxy-secrets
     creationPolicy: Owner
   data:
     - secretKey: jwt-secret
       remoteRef:
-        key: /sentinel-gateway/prod/jwt-secret
+        key: /bulwark-gateway/prod/jwt-secret
     - secretKey: redis-password
       remoteRef:
-        key: /sentinel-gateway/prod/redis-password
+        key: /bulwark-gateway/prod/redis-password
 ```
 
 ### Option 5: Azure Key Vault
@@ -1400,22 +1400,22 @@ Best for: AKS deployments, Azure-native organizations, Microsoft 365 environment
 ```bash
 # Create Key Vault
 az keyvault create \
-  --name sentinel-gw-prod \
-  --resource-group sentinel-gateway-rg \
+  --name bulwark-gw-prod \
+  --resource-group bulwark-gateway-rg \
   --location westeurope \
   --enable-rbac-authorization true
 
 # Store secrets
-az keyvault secret set --vault-name sentinel-gw-prod \
+az keyvault secret set --vault-name bulwark-gw-prod \
   --name jwt-secret --value "$(openssl rand -base64 32)"
 
-az keyvault secret set --vault-name sentinel-gw-prod \
+az keyvault secret set --vault-name bulwark-gw-prod \
   --name redis-password --value "$(openssl rand -base64 24)"
 
-az keyvault secret set --vault-name sentinel-gw-prod \
+az keyvault secret set --vault-name bulwark-gw-prod \
   --name api-keys --value "key1-xxxxx,key2-yyyyy"
 
-az keyvault secret set --vault-name sentinel-gw-prod \
+az keyvault secret set --vault-name bulwark-gw-prod \
   --name db-encryption-key --value "$(openssl rand -hex 32)"
 ```
 
@@ -1424,26 +1424,26 @@ az keyvault secret set --vault-name sentinel-gw-prod \
 ```bash
 # Create managed identity
 az identity create \
-  --name sentinel-gateway-identity \
-  --resource-group sentinel-gateway-rg
+  --name bulwark-gateway-identity \
+  --resource-group bulwark-gateway-rg
 
 # Get identity client ID
-CLIENT_ID=$(az identity show --name sentinel-gateway-identity \
-  --resource-group sentinel-gateway-rg --query clientId -o tsv)
+CLIENT_ID=$(az identity show --name bulwark-gateway-identity \
+  --resource-group bulwark-gateway-rg --query clientId -o tsv)
 
 # Grant Key Vault access
 az role assignment create \
   --role "Key Vault Secrets User" \
   --assignee $CLIENT_ID \
-  --scope /subscriptions/<sub-id>/resourceGroups/sentinel-gateway-rg/providers/Microsoft.KeyVault/vaults/sentinel-gw-prod
+  --scope /subscriptions/<sub-id>/resourceGroups/bulwark-gateway-rg/providers/Microsoft.KeyVault/vaults/bulwark-gw-prod
 
 # Federate with K8s service account
 az identity federated-credential create \
-  --name sentinel-proxy-federated \
-  --identity-name sentinel-gateway-identity \
-  --resource-group sentinel-gateway-rg \
-  --issuer $(az aks show -n my-cluster -g sentinel-gateway-rg --query oidcIssuerProfile.issuerUrl -o tsv) \
-  --subject system:serviceaccount:sentinel-gateway:sentinel-proxy
+  --name bulwark-proxy-federated \
+  --identity-name bulwark-gateway-identity \
+  --resource-group bulwark-gateway-rg \
+  --issuer $(az aks show -n my-cluster -g bulwark-gateway-rg --query oidcIssuerProfile.issuerUrl -o tsv) \
+  --subject system:serviceaccount:bulwark-gateway:bulwark-proxy
 ```
 
 **Step 3a: Via Azure Key Vault CSI Driver (Recommended for AKS)**
@@ -1453,15 +1453,15 @@ az identity federated-credential create \
 apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
 metadata:
-  name: azure-sentinel-secrets
-  namespace: sentinel-gateway
+  name: azure-bulwark-secrets
+  namespace: bulwark-gateway
 spec:
   provider: azure
   parameters:
     usePodIdentity: "false"
     useVMManagedIdentity: "false"
     clientID: "<managed-identity-client-id>"
-    keyvaultName: "sentinel-gw-prod"
+    keyvaultName: "bulwark-gw-prod"
     tenantId: "<azure-tenant-id>"
     objects: |
       array:
@@ -1475,7 +1475,7 @@ spec:
           objectName: api-keys
           objectType: secret
   secretObjects:
-    - secretName: sentinel-proxy-secrets
+    - secretName: bulwark-proxy-secrets
       type: Opaque
       data:
         - objectName: jwt-secret
@@ -1495,7 +1495,7 @@ volumes:
       driver: secrets-store.csi.k8s.io
       readOnly: true
       volumeAttributes:
-        secretProviderClass: azure-sentinel-secrets
+        secretProviderClass: azure-bulwark-secrets
 ```
 
 **Step 3b: Via External Secrets Operator**
@@ -1510,24 +1510,24 @@ spec:
   provider:
     azurekv:
       tenantId: "<azure-tenant-id>"
-      vaultUrl: "https://sentinel-gw-prod.vault.azure.net"
+      vaultUrl: "https://bulwark-gw-prod.vault.azure.net"
       authType: WorkloadIdentity
       serviceAccountRef:
-        name: sentinel-proxy
-        namespace: sentinel-gateway
+        name: bulwark-proxy
+        namespace: bulwark-gateway
 ---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: azure-keyvault
     kind: ClusterSecretStore
   target:
-    name: sentinel-proxy-secrets
+    name: bulwark-proxy-secrets
     creationPolicy: Owner
   data:
     - secretKey: jwt-secret
@@ -1545,7 +1545,7 @@ spec:
 
 ```bash
 # Enable rotation policy (rotates every 60 days, notifies 30 days before)
-az keyvault secret set-attributes --vault-name sentinel-gw-prod \
+az keyvault secret set-attributes --vault-name bulwark-gw-prod \
   --name jwt-secret \
   --expires "$(date -d '+90 days' -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -1565,42 +1565,42 @@ Best for: GKE deployments, Google Cloud-native organizations.
 ```bash
 # Create secrets
 echo -n "$(openssl rand -base64 32)" | \
-  gcloud secrets create sentinel-jwt-secret --data-file=- \
-  --labels=service=sentinel-gateway,env=production
+  gcloud secrets create bulwark-jwt-secret --data-file=- \
+  --labels=service=bulwark-gateway,env=production
 
 echo -n "$(openssl rand -base64 24)" | \
-  gcloud secrets create sentinel-redis-password --data-file=-
+  gcloud secrets create bulwark-redis-password --data-file=-
 
 echo -n "key1-xxxxx,key2-yyyyy" | \
-  gcloud secrets create sentinel-api-keys --data-file=-
+  gcloud secrets create bulwark-api-keys --data-file=-
 
 echo -n "$(openssl rand -hex 32)" | \
-  gcloud secrets create sentinel-db-encryption-key --data-file=-
+  gcloud secrets create bulwark-db-encryption-key --data-file=-
 ```
 
 **Step 2: IAM binding for Workload Identity**
 
 ```bash
 # Create Google Service Account
-gcloud iam service-accounts create sentinel-gateway-sa \
-  --display-name="Sentinel Gateway Secrets Access"
+gcloud iam service-accounts create bulwark-gateway-sa \
+  --display-name="Bulwark Gateway Secrets Access"
 
 # Grant secret accessor role
-gcloud secrets add-iam-policy-binding sentinel-jwt-secret \
-  --member="serviceAccount:sentinel-gateway-sa@PROJECT.iam.gserviceaccount.com" \
+gcloud secrets add-iam-policy-binding bulwark-jwt-secret \
+  --member="serviceAccount:bulwark-gateway-sa@PROJECT.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 
-gcloud secrets add-iam-policy-binding sentinel-redis-password \
-  --member="serviceAccount:sentinel-gateway-sa@PROJECT.iam.gserviceaccount.com" \
+gcloud secrets add-iam-policy-binding bulwark-redis-password \
+  --member="serviceAccount:bulwark-gateway-sa@PROJECT.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 
 # Repeat for all secrets...
 
 # Bind GCP SA to K8s SA (Workload Identity)
 gcloud iam service-accounts add-iam-policy-binding \
-  sentinel-gateway-sa@PROJECT.iam.gserviceaccount.com \
+  bulwark-gateway-sa@PROJECT.iam.gserviceaccount.com \
   --role roles/iam.workloadIdentityUser \
-  --member "serviceAccount:PROJECT.svc.id.goog[sentinel-gateway/sentinel-proxy]"
+  --member "serviceAccount:PROJECT.svc.id.goog[bulwark-gateway/bulwark-proxy]"
 ```
 
 **Step 3: External Secrets configuration**
@@ -1621,34 +1621,34 @@ spec:
           clusterName: my-gke-cluster
           clusterProjectID: "my-gcp-project-id"
           serviceAccountRef:
-            name: sentinel-proxy
-            namespace: sentinel-gateway
+            name: bulwark-proxy
+            namespace: bulwark-gateway
 ---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: gcp-secret-manager
     kind: ClusterSecretStore
   target:
-    name: sentinel-proxy-secrets
+    name: bulwark-proxy-secrets
     creationPolicy: Owner
   data:
     - secretKey: jwt-secret
       remoteRef:
-        key: sentinel-jwt-secret
+        key: bulwark-jwt-secret
         version: latest
     - secretKey: redis-password
       remoteRef:
-        key: sentinel-redis-password
+        key: bulwark-redis-password
         version: latest
     - secretKey: api-keys
       remoteRef:
-        key: sentinel-api-keys
+        key: bulwark-api-keys
         version: latest
 ```
 
@@ -1657,7 +1657,7 @@ spec:
 ```bash
 # Add new version (old remains accessible for rollback)
 echo -n "$(openssl rand -base64 32)" | \
-  gcloud secrets versions add sentinel-jwt-secret --data-file=-
+  gcloud secrets versions add bulwark-jwt-secret --data-file=-
 
 # ESO picks up "latest" on next refresh cycle
 # Use Cloud Functions + Cloud Scheduler for automated rotation
@@ -1674,9 +1674,9 @@ Best for: Financial services, regulated industries, on-premises enterprise envir
 **Step 1: Load secrets into Conjur**
 
 ```yaml
-# policy.yml — define Sentinel Gateway secrets
+# policy.yml — define Bulwark Gateway secrets
 - !policy
-  id: sentinel-gateway
+  id: bulwark-gateway
   body:
     - !variable jwt_secret
     - !variable redis_password
@@ -1686,8 +1686,8 @@ Best for: Financial services, regulated industries, on-premises enterprise envir
     - !host
       id: proxy-service
       annotations:
-        authn-k8s/namespace: sentinel-gateway
-        authn-k8s/service-account: sentinel-proxy
+        authn-k8s/namespace: bulwark-gateway
+        authn-k8s/service-account: bulwark-proxy
         authn-k8s/authentication-container-name: authenticator
 
     - !permit
@@ -1701,9 +1701,9 @@ Best for: Financial services, regulated industries, on-premises enterprise envir
 
 ```bash
 conjur policy load -f policy.yml -b root
-conjur variable set -i sentinel-gateway/jwt_secret -v "$(openssl rand -base64 32)"
-conjur variable set -i sentinel-gateway/redis_password -v "$(openssl rand -base64 24)"
-conjur variable set -i sentinel-gateway/api_keys -v "key1-xxxxx,key2-yyyyy"
+conjur variable set -i bulwark-gateway/jwt_secret -v "$(openssl rand -base64 32)"
+conjur variable set -i bulwark-gateway/redis_password -v "$(openssl rand -base64 24)"
+conjur variable set -i bulwark-gateway/api_keys -v "key1-xxxxx,key2-yyyyy"
 ```
 
 **Step 2: Deploy with Conjur sidecar (Secrets Provider)**
@@ -1713,13 +1713,13 @@ conjur variable set -i sentinel-gateway/api_keys -v "key1-xxxxx,key2-yyyyy"
 spec:
   template:
     spec:
-      serviceAccountName: sentinel-proxy
+      serviceAccountName: bulwark-proxy
       initContainers:
         - name: cyberark-secrets-provider
           image: cyberark/secrets-provider-for-k8s:latest
           env:
             - name: CONJUR_AUTHN_URL
-              value: "https://conjur.corp.com/authn-k8s/sentinel-cluster"
+              value: "https://conjur.corp.com/authn-k8s/bulwark-cluster"
             - name: CONJUR_APPLIANCE_URL
               value: "https://conjur.corp.com"
             - name: CONJUR_ACCOUNT
@@ -1730,7 +1730,7 @@ spec:
                   name: conjur-cert
                   key: ssl-certificate
             - name: K8S_SECRETS
-              value: sentinel-proxy-secrets
+              value: bulwark-proxy-secrets
             - name: SECRETS_DESTINATION
               value: k8s_secrets
           volumeMounts:
@@ -1751,14 +1751,14 @@ spec:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
   annotations:
     conjur.org/conjur-secrets.proxy: |
-      - jwt-secret: sentinel-gateway/jwt_secret
-      - redis-password: sentinel-gateway/redis_password
-      - api-keys: sentinel-gateway/api_keys
-    conjur.org/conjur-secrets-policy-path.proxy: sentinel-gateway/
+      - jwt-secret: bulwark-gateway/jwt_secret
+      - redis-password: bulwark-gateway/redis_password
+      - api-keys: bulwark-gateway/api_keys
+    conjur.org/conjur-secrets-policy-path.proxy: bulwark-gateway/
     conjur.org/secret-file-format.proxy: yaml
 type: Opaque
 ```
@@ -1774,7 +1774,7 @@ Best for: Teams already using 1Password, smaller organizations, developer-friend
 
 **Step 1: Create vault and items in 1Password**
 
-Create a vault called "Sentinel Gateway" with items:
+Create a vault called "Bulwark Gateway" with items:
 - `proxy-secrets` (Login type): fields `jwt-secret`, `redis-password`, `api-keys`
 - `admin-secrets` (Login type): fields `admin-password`, `db-encryption-key`
 
@@ -1800,7 +1800,7 @@ spec:
     onepassword:
       connectHost: "http://connect.external-secrets.svc.cluster.local:8080"
       vaults:
-        sentinel-gateway:
+        bulwark-gateway:
           id: 1  # Vault ID from 1Password
       auth:
         secretRef:
@@ -1812,15 +1812,15 @@ spec:
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
 spec:
   refreshInterval: 30m
   secretStoreRef:
     name: onepassword-connect
     kind: ClusterSecretStore
   target:
-    name: sentinel-proxy-secrets
+    name: bulwark-proxy-secrets
     creationPolicy: Owner
   data:
     - secretKey: jwt-secret
@@ -1852,13 +1852,13 @@ Best for: Developer-first teams, SaaS-native, fast onboarding.
 brew install dopplerhq/cli/doppler
 
 # Create project
-doppler projects create sentinel-gateway
+doppler projects create bulwark-gateway
 
 # Set secrets
-doppler secrets set SENTINEL_JWT_SECRET="$(openssl rand -base64 32)" \
-  SENTINEL_REDIS_PASSWORD="$(openssl rand -base64 24)" \
-  SENTINEL_API_KEYS="key1-xxxxx,key2-yyyyy" \
-  --project sentinel-gateway --config production
+doppler secrets set BULWARK_JWT_SECRET="$(openssl rand -base64 32)" \
+  BULWARK_REDIS_PASSWORD="$(openssl rand -base64 24)" \
+  BULWARK_API_KEYS="key1-xxxxx,key2-yyyyy" \
+  --project bulwark-gateway --config production
 ```
 
 **Step 2: Deploy Doppler Kubernetes Operator**
@@ -1876,27 +1876,27 @@ helm install doppler-operator doppler/doppler-kubernetes-operator \
 apiVersion: secrets.doppler.com/v1alpha1
 kind: DopplerSecret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
 spec:
   tokenSecret:
     name: doppler-token
   managedSecret:
-    name: sentinel-proxy-secrets
-    namespace: sentinel-gateway
-  project: sentinel-gateway
+    name: bulwark-proxy-secrets
+    namespace: bulwark-gateway
+  project: bulwark-gateway
   config: production
   resyncOnChange: true
   processors:
     jwt-secret:
       type: plain
-      key: SENTINEL_JWT_SECRET
+      key: BULWARK_JWT_SECRET
     redis-password:
       type: plain
-      key: SENTINEL_REDIS_PASSWORD
+      key: BULWARK_REDIS_PASSWORD
     api-keys:
       type: plain
-      key: SENTINEL_API_KEYS
+      key: BULWARK_API_KEYS
 ```
 
 Doppler auto-syncs on every secret change (no `refreshInterval` needed).
@@ -1927,20 +1927,20 @@ To migrate from SealedSecrets (current) to an external provider:
 
 2. Create your `ClusterSecretStore` (provider-specific, see above)
 
-3. Create `ExternalSecret` resources (they generate the same K8s Secret names: `sentinel-proxy-secrets`, `sentinel-admin-secrets`)
+3. Create `ExternalSecret` resources (they generate the same K8s Secret names: `bulwark-proxy-secrets`, `bulwark-admin-secrets`)
 
 4. Delete the old SealedSecret resources:
    ```bash
-   kubectl delete sealedsecret -n sentinel-gateway --all
+   kubectl delete sealedsecret -n bulwark-gateway --all
    ```
 
 5. Verify pods still have access:
    ```bash
-   kubectl get secret sentinel-proxy-secrets -n sentinel-gateway -o yaml
-   kubectl rollout restart deployment -n sentinel-gateway
+   kubectl get secret bulwark-proxy-secrets -n bulwark-gateway -o yaml
+   kubectl rollout restart deployment -n bulwark-gateway
    ```
 
-No application code changes needed — Sentinel Gateway reads from K8s Secrets regardless of how they were created.
+No application code changes needed — Bulwark Gateway reads from K8s Secrets regardless of how they were created.
 
 ---
 
@@ -1950,7 +1950,7 @@ No application code changes needed — Sentinel Gateway reads from K8s Secrets r
 |-----------|-------------|-------------|--------------|
 | Proxy | 2 | 10 | CPU 70% / Memory 80% |
 | Admin | 2 | 3 | CPU 70% |
-| Redis | 3 (Sentinel) | 3 | Fixed (quorum) |
+| Redis | 3 (Bulwark) | 3 | Fixed (quorum) |
 
 ### HPA Configuration
 
@@ -1959,7 +1959,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: proxy-hpa
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -1988,9 +1988,9 @@ PDBs ensure minimum availability during node maintenance and cluster upgrades. T
 
 ### Redis High Availability
 
-For production, deploy Redis with Sentinel for automatic failover:
+For production, deploy Redis with Bulwark for automatic failover:
 - 3 Redis nodes (1 master + 2 replicas)
-- 3 Sentinel processes for quorum-based leader election
+- 3 Bulwark processes for quorum-based leader election
 - Automatic failover within seconds
 
 ---
@@ -1999,9 +1999,9 @@ For production, deploy Redis with Sentinel for automatic failover:
 
 | Record | Type | Value | Purpose |
 |--------|------|-------|---------|
-| `sentinel.corp.com` | A / CNAME | Load balancer IP or DNS | Proxy (data plane) |
-| `admin.sentinel.corp.com` | A / CNAME | Load balancer IP or DNS | Admin portal (control plane) |
-| `grafana.sentinel.corp.com` | A / CNAME | Load balancer IP or DNS | Monitoring dashboards (optional) |
+| `bulwark.corp.com` | A / CNAME | Load balancer IP or DNS | Proxy (data plane) |
+| `admin.bulwark.corp.com` | A / CNAME | Load balancer IP or DNS | Admin portal (control plane) |
+| `grafana.bulwark.corp.com` | A / CNAME | Load balancer IP or DNS | Monitoring dashboards (optional) |
 
 For internal-only deployments, use split-horizon DNS or private hosted zones.
 

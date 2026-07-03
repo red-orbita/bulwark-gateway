@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Enrichment Pipeline — Sentinel Gateway Admin{% endblock %}
+{% block title %}Enrichment Pipeline — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Enrichment{% endblock %}
 {% block content %}
 <div x-data="enrichmentPage()" x-init="init()" class="space-y-6">
@@ -188,7 +188,7 @@
         <div x-show="entries.length === 0" class="py-8 text-center">
             <i data-lucide="database" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
             <p class="text-sm text-gray-400">No entries recorded</p>
-            <p class="text-xs text-gray-500 mt-1">Enable enrichment: <code>SENTINEL_ENRICHMENT_ENABLED=true</code></p>
+            <p class="text-xs text-gray-500 mt-1">Enable enrichment: <code>BULWARK_ENRICHMENT_ENABLED=true</code></p>
         </div>
 
         <div x-show="entries.length > 0" class="overflow-x-auto">

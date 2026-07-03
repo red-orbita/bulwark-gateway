@@ -352,7 +352,7 @@ class TestVirtualKeys:
 
     def test_encryption_key_derivation(self):
         """Encryption key should be derived deterministically."""
-        with patch.dict(os.environ, {"SENTINEL_JWT_SECRET": "test-secret-32chars-minimum!!!!"}):
+        with patch.dict(os.environ, {"BULWARK_JWT_SECRET": "test-secret-32chars-minimum!!!!"}):
             from src.services.virtual_keys import VirtualKeyManager
             mgr1 = VirtualKeyManager()
             mgr1._redis = None
@@ -380,9 +380,9 @@ class TestServiceIntegration:
         import src.services.response_cache as rc_module
         rc_module._cache = None  # Reset singleton
         with patch.dict(os.environ, {
-            "SENTINEL_CACHE_ENABLED": "true",
-            "SENTINEL_CACHE_TTL": "120",
-            "SENTINEL_CACHE_MAX_SIZE": "500",
+            "BULWARK_CACHE_ENABLED": "true",
+            "BULWARK_CACHE_TTL": "120",
+            "BULWARK_CACHE_MAX_SIZE": "500",
         }):
             cache = rc_module.get_response_cache()
             assert cache.enabled is True

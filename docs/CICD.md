@@ -1,6 +1,6 @@
 # CI/CD Integration Guide
 
-Guide for deploying Sentinel Gateway via enterprise CI/CD platforms.
+Guide for deploying Bulwark Gateway via enterprise CI/CD platforms.
 
 ## Table of Contents
 
@@ -144,7 +144,7 @@ The production stage uses `input` step requiring approval from `admin` or `deplo
    - `aks-staging` — Kubernetes (staging AKS)
    - `aks-production` — Kubernetes (production AKS)
 
-2. Create variable group `sentinel-gateway-vars`:
+2. Create variable group `bulwark-gateway-vars`:
    - `REGISTRY_URL` — e.g., `myregistry.azurecr.io`
    - `BACKEND_IP` — LLM backend IP
 
@@ -232,7 +232,7 @@ kubectl create secret docker-registry registry-credentials \
   -n tekton-pipelines
 
 # Helm values
-kubectl create configmap sentinel-gateway-helm-values \
+kubectl create configmap bulwark-gateway-helm-values \
   --from-file=values-staging.yaml=ci/values-staging.yaml \
   --from-file=values-production.yaml=ci/values-production.yaml \
   -n tekton-pipelines
@@ -258,15 +258,15 @@ kubectl apply -f ci/tekton/pipeline.yaml
 kubectl create -f ci/tekton/pipeline.yaml  # Uses the PipelineRun at the bottom
 
 # Or with Tekton CLI
-tkn pipeline start sentinel-gateway-deploy \
-  --param git-url=https://github.com/myorg/sentinel-gateway.git \
+tkn pipeline start bulwark-gateway-deploy \
+  --param git-url=https://github.com/myorg/bulwark-gateway.git \
   --param git-revision=main \
   --param image-registry=myregistry.azurecr.io \
   --param target-environment=staging \
   --param version=0.4.3 \
   --workspace name=source,claimName=tekton-source-pvc \
   --workspace name=docker-credentials,secret=registry-credentials \
-  --workspace name=helm-values,config=sentinel-gateway-helm-values
+  --workspace name=helm-values,config=bulwark-gateway-helm-values
 ```
 
 For automated triggers, install [Tekton Triggers](https://tekton.dev/docs/triggers/) and configure a webhook EventListener.
@@ -330,13 +330,13 @@ All pipelines support automatic rollback on deployment failure:
 
 ```bash
 # Manual rollback (any platform)
-helm rollback sentinel-gateway --namespace sentinel-gateway --wait
+helm rollback bulwark-gateway --namespace bulwark-gateway --wait
 
 # Rollback to specific revision
-helm rollback sentinel-gateway 3 --namespace sentinel-gateway --wait
+helm rollback bulwark-gateway 3 --namespace bulwark-gateway --wait
 
 # View revision history
-helm history sentinel-gateway --namespace sentinel-gateway
+helm history bulwark-gateway --namespace bulwark-gateway
 ```
 
 ### Automatic Rollback

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# validate-deployment.sh — Post-deploy validation for Sentinel Gateway
+# validate-deployment.sh — Post-deploy validation for Bulwark Gateway
 #
 # Checks all critical components and reports pass/fail/warn status.
 # Exit 0 if all critical checks pass, exit 1 if any critical check fails.
@@ -8,15 +8,15 @@
 #   ./scripts/validate-deployment.sh [--namespace <ns>] [--skip-backend]
 #
 # Options:
-#   --namespace <ns>    Override default namespace (default: sentinel-gateway)
+#   --namespace <ns>    Override default namespace (default: bulwark-gateway)
 #   --skip-backend      Skip backend connectivity checks (ollama DNS/TCP)
 
 set -euo pipefail
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-NS="sentinel-gateway"
-NS_SIEM="sentinel-siem"
+NS="bulwark-gateway"
+NS_SIEM="bulwark-siem"
 SKIP_BACKEND=false
 PROXY_PORT=8080
 ADMIN_PORT=8090
@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [--namespace <ns>] [--skip-backend]"
             echo ""
             echo "Options:"
-            echo "  --namespace <ns>    Kubernetes namespace (default: sentinel-gateway)"
+            echo "  --namespace <ns>    Kubernetes namespace (default: bulwark-gateway)"
             echo "  --skip-backend      Skip backend connectivity checks"
             exit 0
             ;;
@@ -151,7 +151,7 @@ require_cmd curl
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}║       Sentinel Gateway — Post-Deploy Validation            ║${RESET}"
+echo -e "${BOLD}║       Bulwark Gateway — Post-Deploy Validation            ║${RESET}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${RESET}"
 echo ""
 echo -e "  Namespace:    ${CYAN}$NS${RESET}"
@@ -225,7 +225,7 @@ check_pod_ready "redis" "Redis"
 
 section "3. Secrets"
 
-for secret in sentinel-proxy-secrets sentinel-admin-secrets sentinel-redis-secrets; do
+for secret in bulwark-proxy-secrets bulwark-admin-secrets bulwark-redis-secrets; do
     if kubectl get secret "$secret" -n "$NS" &>/dev/null; then
         pass "Secret '$secret' exists"
     else
@@ -415,7 +415,7 @@ fi
 section "10. Guardrail Test (Malicious Payload)"
 
 # Retrieve API key from secret for authenticated requests
-API_KEY=$(kubectl get secret sentinel-proxy-secrets -n "$NS" -o jsonpath='{.data.api-keys}' 2>/dev/null | base64 -d 2>/dev/null | cut -d',' -f1 || true)
+API_KEY=$(kubectl get secret bulwark-proxy-secrets -n "$NS" -o jsonpath='{.data.api-keys}' 2>/dev/null | base64 -d 2>/dev/null | cut -d',' -f1 || true)
 
 # Determine a valid tenant/agent for testing (from agents.yaml configmap)
 TEST_TENANT=$(kubectl get configmap agents-config -n "$NS" -o jsonpath='{.data.agents\.yaml}' 2>/dev/null | \
@@ -528,7 +528,7 @@ fi
 
 section "13. TLS"
 
-TLS_SECRET="sentinel-gateway-tls"
+TLS_SECRET="bulwark-gateway-tls"
 if kubectl get secret "$TLS_SECRET" -n "$NS" &>/dev/null; then
     # Verify it has tls.crt and tls.key
     TLS_KEYS=$(kubectl get secret "$TLS_SECRET" -n "$NS" -o jsonpath='{.data}' 2>/dev/null || true)
@@ -579,7 +579,7 @@ if [[ -n "${REDIS_POD:-}" ]]; then
             CURSOR=0
             FOUND=0
             while true; do
-                RESULT=$(redis-cli -a "$PASS" --no-auth-warning SCAN $CURSOR MATCH "sentinel:siem:*" COUNT 100 2>/dev/null)
+                RESULT=$(redis-cli -a "$PASS" --no-auth-warning SCAN $CURSOR MATCH "bulwark:siem:*" COUNT 100 2>/dev/null)
                 CURSOR=$(echo "$RESULT" | head -1)
                 MATCHES=$(echo "$RESULT" | tail -n +2)
                 if [ -n "$MATCHES" ]; then
@@ -597,9 +597,9 @@ if [[ -n "${REDIS_POD:-}" ]]; then
     if [[ "$SIEM_KEYS" == "ERROR" ]]; then
         warn "Could not query Redis for SIEM keys"
     elif [[ "$SIEM_KEYS" -gt 0 ]] 2>/dev/null; then
-        pass "Redis has $SIEM_KEYS sentinel:siem:* keys"
+        pass "Redis has $SIEM_KEYS bulwark:siem:* keys"
     else
-        warn "No sentinel:siem:* keys found in Redis (no events exported yet)"
+        warn "No bulwark:siem:* keys found in Redis (no events exported yet)"
     fi
 else
     warn "Cannot check Redis SIEM counters — no Redis pod available"

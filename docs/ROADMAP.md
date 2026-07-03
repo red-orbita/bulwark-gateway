@@ -1,4 +1,4 @@
-# Sentinel Gateway — Implementation Roadmap
+# Bulwark Gateway — Implementation Roadmap
 
 Competitive feature parity plan. Organized by phases with dependencies, effort estimates, and architectural decisions.
 
@@ -143,7 +143,7 @@ def discover_plugins() -> list[type]:
     scanners = []
 
     # Method 1: Entry points
-    for ep in importlib.metadata.entry_points(group="sentinel.scanners"):
+    for ep in importlib.metadata.entry_points(group="bulwark.scanners"):
         scanners.append(ep.load())
 
     # Method 2: Drop-in directory
@@ -163,13 +163,13 @@ Add to `src/config.py`:
 
 ```python
 # Scanner pipeline settings
-SENTINEL_SCANNERS_DIR: Path = Path("config/scanners")
-SENTINEL_ML_ENABLED: bool = False           # Master switch for ML scanners
-SENTINEL_ML_BLOCKING: bool = False          # If True, ML can block (adds latency)
-SENTINEL_ML_BLOCK_THRESHOLD: float = 0.9    # Confidence to auto-block
-SENTINEL_ML_WARN_THRESHOLD: float = 0.7     # Confidence to warn
-SENTINEL_ML_TIMEOUT_MS: int = 500           # Max ML inference time
-SENTINEL_ML_MODEL_BACKEND: str = "local"    # "local", "remote", "onnx"
+BULWARK_SCANNERS_DIR: Path = Path("config/scanners")
+BULWARK_ML_ENABLED: bool = False           # Master switch for ML scanners
+BULWARK_ML_BLOCKING: bool = False          # If True, ML can block (adds latency)
+BULWARK_ML_BLOCK_THRESHOLD: float = 0.9    # Confidence to auto-block
+BULWARK_ML_WARN_THRESHOLD: float = 0.7     # Confidence to warn
+BULWARK_ML_TIMEOUT_MS: int = 500           # Max ML inference time
+BULWARK_ML_MODEL_BACKEND: str = "local"    # "local", "remote", "onnx"
 ```
 
 ### 1.5 Refactor Existing Guardrails as Scanners
@@ -278,7 +278,7 @@ class SemanticSimilarityScanner(InputScanner):
     # Improvements over current embedding_scanner:
     # 1. ONNX-exported model (faster than sentence-transformers)
     # 2. Larger attack corpus (auto-updated from AttackReplayDB)
-    # 3. Contrastive learning on Sentinel's own blocked/allowed data
+    # 3. Contrastive learning on Bulwark's own blocked/allowed data
     # 4. Adaptive threshold based on tenant-specific false positive rate
 ```
 
@@ -367,8 +367,8 @@ class FeedbackLoop:
 - [ ] `src/scanners/ml/` package with 4+ scanner implementations
 - [ ] `src/scanners/ml/model_manager.py` for lifecycle management
 - [ ] ONNX model export scripts in `scripts/export_models.py`
-- [ ] Pre-trained models downloadable via `sentinel-models` package or URL
-- [ ] Docker image variant with ML models included (`sentinel-gateway-proxy:0.5.0-ml`)
+- [ ] Pre-trained models downloadable via `bulwark-models` package or URL
+- [ ] Docker image variant with ML models included (`bulwark-gateway-proxy:0.5.0-ml`)
 - [ ] Feedback loop integration with AttackReplayDB
 - [ ] Benchmarks: latency + accuracy vs pure regex
 - [ ] Admin UI: ML scanner status, confidence distributions, drift alerts
@@ -787,15 +787,15 @@ class MemoryGuard(InputScanner):
 
 ## Phase 6: SDK / Library Mode [COMPLETE]
 
-**Goal**: Allow Sentinel to be used as an embeddable Python library, not just as a proxy.
+**Goal**: Allow Bulwark to be used as an embeddable Python library, not just as a proxy.
 
 **Competitive gap**: All OSS competitors (NeMo, Guardrails AI, LLM Guard) support library mode.
 
 ### 6.1 Package Restructure
 
 ```python
-# New top-level package: sentinel-guardrails (pip-installable)
-# sentinel_guardrails/
+# New top-level package: bulwark-guardrails (pip-installable)
+# bulwark_guardrails/
 #   __init__.py         → Guard, ScanResult, Verdict
 #   guard.py            → Main Guard class
 #   scanners/           → All scanner implementations (shared with proxy)
@@ -806,7 +806,7 @@ class MemoryGuard(InputScanner):
 ### 6.2 Guard API (Python)
 
 ```python
-from sentinel_guardrails import Guard, Verdict
+from bulwark_guardrails import Guard, Verdict
 
 # Create a guard with default security scanners
 guard = Guard(
@@ -837,14 +837,14 @@ def my_agent_function(user_input: str) -> str:
 
 ```python
 # LangChain integration
-from sentinel_guardrails.integrations import LangChainGuard
+from bulwark_guardrails.integrations import LangChainGuard
 
 guard = LangChainGuard(config=...)
 chain = guard.wrap(my_langchain_chain)
 result = chain.invoke({"input": "..."})
 
 # LlamaIndex integration
-from sentinel_guardrails.integrations import LlamaIndexGuard
+from bulwark_guardrails.integrations import LlamaIndexGuard
 
 guard = LlamaIndexGuard(config=...)
 query_engine = guard.wrap(my_query_engine)
@@ -853,11 +853,11 @@ query_engine = guard.wrap(my_query_engine)
 ### 6.4 JavaScript/TypeScript SDK
 
 ```typescript
-// npm package: @sentinel-gateway/guardrails
-import { Guard, Verdict } from '@sentinel-gateway/guardrails';
+// npm package: @bulwark-gateway/guardrails
+import { Guard, Verdict } from '@bulwark-gateway/guardrails';
 
 const guard = new Guard({
-  // Can connect to Sentinel proxy for scanning
+  // Can connect to Bulwark proxy for scanning
   proxyUrl: 'http://localhost:8080',
   // Or use local WASM-compiled regex scanners
   mode: 'local', // 'local' | 'remote'
@@ -871,7 +871,7 @@ if (result.verdict === Verdict.BLOCK) {
 
 ### 6.5 Deliverables
 
-- [ ] `sentinel-guardrails` PyPI package (separate from proxy server)
+- [ ] `bulwark-guardrails` PyPI package (separate from proxy server)
 - [ ] Guard API: `scan_input()`, `scan_output()`, `wrap()`, `@protect` decorator
 - [ ] LangChain integration module
 - [ ] LlamaIndex integration module
@@ -891,8 +891,8 @@ if (result.verdict === Verdict.BLOCK) {
 ### 7.1 Plugin Specification
 
 ```yaml
-# sentinel-plugin.yaml (required in every plugin package)
-name: sentinel-scanner-toxicity
+# bulwark-plugin.yaml (required in every plugin package)
+name: bulwark-scanner-toxicity
 version: 1.0.0
 author: community
 license: MIT
@@ -900,12 +900,12 @@ description: "ML-based toxicity detection using fine-tuned DeBERTa"
 type: input_scanner  # input_scanner | output_scanner | enrichment
 blocking: false
 requires:
-  sentinel-guardrails: ">=0.5.0"
+  bulwark-guardrails: ">=0.5.0"
   onnxruntime: ">=1.17"
 models:
   - name: toxicity-deberta-v3
     size: 180MB
-    url: https://hub.sentinel-gateway.dev/models/toxicity-deberta-v3.onnx
+    url: https://hub.bulwark-gateway.dev/models/toxicity-deberta-v3.onnx
 config:
   threshold:
     type: float
@@ -917,26 +917,26 @@ config:
 
 ```bash
 # Install a scanner from the hub
-sentinel plugin install toxicity-scanner
-sentinel plugin install community/custom-pii-detector
+bulwark plugin install toxicity-scanner
+bulwark plugin install community/custom-pii-detector
 
 # List installed plugins
-sentinel plugin list
+bulwark plugin list
 
 # Create a new plugin scaffold
-sentinel plugin create my-custom-scanner
+bulwark plugin create my-custom-scanner
 
 # Test a plugin locally
-sentinel plugin test my-custom-scanner --input "test payload"
+bulwark plugin test my-custom-scanner --input "test payload"
 
 # Publish to hub
-sentinel plugin publish
+bulwark plugin publish
 ```
 
 ### 7.3 Hub Registry (Web Service)
 
 ```
-hub.sentinel-gateway.dev/
+hub.bulwark-gateway.dev/
 ├── /scanners              # Browse all scanners
 ├── /scanners/{name}       # Scanner detail page
 ├── /api/v1/search         # Search scanners
@@ -954,9 +954,9 @@ hub.sentinel-gateway.dev/
 
 ### 7.5 Deliverables
 
-- [ ] Plugin specification format (`sentinel-plugin.yaml`)
-- [ ] `sentinel` CLI extension for plugin management
-- [ ] Plugin scaffold generator (`sentinel plugin create`)
+- [ ] Plugin specification format (`bulwark-plugin.yaml`)
+- [ ] `bulwark` CLI extension for plugin management
+- [ ] Plugin scaffold generator (`bulwark plugin create`)
 - [ ] Hub web service (API + simple frontend)
 - [ ] 10+ initial plugins (migrated from built-in scanners)
 - [ ] Plugin security scanner (no malicious code in plugins)
@@ -1029,9 +1029,9 @@ class EvaluationRunner:
 
 ```bash
 # CLI command
-sentinel evaluate --config config/policies/ --attacks standard
-sentinel evaluate --config config/policies/ --attacks exhaustive --categories prompt_injection,jailbreak
-sentinel evaluate --report html --output reports/eval-2024-01.html
+bulwark evaluate --config config/policies/ --attacks standard
+bulwark evaluate --config config/policies/ --attacks exhaustive --categories prompt_injection,jailbreak
+bulwark evaluate --report html --output reports/eval-2024-01.html
 
 # Benchmark datasets:
 # - Standard: 1000 attacks + 1000 benign (quick, ~5 min)
@@ -1044,15 +1044,15 @@ sentinel evaluate --report html --output reports/eval-2024-01.html
 ```yaml
 # .github/workflows/security-eval.yml
 - name: Run guardrail evaluation
-  run: sentinel evaluate --config config/policies/ --min-detection-rate 0.95 --max-fp-rate 0.01
+  run: bulwark evaluate --config config/policies/ --min-detection-rate 0.95 --max-fp-rate 0.01
   # Fails CI if detection rate drops below 95% or FP rate exceeds 1%
 ```
 
 ### 8.5 Guardrail Leaderboard
 
-A scoring system comparing Sentinel against competitors on standard datasets:
+A scoring system comparing Bulwark against competitors on standard datasets:
 
-| Metric | Sentinel (regex) | Sentinel (regex+ML) | Lakera | LLM Guard | NeMo |
+| Metric | Bulwark (regex) | Bulwark (regex+ML) | Lakera | LLM Guard | NeMo |
 |--------|-----------------|---------------------|--------|-----------|------|
 | Injection Detection Rate | — | — | — | — | — |
 | False Positive Rate | — | — | — | — | — |
@@ -1064,7 +1064,7 @@ A scoring system comparing Sentinel against competitors on standard datasets:
 - [ ] Attack generator (template + mutation + LLM-generated)
 - [ ] Evaluation runner with metrics
 - [ ] Standard benchmark dataset (curated)
-- [ ] `sentinel evaluate` CLI command
+- [ ] `bulwark evaluate` CLI command
 - [ ] CI integration template
 - [ ] HTML/JSON report generation
 - [ ] Comparison tool (A/B testing of configs)
@@ -1155,7 +1155,7 @@ class MCPInventory:
 
 ### Architecture Invariants (NEVER violate)
 
-1. **Hot path remains regex-only** unless `SENTINEL_ML_BLOCKING=true` is explicitly set
+1. **Hot path remains regex-only** unless `BULWARK_ML_BLOCKING=true` is explicitly set
 2. **Fail-closed** behavior preserved in all new features
 3. **No external calls during request processing** unless explicitly configured
 4. **Graceful degradation**: if ML model unavailable, fall back to regex-only

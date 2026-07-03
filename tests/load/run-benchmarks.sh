@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Sentinel Gateway — Load Test Orchestrator
+# Bulwark Gateway — Load Test Orchestrator
 #
 # Runs all k6 load test scenarios sequentially, collects results,
 # and produces a summary report.
@@ -79,7 +79,7 @@ done
 # ---------------------------------------------------------------------------
 
 echo "============================================================"
-echo " Sentinel Gateway — Load Test Suite"
+echo " Bulwark Gateway — Load Test Suite"
 echo "============================================================"
 echo ""
 echo " Target:     ${TARGET_URL}"

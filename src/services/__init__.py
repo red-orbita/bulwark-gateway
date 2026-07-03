@@ -1,1 +1,1 @@
-"""Sentinel Gateway services."""
+"""Bulwark Gateway services."""

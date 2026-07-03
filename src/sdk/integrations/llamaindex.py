@@ -1,5 +1,5 @@
 """
-LlamaIndex Integration — Wraps LlamaIndex query engines with Sentinel scanning.
+LlamaIndex Integration — Wraps LlamaIndex query engines with Bulwark scanning.
 
 Provides security guardrails for LlamaIndex applications without tight
 coupling. All llama_index imports are lazy and handle ImportError gracefully.
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class LlamaIndexGuard:
-    """Wraps LlamaIndex query engines with Sentinel security scanning.
+    """Wraps LlamaIndex query engines with Bulwark security scanning.
 
     Intercepts queries and responses to apply input guardrails and
     output filters transparently.
@@ -73,14 +73,14 @@ class LlamaIndexGuard:
                 query/aquery methods.
 
         Returns:
-            A SentinelQueryEngine that wraps the original engine.
+            A BulwarkQueryEngine that wraps the original engine.
         """
         guard = self._guard
-        return _SentinelQueryEngine(query_engine, guard)
+        return _BulwarkQueryEngine(query_engine, guard)
 
 
-class _SentinelQueryEngine:
-    """Proxy query engine that applies Sentinel scanning.
+class _BulwarkQueryEngine:
+    """Proxy query engine that applies Bulwark scanning.
 
     Wraps a LlamaIndex query engine and scans both input queries
     and output responses for security threats.

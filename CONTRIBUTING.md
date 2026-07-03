@@ -1,9 +1,9 @@
-# Contributing to Sentinel Gateway
+# Contributing to Bulwark Gateway
 
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/<you>/sentinel-gateway.git`
+2. Clone your fork: `git clone https://github.com/<you>/bulwark-gateway.git`
 3. Create a branch: `git checkout -b feat/my-feature`
 4. Install dependencies: `pip install -e ".[dev]"` and `pre-commit install`
 5. Make your changes

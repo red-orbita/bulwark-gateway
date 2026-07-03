@@ -1,7 +1,7 @@
 """
 V2 Scan Endpoint — Standalone content scanning API.
 
-For customers who want to use Sentinel Gateway as a scanner without
+For customers who want to use Bulwark Gateway as a scanner without
 proxying to an LLM backend. Runs the same InputGuardrail and OutputFilter
 engines used in the proxy pipeline.
 

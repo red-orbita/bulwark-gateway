@@ -1,13 +1,13 @@
 ---
-# Sentinel Gateway Admin — Deployment
+# Bulwark Gateway Admin — Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: admin
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: admin
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: admin
 spec:
   replicas: 1
@@ -20,14 +20,14 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: admin
-        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/part-of: bulwark-gateway
         app.kubernetes.io/component: admin
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8090"
         prometheus.io/path: "/admin/health/metrics"
     spec:
-      serviceAccountName: sentinel-admin
+      serviceAccountName: bulwark-admin
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -39,7 +39,7 @@ spec:
       containers:
         - name: admin
           # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
-          image: sentinel-gateway-admin:0.7.3-hardened
+          image: bulwark-gateway-admin:0.7.3-hardened
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -95,7 +95,7 @@ spec:
       volumes:
         - name: secrets
           secret:
-            secretName: sentinel-admin-secrets
+            secretName: bulwark-admin-secrets
         - name: policies
           persistentVolumeClaim:
             claimName: policies
@@ -121,10 +121,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: admin
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: admin
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   type: ClusterIP
   ports:
@@ -139,9 +139,9 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: sentinel-admin
-  namespace: sentinel-gateway
+  name: bulwark-admin
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: admin
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 automountServiceAccountToken: false

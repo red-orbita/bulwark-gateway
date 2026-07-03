@@ -1,0 +1,43 @@
+# Microsoft Bulwark — Azure Log Analytics Data Collector API
+# Bulwark Gateway SIEM Integration Template
+---
+transport: http_rest
+platform: microsoft_bulwark
+
+connection:
+  url: "https://${BULWARK_AZURE_WORKSPACE_ID}.ods.opinsights.azure.com/api/logs?api-version=2016-04-01"
+  auth_method: hmac
+  workspace_id: "${BULWARK_AZURE_WORKSPACE_ID}"
+  shared_key: "${BULWARK_AZURE_SHARED_KEY}"
+  log_type: "BulwarkGateway"  # Creates BulwarkGateway_CL table
+  verify_ssl: true
+  timeout_seconds: 15
+
+batching:
+  batch_size: 100
+  flush_interval_seconds: 2.0
+  compress: false
+
+format: json
+field_mapping:
+  # Azure auto-creates _CL suffix columns
+  # ECS fields map directly:
+  #   event_category_s → event.category
+  #   bulwark_verdict_s → bulwark.verdict
+  #   bulwark_rule_id_s → bulwark.rule_id
+  #   tenant_id_s → tenant.id
+  time_generated_field: "@timestamp"
+
+# KQL query example for Bulwark workbook:
+# BulwarkGateway_CL
+# | where bulwark_verdict_s == "block"
+# | summarize count() by bulwark_threat_category_s, bin(TimeGenerated, 1h)
+
+retry:
+  max_retries: 3
+  backoff_base_seconds: 2.0
+  backoff_max_seconds: 60.0
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout_seconds: 60

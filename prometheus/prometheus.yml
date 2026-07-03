@@ -1,4 +1,4 @@
-# Sentinel Gateway - Prometheus Configuration
+# Bulwark Gateway - Prometheus Configuration
 # Standalone deployment (docker-compose)
 
 global:
@@ -10,19 +10,19 @@ rule_files:
   - "rules.yml"
 
 scrape_configs:
-  - job_name: "sentinel-proxy"
+  - job_name: "bulwark-proxy"
     static_configs:
       - targets: ["proxy:8080"]
     metrics_path: "/health/metrics"
     scrape_interval: 10s
 
-  - job_name: "sentinel-admin"
+  - job_name: "bulwark-admin"
     static_configs:
       - targets: ["admin:8090"]
     metrics_path: "/admin/health/metrics"
     scrape_interval: 10s
 
-  - job_name: "sentinel-redis"
+  - job_name: "bulwark-redis"
     static_configs:
       - targets: ["redis:6379"]
     metrics_path: "/metrics"

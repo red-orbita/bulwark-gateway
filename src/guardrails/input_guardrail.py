@@ -33,8 +33,10 @@ class InputGuardrail:
     ENTROPY_MIN_LENGTH = 24  # Check entropy for segments >= this length
 
     # Zero-width and invisible Unicode characters (smuggling indicators)
+    # SECURITY FIX (SG-RT-04): Added U+180E (Mongolian Vowel Separator) and
+    # U+FFF9-U+FFFB (Interlinear Annotation) which can break regex matching
     _INVISIBLE_RE = re.compile(
-        r"[\u200b-\u200f\u2028-\u202f\u2060-\u2069\ufeff\u00ad\U000E0000-\U000E007F\uFE00-\uFE0F\U000E0100-\U000E01EF]"
+        r"[\u200b-\u200f\u2028-\u202f\u2060-\u2069\ufeff\u00ad\u180e\ufff9-\ufffb\U000E0000-\U000E007F\uFE00-\uFE0F\U000E0100-\U000E01EF]"
     )
     # URL-encoded sequences
     _URL_ENCODED_RE = re.compile(r"(%[0-9a-fA-F]{2}){3,}")
@@ -51,9 +53,12 @@ class InputGuardrail:
         r"(base64|b64|hex|rot13|decode|encode|encoded|decrypt)\s*[:=]?\s*['\"]?[A-Za-z0-9+/=]{16,}",
         re.I,
     )
-    # Cyrillic → Latin homoglyph mapping
+    # Cyrillic + Greek + Armenian + Fullwidth → Latin homoglyph mapping
+    # SECURITY FIX (SG-RT-02): Extended map with Greek, Armenian, and additional
+    # Unicode confusables that NFKC normalization does NOT resolve.
     _HOMOGLYPH_MAP = str.maketrans(
         {
+            # Cyrillic lowercase
             "\u0430": "a",
             "\u0435": "e",
             "\u043e": "o",
@@ -66,6 +71,7 @@ class InputGuardrail:
             "\u0455": "s",
             "\u0458": "j",
             "\u04cf": "l",  # Cyrillic palochka → l
+            # Cyrillic uppercase
             "\u0410": "A",
             "\u0415": "E",
             "\u041e": "O",
@@ -75,6 +81,49 @@ class InputGuardrail:
             "\u041d": "H",
             "\u041a": "K",
             "\u0412": "B",
+            # Greek lowercase (visually identical to Latin)
+            "\u03bf": "o",  # Greek omicron
+            "\u03c1": "p",  # Greek rho
+            "\u03b1": "a",  # Greek alpha
+            "\u03b5": "e",  # Greek epsilon
+            "\u03b9": "i",  # Greek iota
+            "\u03ba": "k",  # Greek kappa
+            "\u03bd": "v",  # Greek nu
+            "\u03c5": "u",  # Greek upsilon
+            "\u03c4": "t",  # Greek tau
+            "\u03c9": "w",  # Greek omega
+            # Greek uppercase
+            "\u0391": "A",  # Greek Alpha
+            "\u0392": "B",  # Greek Beta
+            "\u0395": "E",  # Greek Epsilon
+            "\u0396": "Z",  # Greek Zeta
+            "\u0397": "H",  # Greek Eta
+            "\u0399": "I",  # Greek Iota
+            "\u039a": "K",  # Greek Kappa
+            "\u039c": "M",  # Greek Mu
+            "\u039d": "N",  # Greek Nu
+            "\u039f": "O",  # Greek Omicron
+            "\u03a1": "P",  # Greek Rho
+            "\u03a4": "T",  # Greek Tau
+            "\u03a5": "Y",  # Greek Upsilon
+            "\u03a7": "X",  # Greek Chi
+            # Armenian
+            "\u0561": "a",  # Armenian ayb
+            "\u0578": "n",  # Armenian now
+            "\u0585": "o",  # Armenian oh
+            "\u0570": "h",  # Armenian ho
+            "\u0575": "j",  # Armenian yi
+            "\u0572": "q",  # Armenian gim (visual)
+            # Additional Unicode confusables
+            "\u0131": "i",  # Latin dotless i
+            "\u0251": "a",  # Latin alpha
+            "\u025b": "e",  # Latin open e
+            "\u1d00": "a",  # Latin small capital A
+            "\u1d04": "c",  # Latin small capital C
+            "\u1d07": "e",  # Latin small capital E
+            "\u1d0f": "o",  # Latin small capital O
+            "\u1d18": "p",  # Latin small capital P
+            "\u2c60": "L",  # Latin L with double bar
         }
     )
     # ROT13 translation table
@@ -207,7 +256,7 @@ class InputGuardrail:
 
         def _collapse_run(m: _re.Match) -> str:
             span = m.group(0)
-            # Replace 2+ spaces with a sentinel, collapse single spaces, restore
+            # Replace 2+ spaces with a bulwark, collapse single spaces, restore
             span = _re.sub(r" {2,}", "\x00", span)
             span = _re.sub(r" ", "", span)
             span = span.replace("\x00", " ")
@@ -309,14 +358,15 @@ class InputGuardrail:
         """
         events = []
 
-        # SECURITY FIX (PENTEST-DEEP CRIT-2): For large inputs, apply encoding
-        # checks to head + tail windows instead of skipping entirely.
-        # Previous behavior: skip ALL encoding checks for >5000 chars.
-        # New behavior: check invisible chars on full first 5KB, then apply
-        # encoding detection on head(2500) + tail(2500) windows.
+        # SECURITY FIX (IG-04): For large inputs, apply encoding checks on
+        # overlapping windows covering the FULL content.
+        # Previous behavior: only checked head(2500) + tail(2500), leaving the
+        # entire middle section unscanned for encoding evasion attacks.
+        # New behavior: check invisible chars on full content (fast O(n) regex),
+        # then apply encoding detection on overlapping windows with full coverage.
         if len(content) > 5000:
-            # Check invisible chars on first 5KB
-            invisible_matches = self._INVISIBLE_RE.findall(content[:5000])
+            # Check invisible chars on FULL content (fast O(n) regex)
+            invisible_matches = self._INVISIBLE_RE.findall(content)
             if len(invisible_matches) >= 3:
                 events.append(
                     SecurityEvent(
@@ -329,13 +379,18 @@ class InputGuardrail:
                         severity="high",
                     )
                 )
-            # Apply encoding detection on head + tail windows
-            head_window = content[:2500]
-            tail_window = content[-2500:]
-            for window in (head_window, tail_window):
+            # Apply encoding detection on overlapping windows covering full content
+            window_size = 2500
+            stride = 1500  # Overlap of 1000 chars
+            for offset in range(0, len(content), stride):
+                window = content[offset:offset + window_size]
+                if not window:
+                    break
                 events.extend(
                     self._check_encoding_window(window, tenant_id, agent_id)
                 )
+                if offset + window_size >= len(content):
+                    break
             return events
         # 1. Invisible/zero-width characters (threshold: 2+)
         invisible_matches = self._INVISIBLE_RE.findall(content)
@@ -519,55 +574,70 @@ class InputGuardrail:
         # 6. ROT13 detection (relaxed thresholds for V5)
         # Strip non-ASCII chars before checking (fixes emoji+ROT13 bypass)
         ascii_content = "".join(c for c in content if ord(c) < 128)
-        if 8 < len(ascii_content) <= 1000:
-            alpha_ratio = sum(1 for c in ascii_content if c.isalpha()) / max(len(ascii_content), 1)
-            if alpha_ratio > 0.5:
-                decoded_rot13 = ascii_content.translate(self._ROT13)
-                # Check against patterns
-                matched = False
-                for pattern in self.all_patterns:
-                    if pattern.regex.search(decoded_rot13):
-                        matched = True
-                        break
-                # Also check for dangerous keywords in decoded text
-                if not matched:
-                    _dangerous_kw = re.search(
-                        r"(system\s*prompt|ignore|bypass|disable|override|inject|"
-                        r"exfiltrat|reverse.shell|credentials?|password|hack|exploit)",
-                        decoded_rot13,
-                        re.I,
-                    )
-                    if _dangerous_kw:
-                        matched = True
-                if matched:
-                    events.append(
-                        SecurityEvent(
-                            tenant_id=tenant_id,
-                            agent_id=agent_id,
-                            verdict=Verdict.BLOCK,
-                            category=ThreatCategory.PROMPT_INJECTION,
-                            description="ROT13-encoded payload decoded to malicious content",
-                            source="input_guardrail_encoding",
-                            severity="high",
+        if len(ascii_content) > 8:
+            # For very long inputs, check segments (head + tail)
+            segments_to_check = [ascii_content]
+            if len(ascii_content) > 10000:
+                segments_to_check = [ascii_content[:5000], ascii_content[-5000:]]
+            for segment in segments_to_check:
+                alpha_ratio = sum(1 for c in segment if c.isalpha()) / max(len(segment), 1)
+                if alpha_ratio > 0.5:
+                    decoded_rot13 = segment.translate(self._ROT13)
+                    # Check against patterns
+                    matched = False
+                    for pattern in self.all_patterns:
+                        if pattern.regex.search(decoded_rot13):
+                            matched = True
+                            break
+                    # Also check for dangerous keywords in decoded text
+                    if not matched:
+                        _dangerous_kw = re.search(
+                            r"(system\s*prompt|ignore|bypass|disable|override|inject|"
+                            r"exfiltrat|reverse.shell|credentials?|password|hack|exploit)",
+                            decoded_rot13,
+                            re.I,
                         )
-                    )
+                        if _dangerous_kw:
+                            matched = True
+                    if matched:
+                        events.append(
+                            SecurityEvent(
+                                tenant_id=tenant_id,
+                                agent_id=agent_id,
+                                verdict=Verdict.BLOCK,
+                                category=ThreatCategory.PROMPT_INJECTION,
+                                description="ROT13-encoded payload decoded to malicious content",
+                                source="input_guardrail_encoding",
+                                severity="high",
+                            )
+                        )
+                        break
 
         # 7. Reversed text detection (only for short inputs)
-        if 15 < len(ascii_content) <= 500:
-            reversed_text = ascii_content[::-1]
-            for pattern in self.all_patterns:
-                if pattern.regex.search(reversed_text):
-                    events.append(
-                        SecurityEvent(
-                            tenant_id=tenant_id,
-                            agent_id=agent_id,
-                            verdict=Verdict.BLOCK,
-                            category=ThreatCategory.PROMPT_INJECTION,
-                            description="Reversed text decoded to malicious content",
-                            source="input_guardrail_encoding",
-                            severity="high",
+        if len(ascii_content) > 15:
+            # For very long inputs, check segments (head + tail)
+            segments_to_check = [ascii_content]
+            if len(ascii_content) > 5000:
+                segments_to_check = [ascii_content[:2500], ascii_content[-2500:]]
+            for segment in segments_to_check:
+                reversed_text = segment[::-1]
+                segment_matched = False
+                for pattern in self.all_patterns:
+                    if pattern.regex.search(reversed_text):
+                        events.append(
+                            SecurityEvent(
+                                tenant_id=tenant_id,
+                                agent_id=agent_id,
+                                verdict=Verdict.BLOCK,
+                                category=ThreatCategory.PROMPT_INJECTION,
+                                description="Reversed text decoded to malicious content",
+                                source="input_guardrail_encoding",
+                                severity="high",
+                            )
                         )
-                    )
+                        segment_matched = True
+                        break
+                if segment_matched:
                     break
 
         # 8. Morse code detection
@@ -733,54 +803,61 @@ class InputGuardrail:
                         )
 
         # 11. Caesar cipher detection (try all shifts, limited to short inputs for perf)
-        if 8 < len(ascii_content) <= 100:
-            alpha_ratio = sum(1 for c in ascii_content if c.isalpha()) / max(len(ascii_content), 1)
-            if alpha_ratio > 0.5:
-                caesar_found = False
-                for shift in range(1, 26):
-                    if shift == 13:  # Already covered by ROT13 check
-                        continue
-                    decoded = self._caesar_shift(ascii_content, shift)
-                    for pattern in self.all_patterns:
-                        if pattern.regex.search(decoded):
+        if len(ascii_content) > 8:
+            # For very long inputs, check segments (head + tail)
+            segments_to_check = [ascii_content]
+            if len(ascii_content) > 2000:
+                segments_to_check = [ascii_content[:1000], ascii_content[-1000:]]
+            for segment in segments_to_check:
+                alpha_ratio = sum(1 for c in segment if c.isalpha()) / max(len(segment), 1)
+                if alpha_ratio > 0.5:
+                    caesar_found = False
+                    for shift in range(1, 26):
+                        if shift == 13:  # Already covered by ROT13 check
+                            continue
+                        decoded = self._caesar_shift(segment, shift)
+                        for pattern in self.all_patterns:
+                            if pattern.regex.search(decoded):
+                                events.append(
+                                    SecurityEvent(
+                                        tenant_id=tenant_id,
+                                        agent_id=agent_id,
+                                        verdict=Verdict.BLOCK,
+                                        category=ThreatCategory.PROMPT_INJECTION,
+                                        description=f"Caesar cipher (shift {shift}) decoded to malicious content",
+                                        source="input_guardrail_encoding",
+                                        severity="high",
+                                    )
+                                )
+                                caesar_found = True
+                                break
+                        if caesar_found:
+                            break
+                        # Also check dangerous keywords
+                        _kw = re.search(
+                            r"(hack|exploit|inject|bypass|exfiltrat|credential|password|"
+                            r"system.prompt|reverse.shell|ignore.*previous|ignore.*instruc|"
+                            r"admin|root|shadow|passwd|secret|token|jailbreak)",
+                            decoded,
+                            re.I,
+                        )
+                        if _kw:
                             events.append(
                                 SecurityEvent(
                                     tenant_id=tenant_id,
                                     agent_id=agent_id,
                                     verdict=Verdict.BLOCK,
                                     category=ThreatCategory.PROMPT_INJECTION,
-                                    description=f"Caesar cipher (shift {shift}) decoded to malicious content",
+                                    description=f"Caesar cipher (shift {shift}) contains dangerous keywords",
                                     source="input_guardrail_encoding",
                                     severity="high",
                                 )
                             )
                             caesar_found = True
                             break
+                        if events and events[-1].description.startswith("Caesar"):
+                            break
                     if caesar_found:
-                        break
-                    # Also check dangerous keywords
-                    _kw = re.search(
-                        r"(hack|exploit|inject|bypass|exfiltrat|credential|password|"
-                        r"system.prompt|reverse.shell|ignore.*previous|ignore.*instruc|"
-                        r"admin|root|shadow|passwd|secret|token|jailbreak)",
-                        decoded,
-                        re.I,
-                    )
-                    if _kw:
-                        events.append(
-                            SecurityEvent(
-                                tenant_id=tenant_id,
-                                agent_id=agent_id,
-                                verdict=Verdict.BLOCK,
-                                category=ThreatCategory.PROMPT_INJECTION,
-                                description=f"Caesar cipher (shift {shift}) contains dangerous keywords",
-                                source="input_guardrail_encoding",
-                                severity="high",
-                            )
-                        )
-                        caesar_found = True
-                        break
-                    if events and events[-1].description.startswith("Caesar"):
                         break
 
         # 12. Atbash cipher detection
@@ -1264,31 +1341,19 @@ class InputGuardrail:
                     severity="medium",
                 )
             )
-            # SECURITY FIX: Full-content sliding window scan
-            # Instead of only checking head+tail (which left the middle unscanned),
-            # we now sample multiple windows covering the entire message.
-            # Strategy: head(8KB) + 3 evenly-spaced middle windows(4KB each) + tail(2KB)
-            # This ensures no section >4KB goes unscanned.
+            # SECURITY FIX (IG-02): True overlapping sliding window scan
+            # Previous approach (head 8KB + 3 middle 4KB + tail 2KB) left ~28KB gaps
+            # in 50KB payloads. Now we use a sliding window of 4KB with 50% overlap
+            # (2KB stride), ensuring every byte is covered by at least one window.
             windows: list[str] = []
             total_len = len(content)
-            head_size = self.MAX_INPUT_SIZE  # 8KB
-            tail_size = 2000
-            mid_window_size = 4000
-            num_mid_windows = 3
-
-            # Head
-            windows.append(content[:head_size])
-            # Middle windows (evenly distributed)
-            if total_len > head_size + tail_size + mid_window_size:
-                middle_start = head_size
-                middle_end = total_len - tail_size
-                middle_span = middle_end - middle_start
-                for i in range(num_mid_windows):
-                    offset = middle_start + int(middle_span * (i + 1) / (num_mid_windows + 1)) - mid_window_size // 2
-                    offset = max(middle_start, min(offset, middle_end - mid_window_size))
-                    windows.append(content[offset:offset + mid_window_size])
-            # Tail
-            windows.append(content[-tail_size:])
+            window_size = 4096
+            stride = 2048  # 50% overlap
+            for offset in range(0, total_len, stride):
+                end = min(offset + window_size, total_len)
+                windows.append(content[offset:end])
+                if end >= total_len:
+                    break
             content = "\n".join(windows)
 
         # Layer 1: Encoding evasion detection (on raw input)
@@ -1427,24 +1492,32 @@ class InputGuardrail:
         _REGEX_BUDGET_SECONDS = 2.0  # Max 2 seconds of regex CPU per request
         _regex_start = _time.monotonic()
         _budget_exceeded = False
+        _pattern_counter = 0  # DOS-03: check budget every 10 patterns (was every ~50 via hash)
 
         for text in texts_to_check:
             if _budget_exceeded:
                 break
             for pattern in self.all_patterns:
-                # Check time budget every 50 patterns
-                if not _budget_exceeded and (hash(pattern.description) % 50 == 0):
+                # DOS-03 FIX: Check time budget every 10 patterns (deterministic).
+                # Previously used hash(pattern.description) % 50 which was non-deterministic
+                # and allowed individual patterns to backtrack for seconds unchecked.
+                _pattern_counter += 1
+                if not _budget_exceeded and (_pattern_counter % 10 == 0):
                     if _time.monotonic() - _regex_start > _REGEX_BUDGET_SECONDS:
                         _budget_exceeded = True
+                        # SECURITY FIX (IG-01): Budget exhaustion MUST produce BLOCK, not WARN.
+                        # Attackers craft inputs that force expensive backtracking to exhaust
+                        # the budget, leaving malicious patterns in unchecked remainder.
+                        # Fail-closed: if we can't finish scanning, assume adversarial intent.
                         events.append(
                             SecurityEvent(
                                 tenant_id=tenant_id,
                                 agent_id=agent_id,
-                                verdict=Verdict.WARN,
+                                verdict=Verdict.BLOCK,
                                 category=ThreatCategory.PROMPT_INJECTION,
-                                description=f"Regex budget exceeded ({_REGEX_BUDGET_SECONDS}s) — possible evasion via complexity",
+                                description=f"Regex budget exceeded ({_REGEX_BUDGET_SECONDS}s) — blocked (fail-closed, possible evasion via complexity)",
                                 source="input_guardrail_budget",
-                                severity="medium",
+                                severity="high",
                             )
                         )
                         break

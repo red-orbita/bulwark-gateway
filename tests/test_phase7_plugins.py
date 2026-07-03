@@ -41,7 +41,7 @@ class TestPluginSpec:
         spec = PluginSpec(
             name="custom-plugin",
             version="2.1.0",
-            author="Sentinel Team",
+            author="Bulwark Team",
             license="Apache-2.0",
             description="A custom scanner plugin",
             type=PluginType.OUTPUT_SCANNER,
@@ -79,7 +79,7 @@ class TestPluginSpec:
             "blocking": True,
             "description": "A test scanner plugin",
         }
-        spec_file = tmp_path / "sentinel-plugin.yaml"
+        spec_file = tmp_path / "bulwark-plugin.yaml"
         spec_file.write_text(yaml.dump(spec_data))
 
         spec = load_plugin_spec(tmp_path)
@@ -160,7 +160,7 @@ class TestPluginManager:
         plugin_dir = mgr.scaffold("my-new-scanner", output_dir=tmp_path / "output")
 
         assert plugin_dir.exists()
-        assert (plugin_dir / "sentinel-plugin.yaml").exists()
+        assert (plugin_dir / "bulwark-plugin.yaml").exists()
         assert (plugin_dir / "scanner.py").exists()
 
     def test_scaffold_has_valid_spec(self, tmp_path):
@@ -293,7 +293,7 @@ class TestPluginCLI:
 
 
 class TestSkillScannerExfiltrationDetection:
-    """Regression tests for the semantic exfiltration bypass (SEN-DF-*, SEN-EX-*).
+    """Regression tests for the semantic exfiltration bypass (BWK-DF-*, BWK-EX-*).
 
     Tests the exact payload that bypassed the scanner prior to the fix,
     plus variants and legitimate skills to verify no false positives.
@@ -336,9 +336,9 @@ instructions: |
         assert result.risk_score >= 7.0
         # Must detect sensitive paths
         rule_ids = {f.rule_id for f in result.findings}
-        assert "SEN-EX-001" in rule_ids, "Should detect sensitive credential paths"
+        assert "BWK-EX-001" in rule_ids, "Should detect sensitive credential paths"
         # Must detect data-flow correlation
-        assert any(r.startswith("SEN-DF-") for r in rule_ids), "Should have data-flow findings"
+        assert any(r.startswith("BWK-DF-") for r in rule_ids), "Should have data-flow findings"
 
     @pytest.mark.asyncio
     async def test_blocks_variant_ssh_key_exfil(self):
@@ -359,7 +359,7 @@ instructions: |
 
         assert result.verdict == ScanVerdict.BLOCK
         rule_ids = {f.rule_id for f in result.findings}
-        assert "SEN-DF-003" in rule_ids, "Should detect read+network+sensitive"
+        assert "BWK-DF-003" in rule_ids, "Should detect read+network+sensitive"
 
     @pytest.mark.asyncio
     async def test_blocks_variant_env_staging(self):
@@ -380,7 +380,7 @@ instructions: |
 
         assert result.verdict == ScanVerdict.BLOCK
         rule_ids = {f.rule_id for f in result.findings}
-        assert "SEN-EX-001" in rule_ids or "SEN-DF-001" in rule_ids
+        assert "BWK-EX-001" in rule_ids or "BWK-DF-001" in rule_ids
 
     @pytest.mark.asyncio
     async def test_blocks_variant_kubeconfig_access(self):
@@ -403,7 +403,7 @@ instructions: |
         assert result.verdict in (ScanVerdict.BLOCK, ScanVerdict.WARN)
         assert result.risk_score >= 4.0
         rule_ids = {f.rule_id for f in result.findings}
-        assert "SEN-EX-001" in rule_ids or "SEN-DF-001" in rule_ids
+        assert "BWK-EX-001" in rule_ids or "BWK-DF-001" in rule_ids
 
     @pytest.mark.asyncio
     async def test_blocks_deceptive_framing_with_paths(self):
@@ -425,7 +425,7 @@ instructions: |
 
         assert result.verdict == ScanVerdict.BLOCK
         rule_ids = {f.rule_id for f in result.findings}
-        assert "SEN-EX-002" in rule_ids or "SEN-DF-004" in rule_ids
+        assert "BWK-EX-002" in rule_ids or "BWK-DF-004" in rule_ids
 
     @pytest.mark.asyncio
     async def test_passes_legitimate_documenter(self):
@@ -518,4 +518,4 @@ instructions: |
 
         assert result.verdict == ScanVerdict.BLOCK
         rule_ids = {f.rule_id for f in result.findings}
-        assert "SEN-DF-003" in rule_ids
+        assert "BWK-DF-003" in rule_ids

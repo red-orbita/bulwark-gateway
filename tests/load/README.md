@@ -1,4 +1,4 @@
-# Sentinel Gateway — Load Testing Suite
+# Bulwark Gateway — Load Testing Suite
 
 Performance benchmarks for enterprise readiness validation using [k6](https://k6.io/).
 
@@ -24,7 +24,7 @@ docker-compose up -d
 ## Prerequisites
 
 - **k6** installed ([installation guide](https://k6.io/docs/get-started/installation/))
-- **Sentinel Gateway** running and accessible (proxy on port 8080)
+- **Bulwark Gateway** running and accessible (proxy on port 8080)
 - **Redis** running (for rate limiting tests)
 
 ```bash
@@ -180,7 +180,7 @@ Target: < 2.0x (system returns to near-baseline within 60s of spike ending)
 
 ## Architecture Notes
 
-The load tests measure **proxy overhead only** — the time Sentinel Gateway adds
+The load tests measure **proxy overhead only** — the time Bulwark Gateway adds
 on top of normal request processing. This includes:
 
 1. JWT/API key validation (~0.1ms)

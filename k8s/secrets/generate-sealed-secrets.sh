@@ -39,29 +39,29 @@ echo "# Re-generate with: ./k8s/secrets/generate-sealed-secrets.sh" >> "$OUTPUT"
 echo "---" >> "$OUTPUT"
 
 # Proxy secrets
-kubectl create secret generic sentinel-proxy-secrets \
+kubectl create secret generic bulwark-proxy-secrets \
     --from-file=jwt-secret="$PROJECT_DIR/secrets/jwt_secret.txt" \
     --from-file=api-keys="$PROJECT_DIR/secrets/api_keys.txt" \
-    -n sentinel-gateway \
+    -n bulwark-gateway \
     --dry-run=client -o yaml | \
     kubeseal --cert /tmp/sealed-secrets-cert.pem --format yaml >> "$OUTPUT"
 
 echo "---" >> "$OUTPUT"
 
 # Admin secrets
-kubectl create secret generic sentinel-admin-secrets \
+kubectl create secret generic bulwark-admin-secrets \
     --from-file=admin-password="$PROJECT_DIR/secrets/admin_password.txt" \
     --from-file=jwt-secret="$PROJECT_DIR/secrets/jwt_secret.txt" \
-    -n sentinel-gateway \
+    -n bulwark-gateway \
     --dry-run=client -o yaml | \
     kubeseal --cert /tmp/sealed-secrets-cert.pem --format yaml >> "$OUTPUT"
 
 echo "---" >> "$OUTPUT"
 
 # Redis secrets
-kubectl create secret generic sentinel-redis-secrets \
+kubectl create secret generic bulwark-redis-secrets \
     --from-file=redis-password="$PROJECT_DIR/secrets/redis_password.txt" \
-    -n sentinel-gateway \
+    -n bulwark-gateway \
     --dry-run=client -o yaml | \
     kubeseal --cert /tmp/sealed-secrets-cert.pem --format yaml >> "$OUTPUT"
 
@@ -69,9 +69,9 @@ echo "---" >> "$OUTPUT"
 
 # Monitoring secrets (if exists)
 if [ -f "$PROJECT_DIR/secrets/grafana_password.txt" ]; then
-    kubectl create secret generic sentinel-monitoring-secrets \
+    kubectl create secret generic bulwark-monitoring-secrets \
         --from-file=grafana-password="$PROJECT_DIR/secrets/grafana_password.txt" \
-        -n sentinel-gateway \
+        -n bulwark-gateway \
         --dry-run=client -o yaml | \
         kubeseal --cert /tmp/sealed-secrets-cert.pem --format yaml >> "$OUTPUT"
 fi

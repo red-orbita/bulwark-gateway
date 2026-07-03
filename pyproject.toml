@@ -1,5 +1,5 @@
 [project]
-name = "sentinel-gateway"
+name = "bulwark-gateway"
 version = "0.2.0"
 description = "Security guardrail proxy for AI agents — intercepts, validates, and enforces policies on tool calls between users and LLM agents in cloud environments"
 requires-python = ">=3.11"
@@ -59,14 +59,14 @@ dev = [
 ]
 
 [project.scripts]
-sentinel-gateway = "src.main:main"
-sentinel-plugin = "src.plugins.cli:main"
-sentinel-evaluate = "src.evaluation.cli:main"
+bulwark-gateway = "src.main:main"
+bulwark-plugin = "src.plugins.cli:main"
+bulwark-evaluate = "src.evaluation.cli:main"
 
 # Scanner plugins register here. Third-party packages use:
-# [project.entry-points."sentinel.scanners"]
+# [project.entry-points."bulwark.scanners"]
 # my_scanner = "my_package.module:MyScannerClass"
-[project.entry-points."sentinel.scanners"]
+[project.entry-points."bulwark.scanners"]
 
 [tool.ruff]
 target-version = "py311"

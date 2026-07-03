@@ -165,7 +165,7 @@ class Scanner(InputScanner):
             version="1.2.0",
             scanner_type=ScannerType.INPUT_ASYNC,
             description="Data Leakage Prevention — blocks sensitive data in LLM prompts",
-            author="sentinel-community",
+            author="bulwark-community",
         )
 
     async def scan(self, content: str, context: ScanContext) -> GuardrailResult:

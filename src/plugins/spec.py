@@ -1,7 +1,7 @@
 """
-Plugin Specification — Defines the metadata schema for Sentinel plugins.
+Plugin Specification — Defines the metadata schema for Bulwark plugins.
 
-Every plugin must include a `sentinel-plugin.yaml` file at its root
+Every plugin must include a `bulwark-plugin.yaml` file at its root
 that conforms to the PluginSpec model. This module handles loading,
 parsing, and validating plugin specifications.
 """
@@ -49,7 +49,7 @@ class PluginModelSpec:
 
 
 class PluginSpec(BaseModel):
-    """Complete plugin specification loaded from sentinel-plugin.yaml."""
+    """Complete plugin specification loaded from bulwark-plugin.yaml."""
 
     name: str = Field(..., description="Unique plugin identifier (kebab-case)")
     version: str = Field(..., description="SemVer version string")
@@ -89,10 +89,10 @@ _VALID_PARAM_TYPES = {"str", "float", "int", "bool"}
 
 
 def load_plugin_spec(path: Path) -> PluginSpec:
-    """Load a PluginSpec from a sentinel-plugin.yaml file.
+    """Load a PluginSpec from a bulwark-plugin.yaml file.
 
     Args:
-        path: Path to the sentinel-plugin.yaml file or to the plugin directory.
+        path: Path to the bulwark-plugin.yaml file or to the plugin directory.
 
     Returns:
         Parsed and validated PluginSpec instance.
@@ -101,7 +101,7 @@ def load_plugin_spec(path: Path) -> PluginSpec:
         FileNotFoundError: If the spec file doesn't exist.
         ValueError: If the YAML is malformed or doesn't match the schema.
     """
-    spec_file = path if path.is_file() else path / "sentinel-plugin.yaml"
+    spec_file = path if path.is_file() else path / "bulwark-plugin.yaml"
 
     if not spec_file.exists():
         raise FileNotFoundError(f"Plugin spec not found: {spec_file}")

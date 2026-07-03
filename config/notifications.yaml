@@ -1,4 +1,4 @@
-# Sentinel Gateway — Notification Channels Configuration
+# Bulwark Gateway — Notification Channels Configuration
 # 
 # This file defines alert notification channels managed via GitOps.
 # Channels defined here are merged with those managed via the Admin UI.
@@ -86,9 +86,9 @@ channels: []
   #   enabled: true
   #   smtp_host: "smtp.gmail.com"          # or smtp.office365.com, smtp.sendgrid.net
   #   smtp_port: 587
-  #   smtp_user: "sentinel-alerts@company.com"
+  #   smtp_user: "bulwark-alerts@company.com"
   #   smtp_password: "app-password-here"    # Use app password, not account password
-  #   smtp_from: "sentinel-alerts@company.com"
+  #   smtp_from: "bulwark-alerts@company.com"
   #   smtp_to:
   #     - "soc-team@company.com"
   #     - "security-lead@company.com"
@@ -104,7 +104,7 @@ channels: []
   #   enabled: true
   #   url: "https://soar.company.com/api/v1/incidents"
   #   headers:
-  #     X-Custom-Header: "sentinel-gateway"
+  #     X-Custom-Header: "bulwark-gateway"
   #   auth_type: bearer                     # none, bearer, basic, api_key
   #   auth_value: "your-bearer-token"
   #   min_severity: medium

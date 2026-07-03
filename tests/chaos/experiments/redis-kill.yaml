@@ -26,22 +26,22 @@
 apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosEngine
 metadata:
-  name: sentinel-redis-kill
-  namespace: sentinel-gateway
+  name: bulwark-redis-kill
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
-    chaos.sentinel.io/experiment: redis-kill
-    chaos.sentinel.io/category: infrastructure
+    app.kubernetes.io/part-of: bulwark-gateway
+    chaos.bulwark.io/experiment: redis-kill
+    chaos.bulwark.io/category: infrastructure
   annotations:
     mitre-attack/technique: T1489
     mitre-attack/tactic: Impact
-    sentinel.io/steady-state: "proxy-healthy,redis-connected,guardrails-active"
-    sentinel.io/pass-criteria: "zero-500-errors,requests-processed"
-    sentinel.io/expected-behavior: "fallback-to-in-memory-rate-limiting"
+    bulwark.io/steady-state: "proxy-healthy,redis-connected,guardrails-active"
+    bulwark.io/pass-criteria: "zero-500-errors,requests-processed"
+    bulwark.io/expected-behavior: "fallback-to-in-memory-rate-limiting"
 spec:
   engineState: active
   appinfo:
-    appns: sentinel-gateway
+    appns: bulwark-gateway
     applabel: app.kubernetes.io/component=redis
     appkind: deployment
   chaosServiceAccount: litmus-chaos-sa
@@ -74,7 +74,7 @@ spec:
             type: httpProbe
             mode: Continuous
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/health
               insecureSkipVerify: true
               method:
                 get:
@@ -90,7 +90,7 @@ spec:
             type: httpProbe
             mode: Continuous
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/v1/chat/completions
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/v1/chat/completions
               insecureSkipVerify: true
               method:
                 post:
@@ -114,7 +114,7 @@ spec:
             cmdProbe/inputs:
               command: |
                 kubectl logs -l app.kubernetes.io/component=proxy \
-                  -n sentinel-gateway --since=70s | \
+                  -n bulwark-gateway --since=70s | \
                   grep -c '"status_code": 500' || echo "0"
               comparator:
                 type: int
@@ -131,9 +131,9 @@ apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosExperiment
 metadata:
   name: pod-delete
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   definition:
     scope: Namespaced

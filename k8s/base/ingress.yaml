@@ -3,10 +3,10 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: sentinel-gateway-proxy
-  namespace: sentinel-gateway
+  name: bulwark-gateway-proxy
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: proxy
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
@@ -21,10 +21,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - sentinel-gateway.local
-      secretName: sentinel-gateway-tls
+        - bulwark-gateway.local
+      secretName: bulwark-gateway-tls
   rules:
-    - host: sentinel-gateway.local
+    - host: bulwark-gateway.local
       http:
         paths:
           - path: /v1
@@ -53,10 +53,10 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: sentinel-gateway-admin
-  namespace: sentinel-gateway
+  name: bulwark-gateway-admin
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: admin
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
@@ -78,10 +78,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - admin.sentinel-gateway.local
-      secretName: sentinel-gateway-tls
+        - admin.bulwark-gateway.local
+      secretName: bulwark-gateway-tls
   rules:
-    - host: admin.sentinel-gateway.local
+    - host: admin.bulwark-gateway.local
       http:
         paths:
           - path: /

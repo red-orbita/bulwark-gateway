@@ -1,5 +1,5 @@
 """
-Sentinel Gateway — Enrichment Layer (Async, Background, Non-Blocking)
+Bulwark Gateway — Enrichment Layer (Async, Background, Non-Blocking)
 
 This module provides ML-based semantic scoring that runs OUTSIDE the hot path.
 It NEVER blocks or delays the primary request/response flow.
@@ -19,5 +19,5 @@ Constraints:
     - NEVER converts ALLOW → BLOCK (enrichment is advisory only)
     - NEVER adds latency to hot path
     - Fails silently (enrichment failure ≠ request failure)
-    - Controlled by feature flag: SENTINEL_ENRICHMENT_ENABLED
+    - Controlled by feature flag: BULWARK_ENRICHMENT_ENABLED
 """

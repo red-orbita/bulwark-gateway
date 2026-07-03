@@ -29,7 +29,7 @@ from admin.models.iocs import (
     IOCUpdate,
 )
 
-_DEFAULT_IOC_PATH = Path(os.environ.get("SENTINEL_IOC_PATH", "data/iocs.json"))
+_DEFAULT_IOC_PATH = Path(os.environ.get("BULWARK_IOC_PATH", "data/iocs.json"))
 _LEGACY_IOC_PATH = Path("config/iocs.json")
 FEED_STATE_PATH = Path("data/feed_state.json")
 
@@ -374,8 +374,8 @@ class IOCStore:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             # Migrate legacy env-based API keys
-            env_map = {"otx": "SENTINEL_OTX_KEY", "abuseipdb": "SENTINEL_ABUSEIPDB_KEY",
-                       "urlhaus": "SENTINEL_URLHAUS_KEY", "threatfox": "SENTINEL_THREATFOX_KEY"}
+            env_map = {"otx": "BULWARK_OTX_KEY", "abuseipdb": "BULWARK_ABUSEIPDB_KEY",
+                       "urlhaus": "BULWARK_URLHAUS_KEY", "threatfox": "BULWARK_THREATFOX_KEY"}
             for fid, env_var in env_map.items():
                 key = os.environ.get(env_var, "")
                 if key and fid in self._feed_state["feeds"]:

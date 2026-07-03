@@ -12,7 +12,7 @@ import pytest
 
 from src.telemetry.schema import (
     SecurityTelemetryEvent,
-    SentinelFields,
+    BulwarkFields,
     TenantFields,
     TelemetryEventCategory,
     TelemetrySeverity,
@@ -28,10 +28,10 @@ from src.telemetry.exporter import CircuitBreaker, CircuitState
 class TestSchema:
     def test_create_event_minimal(self):
         event = SecurityTelemetryEvent(
-            sentinel=SentinelFields(verdict="block", guardrail_layer="input", latency_ms=3.2),
+            bulwark=BulwarkFields(verdict="block", guardrail_layer="input", latency_ms=3.2),
             tenant=TenantFields(id="example-corp"),
         )
-        assert event.sentinel.verdict == "block"
+        assert event.bulwark.verdict == "block"
         assert event.tenant.id == "example-corp"
         assert event.event.kind == "alert"
 
@@ -51,13 +51,13 @@ class TestSchema:
         )
         ecs = event.to_ecs_json()
         assert ecs["@timestamp"]
-        assert ecs["sentinel"]["verdict"] == "block"
-        assert ecs["sentinel"]["rule_id"] == "PI-001"
+        assert ecs["bulwark"]["verdict"] == "block"
+        assert ecs["bulwark"]["rule_id"] == "PI-001"
         assert ecs["tenant"]["id"] == "example-corp"
         assert ecs["event"]["severity"] == TelemetrySeverity.HIGH.value
         assert ecs["source"]["ip"] == "192.168.1.1"
         # Input hash is present, not raw payload
-        assert ecs["sentinel"]["input_hash"]
+        assert ecs["bulwark"]["input_hash"]
         assert "ignore previous" not in json.dumps(ecs)
 
     def test_to_cef(self):
@@ -73,7 +73,7 @@ class TestSchema:
             source_ip="10.0.0.1",
         )
         cef = event.to_cef()
-        assert cef.startswith("CEF:0|SentinelGateway|Guardrail|")
+        assert cef.startswith("CEF:0|BulwarkGateway|Guardrail|")
         assert "act=block" in cef
         assert "cs1=example-corp" in cef
         assert "prompt_injection" in cef
@@ -90,7 +90,7 @@ class TestSchema:
             latency_ms=2.1,
         )
         leef = event.to_leef()
-        assert leef.startswith("LEEF:2.0|SentinelGateway|")
+        assert leef.startswith("LEEF:2.0|BulwarkGateway|")
         assert "action=warn" in leef
         assert "tenantId=healthcare-corp" in leef
 
@@ -162,7 +162,7 @@ class TestQueue:
                 assert q.enqueue_nowait(event)
                 batch = await q.dequeue_batch(batch_size=10, timeout=0.1)
                 assert len(batch) == 1
-                assert batch[0].sentinel.verdict == "block"
+                assert batch[0].bulwark.verdict == "block"
                 q.close()
 
         asyncio.run(_test())

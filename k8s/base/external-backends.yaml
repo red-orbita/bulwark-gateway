@@ -1,12 +1,12 @@
 # External Backend Services — Abstraction layer for LLM backends
 #
 # In production, agents live outside the cluster (AWS, GCP, Azure, on-prem).
-# This file creates stable DNS names (e.g., ollama.sentinel-gateway.svc)
+# This file creates stable DNS names (e.g., ollama.bulwark-gateway.svc)
 # that proxy pods use. To change the backend, update Endpoints — no pod restart needed.
 #
 # Pattern:
 #   Service (clusterIP: None, headless) + Endpoints (manual IP list)
-#   This decouples sentinel-gateway from specific backend locations.
+#   This decouples bulwark-gateway from specific backend locations.
 #
 # For cloud-hosted backends (with DNS), use ExternalName type instead:
 #   type: ExternalName
@@ -24,7 +24,7 @@
 #        ./k8s/deploy.sh --backend-ip 10.0.1.50
 #
 #   3. Manual kubectl patch (post-deploy):
-#        kubectl patch endpoints ollama -n sentinel-gateway \
+#        kubectl patch endpoints ollama -n bulwark-gateway \
 #          --type='json' -p='[{"op":"replace","path":"/subsets/0/addresses/0/ip","value":"10.0.1.50"}]'
 #
 # On minikube, the gateway IP is auto-detected if BACKEND_IP is not set.
@@ -35,7 +35,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ollama
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/component: external-backend
     app.kubernetes.io/name: ollama
@@ -52,7 +52,7 @@ apiVersion: v1
 kind: Endpoints
 metadata:
   name: ollama  # Must match Service name
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 subsets:
   - addresses:
       # Substituted at deploy time — see top of file for configuration options
@@ -70,7 +70,7 @@ subsets:
 # kind: Service
 # metadata:
 #   name: cloud-llm
-#   namespace: sentinel-gateway
+#   namespace: bulwark-gateway
 #   labels:
 #     app.kubernetes.io/component: external-backend
 # spec:
@@ -85,7 +85,7 @@ subsets:
 # kind: Service
 # metadata:
 #   name: onprem-gpu
-#   namespace: sentinel-gateway
+#   namespace: bulwark-gateway
 # spec:
 #   clusterIP: None
 #   ports:
@@ -97,7 +97,7 @@ subsets:
 # kind: Endpoints
 # metadata:
 #   name: onprem-gpu
-#   namespace: sentinel-gateway
+#   namespace: bulwark-gateway
 # subsets:
 #   - addresses:
 #       - ip: 10.0.50.10

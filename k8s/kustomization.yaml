@@ -1,8 +1,8 @@
-# Kustomization — Sentinel Gateway Kubernetes Deployment
+# Kustomization — Bulwark Gateway Kubernetes Deployment
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: sentinel-gateway
+namespace: bulwark-gateway
 
 resources:
   - namespace.yaml
@@ -16,7 +16,7 @@ resources:
   - base/ingress.yaml
   - base/pdb.yaml
   - monitoring/prometheus-grafana.yaml
-  # Wazuh deployed separately in sentinel-siem namespace (baseline PSS)
+  # Wazuh deployed separately in bulwark-siem namespace (baseline PSS)
   - monitoring/namespace-siem.yaml
   - monitoring/wazuh.yaml
 
@@ -28,9 +28,9 @@ commonLabels:
 # Images — pin to semver tags (NEVER use 'latest' in production)
 # For immutable deploys, use sha256 digests: newTag: sha256:abc123...
 images:
-  - name: sentinel-gateway-proxy
-    newName: sentinel-gateway-proxy
+  - name: bulwark-gateway-proxy
+    newName: bulwark-gateway-proxy
     newTag: "0.2.0"
-  - name: sentinel-gateway-admin
-    newName: sentinel-gateway-admin
+  - name: bulwark-gateway-admin
+    newName: bulwark-gateway-admin
     newTag: "0.2.0"

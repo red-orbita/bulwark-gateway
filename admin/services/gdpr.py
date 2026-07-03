@@ -33,17 +33,17 @@ logger = logging.getLogger(__name__)
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-GDPR_SALT_DIR = Path(os.getenv("SENTINEL_GDPR_SALT_DIR", "data/gdpr/salts"))
-GDPR_ARCHIVE_DIR = Path(os.getenv("SENTINEL_GDPR_ARCHIVE_DIR", "data/gdpr/archive"))
-GDPR_REQUESTS_DB = Path(os.getenv("SENTINEL_GDPR_REQUESTS_DB", "data/gdpr/requests.db"))
+GDPR_SALT_DIR = Path(os.getenv("BULWARK_GDPR_SALT_DIR", "data/gdpr/salts"))
+GDPR_ARCHIVE_DIR = Path(os.getenv("BULWARK_GDPR_ARCHIVE_DIR", "data/gdpr/archive"))
+GDPR_REQUESTS_DB = Path(os.getenv("BULWARK_GDPR_REQUESTS_DB", "data/gdpr/requests.db"))
 
 # Retention defaults (days)
-RETENTION_SECURITY_EVENTS_DAYS = int(os.getenv("SENTINEL_RETENTION_SECURITY_DAYS", "90"))
-RETENTION_AUDIT_DAYS = int(os.getenv("SENTINEL_RETENTION_AUDIT_DAYS", "365"))
+RETENTION_SECURITY_EVENTS_DAYS = int(os.getenv("BULWARK_RETENTION_SECURITY_DAYS", "90"))
+RETENTION_AUDIT_DAYS = int(os.getenv("BULWARK_RETENTION_AUDIT_DAYS", "365"))
 
 # Redis keys for GDPR salt storage
-REDIS_GDPR_SALT_PREFIX = "sentinel:gdpr:salt:"
-REDIS_GDPR_REQUESTS_KEY = "sentinel:gdpr:requests"
+REDIS_GDPR_SALT_PREFIX = "bulwark:gdpr:salt:"
+REDIS_GDPR_REQUESTS_KEY = "bulwark:gdpr:requests"
 
 
 # ─── Models ───────────────────────────────────────────────────────────────────
@@ -323,7 +323,7 @@ class GDPRService:
                 from hashlib import sha256
                 import base64
                 # Derive a Fernet key from the JWT secret (deterministic)
-                jwt_secret = os.getenv("SENTINEL_JWT_SECRET", "")
+                jwt_secret = os.getenv("BULWARK_JWT_SECRET", "")
                 key_material = sha256(f"gdpr-archive-key:{jwt_secret}".encode()).digest()
                 fernet_key = base64.urlsafe_b64encode(key_material)
                 from cryptography.fernet import Fernet
@@ -513,13 +513,13 @@ class GDPRService:
         client = get_redis_client()
         if client:
             try:
-                last_run = client.get("sentinel:gdpr:retention:last_run")
+                last_run = client.get("bulwark:gdpr:retention:last_run")
                 if last_run:
                     status.last_enforcement = last_run
-                archived = client.get("sentinel:gdpr:retention:archived")
+                archived = client.get("bulwark:gdpr:retention:archived")
                 if archived:
                     status.records_archived = int(archived)
-                deleted = client.get("sentinel:gdpr:retention:deleted")
+                deleted = client.get("bulwark:gdpr:retention:deleted")
                 if deleted:
                     status.records_deleted = int(deleted)
             except Exception:
@@ -684,7 +684,7 @@ class GDPRService:
 
         try:
             # Check recent blocks list
-            recent = client.lrange("sentinel:recent_blocks", 0, -1)
+            recent = client.lrange("bulwark:recent_blocks", 0, -1)
             for item in (recent or []):
                 try:
                     event = json.loads(item) if isinstance(item, str) else item
@@ -707,7 +707,7 @@ class GDPRService:
 
         try:
             # Rate limit keys are per-tenant
-            key = f"sentinel:rate_limit:{subject_id}"
+            key = f"bulwark:rate_limit:{subject_id}"
             members = client.zrangebyscore(key, "-inf", "+inf", withscores=True)
             for member, score in (members or []):
                 history.append({
@@ -810,9 +810,9 @@ class GDPRService:
 
         try:
             now = datetime.now(timezone.utc).isoformat()
-            client.set("sentinel:gdpr:retention:last_run", now)
-            client.set("sentinel:gdpr:retention:archived", str(archived))
-            client.set("sentinel:gdpr:retention:deleted", str(deleted))
+            client.set("bulwark:gdpr:retention:last_run", now)
+            client.set("bulwark:gdpr:retention:archived", str(archived))
+            client.set("bulwark:gdpr:retention:deleted", str(deleted))
         except Exception:
             pass
 
@@ -827,9 +827,9 @@ class GDPRService:
         """SECURITY (H-09 fix): Erase Redis keys containing subject's PII.
 
         Targets:
-        - Rate limit keys: sentinel:ratelimit:*{subject_id}*
+        - Rate limit keys: bulwark:ratelimit:*{subject_id}*
         - Recent blocks list entries containing subject_id
-        - Quota keys: sentinel:quota:*{subject_id}*
+        - Quota keys: bulwark:quota:*{subject_id}*
 
         Returns count of keys/entries erased.
         """
@@ -841,9 +841,9 @@ class GDPRService:
         try:
             # 1. Rate limit keys containing the subject identifier
             for pattern in [
-                f"sentinel:ratelimit:*{subject_id}*",
-                f"sentinel:quota:*{subject_id}*",
-                f"sentinel:tenant:{subject_id}:*",
+                f"bulwark:ratelimit:*{subject_id}*",
+                f"bulwark:quota:*{subject_id}*",
+                f"bulwark:tenant:{subject_id}:*",
             ]:
                 keys = client.keys(pattern)
                 if keys:
@@ -851,7 +851,7 @@ class GDPRService:
                     erased += len(keys)
 
             # 2. Remove entries in recent_blocks list that contain subject_id
-            recent_key = "sentinel:recent_blocks"
+            recent_key = "bulwark:recent_blocks"
             recent_blocks = client.lrange(recent_key, 0, -1)
             if recent_blocks:
                 for entry in recent_blocks:
@@ -1137,7 +1137,7 @@ _service_lock = threading.Lock()
 def get_gdpr_service() -> GDPRService:
     """Get or create the singleton GDPR service instance.
 
-    CRIT-A fix: Selects PostgreSQL backend when SENTINEL_ADMIN_DB_URL starts
+    CRIT-A fix: Selects PostgreSQL backend when BULWARK_ADMIN_DB_URL starts
     with 'postgresql'. Otherwise uses legacy SQLite (backward compatible).
     """
     global _service

@@ -1,9 +1,9 @@
-# Sentinel Gateway — Region A (Primary) Helm Values
+# Bulwark Gateway — Region A (Primary) Helm Values
 #
 # Active region: serves all production traffic.
-# Deploy: helm install sentinel ./helm/sentinel-gateway -f ci/values-region-primary.yaml \
+# Deploy: helm install bulwark ./helm/bulwark-gateway -f ci/values-region-primary.yaml \
 #           --set backend.ip=<IP> --set externalRedis.password=<PWD> \
-#           --namespace sentinel-gateway --create-namespace --kube-context region-a
+#           --namespace bulwark-gateway --create-namespace --kube-context region-a
 #
 # RTO target: < 5 minutes | RPO target: < 30 seconds
 
@@ -59,15 +59,15 @@ admin:
     postgresql:
       host: ""  # Set via CI/CD: --set admin.database.postgresql.host=<PG_HOST>
       port: 5432
-      database: "sentinel_admin"
-      username: "sentinel"
-      existingSecret: "sentinel-postgresql-credentials"
+      database: "bulwark_admin"
+      username: "bulwark"
+      existingSecret: "bulwark-postgresql-credentials"
       existingSecretKey: "password"
       sslMode: "verify-full"
       poolMin: 5
       poolMax: 30
 
-# Redis — external managed with Sentinel (HA)
+# Redis — external managed with Bulwark (HA)
 redis:
   enabled: false
 
@@ -76,13 +76,13 @@ externalRedis:
   port: 6380
   tls: true
   db: 0
-  existingSecret: "sentinel-redis-credentials"
+  existingSecret: "bulwark-redis-credentials"
   existingSecretKey: "password"
-  # Sentinel mode for auto-failover within the region
-  sentinel:
+  # Bulwark mode for auto-failover within the region
+  bulwark:
     enabled: true
-    masterName: "sentinel-master"
-    nodes: "redis-sentinel-0:26379,redis-sentinel-1:26379,redis-sentinel-2:26379"
+    masterName: "bulwark-master"
+    nodes: "redis-bulwark-0:26379,redis-bulwark-1:26379,redis-bulwark-2:26379"
 
 # Ingress — primary region
 ingress:
@@ -95,13 +95,13 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
     # Health check annotation for external DNS/LB
-    external-dns.alpha.kubernetes.io/hostname: "region-a.sentinel-gateway.example.com"
+    external-dns.alpha.kubernetes.io/hostname: "region-a.bulwark-gateway.example.com"
   tls:
     enabled: true
-    secretName: "sentinel-primary-tls"
+    secretName: "bulwark-primary-tls"
   hosts:
-    proxy: "region-a.sentinel-gateway.example.com"
-    admin: "admin-a.sentinel-gateway.example.com"
+    proxy: "region-a.bulwark-gateway.example.com"
+    admin: "admin-a.bulwark-gateway.example.com"
 
 # Telemetry — full pipeline
 telemetry:
@@ -158,10 +158,10 @@ podTopologySpreadConstraints:
     whenUnsatisfiable: DoNotSchedule
     labelSelector:
       matchLabels:
-        app.kubernetes.io/name: sentinel-gateway
+        app.kubernetes.io/name: bulwark-gateway
 
 # Region label (for multi-region monitoring)
 global:
   region: "a"
   role: "primary"
-  clusterName: "sentinel-region-a"
+  clusterName: "bulwark-region-a"

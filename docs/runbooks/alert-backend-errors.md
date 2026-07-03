@@ -1,15 +1,15 @@
-# Runbook: SentinelBackendErrorRateHigh
+# Runbook: BulwarkBackendErrorRateHigh
 
 ## Alert Details
 
 - **Severity**: Critical
-- **Alert rule**: `SentinelBackendErrorRateHigh`
+- **Alert rule**: `BulwarkBackendErrorRateHigh`
 - **Prometheus expression**:
   ```promql
   (
-    sum(rate(sentinel_backend_errors_total[5m]))
+    sum(rate(bulwark_backend_errors_total[5m]))
     /
-    clamp_min(sum(rate(sentinel_requests_total[5m])), 1)
+    clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
   ) > 0.05
   ```
 - **Fires when**: >5% of forwarded requests are failing at the LLM backend over 3 minutes
@@ -28,22 +28,22 @@
 2. **Identify which backend(s) are failing**:
    ```bash
    # Check proxy logs for backend errors
-   kubectl logs deploy/proxy -n sentinel-gateway --since=5m | \
+   kubectl logs deploy/proxy -n bulwark-gateway --since=5m | \
      jq 'select(.event=="backend_error") | {backend: .backend_url, status: .status_code, error: .error}'
    ```
 3. **Check backend health directly**:
    ```bash
    # Get configured backends from agent registry
-   kubectl exec deploy/proxy -n sentinel-gateway -- \
+   kubectl exec deploy/proxy -n bulwark-gateway -- \
      cat /app/config/agents.yaml | grep backend_url
 
    # Test backend health endpoint
-   kubectl exec deploy/proxy -n sentinel-gateway -- \
+   kubectl exec deploy/proxy -n bulwark-gateway -- \
      curl -s -o /dev/null -w "%{http_code}" http://ollama:11434/health
    ```
 4. **Check if SSRF protection is blocking legitimate backend** (rare but possible after config change):
    ```bash
-   kubectl logs deploy/proxy -n sentinel-gateway --since=5m | grep -i "ssrf"
+   kubectl logs deploy/proxy -n bulwark-gateway --since=5m | grep -i "ssrf"
    ```
 5. **Decision point**: Is the backend overloaded, down, or is there a network issue?
 
@@ -51,31 +51,31 @@
 
 ```bash
 # 1. Error rate by backend (if multi-backend)
-# Prometheus: sum by (backend)(rate(sentinel_backend_errors_total[5m]))
+# Prometheus: sum by (backend)(rate(bulwark_backend_errors_total[5m]))
 
 # 2. HTTP status code distribution from backend
-kubectl logs deploy/proxy -n sentinel-gateway --since=10m | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=10m | \
   jq 'select(.event=="backend_response") | .status_code' | sort | uniq -c
 
 # 3. Backend response time (is it timing out?)
-# Prometheus: histogram_quantile(0.99, sum(rate(sentinel_request_duration_seconds_bucket{phase="backend"}[5m])) by (le))
+# Prometheus: histogram_quantile(0.99, sum(rate(bulwark_request_duration_seconds_bucket{phase="backend"}[5m])) by (le))
 
 # 4. Check if backend DNS resolves
-kubectl exec deploy/proxy -n sentinel-gateway -- nslookup ollama
+kubectl exec deploy/proxy -n bulwark-gateway -- nslookup ollama
 
 # 5. Check backend pod/service status (if in-cluster)
-kubectl get pods -l app=ollama -n sentinel-gateway
-kubectl get svc -l app=ollama -n sentinel-gateway
+kubectl get pods -l app=ollama -n bulwark-gateway
+kubectl get svc -l app=ollama -n bulwark-gateway
 
 # 6. Check ExternalName service (if backend is external)
-kubectl get svc backend -n sentinel-gateway -o yaml
+kubectl get svc backend -n bulwark-gateway -o yaml
 
 # 7. Network connectivity test
-kubectl exec deploy/proxy -n sentinel-gateway -- \
+kubectl exec deploy/proxy -n bulwark-gateway -- \
   curl -v --connect-timeout 5 http://ollama:11434/api/tags
 
 # 8. Check if rate limit on backend side (429s)
-kubectl logs deploy/proxy -n sentinel-gateway --since=5m | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=5m | \
   jq 'select(.status_code==429)'
 ```
 
@@ -89,7 +89,7 @@ kubectl logs deploy/proxy -n sentinel-gateway --since=5m | \
 | Network policy blocking | Connection timeout, no response | Verify network policies allow proxy→backend |
 | TLS certificate mismatch | SSL handshake errors in logs | Update backend TLS config |
 | Backend config change | Works for some models, not others | Check model availability |
-| Timeout too short | 504 errors, large model responses | Increase `SENTINEL_BACKEND_TIMEOUT` |
+| Timeout too short | 504 errors, large model responses | Increase `BULWARK_BACKEND_TIMEOUT` |
 
 ## Remediation
 
@@ -97,26 +97,26 @@ kubectl logs deploy/proxy -n sentinel-gateway --since=5m | \
 
 ```bash
 # 1. Check pod status
-kubectl get pods -l app=ollama -n sentinel-gateway
+kubectl get pods -l app=ollama -n bulwark-gateway
 
 # 2. If CrashLoopBackOff, check logs
-kubectl logs -l app=ollama -n sentinel-gateway --previous --tail=50
+kubectl logs -l app=ollama -n bulwark-gateway --previous --tail=50
 
 # 3. Restart backend
-kubectl rollout restart deploy/ollama -n sentinel-gateway
+kubectl rollout restart deploy/ollama -n bulwark-gateway
 
 # 4. Monitor recovery
-kubectl rollout status deploy/ollama -n sentinel-gateway
+kubectl rollout status deploy/ollama -n bulwark-gateway
 ```
 
 ### Backend is Overloaded
 
 ```bash
 # 1. Scale backend (if possible)
-kubectl scale deploy/ollama --replicas=3 -n sentinel-gateway
+kubectl scale deploy/ollama --replicas=3 -n bulwark-gateway
 
 # 2. Alternatively, reduce proxy concurrency temporarily
-kubectl set env deploy/proxy SENTINEL_BACKEND_TIMEOUT=60 -n sentinel-gateway
+kubectl set env deploy/proxy BULWARK_BACKEND_TIMEOUT=60 -n bulwark-gateway
 
 # 3. Consider enabling request queuing or circuit breaker at proxy level
 ```
@@ -125,14 +125,14 @@ kubectl set env deploy/proxy SENTINEL_BACKEND_TIMEOUT=60 -n sentinel-gateway
 
 ```bash
 # 1. Check external connectivity
-kubectl exec deploy/proxy -n sentinel-gateway -- \
+kubectl exec deploy/proxy -n bulwark-gateway -- \
   curl -v --connect-timeout 10 https://api.openai.com/v1/models
 
 # 2. Check if egress network policy allows the connection
-kubectl get networkpolicies -n sentinel-gateway -o yaml | grep -A5 "egress"
+kubectl get networkpolicies -n bulwark-gateway -o yaml | grep -A5 "egress"
 
 # 3. Check proxy environment for correct backend URL
-kubectl get deploy/proxy -n sentinel-gateway -o jsonpath='{.spec.template.spec.containers[0].env}' | jq .
+kubectl get deploy/proxy -n bulwark-gateway -o jsonpath='{.spec.template.spec.containers[0].env}' | jq .
 
 # 4. If cloud API, check status page and API key validity
 ```
@@ -141,14 +141,14 @@ kubectl get deploy/proxy -n sentinel-gateway -o jsonpath='{.spec.template.spec.c
 
 ```bash
 # 1. Check current timeout setting
-kubectl exec deploy/proxy -n sentinel-gateway -- \
-  env | grep SENTINEL_BACKEND_TIMEOUT
+kubectl exec deploy/proxy -n bulwark-gateway -- \
+  env | grep BULWARK_BACKEND_TIMEOUT
 
 # 2. Increase timeout if requests are legitimately slow
-kubectl set env deploy/proxy SENTINEL_BACKEND_TIMEOUT=180 -n sentinel-gateway
+kubectl set env deploy/proxy BULWARK_BACKEND_TIMEOUT=180 -n bulwark-gateway
 
 # 3. Verify with a test request
-kubectl exec deploy/proxy -n sentinel-gateway -- \
+kubectl exec deploy/proxy -n bulwark-gateway -- \
   curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer <test-key>" \
   -H "X-Tenant-ID: default-corp" \
@@ -165,10 +165,10 @@ kubectl exec deploy/proxy -n sentinel-gateway -- \
 
 ## Related Alerts
 
-- [`SentinelGuardrailLatencyHigh`](alert-guardrail-latency.md) — backend slowness can cascade to overall latency
-- [`SentinelProxyPodsDown`](alert-redis-down.md) — proxy pods may crash if backend causes resource exhaustion
-- [`SentinelSLORequestSuccessLow`](alert-backend-errors.md) — backend errors directly impact success rate SLO
-- [`SentinelSLOLatencyBreach`](alert-backend-errors.md) — timeouts contribute to latency SLO breach
+- [`BulwarkGuardrailLatencyHigh`](alert-guardrail-latency.md) — backend slowness can cascade to overall latency
+- [`BulwarkProxyPodsDown`](alert-redis-down.md) — proxy pods may crash if backend causes resource exhaustion
+- [`BulwarkSLORequestSuccessLow`](alert-backend-errors.md) — backend errors directly impact success rate SLO
+- [`BulwarkSLOLatencyBreach`](alert-backend-errors.md) — timeouts contribute to latency SLO breach
 
 ## Post-Incident
 

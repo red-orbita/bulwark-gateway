@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from admin.main import app
 
 # Default password used when ADMIN_PASSWORD env not set during DB seed
-_ADMIN_PW = "sentinel-admin"
+_ADMIN_PW = "bulwark-admin"
 
 
 @pytest.fixture

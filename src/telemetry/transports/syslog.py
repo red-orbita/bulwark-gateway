@@ -91,7 +91,7 @@ class SyslogTransport:
         else:
             # RFC5424
             pri = self._config.facility * 8 + event.event.severity.value
-            return f"<{pri}>1 {event.timestamp} sentinel-gateway - - - {event.message}"
+            return f"<{pri}>1 {event.timestamp} bulwark-gateway - - - {event.message}"
 
     async def send_batch(self, events: list[SecurityTelemetryEvent]) -> bool:
         try:

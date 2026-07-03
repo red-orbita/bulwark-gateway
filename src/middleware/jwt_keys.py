@@ -354,7 +354,7 @@ def initialize(
     if not public_key_path and not jwks_url:
         raise JWTKeyError(
             f"Algorithm '{algorithm}' requires either "
-            f"SENTINEL_JWT_PUBLIC_KEY_PATH or SENTINEL_JWT_JWKS_URL to be set. "
+            f"BULWARK_JWT_PUBLIC_KEY_PATH or BULWARK_JWT_JWKS_URL to be set. "
             f"Without a public key, token verification is impossible."
         )
 
@@ -429,7 +429,7 @@ def get_verification_key(algorithm: str, kid: Optional[str] = None):
 
     raise JWTKeyError(
         "No verification key available. "
-        "Configure SENTINEL_JWT_PUBLIC_KEY_PATH or SENTINEL_JWT_JWKS_URL."
+        "Configure BULWARK_JWT_PUBLIC_KEY_PATH or BULWARK_JWT_JWKS_URL."
     )
 
 
@@ -448,7 +448,7 @@ def get_signing_key():
     if _private_key is None:
         raise JWTKeyError(
             "No private key configured. "
-            "Set SENTINEL_JWT_PRIVATE_KEY_PATH for token generation."
+            "Set BULWARK_JWT_PRIVATE_KEY_PATH for token generation."
         )
     return _private_key
 

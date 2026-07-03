@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-logger = logging.getLogger("sentinel.feed_scheduler")
+logger = logging.getLogger("bulwark.feed_scheduler")
 
 
 class FeedScheduler:

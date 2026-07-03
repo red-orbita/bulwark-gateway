@@ -1,5 +1,5 @@
 # Datadog — HTTP Logs API
-# Sentinel Gateway SIEM Integration Template
+# Bulwark Gateway SIEM Integration Template
 ---
 transport: http_rest
 platform: datadog
@@ -9,7 +9,7 @@ connection:
   # EU: https://http-intake.logs.datadoghq.eu/api/v2/logs
   auth_method: api_key
   api_key_header: "DD-API-KEY"
-  api_key: "${SENTINEL_DATADOG_API_KEY}"
+  api_key: "${BULWARK_DATADOG_API_KEY}"
   verify_ssl: true
   timeout_seconds: 10
 
@@ -21,16 +21,16 @@ batching:
 format: json
 field_mapping:
   # Datadog standard attributes
-  ddsource: "sentinel-gateway"
-  ddtags: "env:production,service:sentinel-gateway,version:0.2.0"
+  ddsource: "bulwark-gateway"
+  ddtags: "env:production,service:bulwark-gateway,version:0.2.0"
   hostname: "${HOSTNAME}"
-  service: "sentinel-gateway"
-  # Facets: sentinel.verdict, sentinel.threat_category, tenant.id
+  service: "bulwark-gateway"
+  # Facets: bulwark.verdict, bulwark.threat_category, tenant.id
 
 # Datadog Log Pipeline (processing rules):
 # 1. Grok Parser: extract @timestamp from event
-# 2. Category Processor: map sentinel.verdict to status (error=block, warn=warn, info=allow)
-# 3. Remapper: sentinel.latency_ms → duration
+# 2. Category Processor: map bulwark.verdict to status (error=block, warn=warn, info=allow)
+# 3. Remapper: bulwark.latency_ms → duration
 
 retry:
   max_retries: 3
@@ -43,7 +43,7 @@ circuit_breaker:
 
 # Docker agent alternative (DogStatsD + log collection):
 # docker run -d --name dd-agent \
-#   -v /var/log/sentinel-gateway:/var/log/sentinel-gateway:ro \
-#   -e DD_API_KEY=${SENTINEL_DATADOG_API_KEY} \
+#   -v /var/log/bulwark-gateway:/var/log/bulwark-gateway:ro \
+#   -e DD_API_KEY=${BULWARK_DATADOG_API_KEY} \
 #   -e DD_LOGS_ENABLED=true \
 #   datadog/agent:latest

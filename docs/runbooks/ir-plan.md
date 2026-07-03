@@ -1,8 +1,8 @@
-# Incident Response Plan — Sentinel Gateway
+# Incident Response Plan — Bulwark Gateway
 
 **Document Classification**: Internal — SOC 2 CC7.3 / CC7.4  
 **Framework**: NIST SP 800-61 Rev. 2 (Computer Security Incident Handling Guide)  
-**Scope**: All security incidents involving the Sentinel Gateway proxy, admin panel, and connected infrastructure  
+**Scope**: All security incidents involving the Bulwark Gateway proxy, admin panel, and connected infrastructure  
 **Owner**: Security Engineering Lead  
 **Approval**: CISO  
 **Review Cycle**: Quarterly or after any P1 incident
@@ -38,10 +38,10 @@
 
 | Channel | Purpose | When Used |
 |---------|---------|-----------|
-| `#sentinel-incidents` (Slack) | War room for active incidents | All P1/P2 |
-| `#sentinel-alerts` (Slack) | Automated alert routing | Always |
-| PagerDuty service: `sentinel-security` | P1 security incidents | Guardrail bypass, data breach |
-| PagerDuty service: `sentinel-platform` | P2 infrastructure incidents | Redis down, pod failures |
+| `#bulwark-incidents` (Slack) | War room for active incidents | All P1/P2 |
+| `#bulwark-alerts` (Slack) | Automated alert routing | Always |
+| PagerDuty service: `bulwark-security` | P1 security incidents | Guardrail bypass, data breach |
+| PagerDuty service: `bulwark-platform` | P2 infrastructure incidents | Redis down, pod failures |
 | Zoom bridge: `[company-ir-bridge]` | Voice coordination for P1 | Complex multi-team incidents |
 | `security-incidents@company.com` | Formal incident reports | Post-incident, regulatory |
 
@@ -49,7 +49,7 @@
 
 | Tool | Purpose | Access Procedure |
 |------|---------|-----------------|
-| Sentinel Admin UI (`:8090`) | Real-time blocks, pattern management | RBAC session login |
+| Bulwark Admin UI (`:8090`) | Real-time blocks, pattern management | RBAC session login |
 | Grafana (`:3000`) | Metrics dashboards, alert history | SSO |
 | Prometheus (`:9090`) | Raw metric queries, alert status | Port-forward or ingress |
 | Redis CLI | Rate limit state, recent blocks, counters | `kubectl exec` into Redis pod |
@@ -60,7 +60,7 @@
 ### 1.4 Preparation Checklist
 
 - [ ] All team members have PagerDuty accounts and are in rotation
-- [ ] `kubectl` access to `sentinel-gateway` namespace confirmed for all responders
+- [ ] `kubectl` access to `bulwark-gateway` namespace confirmed for all responders
 - [ ] Evidence collection script tested within last 30 days
 - [ ] Communication templates reviewed and updated
 - [ ] Regulatory contacts (DPA, legal counsel) current
@@ -75,8 +75,8 @@
 
 | Source | Mechanism | Alert Examples |
 |--------|-----------|----------------|
-| Prometheus alerting | Metric threshold breach | `SentinelHighBlockRate`, `SentinelRedisDown` |
-| Sentinel SIEM exporter | Security event correlation | Clustered prompt injection attempts |
+| Prometheus alerting | Metric threshold breach | `BulwarkHighBlockRate`, `BulwarkRedisDown` |
+| Bulwark SIEM exporter | Security event correlation | Clustered prompt injection attempts |
 | Wazuh rules | MITRE ATT&CK pattern match | Rule 100101 (injection), 100103 (jailbreak) |
 | Admin dashboard | Real-time block feed | Visual anomaly detection |
 | Customer report | Support ticket | "My requests are being blocked" |
@@ -98,7 +98,7 @@ Alert fires
   │
   ├─ P4/Info → Log ticket → Monitor
   │
-  ├─ P3/Warning → Slack #sentinel-alerts → On-call acknowledges
+  ├─ P3/Warning → Slack #bulwark-alerts → On-call acknowledges
   │                                         └─ Not resolved in 2hr? → Escalate to P2
   │
   ├─ P2/High → PagerDuty page → On-call responds in 30min
@@ -113,27 +113,27 @@ Alert fires
 
 1. **Acknowledge the alert** in PagerDuty (stops re-escalation)
 2. **Classify severity** using criteria above
-3. **Open war room** if P1/P2: post in `#sentinel-incidents`
+3. **Open war room** if P1/P2: post in `#bulwark-incidents`
 4. **Preserve evidence** — run `scripts/ir-collect-evidence.sh --since 30m`
 5. **Check related alerts** — single alert may be symptom of larger issue:
-   - `SentinelHighBlockRate` + `SentinelRedisDown` → likely pattern sync failure
-   - `SentinelBackendErrorRateHigh` + `SentinelGuardrailLatencyHigh` → backend overload cascading
-   - `SentinelCertificateExpiringSoon` + `SentinelProxyTargetDown` → TLS handshake failures
+   - `BulwarkHighBlockRate` + `BulwarkRedisDown` → likely pattern sync failure
+   - `BulwarkBackendErrorRateHigh` + `BulwarkGuardrailLatencyHigh` → backend overload cascading
+   - `BulwarkCertificateExpiringSoon` + `BulwarkProxyTargetDown` → TLS handshake failures
 
 ### 2.5 Analysis Queries
 
 ```bash
 # Current block rate
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli GET sentinel:global:block
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli GET bulwark:global:block
 
 # Recent blocks (last 10)
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli LRANGE sentinel:recent_blocks 0 9
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli LRANGE bulwark:recent_blocks 0 9
 
 # Per-tenant breakdown (Prometheus)
-# sum by (tenant_id)(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+# sum by (tenant_id)(rate(bulwark_verdicts_total{verdict="block"}[5m]))
 
 # Security events in last 5 minutes
-kubectl logs deploy/proxy -n sentinel-gateway --since=5m | jq 'select(.verdict=="BLOCK")'
+kubectl logs deploy/proxy -n bulwark-gateway --since=5m | jq 'select(.verdict=="BLOCK")'
 
 # Active alerts in Prometheus
 curl -s http://prometheus:9090/api/v1/alerts | jq '.data.alerts[] | select(.state=="firing")'
@@ -149,19 +149,19 @@ Goal: Stop the bleeding without full root cause analysis.
 
 | Scenario | Action | Command |
 |----------|--------|---------|
-| **Single tenant under attack** | Isolate tenant (reduce rate limit to 1 RPM) | `kubectl exec deploy/redis -n sentinel-gateway -- redis-cli SET sentinel:rate_limit:override:<tenant> 1` |
-| **Guardrail bypass confirmed** | Switch to fail-closed strict mode | `kubectl set env deploy/proxy SENTINEL_FAIL_MODE=closed -n sentinel-gateway` |
-| **Compromised API key** | Revoke immediately | Remove key from `SENTINEL_API_KEYS` secret, restart proxy |
+| **Single tenant under attack** | Isolate tenant (reduce rate limit to 1 RPM) | `kubectl exec deploy/redis -n bulwark-gateway -- redis-cli SET bulwark:rate_limit:override:<tenant> 1` |
+| **Guardrail bypass confirmed** | Switch to fail-closed strict mode | `kubectl set env deploy/proxy BULWARK_FAIL_MODE=closed -n bulwark-gateway` |
+| **Compromised API key** | Revoke immediately | Remove key from `BULWARK_API_KEYS` secret, restart proxy |
 | **Malicious pattern evading detection** | Add emergency pattern via admin | POST `/admin/guardrails/` with new pattern |
-| **Backend compromise suspected** | Block forwarding | `kubectl scale deploy/proxy --replicas=0 -n sentinel-gateway` |
-| **Redis compromise** | Isolate Redis, proxy falls back to in-memory | `kubectl delete networkpolicy allow-proxy-redis -n sentinel-gateway` |
+| **Backend compromise suspected** | Block forwarding | `kubectl scale deploy/proxy --replicas=0 -n bulwark-gateway` |
+| **Redis compromise** | Isolate Redis, proxy falls back to in-memory | `kubectl delete networkpolicy allow-proxy-redis -n bulwark-gateway` |
 
 ### 3.2 Long-Term Containment (Hours)
 
 Goal: Sustainable containment that allows investigation.
 
 1. **Deploy patched configuration** — update policies, restart with rolling update
-2. **Enable enhanced logging** — `kubectl set env deploy/proxy SENTINEL_LOG_LEVEL=DEBUG`
+2. **Enable enhanced logging** — `kubectl set env deploy/proxy BULWARK_LOG_LEVEL=DEBUG`
 3. **Increase monitoring** — reduce Prometheus scrape interval to 5s
 4. **Notify affected tenants** — via Customer Success (see communication templates)
 5. **Engage threat intel** — check IOC feeds for related indicators
@@ -232,7 +232,7 @@ If any credentials were potentially compromised:
 ./secrets/init.sh --force
 
 # Restart all services to pick up new secrets
-kubectl rollout restart deploy/proxy deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/proxy deploy/admin -n bulwark-gateway
 
 # Verify connectivity
 ./scripts/validate-deployment.sh
@@ -248,7 +248,7 @@ kubectl rollout restart deploy/proxy deploy/admin -n sentinel-gateway
 |------|--------|--------------|
 | 1 | Remove containment measures | Restore rate limits, network policies |
 | 2 | Scale back to normal replicas | `kubectl scale deploy/proxy --replicas=2` |
-| 3 | Restore log level | `kubectl set env deploy/proxy SENTINEL_LOG_LEVEL=INFO` |
+| 3 | Restore log level | `kubectl set env deploy/proxy BULWARK_LOG_LEVEL=INFO` |
 | 4 | Validate deployment | `./scripts/validate-deployment.sh` |
 | 5 | Run security smoke test | `python scripts/security-smoke-test.py` |
 | 6 | Monitor for recurrence | Watch dashboards for 24hr |
@@ -263,13 +263,13 @@ kubectl rollout restart deploy/proxy deploy/admin -n sentinel-gateway
 python scripts/security-smoke-test.py --rounds 3
 
 # Redis state correct
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli INFO keyspace
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli INFO keyspace
 
 # All tenants operational
 curl -s http://proxy:8080/health/stats | jq '.tenants'
 
 # SIEM export flowing
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli GET sentinel:siem:batches_sent
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli GET bulwark:siem:batches_sent
 ```
 
 ### 5.3 Communication — All Clear
@@ -355,7 +355,7 @@ Send "all clear" notification when:
 **Incident**: [Brief description]
 **Impact**: [Who is affected, what is degraded]
 **Incident Commander**: @[name]
-**War Room**: #sentinel-incidents
+**War Room**: #bulwark-incidents
 **Status**: Investigating
 
 Next update in 30 minutes.
@@ -364,7 +364,7 @@ Next update in 30 minutes.
 #### Customer Notification (P1/P2 with customer impact)
 
 ```
-Subject: [Sentinel Gateway] Service Incident — [Date]
+Subject: [Bulwark Gateway] Service Incident — [Date]
 
 We are currently investigating an issue affecting [description].
 

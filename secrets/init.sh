@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Sentinel Gateway — First-run secrets initialization
+# Bulwark Gateway — First-run secrets initialization
 #
 # This script is called by docker compose on first deploy.
 # It generates ALL secrets automatically if they don't exist.
@@ -28,7 +28,7 @@ generate_if_missing() {
     fi
 }
 
-echo "=== Sentinel Gateway — Secrets Initialization ==="
+echo "=== Bulwark Gateway — Secrets Initialization ==="
 echo "Directory: $SECRETS_DIR"
 echo ""
 

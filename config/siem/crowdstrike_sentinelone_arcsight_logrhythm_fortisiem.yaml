@@ -1,22 +1,22 @@
-# CrowdStrike Falcon NG SIEM / SentinelOne / ArcSight / LogRhythm / FortiSIEM
+# CrowdStrike Falcon NG SIEM / BulwarkOne / ArcSight / LogRhythm / FortiSIEM
 # TCP/TLS with CEF format — Universal connector
-# Sentinel Gateway SIEM Integration Template
+# Bulwark Gateway SIEM Integration Template
 ---
 transport: tcp_tls
-platform: cef_universal  # ArcSight, LogRhythm, CrowdStrike, SentinelOne, FortiSIEM
+platform: cef_universal  # ArcSight, LogRhythm, CrowdStrike, BulwarkOne, FortiSIEM
 
 connection:
-  host: "${SENTINEL_CEF_HOST}"
+  host: "${BULWARK_CEF_HOST}"
   port: 6514
   use_tls: true
-  tls_cert: "${SENTINEL_TLS_CERT_PATH}"
-  tls_key: "${SENTINEL_TLS_KEY_PATH}"
-  tls_ca: "${SENTINEL_TLS_CA_PATH}"
+  tls_cert: "${BULWARK_TLS_CERT_PATH}"
+  tls_key: "${BULWARK_TLS_KEY_PATH}"
+  tls_ca: "${BULWARK_TLS_CA_PATH}"
   connect_timeout: 5.0
 
 format: cef  # Common Event Format — universal for these platforms
 # CEF output example:
-# CEF:0|SentinelGateway|Guardrail|0.2.0|prompt_injection|Prompt Injection: DAN pattern detected|7|src=192.168.1.1 act=block cat=intrusion_detection cs1=example-corp cs1Label=TenantID cs2=input cs2Label=GuardrailLayer cs3=PI-001 cs3Label=RuleID cn1=3 cn1Label=LatencyMs msg=Blocked prompt injection attempt
+# CEF:0|BulwarkGateway|Guardrail|0.2.0|prompt_injection|Prompt Injection: DAN pattern detected|7|src=192.168.1.1 act=block cat=intrusion_detection cs1=example-corp cs1Label=TenantID cs2=input cs2Label=GuardrailLayer cs3=PI-001 cs3Label=RuleID cn1=3 cn1Label=LatencyMs msg=Blocked prompt injection attempt
 
 delimiter: "\n"
 
@@ -24,28 +24,28 @@ delimiter: "\n"
 #
 # ArcSight:
 #   - SmartConnector: Syslog CEF (TCP/TLS)
-#   - Create channel filter for deviceVendor = "SentinelGateway"
+#   - Create channel filter for deviceVendor = "BulwarkGateway"
 #   - Map cs1 (TenantID) to Target Zone
 #
 # LogRhythm:
 #   - Log Source Type: Syslog - CEF
-#   - MPE Rule: custom for SentinelGateway events
+#   - MPE Rule: custom for BulwarkGateway events
 #   - Map act field to Classification
 #
 # CrowdStrike Falcon NG SIEM:
 #   - Data connector: Syslog CEF
 #   - Parsing: auto-detected from CEF header
-#   - Correlation: sentinel.threat_category → CrowdStrike TTP mapping
+#   - Correlation: bulwark.threat_category → CrowdStrike TTP mapping
 #
-# SentinelOne:
+# BulwarkOne:
 #   - Singularity Data Lake: Syslog CEF ingestion
-#   - Custom parser for SentinelGateway vendor
-#   - Deep Visibility query: src.process.name = "sentinel-gateway"
+#   - Custom parser for BulwarkGateway vendor
+#   - Deep Visibility query: src.process.name = "bulwark-gateway"
 #
 # FortiSIEM:
 #   - Log parser: CEF generic or custom
 #   - Incident rule: map severity ≥7 to High priority
-#   - CMDB: register sentinel-gateway as security device
+#   - CMDB: register bulwark-gateway as security device
 
 batching:
   batch_size: 50
@@ -62,4 +62,4 @@ circuit_breaker:
 
 # mTLS certificate generation (testing):
 # openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes \
-#   -subj "/CN=sentinel-gateway/O=SentinelGateway"
+#   -subj "/CN=bulwark-gateway/O=BulwarkGateway"

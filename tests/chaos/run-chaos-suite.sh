@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Sentinel Gateway — Chaos Testing Orchestrator
+# Bulwark Gateway — Chaos Testing Orchestrator
 #
 # Runs all chaos experiments sequentially with steady-state validation
 # between each experiment. Generates JSON + Markdown reports.
@@ -11,14 +11,14 @@
 # Prerequisites:
 #   - kubectl configured with cluster access
 #   - LitmusChaos v3.x operator installed
-#   - Sentinel Gateway deployed in target namespace
+#   - Bulwark Gateway deployed in target namespace
 #
 
 set -euo pipefail
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-NAMESPACE="sentinel-gateway"
+NAMESPACE="bulwark-gateway"
 DRY_RUN=false
 TIMEOUT=600  # Max wait per experiment (seconds)
 MAX_CONSECUTIVE_FAILURES=3
@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [--namespace NS] [--dry-run] [--timeout SECONDS]"
       echo ""
       echo "Options:"
-      echo "  --namespace, -n    Target namespace (default: sentinel-gateway)"
+      echo "  --namespace, -n    Target namespace (default: bulwark-gateway)"
       echo "  --dry-run          Validate manifests without executing experiments"
       echo "  --timeout, -t      Max wait per experiment in seconds (default: 600)"
       echo "  --help, -h         Show this help"
@@ -140,7 +140,7 @@ check_prerequisites() {
   fi
   log_pass "Chaos ServiceAccount ready"
 
-  # Sentinel Gateway pods running
+  # Bulwark Gateway pods running
   PROXY_PODS=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/component=proxy --no-headers 2>/dev/null | wc -l)
   if [ "$PROXY_PODS" -lt 1 ]; then
     log_fail "No proxy pods found in namespace '$NAMESPACE'"
@@ -168,7 +168,7 @@ metadata:
   name: litmus-chaos-sa
   namespace: ${NAMESPACE}
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: chaos-testing
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -176,7 +176,7 @@ kind: ClusterRole
 metadata:
   name: litmus-chaos-role
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "pods/exec", "events", "services", "endpoints"]
@@ -202,7 +202,7 @@ kind: ClusterRoleBinding
 metadata:
   name: litmus-chaos-binding
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 subjects:
   - kind: ServiceAccount
     name: litmus-chaos-sa
@@ -470,7 +470,7 @@ EOF
 
   # Markdown Report
   cat > "${REPORT_DIR}/chaos-report.md" <<EOF
-# Chaos Test Report — Sentinel Gateway
+# Chaos Test Report — Bulwark Gateway
 
 **Run ID**: \`${SUITE_RUN_ID}\`
 **Timestamp**: ${TIMESTAMP}
@@ -506,7 +506,7 @@ EOF
 
 - Kubernetes cluster: $(kubectl cluster-info 2>/dev/null | head -1 | sed 's/\x1b\[[0-9;]*m//g' || echo "unknown")
 - LitmusChaos version: 3.x
-- Sentinel Gateway namespace: ${NAMESPACE}
+- Bulwark Gateway namespace: ${NAMESPACE}
 EOF
 
   log_pass "JSON report: ${REPORT_DIR}/chaos-report.json"
@@ -532,7 +532,7 @@ EOF
 main() {
   echo ""
   echo "╔══════════════════════════════════════════════════════════════╗"
-  echo "║     Sentinel Gateway — Chaos Testing Suite                  ║"
+  echo "║     Bulwark Gateway — Chaos Testing Suite                  ║"
   echo "║     LitmusChaos v3.x                                        ║"
   echo "╚══════════════════════════════════════════════════════════════╝"
   echo ""

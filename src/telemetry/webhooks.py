@@ -140,7 +140,7 @@ class WebhookAlerter:
                 "agent_id": agent_id,
                 "matched_patterns": matched_patterns or [],
                 "timestamp": time.time(),
-                "source": "sentinel-gateway",
+                "source": "bulwark-gateway",
             }))
 
     async def _dispatch(self, webhook: WebhookConfig, payload: dict):
@@ -176,7 +176,7 @@ class WebhookAlerter:
             "blocks": [
                 {
                     "type": "header",
-                    "text": {"type": "plain_text", "text": f"{emoji} Sentinel Gateway Alert"}
+                    "text": {"type": "plain_text", "text": f"{emoji} Bulwark Gateway Alert"}
                 },
                 {
                     "type": "section",

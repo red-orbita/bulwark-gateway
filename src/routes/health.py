@@ -16,7 +16,7 @@ from src.models import Verdict
 router = APIRouter()
 
 # C-03: Red team endpoint disabled by default in production
-REDTEAM_ENABLED = os.getenv("SENTINEL_REDTEAM_ENABLED", "false").lower() in ("true", "1")
+REDTEAM_ENABLED = os.getenv("BULWARK_REDTEAM_ENABLED", "false").lower() in ("true", "1")
 
 # Pre-instantiate guardrails for redteam testing (avoids import on each request)
 _redteam_input = InputGuardrail()
@@ -27,7 +27,7 @@ REPORTS_DIR = Path("reports/redteam")
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "service": "sentinel-gateway"}
+    return {"status": "ok", "service": "bulwark-gateway"}
 
 
 @router.get("/health/live")
@@ -168,7 +168,7 @@ async def redteam_test(request: Request):
     """
     Red Team testing endpoint — accepts adversarial payloads for guardrail validation.
 
-    SECURITY: Requires authentication (JWT/API key) AND SENTINEL_REDTEAM_ENABLED=true.
+    SECURITY: Requires authentication (JWT/API key) AND BULWARK_REDTEAM_ENABLED=true.
     Disabled by default in production (C-03).
 
     Accepts JSON body:
@@ -185,7 +185,7 @@ async def redteam_test(request: Request):
     if not REDTEAM_ENABLED:
         raise HTTPException(
             status_code=403,
-            detail="Red team endpoint is disabled. Set SENTINEL_REDTEAM_ENABLED=true to enable.",
+            detail="Red team endpoint is disabled. Set BULWARK_REDTEAM_ENABLED=true to enable.",
         )
 
     # C-03: Require authenticated request (enforced by AuthMiddleware since not in PUBLIC_PATHS)

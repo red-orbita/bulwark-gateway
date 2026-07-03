@@ -18,7 +18,7 @@ Enterprise multi-channel alerting for security events (BLOCK, WARN, REDACT).
 
 ## Overview
 
-Sentinel Gateway fires real-time notifications when security events occur (input blocked, output redacted, policy violation). Notifications are:
+Bulwark Gateway fires real-time notifications when security events occur (input blocked, output redacted, policy violation). Notifications are:
 - **Non-blocking**: dispatched via asyncio fire-and-forget (zero latency impact on proxy)
 - **Deduplicated**: same alert not sent twice within configurable window
 - **Routable**: filter by severity, verdict type, and tenant
@@ -44,7 +44,7 @@ Channels can be defined from multiple sources (merged at startup):
 
 1. **YAML file** (`config/notifications.yaml`) — GitOps, version-controlled
 2. **Admin UI** (`/notifications`) — stored in `shared/notifications/channels.json`
-3. **Environment variable** (`SENTINEL_WEBHOOK_ALERT_URLS`) — legacy, backward-compatible
+3. **Environment variable** (`BULWARK_WEBHOOK_ALERT_URLS`) — legacy, backward-compatible
 
 Priority: Admin UI channels load first, then YAML (skips duplicates by ID), then env var.
 
@@ -128,7 +128,7 @@ channels:
     type: generic
     url: "https://soar.company.com/api/v1/incidents"
     headers:
-      X-Custom-Header: "sentinel-gateway"
+      X-Custom-Header: "bulwark-gateway"
     auth_type: bearer
     auth_value: "your-bearer-token"
     min_severity: medium
@@ -270,7 +270,7 @@ For custom webhook destinations that require authentication:
     auth_type: bearer       # Options: none, bearer, api_key
     auth_value: "your-token"
     headers:
-      X-Source: "sentinel-gateway"
+      X-Source: "bulwark-gateway"
       X-Environment: "production"
 ```
 
@@ -282,11 +282,11 @@ For custom webhook destinations that require authentication:
 
 ## Legacy Environment Variable
 
-For backward compatibility, the `SENTINEL_WEBHOOK_ALERT_URLS` env var still works:
+For backward compatibility, the `BULWARK_WEBHOOK_ALERT_URLS` env var still works:
 
 ```bash
 # Format: type|name|url (comma-separated for multiple)
-SENTINEL_WEBHOOK_ALERT_URLS="slack|alerts|https://hooks.slack.com/...,generic|soar|https://soar.company.com/..."
+BULWARK_WEBHOOK_ALERT_URLS="slack|alerts|https://hooks.slack.com/...,generic|soar|https://soar.company.com/..."
 ```
 
 These are loaded at startup with default routing (min_severity=high, verdicts=[block]).

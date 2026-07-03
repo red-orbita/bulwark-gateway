@@ -10,9 +10,9 @@ Data is stored in Redis (persistent across pod restarts) with
 in-memory fallback for environments without Redis.
 
 Redis keys:
-  sentinel:cost:{tenant_id}:tokens       — HASH {prompt, completion, total, requests}
-  sentinel:cost:{tenant_id}:{agent_id}   — HASH {prompt, completion, total, requests}
-  sentinel:cost:global                    — HASH {prompt, completion, total, requests}
+  bulwark:cost:{tenant_id}:tokens       — HASH {prompt, completion, total, requests}
+  bulwark:cost:{tenant_id}:{agent_id}   — HASH {prompt, completion, total, requests}
+  bulwark:cost:global                    — HASH {prompt, completion, total, requests}
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ class CostTracker:
 
         if self._redis:
             try:
-                key = f"sentinel:cost:{tenant_id}:tokens"
+                key = f"bulwark:cost:{tenant_id}:tokens"
                 data = self._redis.hgetall(key)
                 if data:
                     summary.prompt_tokens = int(data.get(b"prompt", data.get("prompt", 0)))
@@ -180,7 +180,7 @@ class CostTracker:
         """Get global usage across all tenants."""
         if self._redis:
             try:
-                data = self._redis.hgetall("sentinel:cost:global")
+                data = self._redis.hgetall("bulwark:cost:global")
                 if data:
                     return {
                         "prompt_tokens": int(data.get(b"prompt", data.get("prompt", 0))),
@@ -226,7 +226,7 @@ class CostTracker:
                 pipe = self._redis.pipeline(transaction=False)
 
                 # Per-tenant totals
-                tenant_key = f"sentinel:cost:{record.tenant_id}:tokens"
+                tenant_key = f"bulwark:cost:{record.tenant_id}:tokens"
                 pipe.hincrby(tenant_key, "prompt", record.prompt_tokens)
                 pipe.hincrby(tenant_key, "completion", record.completion_tokens)
                 pipe.hincrby(tenant_key, "total", record.total_tokens)
@@ -234,7 +234,7 @@ class CostTracker:
                 pipe.hincrbyfloat(tenant_key, "cost_usd", record.estimated_cost_usd)
 
                 # Per-agent totals
-                agent_key = f"sentinel:cost:{record.tenant_id}:{record.agent_id}"
+                agent_key = f"bulwark:cost:{record.tenant_id}:{record.agent_id}"
                 pipe.hincrby(agent_key, "prompt", record.prompt_tokens)
                 pipe.hincrby(agent_key, "completion", record.completion_tokens)
                 pipe.hincrby(agent_key, "total", record.total_tokens)
@@ -243,11 +243,11 @@ class CostTracker:
                 pipe.hset(agent_key, "model", record.model)
 
                 # Global totals
-                pipe.hincrby("sentinel:cost:global", "prompt", record.prompt_tokens)
-                pipe.hincrby("sentinel:cost:global", "completion", record.completion_tokens)
-                pipe.hincrby("sentinel:cost:global", "total", record.total_tokens)
-                pipe.hincrby("sentinel:cost:global", "requests", 1)
-                pipe.hincrbyfloat("sentinel:cost:global", "cost_usd", record.estimated_cost_usd)
+                pipe.hincrby("bulwark:cost:global", "prompt", record.prompt_tokens)
+                pipe.hincrby("bulwark:cost:global", "completion", record.completion_tokens)
+                pipe.hincrby("bulwark:cost:global", "total", record.total_tokens)
+                pipe.hincrby("bulwark:cost:global", "requests", 1)
+                pipe.hincrbyfloat("bulwark:cost:global", "cost_usd", record.estimated_cost_usd)
 
                 pipe.execute()
             except Exception as e:

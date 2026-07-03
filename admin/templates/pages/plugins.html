@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Plugin Management — Sentinel Gateway Admin{% endblock %}
+{% block title %}Plugin Management — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Plugin Management{% endblock %}
 {% block content %}
 <div x-data="pluginsPage()" x-init="init()" class="space-y-6">
@@ -138,7 +138,7 @@
 
             <!-- Upload tab -->
             <div x-show="installTab === 'upload'" class="p-6 space-y-4">
-                <p class="text-xs text-gray-400">Upload a <code class="text-cyan-400">.zip</code> or <code class="text-cyan-400">.tar.gz</code> archive containing a valid plugin (must include <code class="text-cyan-400">sentinel-plugin.yaml</code>).</p>
+                <p class="text-xs text-gray-400">Upload a <code class="text-cyan-400">.zip</code> or <code class="text-cyan-400">.tar.gz</code> archive containing a valid plugin (must include <code class="text-cyan-400">bulwark-plugin.yaml</code>).</p>
                 <div class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-cyan-500/50 transition-colors cursor-pointer"
                      @click="$refs.fileInput.click()"
                      @dragover.prevent="dragOver = true"
@@ -156,10 +156,10 @@
 
             <!-- Git tab -->
             <div x-show="installTab === 'git'" class="p-6 space-y-4">
-                <p class="text-xs text-gray-400">Clone a plugin from a public Git repository. The repo must contain <code class="text-cyan-400">sentinel-plugin.yaml</code> at root or one level deep.</p>
+                <p class="text-xs text-gray-400">Clone a plugin from a public Git repository. The repo must contain <code class="text-cyan-400">bulwark-plugin.yaml</code> at root or one level deep.</p>
                 <div>
                     <label class="sg-label">Repository URL</label>
-                    <input type="url" x-model="gitUrl" class="sg-input w-full" placeholder="https://github.com/user/sentinel-plugin-example">
+                    <input type="url" x-model="gitUrl" class="sg-input w-full" placeholder="https://github.com/user/bulwark-plugin-example">
                 </div>
                 <div>
                     <label class="sg-label">Branch</label>
@@ -186,7 +186,7 @@
                 <button @click="showScaffold = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
             <div class="p-6 space-y-4">
-                <p class="text-xs text-gray-400">Generate a boilerplate plugin structure with <code class="text-cyan-400">sentinel-plugin.yaml</code>, <code class="text-cyan-400">scanner.py</code>, tests, and README.</p>
+                <p class="text-xs text-gray-400">Generate a boilerplate plugin structure with <code class="text-cyan-400">bulwark-plugin.yaml</code>, <code class="text-cyan-400">scanner.py</code>, tests, and README.</p>
                 <div>
                     <label class="sg-label">Plugin Name</label>
                     <input type="text" x-model="scaffoldName" class="sg-input w-full" placeholder="my-custom-scanner" pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">

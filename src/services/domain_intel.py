@@ -1,7 +1,7 @@
 """
 Domain Intelligence — Typosquatting detection and subdomain-aware matching.
 
-Ported and enhanced from opencode-security-agent/plugins/sentinel_preflight.py.
+Ported and enhanced from opencode-security-agent/plugins/bulwark_preflight.py.
 Used by ToolPolicyEngine to validate URLs in tool call arguments.
 """
 

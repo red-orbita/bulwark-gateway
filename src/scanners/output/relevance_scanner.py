@@ -63,7 +63,7 @@ class RelevanceScanner(OutputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="Embedding-based relevance scoring for LLM responses",
-            author="sentinel",
+            author="bulwark",
             priority=30,
         )
 

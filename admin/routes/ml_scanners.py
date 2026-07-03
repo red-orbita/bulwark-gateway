@@ -159,8 +159,8 @@ def _sync_to_redis() -> None:
         r = get_redis_client()
         if not r:
             return
-        r.set("sentinel:ml_scanners:config", json.dumps(_scanner_config))
-        r.incr("sentinel:ml_scanners:version")
+        r.set("bulwark:ml_scanners:config", json.dumps(_scanner_config))
+        r.incr("bulwark:ml_scanners:version")
     except Exception:
         pass
 
@@ -185,7 +185,7 @@ async def _query_proxy_scanner_status() -> dict | None:
     """
     import httpx
 
-    proxy_url = os.environ.get("SENTINEL_PROXY_URL", "http://proxy:8080")
+    proxy_url = os.environ.get("BULWARK_PROXY_URL", "http://proxy:8080")
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{proxy_url}/internal/scanners/status")
@@ -242,11 +242,11 @@ async def ml_scanner_status(
                 missing_deps.append(dep_name)
 
     # Global ML settings from env (admin-side config, used for display)
-    ml_enabled_env = os.environ.get("SENTINEL_ML_ENABLED", "false").lower() in ("true", "1")
-    ml_blocking_env = os.environ.get("SENTINEL_ML_BLOCKING", "false").lower() in ("true", "1")
-    model_dir = os.environ.get("SENTINEL_ML_MODEL_DIR", "models/")
-    rag_enabled_env = os.environ.get("SENTINEL_RAG_ENABLED", "false").lower() in ("true", "1")
-    multilingual_enabled_env = os.environ.get("SENTINEL_MULTILINGUAL_ENABLED", "false").lower() in ("true", "1")
+    ml_enabled_env = os.environ.get("BULWARK_ML_ENABLED", "false").lower() in ("true", "1")
+    ml_blocking_env = os.environ.get("BULWARK_ML_BLOCKING", "false").lower() in ("true", "1")
+    model_dir = os.environ.get("BULWARK_ML_MODEL_DIR", "models/")
+    rag_enabled_env = os.environ.get("BULWARK_RAG_ENABLED", "false").lower() in ("true", "1")
+    multilingual_enabled_env = os.environ.get("BULWARK_MULTILINGUAL_ENABLED", "false").lower() in ("true", "1")
 
     # Override with proxy's actual state if available
     if proxy_data:

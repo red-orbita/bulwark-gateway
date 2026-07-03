@@ -24,8 +24,8 @@ from .base import BaseEnrichmentScanner, EnrichmentResult, EnrichmentStatus
 logger = logging.getLogger(__name__)
 
 # Only activate if explicitly enabled (heavy dependency)
-SKILL_ENRICHMENT_ENABLED = os.getenv("SENTINEL_SKILL_ENRICHMENT_ENABLED", "false").lower() == "true"
-SKILLSPECTOR_TIMEOUT = int(os.getenv("SENTINEL_SKILLSPECTOR_ENRICHMENT_TIMEOUT", "30"))
+SKILL_ENRICHMENT_ENABLED = os.getenv("BULWARK_SKILL_ENRICHMENT_ENABLED", "false").lower() == "true"
+SKILLSPECTOR_TIMEOUT = int(os.getenv("BULWARK_SKILLSPECTOR_ENRICHMENT_TIMEOUT", "30"))
 
 
 class SkillEnrichmentScanner(BaseEnrichmentScanner):

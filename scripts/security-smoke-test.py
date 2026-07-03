@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sentinel Gateway — Security Smoke Test
+Bulwark Gateway — Security Smoke Test
 =======================================
 End-to-end validation suite that fires real requests against the proxy
 to verify guardrails are functioning correctly in the deployed environment.
@@ -34,11 +34,11 @@ import httpx
 
 DEFAULT_HOST = "http://localhost:8080"
 # SECURITY: API key must come from environment variable, never hardcoded
-API_KEY = os.environ.get("SENTINEL_SMOKE_TEST_API_KEY", "")
+API_KEY = os.environ.get("BULWARK_SMOKE_TEST_API_KEY", "")
 if not API_KEY:
-    API_KEY = os.environ.get("SENTINEL_API_KEYS", "").split(",")[0].strip()
+    API_KEY = os.environ.get("BULWARK_API_KEYS", "").split(",")[0].strip()
 if not API_KEY:
-    print("ERROR: Set SENTINEL_SMOKE_TEST_API_KEY or SENTINEL_API_KEYS env var", file=sys.stderr)
+    print("ERROR: Set BULWARK_SMOKE_TEST_API_KEY or BULWARK_API_KEYS env var", file=sys.stderr)
     sys.exit(1)
 
 HEADERS_SUPPORT = {
@@ -309,7 +309,7 @@ def print_report(report: Report, show_all: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sentinel Gateway Attack Simulation")
+    parser = argparse.ArgumentParser(description="Bulwark Gateway Attack Simulation")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Proxy base URL")
     parser.add_argument("--rounds", type=int, default=1, help="Number of rounds")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show all results")

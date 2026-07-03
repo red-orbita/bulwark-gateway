@@ -1,5 +1,5 @@
 # ============================================================
-# Sentinel Gateway — Proxy (Security Hot Path)
+# Bulwark Gateway — Proxy (Security Hot Path)
 # Multi-stage build for minimal attack surface
 # H-08 fix: Pin base image to SHA256 digest (prevents supply chain poisoning)
 # ============================================================
@@ -30,12 +30,12 @@ RUN if [ "$INSTALL_EMBEDDINGS" = "true" ] || [ "$INSTALL_ML" = "true" ]; then \
 # ============================================================
 FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS runtime
 
-LABEL org.opencontainers.image.title="sentinel-gateway"
+LABEL org.opencontainers.image.title="bulwark-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"
-LABEL org.opencontainers.image.version="0.2.0"
+LABEL org.opencontainers.image.version="0.4.3"
 
 # Security: non-root user
-RUN groupadd -r sentinel && useradd -r -g sentinel -s /bin/false sentinel
+RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark
 
 WORKDIR /app
 
@@ -48,17 +48,22 @@ COPY config/ config/
 
 # Create data directories (models dir for ML, writable for download)
 RUN mkdir -p data reports models shared/enrichment shared/siem && \
-    chown -R sentinel:sentinel /app && \
+    chown -R bulwark:bulwark /app && \
     rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
 
-USER sentinel
+USER bulwark
 
 EXPOSE 8080
 
 # Healthcheck using built-in Python (no curl dependency)
+# SECURITY FIX (APT-19): Wrapped in try/except to suppress stack traces on failure
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"
+    CMD python -c "import urllib.request,sys; \
+try: urllib.request.urlopen('http://127.0.0.1:8080/health'); \
+except: sys.exit(1)"
 
-# Production: configurable workers (default 4), no access log
-ENV SENTINEL_WORKERS=4
-CMD ["sh", "-c", "python -m uvicorn src.main:app --host 0.0.0.0 --port 8080 --workers ${SENTINEL_WORKERS} --access-log --log-level warning --no-server-header"]
+# SECURITY FIX (APT-13): Use exec-form entrypoint for proper signal handling.
+# Shell form invokes /bin/sh as PID 1 which doesn't forward SIGTERM properly,
+# delaying graceful shutdown and leaving zombie processes.
+ENTRYPOINT ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080", "--access-log", "--log-level", "warning", "--no-server-header"]
+CMD ["--workers", "4"]

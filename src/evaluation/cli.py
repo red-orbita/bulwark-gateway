@@ -2,9 +2,9 @@
 Evaluation CLI — Command-line interface for running guardrail evaluations.
 
 Usage:
-    sentinel evaluate --attacks standard --min-detection-rate 0.95
-    sentinel evaluate --attacks exhaustive --report json --output report.json
-    sentinel evaluate --compare baseline.json current.json
+    bulwark evaluate --attacks standard --min-detection-rate 0.95
+    bulwark evaluate --attacks exhaustive --report json --output report.json
+    bulwark evaluate --compare baseline.json current.json
 """
 
 from __future__ import annotations
@@ -27,15 +27,15 @@ from src.evaluation.runner import EvaluationRunner
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser for the evaluation CLI."""
     parser = argparse.ArgumentParser(
-        prog="sentinel evaluate",
-        description="Sentinel Gateway — Guardrail Evaluation Framework",
+        prog="bulwark evaluate",
+        description="Bulwark Gateway — Guardrail Evaluation Framework",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  sentinel evaluate --attacks standard --min-detection-rate 0.95
-  sentinel evaluate --attacks exhaustive --report json --output report.json
-  sentinel evaluate --compare baseline.json current.json
-  sentinel evaluate --categories prompt_injection jailbreak --count 50
+  bulwark evaluate --attacks standard --min-detection-rate 0.95
+  bulwark evaluate --attacks exhaustive --report json --output report.json
+  bulwark evaluate --compare baseline.json current.json
+  bulwark evaluate --categories prompt_injection jailbreak --count 50
 """,
     )
 

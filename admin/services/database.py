@@ -1,9 +1,9 @@
 """Database abstraction layer supporting SQLite and PostgreSQL.
 
-Selection via SENTINEL_ADMIN_DB_URL:
+Selection via BULWARK_ADMIN_DB_URL:
   - sqlite:///path/to/db.sqlite  (default, backward compatible)
   - sqlite+cipher:///path/to/db.sqlite?key=... (SQLCipher, existing behavior)
-  - postgresql://user:pass@host:5432/sentinel_admin (enterprise)
+  - postgresql://user:pass@host:5432/bulwark_admin (enterprise)
   - postgresql+asyncpg://... (async PostgreSQL)
 
 Design principles:
@@ -63,18 +63,18 @@ DEFAULT_DB_URL = "sqlite:///data/admin.db"
 def _read_db_url() -> str:
     """Read database URL from env var or file (Docker secrets pattern)."""
     # Check file-based secret first (Kubernetes-native)
-    url_file = os.getenv("SENTINEL_ADMIN_DB_URL_FILE")
+    url_file = os.getenv("BULWARK_ADMIN_DB_URL_FILE")
     if url_file and os.path.isfile(url_file):
         return open(url_file).read().strip()
-    return os.getenv("SENTINEL_ADMIN_DB_URL", DEFAULT_DB_URL)
+    return os.getenv("BULWARK_ADMIN_DB_URL", DEFAULT_DB_URL)
 
 
 # Read from environment or file
 ADMIN_DB_URL = _read_db_url()
-ADMIN_DB_POOL_MIN = int(os.getenv("SENTINEL_ADMIN_DB_POOL_MIN", "2"))
-ADMIN_DB_POOL_MAX = int(os.getenv("SENTINEL_ADMIN_DB_POOL_MAX", "20"))
-ADMIN_DB_SSL = os.getenv("SENTINEL_ADMIN_DB_SSL", "false").lower() in ("true", "1")
-ADMIN_DB_SSL_MODE = os.getenv("SENTINEL_ADMIN_DB_SSL_MODE", "require")
+ADMIN_DB_POOL_MIN = int(os.getenv("BULWARK_ADMIN_DB_POOL_MIN", "2"))
+ADMIN_DB_POOL_MAX = int(os.getenv("BULWARK_ADMIN_DB_POOL_MAX", "20"))
+ADMIN_DB_SSL = os.getenv("BULWARK_ADMIN_DB_SSL", "false").lower() in ("true", "1")
+ADMIN_DB_SSL_MODE = os.getenv("BULWARK_ADMIN_DB_SSL_MODE", "require")
 
 # Retry configuration
 MAX_RETRIES = 3
@@ -793,6 +793,98 @@ class PostgreSQLEngine(DatabaseEngine):
             f"Failed to connect to PostgreSQL after {MAX_RETRIES} attempts: {last_error}"
         )
 
+    def _run_sync(self, coro):
+        """Run an async coroutine synchronously, safe from any context.
+
+        If called from a thread with no running event loop: uses asyncio.run().
+        If called from within a running event loop (e.g., from FastAPI handler
+        via run_in_executor or directly): spawns a new thread to run asyncio.run().
+        """
+        import concurrent.futures
+        try:
+            asyncio.get_running_loop()
+            # We're inside an event loop — run in a separate thread
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result(timeout=10)
+        except RuntimeError:
+            # No running loop — safe to use asyncio.run() directly
+            return asyncio.run(coro)
+
+    def _get_connect_kwargs(self) -> dict[str, Any]:
+        """Build connection kwargs for direct asyncpg.connect()."""
+        connect_kwargs: dict[str, Any] = {}
+        if self._ssl:
+            import ssl as ssl_module
+            ssl_ctx = ssl_module.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl_module.CERT_NONE
+            connect_kwargs["ssl"] = ssl_ctx
+        return connect_kwargs
+
+    def sync_fetch_one(self, query: str, params: Optional[Sequence] = None) -> Optional[Row]:
+        """Synchronous single-row fetch using a direct connection (no pool).
+
+        Safe to call from any thread/event loop context. Creates and closes
+        a dedicated connection per call. Use sparingly (login, seed checks).
+        """
+        translated, translated_params = self.translator.translate(query, params)
+        if not translated:
+            return None
+
+        import asyncpg as _asyncpg
+        dsn = self._dsn
+        connect_kwargs = self._get_connect_kwargs()
+
+        async def _fetch():
+            conn = await _asyncpg.connect(dsn=dsn, **connect_kwargs)
+            try:
+                row = await conn.fetchrow(translated, *(translated_params or ()))
+                return Row(_data=dict(row)) if row else None
+            finally:
+                await conn.close()
+
+        return self._run_sync(_fetch())
+
+    def sync_fetch_all(self, query: str, params: Optional[Sequence] = None) -> list[Row]:
+        """Synchronous multi-row fetch using a direct connection (no pool)."""
+        translated, translated_params = self.translator.translate(query, params)
+        if not translated:
+            return []
+
+        import asyncpg as _asyncpg
+        dsn = self._dsn
+        connect_kwargs = self._get_connect_kwargs()
+
+        async def _fetch():
+            conn = await _asyncpg.connect(dsn=dsn, **connect_kwargs)
+            try:
+                rows = await conn.fetch(translated, *(translated_params or ()))
+                return [Row(_data=dict(r)) for r in rows]
+            finally:
+                await conn.close()
+
+        return self._run_sync(_fetch())
+
+    def sync_execute(self, query: str, params: Optional[Sequence] = None) -> int:
+        """Synchronous execute using a direct connection (no pool)."""
+        translated, translated_params = self.translator.translate(query, params)
+        if not translated:
+            return 0
+
+        import asyncpg as _asyncpg
+        dsn = self._dsn
+        connect_kwargs = self._get_connect_kwargs()
+
+        async def _exec():
+            conn = await _asyncpg.connect(dsn=dsn, **connect_kwargs)
+            try:
+                result = await conn.execute(translated, *(translated_params or ()))
+                return self._parse_rowcount(result)
+            finally:
+                await conn.close()
+
+        return self._run_sync(_exec())
+
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()
@@ -956,7 +1048,7 @@ def create_engine(url: Optional[str] = None) -> DatabaseEngine:
     """Create a database engine based on the URL scheme.
 
     Args:
-        url: Database URL. If None, reads from SENTINEL_ADMIN_DB_URL env var.
+        url: Database URL. If None, reads from BULWARK_ADMIN_DB_URL env var.
 
     Returns:
         Appropriate DatabaseEngine instance (SQLiteEngine or PostgreSQLEngine)
@@ -1012,7 +1104,7 @@ async def init_database(url: Optional[str] = None) -> DatabaseEngine:
     establishes connections, and runs any pending schema migrations.
 
     Args:
-        url: Optional database URL override. Defaults to SENTINEL_ADMIN_DB_URL.
+        url: Optional database URL override. Defaults to BULWARK_ADMIN_DB_URL.
 
     Returns:
         The initialized DatabaseEngine instance.

@@ -70,7 +70,7 @@ class GroundingScanner(OutputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="RAG faithfulness — checks output is grounded in context",
-            author="sentinel",
+            author="bulwark",
             priority=25,
         )
 

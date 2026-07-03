@@ -1,12 +1,12 @@
 """
-Sentinel Plugins — Plugin Hub and Marketplace framework.
+Bulwark Plugins — Plugin Hub and Marketplace framework.
 
 This package provides the plugin specification, lifecycle manager, and CLI
 for installing, managing, and developing third-party scanner plugins.
 
-Plugins extend Sentinel Gateway with custom detection logic without
+Plugins extend Bulwark Gateway with custom detection logic without
 modifying the core codebase. Each plugin is a self-contained directory
-with a sentinel-plugin.yaml manifest and a scanner.py implementation.
+with a bulwark-plugin.yaml manifest and a scanner.py implementation.
 
 Usage:
     from src.plugins import PluginSpec, PluginManager, PluginCLI

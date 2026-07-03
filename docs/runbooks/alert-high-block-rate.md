@@ -1,15 +1,15 @@
-# Runbook: SentinelHighBlockRate
+# Runbook: BulwarkHighBlockRate
 
 ## Alert Details
 
 - **Severity**: Critical
-- **Alert rule**: `SentinelHighBlockRate`
+- **Alert rule**: `BulwarkHighBlockRate`
 - **Prometheus expression**:
   ```promql
   (
-    sum(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+    sum(rate(bulwark_verdicts_total{verdict="block"}[5m]))
     /
-    clamp_min(sum(rate(sentinel_requests_total[5m])), 1)
+    clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
   ) > 0.10
   ```
 - **Fires when**: >10% of requests are being blocked over 2 minutes
@@ -30,18 +30,18 @@
 2. **Check if this is a targeted or global event**:
    ```bash
    # Per-tenant block rate breakdown
-   kubectl exec deploy/redis -n sentinel-gateway -- \
-     redis-cli LRANGE sentinel:recent_blocks 0 20
+   kubectl exec deploy/redis -n bulwark-gateway -- \
+     redis-cli LRANGE bulwark:recent_blocks 0 20
    ```
 3. **Identify the blocking pattern(s)**:
    ```bash
    # Recent security events with block verdicts
-   kubectl logs deploy/proxy -n sentinel-gateway --since=5m | \
+   kubectl logs deploy/proxy -n bulwark-gateway --since=5m | \
      jq 'select(.verdict=="BLOCK") | {tenant: .tenant_id, category: .category, pattern: .matched_pattern}'
    ```
 4. **Check current block rate** (Prometheus):
    ```promql
-   sum by (category)(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+   sum by (category)(rate(bulwark_verdicts_total{verdict="block"}[5m]))
    ```
 5. **Decision point**: Is this concentrated on one category/tenant or distributed?
 
@@ -52,8 +52,8 @@
 **Indicators of real attack**:
 - Blocks concentrated in `prompt_injection`, `jailbreak`, or `exfiltration` categories
 - Single source tenant/IP generating most blocks
-- Payloads in `sentinel:recent_blocks` contain known attack patterns
-- Correlated with IOC matches (`SentinelIOCMatchesElevated`)
+- Payloads in `bulwark:recent_blocks` contain known attack patterns
+- Correlated with IOC matches (`BulwarkIOCMatchesElevated`)
 
 **Indicators of false positive**:
 - Blocks across many tenants simultaneously
@@ -65,24 +65,24 @@
 
 ```bash
 # 1. Category breakdown
-# Prometheus: sum by (category)(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+# Prometheus: sum by (category)(rate(bulwark_verdicts_total{verdict="block"}[5m]))
 
 # 2. Tenant breakdown
-# Prometheus: sum by (tenant_id)(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+# Prometheus: sum by (tenant_id)(rate(bulwark_verdicts_total{verdict="block"}[5m]))
 
 # 3. Check if a recent pattern change caused this
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli GET sentinel:guardrails:version
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli GET bulwark:guardrails:version
 
 # 4. View admin audit log for recent changes
-kubectl logs deploy/admin -n sentinel-gateway --since=30m | \
+kubectl logs deploy/admin -n bulwark-gateway --since=30m | \
   jq 'select(.event=="policy_reload" or .event=="pattern_change")'
 
 # 5. Check global counters for trend
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli MGET \
-  sentinel:global:requests_total sentinel:global:block sentinel:global:allow
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli MGET \
+  bulwark:global:requests_total bulwark:global:block bulwark:global:allow
 
 # 6. Dashboard: Grafana Security Overview
-# /grafana/d/sentinel-security/security-overview
+# /grafana/d/bulwark-security/security-overview
 ```
 
 ## Remediation
@@ -91,17 +91,17 @@ kubectl exec deploy/redis -n sentinel-gateway -- redis-cli MGET \
 
 1. **Identify the attacker** (tenant ID, source IP if available):
    ```bash
-   kubectl logs deploy/proxy -n sentinel-gateway --since=10m | \
+   kubectl logs deploy/proxy -n bulwark-gateway --since=10m | \
      jq 'select(.verdict=="BLOCK") | .tenant_id' | sort | uniq -c | sort -rn | head -5
    ```
 2. **Isolate the tenant** (rate limit override):
    ```bash
-   kubectl exec deploy/redis -n sentinel-gateway -- \
-     redis-cli SET sentinel:rate_limit:override:<TENANT_ID> 1
+   kubectl exec deploy/redis -n bulwark-gateway -- \
+     redis-cli SET bulwark:rate_limit:override:<TENANT_ID> 1
    ```
 3. **Collect evidence** before any destructive actions:
    ```bash
-   ./scripts/ir-collect-evidence.sh --namespace sentinel-gateway --since 30m
+   ./scripts/ir-collect-evidence.sh --namespace bulwark-gateway --since 30m
    ```
 4. **Consider revoking tenant API key** if compromise is confirmed
 5. **Monitor for adaptation** — attacker may change techniques
@@ -111,7 +111,7 @@ kubectl exec deploy/redis -n sentinel-gateway -- redis-cli MGET \
 
 1. **Identify the offending pattern**:
    ```bash
-   kubectl logs deploy/proxy -n sentinel-gateway --since=5m | \
+   kubectl logs deploy/proxy -n bulwark-gateway --since=5m | \
      jq 'select(.verdict=="BLOCK") | .matched_pattern' | sort | uniq -c | sort -rn | head -5
    ```
 2. **Disable the pattern temporarily** via admin API:
@@ -137,10 +137,10 @@ kubectl exec deploy/redis -n sentinel-gateway -- redis-cli MGET \
 
 ## Related Alerts
 
-- [`SentinelPromptInjectionSpike`](alert-high-block-rate.md) — may fire concurrently
-- [`SentinelRedisDown`](alert-redis-down.md) — if Redis is down, pattern sync may be broken causing false positives
-- [`SentinelExfiltrationAttempts`](alert-high-block-rate.md) — specific exfiltration category blocks
-- [`SentinelRateLimitRejectionsHigh`](alert-high-block-rate.md) — rate limiting may be concurrent
+- [`BulwarkPromptInjectionSpike`](alert-high-block-rate.md) — may fire concurrently
+- [`BulwarkRedisDown`](alert-redis-down.md) — if Redis is down, pattern sync may be broken causing false positives
+- [`BulwarkExfiltrationAttempts`](alert-high-block-rate.md) — specific exfiltration category blocks
+- [`BulwarkRateLimitRejectionsHigh`](alert-high-block-rate.md) — rate limiting may be concurrent
 
 ## Post-Incident
 

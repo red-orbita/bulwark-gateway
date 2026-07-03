@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Model Export & Download Utility for Sentinel Gateway ML Scanners.
+Model Export & Download Utility for Bulwark Gateway ML Scanners.
 
 Downloads pre-trained models from HuggingFace, exports them to ONNX format,
-and prepares them for use with the Sentinel ML scanner pipeline.
+and prepares them for use with the Bulwark ML scanner pipeline.
 
 Usage:
     # Download and export all models
@@ -22,7 +22,7 @@ Usage:
     python scripts/export_models.py --verify
 
 Requirements:
-    pip install sentinel-gateway[ml]
+    pip install bulwark-gateway[ml]
     pip install optimum[exporters] transformers torch
 
 Models exported:
@@ -144,7 +144,7 @@ def check_dependencies() -> bool:
 
 def list_models() -> None:
     """Print available models."""
-    print("\nAvailable models for Sentinel Gateway ML scanners:\n")
+    print("\nAvailable models for Bulwark Gateway ML scanners:\n")
     print(f"{'Name':<25} {'Task':<25} {'Description'}")
     print("-" * 90)
     for name, config in MODEL_REGISTRY.items():
@@ -364,7 +364,7 @@ def _quantize_model(output_dir: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sentinel Gateway — ML Model Export Utility",
+        description="Bulwark Gateway — ML Model Export Utility",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

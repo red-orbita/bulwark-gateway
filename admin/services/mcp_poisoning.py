@@ -1,5 +1,5 @@
 """
-MCP Tool Poisoning Detection — Sentinel Gateway SkillSpector Integration
+MCP Tool Poisoning Detection — Bulwark Gateway SkillSpector Integration
 
 Detects attempts to inject hidden instructions, deceptive text, or malicious
 metadata into MCP tool definitions. Attacks target the LLM that reads tool
@@ -11,7 +11,7 @@ Detection categories:
   TP3: Parameter Description Injection — override tokens, system prompts in params
   TP4: Description-Behavior Mismatch — contradictory claims indicating deception
 
-Adapted from opencode-security-agent for use within Sentinel Gateway's
+Adapted from opencode-security-agent for use within Bulwark Gateway's
 SkillSpector hybrid scanner. No additional dependencies beyond PyYAML (already
 present in admin service).
 """
@@ -165,7 +165,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
         comment_content = match.group().strip("<!->- \n\t")
         if len(comment_content) > 5:
             findings.append({
-                "rule_id": "SEN-MCP-TP1",
+                "rule_id": "BWK-MCP-TP1",
                 "severity": "high",
                 "message": f"Hidden HTML comment in {context}: '{comment_content[:80]}...'",
                 "confidence": 88,
@@ -176,7 +176,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
     zw_matches = _ZERO_WIDTH_CHARS.findall(text)
     if zw_matches:
         findings.append({
-            "rule_id": "SEN-MCP-TP1",
+            "rule_id": "BWK-MCP-TP1",
             "severity": "high",
             "message": (
                 f"Zero-width/invisible characters in {context} "
@@ -191,7 +191,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
         decoded = _decode_base64_safe(match.group(1))
         if decoded:
             findings.append({
-                "rule_id": "SEN-MCP-TP1",
+                "rule_id": "BWK-MCP-TP1",
                 "severity": "high",
                 "message": (
                     f"Base64-encoded instructions in {context}: "
@@ -206,7 +206,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
         decoded = _decode_base64_safe(match.group())
         if decoded:
             findings.append({
-                "rule_id": "SEN-MCP-TP1",
+                "rule_id": "BWK-MCP-TP1",
                 "severity": "high",
                 "message": (
                     f"Hidden base64 payload in {context}: "
@@ -219,7 +219,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
 
     for match in _DATA_URI.finditer(text):
         findings.append({
-            "rule_id": "SEN-MCP-TP1",
+            "rule_id": "BWK-MCP-TP1",
             "severity": "medium",
             "message": f"Data URI in {context} may hide instructions",
             "confidence": 70,
@@ -234,7 +234,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
         ]
         if any(len(d) > 3 for d in decoded_parts):
             findings.append({
-                "rule_id": "SEN-MCP-TP1",
+                "rule_id": "BWK-MCP-TP1",
                 "severity": "critical",
                 "message": (
                     f"Unicode Tags block encoding in {context}: "
@@ -250,7 +250,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
     rtl_matches = _RTL_OVERRIDES.findall(text)
     if rtl_matches:
         findings.append({
-            "rule_id": "SEN-MCP-TP2",
+            "rule_id": "BWK-MCP-TP2",
             "severity": "high",
             "message": (
                 f"RTL override characters in {context} "
@@ -267,7 +267,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
             f"'{c}'->'{_HOMOGLYPHS[c]}'" for c in homoglyph_matches[:5]
         ]
         findings.append({
-            "rule_id": "SEN-MCP-TP2",
+            "rule_id": "BWK-MCP-TP2",
             "severity": "high",
             "message": (
                 f"Homoglyph characters in {context}: "
@@ -281,7 +281,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
     mixed_words = _check_mixed_scripts(text)
     if mixed_words:
         findings.append({
-            "rule_id": "SEN-MCP-TP2",
+            "rule_id": "BWK-MCP-TP2",
             "severity": "high",
             "message": (
                 f"Mixed-script identifiers in {context}: "
@@ -299,7 +299,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
         if match:
             sev = "high" if "override" in match.group().lower() else "medium"
             findings.append({
-                "rule_id": "SEN-MCP-TP3",
+                "rule_id": "BWK-MCP-TP3",
                 "severity": sev,
                 "message": f"Injection pattern in {context}: '{match.group()}'",
                 "confidence": 82,
@@ -313,7 +313,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
         match = pattern.search(text)
         if match:
             findings.append({
-                "rule_id": "SEN-MCP-TP4",
+                "rule_id": "BWK-MCP-TP4",
                 "severity": "medium",
                 "message": f"Potential description-behavior mismatch: '{match.group()}'",
                 "confidence": 65,

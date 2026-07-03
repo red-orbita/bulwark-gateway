@@ -1,5 +1,5 @@
 # ============================================================
-# Sentinel Gateway — Admin Portal
+# Bulwark Gateway — Admin Portal
 # Separate service, zero impact on proxy hot path
 # H-08 fix: Pin base image to SHA256 digest (prevents supply chain poisoning)
 # ============================================================
@@ -35,16 +35,18 @@ RUN if [ -n "$SKILLSPECTOR_COMMIT" ]; then \
 # ============================================================
 FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS runtime
 
-LABEL org.opencontainers.image.title="sentinel-gateway-admin"
-LABEL org.opencontainers.image.description="Admin portal for Sentinel Gateway"
-LABEL org.opencontainers.image.version="0.2.0"
+LABEL org.opencontainers.image.title="bulwark-gateway-admin"
+LABEL org.opencontainers.image.description="Admin portal for Bulwark Gateway"
+LABEL org.opencontainers.image.version="0.4.3"
 
-# Runtime deps for SQLCipher
+# Runtime deps for SQLCipher (runtime library only, not -dev headers)
+# SECURITY FIX (APT-21): Use libsqlcipher0 instead of libsqlcipher-dev
+# to reduce attack surface (no headers, no dev tools in runtime image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsqlcipher-dev && \
+    libsqlcipher0 && \
     rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r sentinel && useradd -r -g sentinel -s /bin/false sentinel
+RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark
 
 WORKDIR /app
 
@@ -59,15 +61,17 @@ COPY config/ config/
 # Create writable directories for audit DB and backups
 # Remove pip to reduce post-exploitation surface
 RUN mkdir -p data reports config/policies/.backup && \
-    chown -R sentinel:sentinel /app && \
+    chown -R bulwark:bulwark /app && \
     rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
 
-USER sentinel
+USER bulwark
 
 EXPOSE 8090
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/admin/health')"
+    CMD python -c "import urllib.request,sys; \
+try: urllib.request.urlopen('http://127.0.0.1:8090/admin/health'); \
+except: sys.exit(1)"
 
 CMD ["python", "-m", "uvicorn", "admin.main:app", \
      "--host", "0.0.0.0", \

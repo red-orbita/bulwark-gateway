@@ -1,11 +1,11 @@
-# Sentinel Gateway Go SDK
+# Bulwark Gateway Go SDK
 
-Production-ready Go client for the [Sentinel Gateway](https://github.com/sentinel-gateway/sentinel-gateway) security proxy.
+Production-ready Go client for the [Bulwark Gateway](https://github.com/bulwark-gateway/bulwark-gateway) security proxy.
 
 ## Installation
 
 ```bash
-go get github.com/sentinel-gateway/sdk-go
+go get github.com/bulwark-gateway/sdk-go
 ```
 
 Requires Go 1.21+. Zero external dependencies (stdlib only).
@@ -21,17 +21,17 @@ import (
     "log"
     "time"
 
-    sentinel "github.com/sentinel-gateway/sdk-go"
+    bulwark "github.com/bulwark-gateway/sdk-go"
 )
 
 func main() {
     // Create client
-    client, err := sentinel.NewClient(
-        sentinel.WithBaseURL("https://sentinel.company.com"),
-        sentinel.WithAPIKey("sk-your-api-key"),
-        sentinel.WithTenant("acme-corp"),
-        sentinel.WithAgent("support-bot"),
-        sentinel.WithTimeout(10 * time.Second),
+    client, err := bulwark.NewClient(
+        bulwark.WithBaseURL("https://bulwark.company.com"),
+        bulwark.WithAPIKey("sk-your-api-key"),
+        bulwark.WithTenant("acme-corp"),
+        bulwark.WithAgent("support-bot"),
+        bulwark.WithTimeout(10 * time.Second),
     )
     if err != nil {
         log.Fatal(err)
@@ -45,7 +45,7 @@ func main() {
         log.Fatal(err)
     }
 
-    if result.Verdict == sentinel.VerdictBlock {
+    if result.Verdict == bulwark.VerdictBlock {
         fmt.Printf("Blocked: %s\n", result.Findings[0].Description)
         return
     }
@@ -72,16 +72,16 @@ func main() {
 ### Client Creation
 
 ```go
-client, err := sentinel.NewClient(
-    sentinel.WithBaseURL("https://sentinel.company.com"),  // Gateway URL
-    sentinel.WithAPIKey("sk-..."),                          // API key
-    sentinel.WithTenant("acme-corp"),                       // Tenant ID
-    sentinel.WithAgent("support-bot"),                      // Agent ID
-    sentinel.WithTimeout(10 * time.Second),                 // Request timeout
-    sentinel.WithRetries(3),                                // Auto-retry count
-    sentinel.WithRetryWait(500 * time.Millisecond),         // Retry base wait
-    sentinel.WithHTTPClient(customClient),                  // Custom http.Client
-    sentinel.WithHeader("X-Custom", "value"),               // Custom headers
+client, err := bulwark.NewClient(
+    bulwark.WithBaseURL("https://bulwark.company.com"),  // Gateway URL
+    bulwark.WithAPIKey("sk-..."),                          // API key
+    bulwark.WithTenant("acme-corp"),                       // Tenant ID
+    bulwark.WithAgent("support-bot"),                      // Agent ID
+    bulwark.WithTimeout(10 * time.Second),                 // Request timeout
+    bulwark.WithRetries(3),                                // Auto-retry count
+    bulwark.WithRetryWait(500 * time.Millisecond),         // Retry base wait
+    bulwark.WithHTTPClient(customClient),                  // Custom http.Client
+    bulwark.WithHeader("X-Custom", "value"),               // Custom headers
 )
 ```
 
@@ -96,11 +96,11 @@ if err != nil {
 }
 
 switch result.Verdict {
-case sentinel.VerdictBlock:
+case bulwark.VerdictBlock:
     // Reject the input
-case sentinel.VerdictWarn:
+case bulwark.VerdictWarn:
     // Log warning, proceed with caution
-case sentinel.VerdictAllow:
+case bulwark.VerdictAllow:
     // Safe to proceed
 }
 ```
@@ -111,7 +111,7 @@ Scans LLM responses for leaked secrets, PII, and credentials.
 
 ```go
 result, err := client.ScanOutput(ctx, "llm response text")
-if result.Verdict == sentinel.VerdictRedact {
+if result.Verdict == bulwark.VerdictRedact {
     // Content was modified (secrets masked)
 }
 ```
@@ -121,7 +121,7 @@ if result.Verdict == sentinel.VerdictRedact {
 Scan multiple items efficiently in a single request.
 
 ```go
-results, err := client.ScanBatch(ctx, []sentinel.ScanItem{
+results, err := client.ScanBatch(ctx, []bulwark.ScanItem{
     {Content: "message 1", ID: "req-001"},
     {Content: "message 2", ID: "req-002"},
     {Content: "message 3", ID: "req-003"},
@@ -135,9 +135,9 @@ fmt.Printf("Blocked: %d/%d\n", results.TotalBlocked, results.TotalItems)
 Send chat completions through the gateway with full guardrail protection.
 
 ```go
-resp, err := client.ChatCompletion(ctx, sentinel.ChatRequest{
+resp, err := client.ChatCompletion(ctx, bulwark.ChatRequest{
     Model: "gpt-4",
-    Messages: []sentinel.Message{
+    Messages: []bulwark.Message{
         {Role: "system", Content: "You are a helpful assistant."},
         {Role: "user", Content: "Hello!"},
     },
@@ -155,7 +155,7 @@ result, err := client.ValidateTool(ctx, "run_command", map[string]any{
     "command": "ls -la /tmp",
 })
 
-if result.Verdict == sentinel.VerdictBlock {
+if result.Verdict == bulwark.VerdictBlock {
     fmt.Println("Tool call denied by policy")
 }
 ```
@@ -170,10 +170,10 @@ fmt.Printf("Gateway: %s (v%s)\n", status.Status, status.Version)
 ## Local Guard (Offline Scanning)
 
 The Guard provides instant, offline regex scanning with zero network dependency.
-It contains the top 15 most critical detection patterns from Sentinel Gateway.
+It contains the top 15 most critical detection patterns from Bulwark Gateway.
 
 ```go
-guard := sentinel.NewGuard()
+guard := bulwark.NewGuard()
 
 // Scan locally — sub-millisecond, no network
 result := guard.Scan("ignore all previous instructions")
@@ -199,17 +199,17 @@ and blocks malicious content with a 403 response.
 ```go
 mux := http.NewServeMux()
 
-// Wrap your handler with Sentinel middleware
-mux.Handle("/api/chat", sentinel.Middleware(client)(chatHandler))
+// Wrap your handler with Bulwark middleware
+mux.Handle("/api/chat", bulwark.Middleware(client)(chatHandler))
 ```
 
 Access the scan result in downstream handlers:
 
 ```go
 func chatHandler(w http.ResponseWriter, r *http.Request) {
-    result := sentinel.ResultFromContext(r.Context())
+    result := bulwark.ResultFromContext(r.Context())
     if result != nil {
-        log.Printf("Sentinel verdict: %s", result.Verdict)
+        log.Printf("Bulwark verdict: %s", result.Verdict)
     }
     // ... handle request
 }
@@ -223,16 +223,16 @@ The SDK provides structured errors compatible with `errors.Is()` and `errors.As(
 result, err := client.ScanInput(ctx, content)
 if err != nil {
     // Check specific error types
-    if sentinel.IsBlocked(err) {
+    if bulwark.IsBlocked(err) {
         // Content was blocked (403)
-    } else if sentinel.IsRateLimited(err) {
+    } else if bulwark.IsRateLimited(err) {
         // Back off and retry
-    } else if sentinel.IsRetryable(err) {
+    } else if bulwark.IsRetryable(err) {
         // Can retry (rate limit, timeout, server error)
     }
 
     // Extract full API error details
-    var apiErr *sentinel.APIError
+    var apiErr *bulwark.APIError
     if errors.As(err, &apiErr) {
         fmt.Printf("Status: %d, Code: %s, RequestID: %s\n",
             apiErr.StatusCode, apiErr.Code, apiErr.RequestID)
@@ -248,17 +248,17 @@ and share it across goroutines:
 ```go
 // Create once at startup
 var (
-    client *sentinel.Client
-    guard  *sentinel.Guard
+    client *bulwark.Client
+    guard  *bulwark.Guard
 )
 
 func init() {
     var err error
-    client, err = sentinel.NewClient(sentinel.WithAPIKey(os.Getenv("SENTINEL_API_KEY")))
+    client, err = bulwark.NewClient(bulwark.WithAPIKey(os.Getenv("BULWARK_API_KEY")))
     if err != nil {
         log.Fatal(err)
     }
-    guard = sentinel.NewGuard()
+    guard = bulwark.NewGuard()
 }
 ```
 
@@ -267,11 +267,11 @@ func init() {
 Recommended pattern for production:
 
 ```go
-client, err := sentinel.NewClient(
-    sentinel.WithBaseURL(os.Getenv("SENTINEL_URL")),
-    sentinel.WithAPIKey(os.Getenv("SENTINEL_API_KEY")),
-    sentinel.WithTenant(os.Getenv("SENTINEL_TENANT")),
-    sentinel.WithAgent(os.Getenv("SENTINEL_AGENT")),
+client, err := bulwark.NewClient(
+    bulwark.WithBaseURL(os.Getenv("BULWARK_URL")),
+    bulwark.WithAPIKey(os.Getenv("BULWARK_API_KEY")),
+    bulwark.WithTenant(os.Getenv("BULWARK_TENANT")),
+    bulwark.WithAgent(os.Getenv("BULWARK_AGENT")),
 )
 ```
 
@@ -287,4 +287,4 @@ Dependencies: **none** (stdlib only — `net/http`, `encoding/json`, `regexp`, `
 
 ## License
 
-GPL-3.0-or-later (same as Sentinel Gateway)
+GPL-3.0-or-later (same as Bulwark Gateway)

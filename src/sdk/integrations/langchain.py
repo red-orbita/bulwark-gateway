@@ -1,5 +1,5 @@
 """
-LangChain Integration — Wraps LangChain chains/runnables with Sentinel scanning.
+LangChain Integration — Wraps LangChain chains/runnables with Bulwark scanning.
 
 Provides a non-intrusive way to add security guardrails to LangChain
 applications. Does NOT import langchain at module level — all imports
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class LangChainGuard:
-    """Wraps LangChain chains/runnables with Sentinel security scanning.
+    """Wraps LangChain chains/runnables with Bulwark security scanning.
 
     Intercepts input and output of a LangChain chain to apply
     input guardrails (prompt injection, jailbreak detection) and
@@ -76,7 +76,7 @@ class LangChainGuard:
                 invoke/ainvoke methods.
 
         Returns:
-            A SentinelRunnable that wraps the original chain.
+            A BulwarkRunnable that wraps the original chain.
 
         Raises:
             ImportError: If langchain-core is not installed.
@@ -94,8 +94,8 @@ class LangChainGuard:
 
         guard = self._guard
 
-        class SentinelRunnable(Runnable):
-            """A LangChain Runnable that applies Sentinel scanning."""
+        class BulwarkRunnable(Runnable):
+            """A LangChain Runnable that applies Bulwark scanning."""
 
             def __init__(self, wrapped: Any) -> None:
                 self._wrapped = wrapped
@@ -179,7 +179,7 @@ class LangChainGuard:
 
                 return output
 
-        return SentinelRunnable(chain)
+        return BulwarkRunnable(chain)
 
     def as_callback(self) -> Any:
         """Return a LangChain callback handler for monitoring.
@@ -206,10 +206,10 @@ class LangChainGuard:
 
         guard = self._guard
 
-        class SentinelCallbackHandler(BaseCallbackHandler):
-            """LangChain callback that logs Sentinel scan results."""
+        class BulwarkCallbackHandler(BaseCallbackHandler):
+            """LangChain callback that logs Bulwark scan results."""
 
-            name = "sentinel_guard"
+            name = "bulwark_guard"
 
             def on_llm_start(
                 self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
@@ -259,7 +259,7 @@ class LangChainGuard:
                         extra={"error": str(e)[:200]},
                     )
 
-        return SentinelCallbackHandler()
+        return BulwarkCallbackHandler()
 
 
 # === Internal helpers ===

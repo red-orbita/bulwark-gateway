@@ -16,8 +16,8 @@ from ..services.auth_service import require_permission
 router = APIRouter()
 
 # Persist custom RBAC overrides and custom roles to disk
-_RBAC_FILE = Path(os.getenv("SENTINEL_DATA_DIR", "data")) / "rbac_overrides.json"
-_CUSTOM_ROLES_FILE = Path(os.getenv("SENTINEL_DATA_DIR", "data")) / "rbac_custom_roles.json"
+_RBAC_FILE = Path(os.getenv("BULWARK_DATA_DIR", "data")) / "rbac_overrides.json"
+_CUSTOM_ROLES_FILE = Path(os.getenv("BULWARK_DATA_DIR", "data")) / "rbac_custom_roles.json"
 
 # Built-in roles that cannot be deleted
 BUILTIN_ROLES = {"admin", "security", "auditor", "viewer"}

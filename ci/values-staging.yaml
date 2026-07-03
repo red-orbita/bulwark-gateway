@@ -1,4 +1,4 @@
-# Sentinel Gateway — Staging Environment Values
+# Bulwark Gateway — Staging Environment Values
 #
 # This file is used by CI/CD pipelines for staging deployments.
 # Copy and customize for your environment.
@@ -46,10 +46,10 @@ ingress:
   className: "nginx"
   tls:
     enabled: true
-    secretName: "sentinel-staging-tls"
+    secretName: "bulwark-staging-tls"
   hosts:
-    proxy: "api-staging.sentinel-gateway.mycompany.com"
-    admin: "admin-staging.sentinel-gateway.mycompany.com"
+    proxy: "api-staging.bulwark-gateway.mycompany.com"
+    admin: "admin-staging.bulwark-gateway.mycompany.com"
 
 # Telemetry
 telemetry:

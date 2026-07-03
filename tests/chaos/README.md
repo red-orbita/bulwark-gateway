@@ -1,11 +1,11 @@
-# Chaos Testing Suite — Sentinel Gateway
+# Chaos Testing Suite — Bulwark Gateway
 
 Comprehensive chaos engineering experiments using [LitmusChaos v3.x](https://litmuschaos.io/)
 to validate system resilience under failure conditions.
 
 ## Purpose
 
-Enterprise customers require evidence that Sentinel Gateway degrades gracefully
+Enterprise customers require evidence that Bulwark Gateway degrades gracefully
 under real-world failure conditions. This suite proves:
 
 - **No security bypass on failure** — fail-closed guarantees hold under chaos
@@ -19,8 +19,8 @@ under real-world failure conditions. This suite proves:
 # 1. LitmusChaos operator installed (v3.x)
 kubectl apply -f https://litmuschaos.github.io/litmus/litmus-operator-v3.0.0.yaml
 
-# 2. Sentinel Gateway deployed in target namespace
-helm install sentinel ./helm/sentinel-gateway --namespace sentinel-gateway
+# 2. Bulwark Gateway deployed in target namespace
+helm install bulwark ./helm/bulwark-gateway --namespace bulwark-gateway
 
 # 3. LitmusChaos CRDs available
 kubectl get crds | grep chaos
@@ -57,30 +57,30 @@ These experiments validate resilience against known attack patterns:
 
 ```bash
 # Run all experiments sequentially with steady-state checks
-./tests/chaos/run-chaos-suite.sh --namespace sentinel-gateway
+./tests/chaos/run-chaos-suite.sh --namespace bulwark-gateway
 
 # Dry-run (validate manifests only, no execution)
-./tests/chaos/run-chaos-suite.sh --namespace sentinel-gateway --dry-run
+./tests/chaos/run-chaos-suite.sh --namespace bulwark-gateway --dry-run
 ```
 
 ### Individual Experiments
 
 ```bash
 # Apply a single experiment
-kubectl apply -f tests/chaos/experiments/redis-kill.yaml -n sentinel-gateway
+kubectl apply -f tests/chaos/experiments/redis-kill.yaml -n bulwark-gateway
 
 # Monitor experiment status
-kubectl get chaosengine -n sentinel-gateway -w
+kubectl get chaosengine -n bulwark-gateway -w
 
 # Check result
-kubectl get chaosresult -n sentinel-gateway
+kubectl get chaosresult -n bulwark-gateway
 ```
 
 ### Steady-State Validation
 
 ```bash
 # Run health checks independently
-./tests/chaos/steady-state-check.sh --namespace sentinel-gateway
+./tests/chaos/steady-state-check.sh --namespace bulwark-gateway
 ```
 
 ## Output
@@ -97,7 +97,7 @@ The orchestrator generates:
 {
   "suite_run_id": "uuid",
   "timestamp": "2024-01-15T10:30:00Z",
-  "namespace": "sentinel-gateway",
+  "namespace": "bulwark-gateway",
   "experiments": [
     {
       "name": "redis-kill",

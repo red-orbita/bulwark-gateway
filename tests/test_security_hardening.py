@@ -145,7 +145,7 @@ class TestProfileEndpoints:
         from admin.main import app
         self.client = TestClient(app, raise_server_exceptions=False)
         # Login to get token
-        resp = self.client.post("/admin/auth/login", json={"username": "admin", "password": "sentinel-admin"})
+        resp = self.client.post("/admin/auth/login", json={"username": "admin", "password": "bulwark-admin"})
         if resp.status_code == 200:
             data = resp.json()
             self.token = data["access_token"]
@@ -235,7 +235,7 @@ class TestCookieSecurity:
         self.client = TestClient(app, raise_server_exceptions=False)
 
     def test_login_sets_secure_cookie(self):
-        resp = self.client.post("/admin/auth/login", json={"username": "admin", "password": "sentinel-admin"})
+        resp = self.client.post("/admin/auth/login", json={"username": "admin", "password": "bulwark-admin"})
         if resp.status_code == 200:
             # Check Set-Cookie header
             cookie_header = resp.headers.get("set-cookie", "")

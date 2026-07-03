@@ -1,5 +1,5 @@
 """
-Sentinel Gateway — OpenTelemetry Distributed Tracing.
+Bulwark Gateway — OpenTelemetry Distributed Tracing.
 
 Provides W3C-compliant distributed tracing for the proxy request pipeline.
 100% optional: if OpenTelemetry packages are not installed or tracing is disabled,
@@ -12,13 +12,13 @@ Usage:
     init_tracing()
 
     # Decorator:
-    @trace_span("sentinel.guardrail.input")
+    @trace_span("bulwark.guardrail.input")
     async def scan_input(content: str, context: dict) -> GuardrailResult:
         ...
 
     # Context manager:
-    async with trace_span("sentinel.backend.forward") as span:
-        span.set_attribute("sentinel.model", model_name)
+    async with trace_span("bulwark.backend.forward") as span:
+        span.set_attribute("bulwark.model", model_name)
         response = await forward_request(...)
 """
 
@@ -112,7 +112,7 @@ def init_tracing() -> None:
         import logging
 
         logging.getLogger(__name__).warning(
-            "SENTINEL_TRACING_ENABLED=true but opentelemetry packages not installed. "
+            "BULWARK_TRACING_ENABLED=true but opentelemetry packages not installed. "
             "Install with: pip install opentelemetry-api opentelemetry-sdk "
             "opentelemetry-exporter-otlp-proto-grpc opentelemetry-exporter-zipkin"
         )
@@ -133,7 +133,7 @@ def init_tracing() -> None:
             "service.name": settings.tracing_service_name,
             "service.version": "0.2.0",
             "deployment.environment": "production" if not settings.debug else "development",
-            "service.namespace": "sentinel-gateway",
+            "service.namespace": "bulwark-gateway",
         }
     )
 
@@ -170,7 +170,7 @@ def init_tracing() -> None:
     trace.set_tracer_provider(provider)
 
     # Create module-level tracer singleton
-    _tracer = trace.get_tracer("sentinel-gateway", "0.2.0")
+    _tracer = trace.get_tracer("bulwark-gateway", "0.2.0")
     _enabled = True
 
     import logging
@@ -299,22 +299,22 @@ def trace_span(
     executes directly without any wrapping.
 
     As a decorator:
-        @trace_span("sentinel.guardrail.input")
+        @trace_span("bulwark.guardrail.input")
         async def scan_input(content: str, context: dict) -> GuardrailResult:
             ...
 
-        @trace_span("sentinel.auth")
+        @trace_span("bulwark.auth")
         def validate_token(token: str) -> dict:
             ...
 
     As an async context manager:
-        async with trace_span("sentinel.backend.forward") as span:
-            span.set_attribute("sentinel.model", model_name)
+        async with trace_span("bulwark.backend.forward") as span:
+            span.set_attribute("bulwark.model", model_name)
             ...
 
     As a sync context manager:
-        with trace_span("sentinel.ioc_check") as span:
-            span.set_attribute("sentinel.ioc_count", count)
+        with trace_span("bulwark.ioc_check") as span:
+            span.set_attribute("bulwark.ioc_count", count)
             ...
     """
     # If used as a context manager (no function passed)
@@ -374,7 +374,7 @@ def trace_span(
                             raise
                         finally:
                             elapsed_ms = (time.perf_counter() - start) * 1000
-                            span.set_attribute("sentinel.latency_ms", round(elapsed_ms, 2))
+                            span.set_attribute("bulwark.latency_ms", round(elapsed_ms, 2))
 
                 return cast(_F, async_wrapper)
             else:
@@ -397,7 +397,7 @@ def trace_span(
                             raise
                         finally:
                             elapsed_ms = (time.perf_counter() - start) * 1000
-                            span.set_attribute("sentinel.latency_ms", round(elapsed_ms, 2))
+                            span.set_attribute("bulwark.latency_ms", round(elapsed_ms, 2))
 
                 return cast(_F, sync_wrapper)
 
@@ -411,7 +411,7 @@ def trace_span(
 
         def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
             elapsed_ms = (time.perf_counter() - self._start) * 1000
-            self._span.set_attribute("sentinel.latency_ms", round(elapsed_ms, 2))
+            self._span.set_attribute("bulwark.latency_ms", round(elapsed_ms, 2))
             if exc_val is not None:
                 self._span.set_status(StatusCode.ERROR, str(exc_val))
                 self._span.record_exception(exc_val)
@@ -444,7 +444,7 @@ def create_request_span(
     Usage:
         span = create_request_span(tenant_id="corp", agent_id="bot")
         with span:
-            span.set_attribute("sentinel.verdict", "allow")
+            span.set_attribute("bulwark.verdict", "allow")
     """
     if not _enabled or _tracer is None:
         return _NOOP_SPAN
@@ -453,20 +453,20 @@ def create_request_span(
     # to external OTEL backends. Prevents PII/tenant correlation by third parties.
     import hashlib as _hashlib_tr
     hashed_tenant = _hashlib_tr.sha256(
-        f"sentinel-trace:{tenant_id}".encode()
+        f"bulwark-trace:{tenant_id}".encode()
     ).hexdigest()[:12]
 
     attrs: dict[str, Any] = {
-        "sentinel.tenant_id": hashed_tenant,
-        "sentinel.agent_id": agent_id,
+        "bulwark.tenant_id": hashed_tenant,
+        "bulwark.agent_id": agent_id,
     }
     if model:
-        attrs["sentinel.model"] = model
+        attrs["bulwark.model"] = model
     if request_id:
-        attrs["sentinel.request_id"] = request_id
+        attrs["bulwark.request_id"] = request_id
 
     span = _tracer.start_span(
-        "sentinel.request",
+        "bulwark.request",
         kind=SpanKind.SERVER,
         attributes=attrs,
     )
@@ -536,7 +536,7 @@ def extract_trace_context(headers: dict[str, str]) -> Optional[Any]:
 
     # L-05 fix: Only accept trace context if request has internal marker.
     # External requests should NOT propagate their trace context into our system.
-    internal_marker = headers.get("x-sentinel-internal")
+    internal_marker = headers.get("x-bulwark-internal")
     if not internal_marker:
         return None
 

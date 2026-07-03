@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Setup Wizard — Sentinel Gateway Admin{% endblock %}
+{% block title %}Setup Wizard — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Setup{% endblock %}
 {% block content %}
 <div x-data="onboardingWizard()" x-init="init()" class="min-h-[80vh] flex items-center justify-center">
@@ -34,7 +34,7 @@
                     <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-brand-500/10 mb-4">
                         <i data-lucide="shield-check" class="w-8 h-8 text-brand-400"></i>
                     </div>
-                    <h2 class="text-xl font-semibold text-white">Welcome to Sentinel Gateway</h2>
+                    <h2 class="text-xl font-semibold text-white">Welcome to Bulwark Gateway</h2>
                     <p class="text-sm text-gray-400 mt-1">Let's configure your security proxy in a few steps.</p>
                 </div>
 
@@ -69,7 +69,7 @@
             <div x-show="currentStep === 1" x-transition>
                 <div class="mb-6">
                     <h2 class="text-lg font-semibold text-white">Backend Configuration</h2>
-                    <p class="text-sm text-gray-400 mt-0.5">Configure the upstream LLM/Agent API that Sentinel will protect.</p>
+                    <p class="text-sm text-gray-400 mt-0.5">Configure the upstream LLM/Agent API that Bulwark will protect.</p>
                 </div>
 
                 <div class="space-y-4">
@@ -170,7 +170,7 @@
 
                     <div x-show="config.siem_transport === 'file'">
                         <label class="sg-label">Output Path</label>
-                        <input type="text" x-model="config.siem_file_path" class="sg-input" placeholder="/var/log/sentinel/events.jsonl">
+                        <input type="text" x-model="config.siem_file_path" class="sg-input" placeholder="/var/log/bulwark/events.jsonl">
                     </div>
                 </div>
             </div>
@@ -265,7 +265,7 @@ function onboardingWizard() {
             siem_host: '',
             siem_port: 514,
             siem_webhook_url: '',
-            siem_file_path: '/var/log/sentinel/events.jsonl'
+            siem_file_path: '/var/log/bulwark/events.jsonl'
         },
         modules: [
             { id: 'prompt_injection', name: 'Prompt Injection', desc: 'Detect injection attacks in prompts', icon: 'syringe', color: 'bg-red-500/10 text-red-400', enabled: true },

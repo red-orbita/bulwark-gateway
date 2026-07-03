@@ -35,6 +35,7 @@ from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
 from src.guardrails.session_tracker import get_session_tracker
 from src.guardrails.tool_policy import _normalize_tool_name
+from src.middleware.auth import _is_token_revoked
 from src.models import (
     GuardrailResult,
     SecurityEvent,
@@ -102,12 +103,49 @@ _DNS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=5.0)
 
 # H-04 fix: Maximum size for accumulated tool call arguments in streaming responses.
 # Prevents memory exhaustion from malicious/compromised backends streaming infinite data.
-_MAX_TOOL_ARGS_BYTES = int(os.environ.get("SENTINEL_MAX_TOOL_ARGS_BYTES", str(1024 * 1024)))  # 1MB default
+_MAX_TOOL_ARGS_BYTES = int(os.environ.get("BULWARK_MAX_TOOL_ARGS_BYTES", str(1024 * 1024)))  # 1MB default
 
-# SECURITY FIX (H-04): Limit concurrent streaming connections per tenant
-# to prevent worker starvation (4 connections = full DoS previously)
-_MAX_CONCURRENT_STREAMS = int(os.environ.get("SENTINEL_MAX_CONCURRENT_STREAMS", "50"))
+# SECURITY FIX (H-05): Per-tenant stream limit to prevent one tenant from
+# exhausting all concurrent streaming slots and blocking other tenants.
+# Previously a single global semaphore meant one tenant could block ALL streaming.
+_MAX_CONCURRENT_STREAMS = int(os.environ.get("BULWARK_MAX_CONCURRENT_STREAMS", "50"))
+_MAX_STREAMS_PER_TENANT = int(os.environ.get("BULWARK_MAX_STREAMS_PER_TENANT", "10"))
 _stream_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_STREAMS)
+_tenant_stream_counts: dict[str, int] = {}  # tenant_id -> active stream count (in-memory fallback)
+_tenant_stream_lock = asyncio.Lock()
+
+# P8-01 fix: Redis key prefix for distributed stream counting.
+# With multiple Uvicorn workers, in-memory counters are per-process.
+# Redis provides cross-worker consistency for true per-tenant limits.
+_STREAM_KEY_PREFIX = "bulwark:streams"
+_STREAM_KEY_GLOBAL = f"{_STREAM_KEY_PREFIX}:global"
+_STREAM_TTL = 300  # Safety-net TTL (seconds) — auto-expire if decrement is lost
+
+
+def _check_json_depth(obj, max_depth: int = 50, current: int = 0):
+    """Post-parse depth check that catches nested arrays (P6-01 fix).
+
+    object_pairs_hook only fires for JSON objects (dicts), not arrays.
+    This recursive validator catches both dict and list nesting.
+    """
+    if current > max_depth:
+        raise ValueError(f"JSON nesting exceeds {max_depth} levels")
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _check_json_depth(v, max_depth, current + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _check_json_depth(item, max_depth, current + 1)
+
+
+def _get_stream_redis():
+    """Get Redis client for stream counting (reuses dynamic registry connection)."""
+    try:
+        from src.guardrails.dynamic_registry import get_pattern_registry
+        registry = get_pattern_registry()
+        return registry._redis
+    except Exception:
+        return None
 
 
 def _sanitize_backend_error(status_code: int, raw_body: bytes) -> dict:
@@ -144,10 +182,15 @@ def _sanitize_backend_error(status_code: int, raw_body: bytes) -> dict:
 # making file descriptor exhaustion trivial. A shared pool limits total
 # outbound connections and reuses TCP connections for performance.
 _HTTP_POOL_LIMITS = httpx.Limits(
-    max_connections=int(os.environ.get("SENTINEL_MAX_BACKEND_CONNECTIONS", "100")),
-    max_keepalive_connections=int(os.environ.get("SENTINEL_MAX_KEEPALIVE", "20")),
+    max_connections=int(os.environ.get("BULWARK_MAX_BACKEND_CONNECTIONS", "100")),
+    max_keepalive_connections=int(os.environ.get("BULWARK_MAX_KEEPALIVE", "20")),
     keepalive_expiry=30.0,
 )
+# SECURITY FIX (DOS-01): Pool acquisition timeout prevents connection exhaustion DoS.
+# Without this, when all 100 connections are in use, new requests block for up to 120s
+# (full backend timeout). This starves ALL tenants. With pool_timeout=5s, blocked
+# requests fail fast with 503, allowing the system to shed load gracefully.
+_POOL_ACQUIRE_TIMEOUT = float(os.environ.get("BULWARK_POOL_ACQUIRE_TIMEOUT", "5.0"))
 _shared_client: httpx.AsyncClient | None = None
 
 
@@ -157,7 +200,7 @@ def _get_shared_client(timeout: float = 120.0) -> httpx.AsyncClient:
     if _shared_client is None or _shared_client.is_closed:
         _shared_client = httpx.AsyncClient(
             limits=_HTTP_POOL_LIMITS,
-            timeout=httpx.Timeout(timeout, connect=10.0),
+            timeout=httpx.Timeout(timeout, connect=10.0, pool=_POOL_ACQUIRE_TIMEOUT),
             follow_redirects=False,
         )
     return _shared_client
@@ -309,10 +352,31 @@ async def chat_completions(request: Request):
             _current_depth[0] -= 1
             return keys
         body = json.loads(raw_body, object_pairs_hook=_reject_duplicate_keys)
+        # SECURITY FIX (P6-01): Post-parse depth check that catches nested arrays.
+        # object_pairs_hook only fires for JSON objects (dicts), not arrays.
+        # 5000 nested arrays would bypass the depth limit without this check.
+        _check_json_depth(body, max_depth=_MAX_JSON_DEPTH)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid request body: excessive nesting") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid request body") from exc
+
+    # SECURITY FIX (P6-02): Strip null bytes and C0 control characters from all message content.
+    # JSON \u0000 is valid but breaks regex word boundaries (\b): "ig\x00nore" doesn't match \bignore\b.
+    # LLM backends strip nulls during tokenization, so the model sees the full injection.
+    # Also strip C0 controls (0x01-0x08, 0x0B, 0x0C, 0x0E-0x1F) which serve no text purpose.
+    import re as _re_proxy
+    _C0_CONTROL_RE = _re_proxy.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+    for msg in body.get("messages", []):
+        if isinstance(msg.get("content"), str):
+            msg["content"] = _C0_CONTROL_RE.sub("", msg["content"])
+        # Handle content arrays (multimodal messages with text parts)
+        elif isinstance(msg.get("content"), list):
+            for part in msg["content"]:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"] = _C0_CONTROL_RE.sub("", part["text"])
 
     messages = body.get("messages", [])
 
@@ -361,13 +425,20 @@ async def chat_completions(request: Request):
                 asyncio.create_task(
                     _enrich_and_record(user_content, "block", request_id, tenant_id)
                 )
+        # SECURITY FIX (M-09): Constant-time block response to prevent timing oracle.
+        # Without this, attackers can distinguish regex blocks (~5ms) from ML blocks (~50ms)
+        # and use the timing difference to fingerprint which detection layer caught them.
+        _MIN_BLOCK_LATENCY_MS = 50  # Minimum response time for all blocks
+        _elapsed_ms = (time.perf_counter() - _req_start) * 1000
+        if _elapsed_ms < _MIN_BLOCK_LATENCY_MS:
+            await asyncio.sleep((_MIN_BLOCK_LATENCY_MS - _elapsed_ms) / 1000)
         return JSONResponse(
             status_code=403,
             content={
                 "error": {
                     "message": "Request blocked by security policy",
                     "type": "security_violation",
-                    "code": "input_guardrail_block",
+                    "code": "security_block",
                 }
             },
         )
@@ -399,9 +470,9 @@ async def chat_completions(request: Request):
                     status_code=403,
                     content={
                         "error": {
-                            "message": "Request blocked: multi-turn attack pattern detected",
+                            "message": "Request blocked by security policy",
                             "type": "security_violation",
-                            "code": "session_decomposition_block",
+                            "code": "security_block",
                         }
                     },
                 )
@@ -441,9 +512,9 @@ async def chat_completions(request: Request):
                 status_code=403,
                 content={
                     "error": {
-                        "message": "Request contains known malicious indicators",
+                        "message": "Request blocked by security policy",
                         "type": "security_violation",
-                        "code": "ioc_block",
+                        "code": "security_block",
                     }
                 },
             )
@@ -459,7 +530,7 @@ async def chat_completions(request: Request):
     if backend is None:
         return JSONResponse(
             status_code=403,
-            content={"error": {"message": "Unknown tenant or agent", "type": "authorization_error"}},
+            content={"error": {"message": "Request blocked by security policy", "type": "security_violation", "code": "security_block"}},
         )
 
     is_streaming = body.get("stream", False)
@@ -504,31 +575,91 @@ async def chat_completions(request: Request):
                 logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
                 return JSONResponse(
                     status_code=403,
-                    content={"error": {"message": "Backend URL resolves to blocked address", "type": "security_violation", "code": "ssrf_block"}},
+                    content={"error": {"message": "Request blocked by security policy", "type": "security_violation", "code": "security_block"}},
                 )
 
             if is_streaming:
-                # SECURITY FIX (H-04): Limit concurrent streams to prevent
-                # worker starvation (previously 4 connections = full DoS)
+                # SECURITY FIX (H-05): Per-tenant stream limit enforcement.
+                # Check both global capacity and per-tenant limit.
                 if _stream_semaphore.locked():
                     return JSONResponse(
                         status_code=503,
                         content={"error": {"message": "Too many concurrent streaming connections", "type": "capacity_error", "code": "stream_limit"}},
                     )
-                async with _stream_semaphore:
-                    # Streaming path: forward SSE with chunk-level guardrails
-                    policy_engine = request.app.state.policy_loader.engine
-                    return await _handle_streaming(
-                        client,
-                        backend_url,
-                        body,
-                        backend_headers,
-                        tenant_id,
-                        agent_id,
-                        source_ip,
-                        ioc_manager,
-                        policy_engine,
-                    )
+
+                # P8-01 fix: Use Redis for distributed stream counting across workers.
+                # Falls back to in-memory if Redis is unavailable.
+                r = _get_stream_redis()
+                use_redis = r is not None
+                tenant_stream_key = f"{_STREAM_KEY_PREFIX}:{tenant_id}"
+
+                if use_redis:
+                    try:
+                        # Atomic check-and-increment for per-tenant limit
+                        current_tenant = r.incr(tenant_stream_key)
+                        r.expire(tenant_stream_key, _STREAM_TTL)
+                        if current_tenant > _MAX_STREAMS_PER_TENANT:
+                            r.decr(tenant_stream_key)
+                            return JSONResponse(
+                                status_code=429,
+                                content={"error": {"message": f"Too many concurrent streams for tenant (max {_MAX_STREAMS_PER_TENANT})", "type": "rate_limit", "code": "tenant_stream_limit"}},
+                            )
+                        # Global distributed check
+                        current_global = r.incr(_STREAM_KEY_GLOBAL)
+                        r.expire(_STREAM_KEY_GLOBAL, _STREAM_TTL)
+                        if current_global > _MAX_CONCURRENT_STREAMS:
+                            r.decr(_STREAM_KEY_GLOBAL)
+                            r.decr(tenant_stream_key)
+                            return JSONResponse(
+                                status_code=503,
+                                content={"error": {"message": "Too many concurrent streaming connections", "type": "capacity_error", "code": "stream_limit"}},
+                            )
+                    except Exception:
+                        # Redis failed mid-operation — fall back to in-memory
+                        use_redis = False
+                        r = None
+
+                if not use_redis:
+                    # In-memory fallback (per-process only — best effort)
+                    async with _tenant_stream_lock:
+                        current_count = _tenant_stream_counts.get(tenant_id, 0)
+                        if current_count >= _MAX_STREAMS_PER_TENANT:
+                            return JSONResponse(
+                                status_code=429,
+                                content={"error": {"message": f"Too many concurrent streams for tenant (max {_MAX_STREAMS_PER_TENANT})", "type": "rate_limit", "code": "tenant_stream_limit"}},
+                            )
+                        _tenant_stream_counts[tenant_id] = current_count + 1
+
+                try:
+                    async with _stream_semaphore:
+                        # Streaming path: forward SSE with chunk-level guardrails
+                        policy_engine = request.app.state.policy_loader.engine
+                        # SECURITY FIX (RC-07): Pass token jti for periodic re-validation
+                        token_jti = getattr(request.state, "token_jti", None)
+                        return await _handle_streaming(
+                            client,
+                            backend_url,
+                            body,
+                            backend_headers,
+                            tenant_id,
+                            agent_id,
+                            source_ip,
+                            ioc_manager,
+                            policy_engine,
+                            token_jti=token_jti,
+                        )
+                finally:
+                    if use_redis:
+                        try:
+                            r.decr(tenant_stream_key)
+                            r.decr(_STREAM_KEY_GLOBAL)
+                        except Exception:
+                            pass  # Best effort — TTL will clean up
+                    else:
+                        async with _tenant_stream_lock:
+                            _tenant_stream_counts[tenant_id] = _tenant_stream_counts.get(tenant_id, 1) - 1
+                            if _tenant_stream_counts[tenant_id] <= 0:
+                                del _tenant_stream_counts[tenant_id]
 
             resp = await client.post(
                 backend_url,
@@ -567,6 +698,14 @@ async def chat_completions(request: Request):
                 _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
                 _record_tenant_usage(tenant_id, "allow")
                 if isinstance(exc, httpx.TimeoutException):
+                    # SECURITY FIX (DOS-01): Distinguish pool timeout from backend timeout.
+                    # PoolTimeout means the connection pool is exhausted — return 503 (overloaded)
+                    # to shed load and prevent cascading failures across all tenants.
+                    if "pool" in type(exc).__name__.lower() or "PoolTimeout" in str(type(exc)):
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Service temporarily overloaded — connection pool exhausted",
+                        ) from exc
                     raise HTTPException(status_code=504, detail="Request timed out") from exc
                 raise HTTPException(status_code=502, detail="Service unavailable") from exc
 
@@ -666,6 +805,24 @@ async def chat_completions(request: Request):
                     )
 
     # === PHASE 5: Output Filter ===
+    # SECURITY FIX (AC-01): Also filter tool_call arguments for secrets/PII.
+    # Previously only message.content was scanned, allowing secret exfiltration
+    # via tool call arguments returned to the client.
+    for choice in choices:
+        message = choice.get("message", {})
+        for tc in message.get("tool_calls", []):
+            args_raw = tc.get("function", {}).get("arguments", "")
+            if args_raw:
+                tc_filter = output_filter.inspect_and_redact(args_raw, tenant_id, agent_id)
+                if tc_filter.verdict == Verdict.REDACT and tc_filter.modified_content:
+                    tc["function"]["arguments"] = tc_filter.modified_content
+                    await _log_events(tc_filter.events, source_ip)
+                elif tc_filter.verdict == Verdict.BLOCK:
+                    # Dangerous content in tool args — nullify the tool call
+                    tc["function"]["arguments"] = "{}"
+                    await _log_events(tc_filter.events, source_ip)
+                    asyncio.create_task(_fire_webhook_alert(tc_filter.events, tenant_id, agent_id))
+
     for choice in choices:
         message = choice.get("message", {})
         content = message.get("content")
@@ -800,6 +957,7 @@ async def _handle_streaming(
     source_ip: str | None,
     ioc_manager,
     policy_engine,
+    token_jti: str | None = None,
 ) -> StreamingResponse:
     """Forward streaming SSE response with chunk-level output guardrails.
 
@@ -809,6 +967,7 @@ async def _handle_streaming(
     - If REDACT verdict: replace content with redacted version
     - If dangerous output detected: terminate stream with error event
     - C-01: Tool call chunks are BUFFERED and policy-checked BEFORE yielding to client
+    - RC-07: Periodic token re-validation during long streams
     """
     BUFFER_SIZE = 256  # chars before flushing to client
     # SECURITY FIX (C-04): 50% overlapping window prevents boundary-split secret leakage
@@ -816,6 +975,10 @@ async def _handle_streaming(
     # SECURITY FIX (M-07): Max stream duration and body size to prevent worker starvation
     MAX_STREAM_DURATION_SECONDS = 300  # 5 minutes
     MAX_STREAM_BYTES = 50 * 1024 * 1024  # 50MB
+    # SECURITY FIX (RC-07): Re-validate token every 30 seconds during streaming.
+    # Previously tokens were only validated once at request start, allowing revoked
+    # tokens to continue receiving data for up to 5 minutes.
+    TOKEN_REVALIDATION_INTERVAL = 30  # seconds
 
     async def stream_generator():
         content_buffer = ""
@@ -823,6 +986,7 @@ async def _handle_streaming(
         tool_call_lines: list[str] = []  # C-01: Buffer raw SSE lines until policy validated
         blocked = False
         stream_start = time.monotonic()
+        last_revalidation = stream_start  # RC-07: Track last token check
         total_bytes = 0
 
         try:
@@ -844,6 +1008,20 @@ async def _handle_streaming(
                     if time.monotonic() - stream_start > MAX_STREAM_DURATION_SECONDS:
                         yield _make_error_event("Stream terminated: max duration exceeded")
                         break
+
+                    # SECURITY FIX (RC-07): Periodic token re-validation.
+                    # Revoked tokens must not continue receiving streaming data.
+                    # Check every TOKEN_REVALIDATION_INTERVAL seconds.
+                    now = time.monotonic()
+                    if token_jti and (now - last_revalidation) >= TOKEN_REVALIDATION_INTERVAL:
+                        last_revalidation = now
+                        if _is_token_revoked(token_jti):
+                            logger.warning(
+                                "streaming_token_revoked",
+                                extra={"tenant": tenant_id, "jti": token_jti},
+                            )
+                            yield _make_error_event("Stream terminated: token revoked")
+                            break
 
                     # SECURITY (M-07): Enforce max response body size
                     total_bytes += len(line.encode("utf-8"))
@@ -1163,6 +1341,10 @@ def _push_recent_block(events: list[SecurityEvent], tenant_id: str, agent_id: st
         if not r:
             return
         import json as _json
+        # SECURITY FIX (SGW-XT-002): Per-tenant recent_blocks key.
+        # Previously all tenants shared a single list, leaking block metadata
+        # across tenant boundaries.
+        redis_key = f"bulwark:recent_blocks:{tenant_id}"
         for event in events[:3]:  # Max 3 events per block
             entry = _json.dumps({
                 "ts": time.time(),
@@ -1173,8 +1355,8 @@ def _push_recent_block(events: list[SecurityEvent], tenant_id: str, agent_id: st
                 "severity": event.severity or "high",
                 "pattern": event.matched_pattern or "",
             })
-            r.lpush("sentinel:recent_blocks", entry)
-            r.ltrim("sentinel:recent_blocks", 0, 49)  # Keep last 50
+            r.lpush(redis_key, entry)
+            r.ltrim(redis_key, 0, 49)  # Keep last 50 per tenant
     except Exception as exc:
         logger.warning("recent_blocks_push_failed", error=str(exc))
 
@@ -1187,11 +1369,11 @@ def _record_tenant_usage(tenant_id: str, verdict: str):
         r = registry._redis
         if not r:
             return
-        r.hincrby("sentinel:usage:total", tenant_id, 1)
-        r.hincrby(f"sentinel:usage:{verdict}", tenant_id, 1)
+        r.hincrby("bulwark:usage:total", tenant_id, 1)
+        r.hincrby(f"bulwark:usage:{verdict}", tenant_id, 1)
         # Global counters (persist across pod restarts)
-        r.incrby("sentinel:global:requests_total", 1)
-        r.incrby(f"sentinel:global:{verdict}", 1)
+        r.incrby("bulwark:global:requests_total", 1)
+        r.incrby(f"bulwark:global:{verdict}", 1)
     except Exception as exc:
         logger.warning("tenant_usage_counter_failed", error=str(exc), tenant_id=tenant_id)
 

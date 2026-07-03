@@ -1,5 +1,5 @@
 /**
- * Sentinel Gateway — Streaming (SSE) Scenario
+ * Bulwark Gateway — Streaming (SSE) Scenario
  *
  * Measures Time-To-First-Byte (TTFB) and throughput for SSE streaming
  * responses. The gateway applies chunk-level output filtering with a

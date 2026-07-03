@@ -45,7 +45,7 @@ class ToxicityScanner(InputScanner):
       - Compliance with content safety requirements
 
     Configuration:
-      - SENTINEL_ML_ENABLED=true
+      - BULWARK_ML_ENABLED=true
       - Model files at: models/toxicity/{model.onnx, tokenizer.json}
     """
 
@@ -71,7 +71,7 @@ class ToxicityScanner(InputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="ML-based toxic/harmful content detection (multi-label)",
-            author="sentinel",
+            author="bulwark",
             priority=25,
         )
 
@@ -82,7 +82,7 @@ class ToxicityScanner(InputScanner):
             return
 
         if not settings.ml_enabled:
-            logger.info("ml_toxicity_skipped", extra={"reason": "SENTINEL_ML_ENABLED=false"})
+            logger.info("ml_toxicity_skipped", extra={"reason": "BULWARK_ML_ENABLED=false"})
             return
 
         manager = get_model_manager()
@@ -102,7 +102,19 @@ class ToxicityScanner(InputScanner):
         Supports both binary (neutral/toxic) and multi-label model outputs.
         """
         if not self._model_loaded:
-            return GuardrailResult(verdict=Verdict.ALLOW)
+            # SECURITY FIX (P7-01): Fail-closed when ML model unavailable.
+            return GuardrailResult(
+                verdict=Verdict.BLOCK,
+                events=[SecurityEvent(
+                    tenant_id="system",
+                    agent_id="ml_scanner",
+                    verdict=Verdict.BLOCK,
+                    category=ThreatCategory.PROMPT_INJECTION,
+                    description="ML toxicity scanner unavailable — fail-closed (model not loaded)",
+                    source="ml_toxicity_scanner",
+                    severity="high",
+                )],
+            )
 
         loop = asyncio.get_event_loop()
         predictions = await loop.run_in_executor(

@@ -24,12 +24,12 @@ type-check: ## Run mypy type checker
 	mypy src/ --ignore-missing-imports
 
 build: ## Build Docker images
-	docker build -t sentinel-gateway-proxy:dev -f Dockerfile .
-	docker build -t sentinel-gateway-admin:dev -f docker/Dockerfile.admin .
+	docker build -t bulwark-gateway-proxy:dev -f Dockerfile .
+	docker build -t bulwark-gateway-admin:dev -f docker/Dockerfile.admin .
 
 security-scan: ## Run security scans (pip-audit + trivy)
 	pip-audit
-	@echo "Run 'trivy image sentinel-gateway-proxy:dev' for container scan"
+	@echo "Run 'trivy image bulwark-gateway-proxy:dev' for container scan"
 
 deploy-local: ## Deploy full stack locally with docker-compose
 	docker-compose up --build -d

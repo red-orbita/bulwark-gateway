@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}System Status — Sentinel Gateway Admin{% endblock %}
+{% block title %}System Status — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Status{% endblock %}
 {% block content %}
 <div x-data="statusPage()" x-init="init()" class="space-y-6">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">System Status</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Real-time health of all Sentinel Gateway components.</p>
+            <p class="text-sm text-gray-400 mt-0.5">Real-time health of all Bulwark Gateway components.</p>
         </div>
         <div class="flex items-center gap-2">
             <span class="text-xs text-gray-500">Auto-refresh: 30s</span>

@@ -9,14 +9,14 @@ similar queries. Supports:
   - Redis backend (persistent) with in-memory LRU fallback
 
 Configuration:
-  SENTINEL_CACHE_ENABLED=true         Enable response caching
-  SENTINEL_CACHE_TTL=3600             Default TTL in seconds (1 hour)
-  SENTINEL_CACHE_MAX_SIZE=10000       Max entries in LRU fallback
-  SENTINEL_CACHE_SKIP_STREAMING=true  Don't cache streaming responses
+  BULWARK_CACHE_ENABLED=true         Enable response caching
+  BULWARK_CACHE_TTL=3600             Default TTL in seconds (1 hour)
+  BULWARK_CACHE_MAX_SIZE=10000       Max entries in LRU fallback
+  BULWARK_CACHE_SKIP_STREAMING=true  Don't cache streaming responses
 
 Redis keys:
-  sentinel:cache:{hash}               — JSON-serialized response
-  sentinel:cache:stats                 — HASH {hits, misses, evictions, savings_tokens}
+  bulwark:cache:{hash}               — JSON-serialized response
+  bulwark:cache:stats                 — HASH {hits, misses, evictions, savings_tokens}
 """
 
 from __future__ import annotations
@@ -133,15 +133,15 @@ class ResponseCache:
         # Try Redis first
         if self._redis:
             try:
-                raw = self._redis.get(f"sentinel:cache:{cache_key}")
+                raw = self._redis.get(f"bulwark:cache:{cache_key}")
                 if raw:
                     entry_data = json.loads(raw)
                     # Check TTL (Redis TTL handles this but double-check)
                     self._stats.hits += 1
                     tokens = entry_data.get("_tokens_saved", 0)
                     self._stats.total_tokens_saved += tokens
-                    self._redis.hincrby("sentinel:cache:stats", "hits", 1)
-                    self._redis.hincrby("sentinel:cache:stats", "savings_tokens", tokens)
+                    self._redis.hincrby("bulwark:cache:stats", "hits", 1)
+                    self._redis.hincrby("bulwark:cache:stats", "savings_tokens", tokens)
                     # Return without internal metadata
                     response = entry_data.copy()
                     response.pop("_tokens_saved", None)
@@ -169,7 +169,7 @@ class ResponseCache:
         self._stats.misses += 1
         if self._redis:
             try:
-                self._redis.hincrby("sentinel:cache:stats", "misses", 1)
+                self._redis.hincrby("bulwark:cache:stats", "misses", 1)
             except Exception:
                 pass
         return None
@@ -205,7 +205,7 @@ class ResponseCache:
                 cache_data["_cached_at"] = time.time()
                 cache_data["_tokens_saved"] = total_tokens
                 self._redis.setex(
-                    f"sentinel:cache:{cache_key}",
+                    f"bulwark:cache:{cache_key}",
                     self._ttl,
                     json.dumps(cache_data),
                 )
@@ -232,7 +232,7 @@ class ResponseCache:
         self._lru.pop(cache_key, None)
         if self._redis:
             try:
-                self._redis.delete(f"sentinel:cache:{cache_key}")
+                self._redis.delete(f"bulwark:cache:{cache_key}")
             except Exception:
                 pass
         return removed
@@ -251,7 +251,7 @@ class ResponseCache:
                 # Clear cache keys (scan + delete pattern)
                 cursor = 0
                 while True:
-                    cursor, keys = self._redis.scan(cursor, match="sentinel:cache:*", count=100)
+                    cursor, keys = self._redis.scan(cursor, match="bulwark:cache:*", count=100)
                     if keys:
                         self._redis.delete(*keys)
                     if cursor == 0:
@@ -316,10 +316,10 @@ def get_response_cache() -> ResponseCache:
     global _cache
     if _cache is None:
         import os
-        enabled = os.environ.get("SENTINEL_CACHE_ENABLED", "false").lower() in ("true", "1")
+        enabled = os.environ.get("BULWARK_CACHE_ENABLED", "false").lower() in ("true", "1")
         # SECURITY FIX (M-01): Reduced default TTL from 3600s to 300s to limit
         # staleness window when IOC/policy updates don't trigger explicit invalidation
-        ttl = int(os.environ.get("SENTINEL_CACHE_TTL", "300"))
-        max_size = int(os.environ.get("SENTINEL_CACHE_MAX_SIZE", "10000"))
+        ttl = int(os.environ.get("BULWARK_CACHE_TTL", "300"))
+        max_size = int(os.environ.get("BULWARK_CACHE_MAX_SIZE", "10000"))
         _cache = ResponseCache(ttl=ttl, max_size=max_size, enabled=enabled)
     return _cache

@@ -1,14 +1,14 @@
 """
-Plugin CLI — Command-line interface for Sentinel plugin management.
+Plugin CLI — Command-line interface for Bulwark plugin management.
 
 Usage:
-    sentinel plugin install <name> [--source hub|local]
-    sentinel plugin uninstall <name>
-    sentinel plugin list
-    sentinel plugin create <name> [--output-dir <path>]
-    sentinel plugin test <path>
-    sentinel plugin enable <name>
-    sentinel plugin disable <name>
+    bulwark plugin install <name> [--source hub|local]
+    bulwark plugin uninstall <name>
+    bulwark plugin list
+    bulwark plugin create <name> [--output-dir <path>]
+    bulwark plugin test <path>
+    bulwark plugin enable <name>
+    bulwark plugin disable <name>
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
     print(f"  [OK] Plugin scaffold created at: {plugin_path}")
     print()
     print("  Created files:")
-    print(f"    {plugin_path}/sentinel-plugin.yaml  (plugin spec)")
+    print(f"    {plugin_path}/bulwark-plugin.yaml  (plugin spec)")
     print(f"    {plugin_path}/scanner.py            (scanner implementation)")
     print(f"    {plugin_path}/tests/test_scanner.py (test template)")
     print(f"    {plugin_path}/README.md             (documentation)")
@@ -112,7 +112,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
     print("  Next steps:")
     print(f"    1. Edit {plugin_path}/scanner.py with your detection logic")
     print(f"    2. Run tests: cd {plugin_path} && pytest tests/ -v")
-    print(f"    3. Install: sentinel plugin install {plugin_path} --source local")
+    print(f"    3. Install: bulwark plugin install {plugin_path} --source local")
     return 0
 
 
@@ -124,9 +124,9 @@ def _cmd_test(args: argparse.Namespace) -> int:
         print(f"  [FAIL] Not a directory: {plugin_path}", file=sys.stderr)
         return 1
 
-    spec_file = plugin_path / "sentinel-plugin.yaml"
+    spec_file = plugin_path / "bulwark-plugin.yaml"
     if not spec_file.exists():
-        print(f"  [FAIL] No sentinel-plugin.yaml found in {plugin_path}", file=sys.stderr)
+        print(f"  [FAIL] No bulwark-plugin.yaml found in {plugin_path}", file=sys.stderr)
         return 1
 
     # Load and validate spec
@@ -222,8 +222,8 @@ def main(argv: list[str] | None = None) -> int:
         Exit code (0 = success, non-zero = error).
     """
     parser = argparse.ArgumentParser(
-        prog="sentinel plugin",
-        description="Sentinel Gateway Plugin Manager",
+        prog="bulwark plugin",
+        description="Bulwark Gateway Plugin Manager",
     )
     parser.add_argument(
         "--plugin-dir",

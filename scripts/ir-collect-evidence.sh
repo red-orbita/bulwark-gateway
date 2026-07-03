@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Sentinel Gateway — Incident Response Evidence Collection
+# Bulwark Gateway — Incident Response Evidence Collection
 #
 # Automated forensic evidence collection for security incidents.
 # Produces a timestamped tarball with SHA-256 chain-of-custody manifest.
@@ -12,9 +12,9 @@
 #   ./scripts/ir-collect-evidence.sh [OPTIONS]
 #
 # Options:
-#   --namespace, -n    Kubernetes namespace (default: sentinel-gateway)
+#   --namespace, -n    Kubernetes namespace (default: bulwark-gateway)
 #   --since, -s        Time window for logs (default: 30m)
-#   --output-dir, -o   Output directory (default: /tmp/sentinel-evidence)
+#   --output-dir, -o   Output directory (default: /tmp/bulwark-evidence)
 #   --help, -h         Show usage
 #
 # Output:
@@ -27,9 +27,9 @@
 set -euo pipefail
 
 # --- Defaults ---
-NAMESPACE="sentinel-gateway"
+NAMESPACE="bulwark-gateway"
 SINCE="30m"
-OUTPUT_DIR="/tmp/sentinel-evidence"
+OUTPUT_DIR="/tmp/bulwark-evidence"
 TIMESTAMP=$(date -u +%Y%m%d_%H%M%S_UTC)
 EVIDENCE_DIR="${OUTPUT_DIR}/evidence-${TIMESTAMP}"
 TARBALL_NAME="incident-evidence-${TIMESTAMP}.tar.gz"
@@ -45,14 +45,14 @@ NC='\033[0m' # No Color
 # --- Functions ---
 usage() {
     cat <<EOF
-Sentinel Gateway — Incident Response Evidence Collection
+Bulwark Gateway — Incident Response Evidence Collection
 
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
-  --namespace, -n <ns>     Kubernetes namespace (default: sentinel-gateway)
+  --namespace, -n <ns>     Kubernetes namespace (default: bulwark-gateway)
   --since, -s <duration>   Log time window, e.g. 30m, 1h, 2h (default: 30m)
-  --output-dir, -o <path>  Output directory (default: /tmp/sentinel-evidence)
+  --output-dir, -o <path>  Output directory (default: /tmp/bulwark-evidence)
   --help, -h               Show this help
 
 Output:
@@ -70,7 +70,7 @@ Examples:
   ./scripts/ir-collect-evidence.sh
 
   # Collect last 2 hours from custom namespace
-  ./scripts/ir-collect-evidence.sh --namespace prod-sentinel --since 2h
+  ./scripts/ir-collect-evidence.sh --namespace prod-bulwark --since 2h
 
   # Custom output directory
   ./scripts/ir-collect-evidence.sh --output-dir ./incident-INC-1234/
@@ -140,7 +140,7 @@ EVIDENCE_DIR="${OUTPUT_DIR}/evidence-${TIMESTAMP}"
 
 # --- Pre-flight Checks ---
 echo "=============================================="
-echo " Sentinel Gateway — Evidence Collection"
+echo " Bulwark Gateway — Evidence Collection"
 echo " SOC 2 CC7.3 Compliant"
 echo "=============================================="
 echo ""
@@ -275,31 +275,31 @@ log_info "--- Section 3: Redis State ---"
 
 collect_step "Redis global counters" \
     "03-redis-counters.txt" \
-    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning MGET sentinel:global:requests_total sentinel:global:block sentinel:global:allow sentinel:global:warn"
+    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning MGET bulwark:global:requests_total bulwark:global:block bulwark:global:allow bulwark:global:warn"
 
 collect_step "Redis SIEM stats" \
     "03-redis-siem-stats.txt" \
-    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning MGET sentinel:siem:batches_sent sentinel:siem:events_exported sentinel:siem:export_errors sentinel:siem:transports sentinel:siem:queue_memory_depth sentinel:siem:updated_at"
+    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning MGET bulwark:siem:batches_sent bulwark:siem:events_exported bulwark:siem:export_errors bulwark:siem:transports bulwark:siem:queue_memory_depth bulwark:siem:updated_at"
 
 collect_step "Redis recent blocks (last 100)" \
     "03-redis-recent-blocks.json" \
-    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning LRANGE sentinel:recent_blocks 0 99"
+    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning LRANGE bulwark:recent_blocks 0 99"
 
 collect_step "Redis guardrail version" \
     "03-redis-guardrail-version.txt" \
-    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning GET sentinel:guardrails:version"
+    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning GET bulwark:guardrails:version"
 
 collect_step "Redis disabled patterns" \
     "03-redis-disabled-patterns.txt" \
-    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning SMEMBERS sentinel:guardrails:disabled"
+    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning SMEMBERS bulwark:guardrails:disabled"
 
 collect_step "Redis custom patterns" \
     "03-redis-custom-patterns.txt" \
-    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning HGETALL sentinel:guardrails:custom"
+    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning HGETALL bulwark:guardrails:custom"
 
 collect_step "Redis rate limit keys" \
     "03-redis-rate-limit-keys.txt" \
-    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning KEYS 'sentinel:rate_limit:*'"
+    "kubectl exec deploy/redis -n ${NAMESPACE} -- redis-cli --no-auth-warning KEYS 'bulwark:rate_limit:*'"
 
 collect_step "Redis INFO (memory, clients, stats)" \
     "03-redis-info.txt" \

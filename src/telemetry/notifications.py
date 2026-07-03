@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 # Persistent storage path — uses data/ (mounted as PVC in k8s)
-_CHANNELS_FILE = Path(os.environ.get("SENTINEL_NOTIFICATIONS_FILE", "data/notifications_channels.json"))
+_CHANNELS_FILE = Path(os.environ.get("BULWARK_NOTIFICATIONS_FILE", "data/notifications_channels.json"))
 
 
 @dataclass
@@ -356,7 +356,7 @@ class NotificationEngine:
 
         body = {
             "blocks": [
-                {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} Sentinel Gateway — {alert.verdict.upper()}"}},
+                {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} Bulwark Gateway — {alert.verdict.upper()}"}},
                 {"type": "section", "fields": [
                     {"type": "mrkdwn", "text": f"*Severity:* `{alert.severity}`"},
                     {"type": "mrkdwn", "text": f"*Category:* `{alert.category}`"},
@@ -388,7 +388,7 @@ class NotificationEngine:
                     "body": [
                         {
                             "type": "TextBlock",
-                            "text": f"🛡️ Sentinel Gateway — {alert.verdict.upper()}",
+                            "text": f"🛡️ Bulwark Gateway — {alert.verdict.upper()}",
                             "weight": "Bolder",
                             "size": "Large",
                             "color": "Attention" if alert.severity in ("critical", "high") else "Warning",
@@ -423,7 +423,7 @@ class NotificationEngine:
 
         body = {
             "embeds": [{
-                "title": f"🛡️ Sentinel Gateway — {alert.verdict.upper()}",
+                "title": f"🛡️ Bulwark Gateway — {alert.verdict.upper()}",
                 "color": color,
                 "fields": [
                     {"name": "Severity", "value": f"`{alert.severity}`", "inline": True},
@@ -449,9 +449,9 @@ class NotificationEngine:
             "event_action": "trigger",
             "payload": {
                 "summary": f"[{alert.verdict.upper()}] {alert.description[:250]}",
-                "source": f"sentinel-gateway/{alert.tenant_id}",
+                "source": f"bulwark-gateway/{alert.tenant_id}",
                 "severity": pagerduty_severity,
-                "component": "sentinel-gateway",
+                "component": "bulwark-gateway",
                 "group": alert.tenant_id,
                 "class": alert.category,
                 "custom_details": {
@@ -471,8 +471,8 @@ class NotificationEngine:
             "message": f"[{alert.verdict.upper()}] {alert.description[:130]}",
             "alias": self._make_dedup_key(alert),
             "priority": priority,
-            "source": "sentinel-gateway",
-            "tags": ["sentinel-gateway", alert.category, alert.tenant_id],
+            "source": "bulwark-gateway",
+            "tags": ["bulwark-gateway", alert.category, alert.tenant_id],
             "details": {
                 "tenant_id": alert.tenant_id,
                 "agent_id": alert.agent_id,
@@ -496,7 +496,7 @@ class NotificationEngine:
         def esc(s: str) -> str:
             return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         text = (
-            f"{emoji} <b>Sentinel Gateway \u2014 {alert.verdict.upper()}</b>\n"
+            f"{emoji} <b>Bulwark Gateway \u2014 {alert.verdict.upper()}</b>\n"
             f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
             f"\U0001f4cb <b>Severity:</b> {alert.severity.upper()}\n"
             f"\U0001f3f7 <b>Category:</b> {esc(alert.category)}\n"
@@ -521,7 +521,7 @@ class NotificationEngine:
         patterns = ", ".join(alert.matched_patterns[:3]) or "N/A"
         body = {
             "cards": [{
-                "header": {"title": f"🛡️ Sentinel Gateway — {alert.verdict.upper()}", "subtitle": alert.category},
+                "header": {"title": f"🛡️ Bulwark Gateway — {alert.verdict.upper()}", "subtitle": alert.category},
                 "sections": [{
                     "widgets": [
                         {"keyValue": {"topLabel": "Severity", "content": alert.severity.upper()}},
@@ -545,12 +545,12 @@ class NotificationEngine:
                           "medium": "#FFD700", "low": "#4169E1"}.get(alert.severity, "#808080")
         patterns = ", ".join(alert.matched_patterns[:5]) or "N/A"
 
-        subject = f"[Sentinel Gateway] [{alert.severity.upper()}] {alert.description[:80]}"
+        subject = f"[Bulwark Gateway] [{alert.severity.upper()}] {alert.description[:80]}"
 
         html_body = f"""
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px;">
 <div style="border-left: 4px solid {severity_color}; padding: 16px; margin: 16px 0; background: #f9f9f9;">
-  <h2 style="margin: 0 0 12px 0; color: #333;">🛡️ Sentinel Gateway — {alert.verdict.upper()}</h2>
+  <h2 style="margin: 0 0 12px 0; color: #333;">🛡️ Bulwark Gateway — {alert.verdict.upper()}</h2>
   <table style="border-collapse: collapse; width: 100%;">
     <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Severity</td>
         <td style="padding: 4px 0;"><span style="background: {severity_color}; color: white; padding: 2px 8px; border-radius: 4px;">{alert.severity.upper()}</span></td></tr>
@@ -568,7 +568,7 @@ class NotificationEngine:
   <hr style="border: none; border-top: 1px solid #ddd; margin: 12px 0;">
   <p style="color: #333; margin: 0;">{alert.description[:1000]}</p>
 </div>
-<p style="color: #999; font-size: 12px;">Sent by Sentinel Gateway Notification Engine</p>
+<p style="color: #999; font-size: 12px;">Sent by Bulwark Gateway Notification Engine</p>
 </body></html>"""
 
         # Run SMTP in thread to avoid blocking event loop
@@ -609,7 +609,7 @@ class NotificationEngine:
     async def _send_generic(self, channel: NotificationChannel, alert: AlertPayload):
         """Generic HTTP webhook (JSON POST)."""
         body = {
-            "source": "sentinel-gateway",
+            "source": "bulwark-gateway",
             "verdict": alert.verdict,
             "severity": alert.severity,
             "category": alert.category,
@@ -639,9 +639,9 @@ class NotificationEngine:
             verdict="block",
             severity="high",
             category="connectivity_test",
-            description="Sentinel Gateway notification channel verification. This confirms the integration is operational and alerts will be delivered to this endpoint.",
+            description="Bulwark Gateway notification channel verification. This confirms the integration is operational and alerts will be delivered to this endpoint.",
             tenant_id="system",
-            agent_id="sentinel-gateway",
+            agent_id="bulwark-gateway",
             source_ip="10.0.0.1",
             matched_patterns=["channel_test"],
         )

@@ -19,10 +19,10 @@ cat <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sentinel-proxy-secrets
-  namespace: sentinel-gateway
+  name: bulwark-proxy-secrets
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: proxy
 type: Opaque
 data:
@@ -37,10 +37,10 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sentinel-admin-secrets
-  namespace: sentinel-gateway
+  name: bulwark-admin-secrets
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: admin
 type: Opaque
 data:
@@ -55,10 +55,10 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sentinel-redis-secrets
-  namespace: sentinel-gateway
+  name: bulwark-redis-secrets
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: redis
 type: Opaque
 data:
@@ -67,10 +67,10 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sentinel-monitoring-secrets
-  namespace: sentinel-gateway
+  name: bulwark-monitoring-secrets
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: monitoring
 type: Opaque
 data:

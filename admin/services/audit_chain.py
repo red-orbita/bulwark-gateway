@@ -343,7 +343,7 @@ async def publish_anchor_to_redis() -> Optional[str]:
             f"chain-anchor:{anchor_json}".encode()
         ).hexdigest()
 
-        client.hset("sentinel:audit:anchor", mapping={
+        client.hset("bulwark:audit:anchor", mapping={
             "chain_head": audit.chain_head,
             "sequence_id": str(audit.sequence_id),
             "timestamp": anchor_data["timestamp"],

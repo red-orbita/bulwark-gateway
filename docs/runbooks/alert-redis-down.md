@@ -1,12 +1,12 @@
-# Runbook: SentinelRedisDown
+# Runbook: BulwarkRedisDown
 
 ## Alert Details
 
 - **Severity**: Critical
-- **Alert rule**: `SentinelRedisDown`
+- **Alert rule**: `BulwarkRedisDown`
 - **Prometheus expression**:
   ```promql
-  up{job="sentinel-redis"} == 0
+  up{job="bulwark-redis"} == 0
   ```
 - **Fires when**: Redis instance is unreachable for more than 1 minute
 - **Team**: Platform
@@ -18,9 +18,9 @@
 - **What degrades**:
   - Rate limiting: falls back to non-distributed in-memory (each pod tracks independently)
   - Pattern sync: disabled (admin pattern changes won't propagate to proxy)
-  - Global counters: unavailable (`sentinel:global:*` keys)
+  - Global counters: unavailable (`bulwark:global:*` keys)
   - Recent blocks: not recorded (admin dashboard shows stale data)
-  - SIEM stats: `sentinel:siem:*` counters stop updating
+  - SIEM stats: `bulwark:siem:*` counters stop updating
 - **What continues working**: Guardrails still enforce (patterns compiled at startup), proxying still works, SIEM export still functions
 - **Business impact**: Reduced visibility, rate limits less effective (per-pod instead of global), possible over/under-limiting
 
@@ -30,19 +30,19 @@
 2. **Verify Redis is actually down** (not a network/scrape issue):
    ```bash
    # Check Redis pod status
-   kubectl get pods -l app.kubernetes.io/name=redis -n sentinel-gateway
+   kubectl get pods -l app.kubernetes.io/name=redis -n bulwark-gateway
 
    # Check Redis pod events
-   kubectl describe pod -l app.kubernetes.io/name=redis -n sentinel-gateway | tail -20
+   kubectl describe pod -l app.kubernetes.io/name=redis -n bulwark-gateway | tail -20
 
    # Try direct connectivity from proxy pod
-   kubectl exec deploy/proxy -n sentinel-gateway -- \
+   kubectl exec deploy/proxy -n bulwark-gateway -- \
      python -c "import redis; r=redis.from_url('redis://redis:6379'); print(r.ping())"
    ```
 3. **Check if proxy is degraded gracefully**:
    ```bash
    # Proxy health should still be 200 (Redis is optional)
-   kubectl exec deploy/proxy -n sentinel-gateway -- \
+   kubectl exec deploy/proxy -n bulwark-gateway -- \
      curl -s http://localhost:8080/health | jq .
    ```
 4. **Determine cause** — OOMKill, disk full, network policy, or crash
@@ -51,26 +51,26 @@
 
 ```bash
 # 1. Pod status and restart count
-kubectl get pods -l app.kubernetes.io/name=redis -n sentinel-gateway -o wide
+kubectl get pods -l app.kubernetes.io/name=redis -n bulwark-gateway -o wide
 
 # 2. Pod events (OOMKill, eviction, scheduling failure)
-kubectl describe pod -l app.kubernetes.io/name=redis -n sentinel-gateway
+kubectl describe pod -l app.kubernetes.io/name=redis -n bulwark-gateway
 
 # 3. Redis logs (last restart)
-kubectl logs -l app.kubernetes.io/name=redis -n sentinel-gateway --previous --tail=50
+kubectl logs -l app.kubernetes.io/name=redis -n bulwark-gateway --previous --tail=50
 
 # 4. Current Redis logs
-kubectl logs -l app.kubernetes.io/name=redis -n sentinel-gateway --tail=100
+kubectl logs -l app.kubernetes.io/name=redis -n bulwark-gateway --tail=100
 
 # 5. Resource usage (memory/CPU)
-kubectl top pod -l app.kubernetes.io/name=redis -n sentinel-gateway
+kubectl top pod -l app.kubernetes.io/name=redis -n bulwark-gateway
 
 # 6. PVC status (disk full?)
-kubectl get pvc -n sentinel-gateway
-kubectl describe pvc redis-data -n sentinel-gateway
+kubectl get pvc -n bulwark-gateway
+kubectl describe pvc redis-data -n bulwark-gateway
 
 # 7. Network policy (connectivity blocked?)
-kubectl get networkpolicies -n sentinel-gateway
+kubectl get networkpolicies -n bulwark-gateway
 
 # 8. Check if external Redis (if applicable)
 # For Azure/AWS/GCP managed Redis, check cloud console
@@ -93,49 +93,49 @@ kubectl get networkpolicies -n sentinel-gateway
 
 ```bash
 # 1. If pod is CrashLoopBackOff, check and fix the cause, then:
-kubectl delete pod -l app.kubernetes.io/name=redis -n sentinel-gateway
+kubectl delete pod -l app.kubernetes.io/name=redis -n bulwark-gateway
 # (StatefulSet/Deployment will recreate it)
 
 # 2. If OOMKilled, increase limit:
-kubectl patch deploy redis -n sentinel-gateway --type=json -p='[
+kubectl patch deploy redis -n bulwark-gateway --type=json -p='[
   {"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"256Mi"}
 ]'
 
 # 3. If disk full, expand PVC (if StorageClass supports it):
-kubectl patch pvc redis-data -n sentinel-gateway -p '{"spec":{"resources":{"requests":{"storage":"2Gi"}}}}'
+kubectl patch pvc redis-data -n bulwark-gateway -p '{"spec":{"resources":{"requests":{"storage":"2Gi"}}}}'
 
 # 4. If network connectivity issue:
-kubectl exec deploy/proxy -n sentinel-gateway -- nc -zv redis 6379
+kubectl exec deploy/proxy -n bulwark-gateway -- nc -zv redis 6379
 ```
 
 ### After Redis Recovers
 
 ```bash
 # 1. Verify Redis is responding
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli PING
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli PING
 
 # 2. Check data persistence (counters should survive restart if AOF enabled)
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli MGET \
-  sentinel:global:requests_total sentinel:global:block
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli MGET \
+  bulwark:global:requests_total bulwark:global:block
 
 # 3. Force pattern re-sync from admin
 curl -X POST http://admin:8090/admin/guardrails/sync
 
 # 4. Verify rate limiting is distributed again
-kubectl logs deploy/proxy -n sentinel-gateway --since=2m | grep -i "redis"
+kubectl logs deploy/proxy -n bulwark-gateway --since=2m | grep -i "redis"
 
 # 5. Verify SIEM stats are updating
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli GET sentinel:siem:updated_at
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli GET bulwark:siem:updated_at
 ```
 
 ### If Using External Redis (Azure/AWS/GCP)
 
 ```bash
 # Check connection string
-kubectl get secret sentinel-redis-secret -n sentinel-gateway -o jsonpath='{.data.url}' | base64 -d
+kubectl get secret bulwark-redis-secret -n bulwark-gateway -o jsonpath='{.data.url}' | base64 -d
 
 # Test TLS connectivity
-kubectl exec deploy/proxy -n sentinel-gateway -- \
+kubectl exec deploy/proxy -n bulwark-gateway -- \
   python -c "import redis; r=redis.from_url('rediss://...', ssl_cert_reqs=None); print(r.ping())"
 
 # Check cloud provider status page for outage
@@ -153,10 +153,10 @@ kubectl exec deploy/proxy -n sentinel-gateway -- \
 
 ## Related Alerts
 
-- [`SentinelHighBlockRate`](alert-high-block-rate.md) — pattern sync failure may cause false positives
-- [`SentinelProxyPodsDown`](alert-redis-down.md) — if proxy pods are crashing due to Redis dependency
-- [`SentinelAuditLogFailures`](alert-redis-down.md) — Redis-backed audit may fail
-- [`SentinelMemoryPressure`](alert-redis-down.md) — OOMKill often precedes Redis down
+- [`BulwarkHighBlockRate`](alert-high-block-rate.md) — pattern sync failure may cause false positives
+- [`BulwarkProxyPodsDown`](alert-redis-down.md) — if proxy pods are crashing due to Redis dependency
+- [`BulwarkAuditLogFailures`](alert-redis-down.md) — Redis-backed audit may fail
+- [`BulwarkMemoryPressure`](alert-redis-down.md) — OOMKill often precedes Redis down
 
 ## Post-Incident
 
@@ -164,6 +164,6 @@ kubectl exec deploy/proxy -n sentinel-gateway -- \
 - [ ] Check if global counters are accurate post-recovery
 - [ ] Increase Redis memory limits if OOMKill was cause
 - [ ] Add Redis PodDisruptionBudget if not present
-- [ ] Consider Redis Sentinel/Cluster for HA if single-instance
+- [ ] Consider Redis Bulwark/Cluster for HA if single-instance
 - [ ] Create Jira ticket for root cause
 - [ ] Update this runbook with lessons learned

@@ -4,7 +4,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: redis-access
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector:
     matchLabels:
@@ -30,7 +30,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: proxy-access
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector:
     matchLabels:
@@ -97,7 +97,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: admin-access
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector:
     matchLabels:
@@ -150,7 +150,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: prometheus-access
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector:
     matchLabels:
@@ -197,7 +197,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: grafana-access
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector:
     matchLabels:
@@ -236,7 +236,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-egress
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector: {}
   policyTypes:
@@ -248,7 +248,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-ingress
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   podSelector: {}
   policyTypes:

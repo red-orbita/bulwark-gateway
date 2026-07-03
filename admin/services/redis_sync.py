@@ -2,9 +2,9 @@
 
 Writes to Redis so the proxy's DynamicPatternRegistry picks up changes.
 Keys:
-  sentinel:guardrails:disabled  — SET of disabled pattern IDs
-  sentinel:guardrails:custom    — HASH { id: JSON(regex, severity, category, description, layer) }
-  sentinel:guardrails:version   — INT (incremented on every change)
+  bulwark:guardrails:disabled  — SET of disabled pattern IDs
+  bulwark:guardrails:custom    — HASH { id: JSON(regex, severity, category, description, layer) }
+  bulwark:guardrails:version   — INT (incremented on every change)
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ import redis
 logger = logging.getLogger(__name__)
 
 # Redis keys (must match src/guardrails/dynamic_registry.py)
-KEY_DISABLED = "sentinel:guardrails:disabled"
-KEY_CUSTOM = "sentinel:guardrails:custom"
-KEY_VERSION = "sentinel:guardrails:version"
+KEY_DISABLED = "bulwark:guardrails:disabled"
+KEY_CUSTOM = "bulwark:guardrails:custom"
+KEY_VERSION = "bulwark:guardrails:version"
 
 # ─── Connection Pool Singleton ────────────────────────────────────────
 # Avoids creating a new TCP connection + PING on every call.
@@ -40,7 +40,7 @@ def _get_pool() -> Optional[redis.ConnectionPool]:
     """Get or create the Redis connection pool singleton."""
     global _redis_pool, _redis_url_resolved, _pool_created_at
 
-    url = os.getenv("SENTINEL_REDIS_URL", "")
+    url = os.getenv("BULWARK_REDIS_URL", "")
     if not url:
         return None
 
@@ -56,7 +56,7 @@ def _get_pool() -> Optional[redis.ConnectionPool]:
             return _redis_pool
 
         # Inject password from secret file
-        pw_file = os.getenv("SENTINEL_REDIS_PASSWORD_FILE", "")
+        pw_file = os.getenv("BULWARK_REDIS_PASSWORD_FILE", "")
         password = None
         if pw_file and os.path.isfile(pw_file):
             with open(pw_file) as f:
@@ -76,7 +76,7 @@ def _get_pool() -> Optional[redis.ConnectionPool]:
             if password:
                 kwargs["password"] = password
             if url.startswith("rediss://"):
-                tls_insecure = os.getenv("SENTINEL_REDIS_TLS_INSECURE", "false").lower() in ("1", "true", "yes")
+                tls_insecure = os.getenv("BULWARK_REDIS_TLS_INSECURE", "false").lower() in ("1", "true", "yes")
                 if tls_insecure:
                     import ssl
                     kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
@@ -97,7 +97,7 @@ def _build_redis_kwargs(url: str, timeout: float = 2.0, password: Optional[str] 
     if password:
         kwargs["password"] = password
     if url.startswith("rediss://"):
-        tls_insecure = os.getenv("SENTINEL_REDIS_TLS_INSECURE", "false").lower() in ("1", "true", "yes")
+        tls_insecure = os.getenv("BULWARK_REDIS_TLS_INSECURE", "false").lower() in ("1", "true", "yes")
         if tls_insecure:
             import ssl
             kwargs["ssl_cert_reqs"] = ssl.CERT_NONE

@@ -53,7 +53,7 @@ if [[ "$HEALTH" == "ok" ]]; then
     echo "[ROLLBACK] ✓ Service healthy after rollback"
 else
     echo "[ROLLBACK] ✗ Service unhealthy: $HEALTH"
-    echo "[ROLLBACK] Consider restarting: docker-compose restart sentinel-gateway"
+    echo "[ROLLBACK] Consider restarting: docker-compose restart bulwark-gateway"
     exit 1
 fi
 

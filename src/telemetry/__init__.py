@@ -1,5 +1,5 @@
 """
-Sentinel Gateway — Telemetry & SIEM Export Module
+Bulwark Gateway — Telemetry & SIEM Export Module
 
 Architecture:
     Hot Path (proxy.py) → enqueue(event) [≤2ms, non-blocking]

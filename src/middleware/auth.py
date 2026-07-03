@@ -13,6 +13,7 @@ Supports:
 import hashlib
 import hmac
 import logging
+import os
 import re
 from typing import Set
 
@@ -36,33 +37,39 @@ _revocation_redis = None
 _revocation_redis_init = False
 
 # H-05 fix: Local revocation cache with short TTL to survive Redis outages.
-# On Redis failure, previously-validated tokens get a 30s grace period to
+# On Redis failure, previously-validated tokens get a grace period to
 # prevent full DoS on Redis outage while still maintaining security.
+# SECURITY FIX (P8-03): Split into positive/negative caches.
+# - Positive cache (not-revoked): short TTL (2s) so revocations are detected quickly.
+# - Negative cache (revoked): long TTL (60s) to avoid hammering Redis for
+#   tokens already confirmed revoked.
 from cachetools import TTLCache
-_revocation_cache: TTLCache = TTLCache(maxsize=4096, ttl=30.0)  # token_jti -> is_revoked
-_REVOCATION_CACHE_MISS = object()  # sentinel for cache miss
+
+_AUTH_CACHE_TTL = float(os.environ.get("BULWARK_AUTH_CACHE_TTL", "2.0"))
+_auth_cache: TTLCache = TTLCache(maxsize=1024, ttl=_AUTH_CACHE_TTL)
+
+# Negative cache: revoked token JTIs cached to avoid repeated Redis lookups
+_REVOKED_CACHE_TTL = float(os.environ.get("BULWARK_REVOKED_CACHE_TTL", "60.0"))
+_revoked_cache: TTLCache = TTLCache(maxsize=4096, ttl=_REVOKED_CACHE_TTL)
 
 
 def _is_token_revoked(jti: str) -> bool:
     """Check if a JWT ID is in the revocation set (Redis).
 
-    H-05 fix: Uses a local cache with 30s TTL to mitigate Redis DoS.
-    - On Redis success: cache the result (True/False) for 30s
-    - On Redis failure: return cached value if available (stale grace period)
-    - If no cached value AND Redis unavailable: fail-closed (reject)
-
-    This prevents Redis being a single point of failure for availability
-    while maintaining security guarantees:
-    - Revoked tokens are blocked within 30s of revocation
-    - New/unknown tokens are rejected if Redis is unavailable (fail-closed)
-    - Known-good tokens get a 30s grace period during Redis outages
+    P8-03 fix: Uses split positive/negative caches:
+    - Negative cache (revoked): 60s TTL — once revoked, stays revoked.
+    - Positive cache (not-revoked): 2s TTL — recheck quickly to catch revocations.
+    - On Redis failure: fail-closed (reject) for unknown tokens.
     """
     global _revocation_redis, _revocation_redis_init
 
-    # Check local cache first
-    cached = _revocation_cache.get(jti, _REVOCATION_CACHE_MISS)
-    if cached is not _REVOCATION_CACHE_MISS:
-        return cached
+    # Check negative cache first — revoked tokens short-circuit immediately
+    if jti in _revoked_cache:
+        return True
+
+    # Check positive cache — recently verified as not-revoked
+    if jti in _auth_cache:
+        return False
 
     if not _revocation_redis_init:
         _revocation_redis_init = True
@@ -79,9 +86,13 @@ def _is_token_revoked(jti: str) -> bool:
         # Fail-closed: cannot verify revocation → reject token (C-04)
         return True
     try:
-        is_revoked = bool(_revocation_redis.sismember("sentinel:revoked_tokens", jti))
-        # Cache the result (both positive and negative)
-        _revocation_cache[jti] = is_revoked
+        is_revoked = bool(_revocation_redis.sismember("bulwark:revoked_tokens", jti))
+        if is_revoked:
+            # Cache in negative cache (long TTL — revocation is permanent)
+            _revoked_cache[jti] = True
+        else:
+            # Cache in positive cache (short TTL — recheck soon)
+            _auth_cache[jti] = True
         return is_revoked
     except Exception:
         # H-05: On Redis error, fail-closed for unknown tokens
@@ -94,7 +105,7 @@ def _is_token_revoked(jti: str) -> bool:
 PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json"}
 
 # SECURITY FIX (CRIT-01): API keys are now bound to tenant_id.
-# Format: "key:tenant_id" pairs in SENTINEL_API_KEYS.
+# Format: "key:tenant_id" pairs in BULWARK_API_KEYS.
 # Keys without explicit tenant binding default to "default" tenant.
 # This prevents cross-tenant impersonation via X-Tenant-ID header spoofing.
 _API_KEY_BINDINGS: dict[str, str] = {}  # key_hash -> bound_tenant_id
@@ -115,7 +126,7 @@ def _init_api_keys() -> dict[str, str]:
     """Load API keys from config, store as SHA-256 hashes bound to tenant_ids.
 
     SECURITY FIX (CRIT-01): API keys are now bound to a specific tenant.
-    Format options in SENTINEL_API_KEYS:
+    Format options in BULWARK_API_KEYS:
       - "key1:tenant1,key2:tenant2"   (explicit tenant binding)
       - "key1,key2"                    (backward-compat: binds to "default")
 
@@ -253,6 +264,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         )
                     tenant_id = payload["tenant_id"]
                     agent_id = payload.get("agent_id", agent_id)
+                    # SECURITY FIX (RC-07): Store jti for streaming re-validation
+                    request.state._auth_jti = jti
                 except JWTError:
                     # SECURITY (L-01 fix): JWT decode failed. Do NOT fall through
                     # to API key check — this creates a timing oracle that reveals
@@ -292,15 +305,26 @@ class AuthMiddleware(BaseHTTPMiddleware):
         else:
             # H-03: Even with API key auth disabled, still validate JWT if present
             # This mode is ONLY for local development/testing
+            # SECURITY FIX (APT-03): Always enforce audience/issuer to prevent
+            # cross-service token reuse (admin tokens accepted by proxy).
             if auth_header and auth_header.startswith("Bearer "):
                 token = auth_header[7:]
                 try:
                     verification_key = _get_jwt_verification_key(token)
+                    decode_kwargs: dict = {
+                        "algorithms": [settings.jwt_algorithm],
+                    }
+                    # Enforce audience/issuer even in non-auth mode
+                    jwt_audience = getattr(settings, "jwt_audience", None)
+                    jwt_issuer = getattr(settings, "jwt_issuer", None)
+                    if jwt_audience:
+                        decode_kwargs["audience"] = jwt_audience
+                    if jwt_issuer:
+                        decode_kwargs["issuer"] = jwt_issuer
                     payload = jwt.decode(
                         token,
                         verification_key,
-                        algorithms=[settings.jwt_algorithm],
-                        options={"verify_aud": False, "verify_iss": False},
+                        **decode_kwargs,
                     )
                     tenant_id = payload.get("tenant_id", tenant_id)
                     agent_id = payload.get("agent_id", agent_id)
@@ -320,7 +344,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         # Tier 2 Multi-Tenancy: Enforce tenant isolation on dedicated pods.
-        # If SENTINEL_ALLOWED_TENANTS is set, only those tenants are served.
+        # If BULWARK_ALLOWED_TENANTS is set, only those tenants are served.
         # Requests for other tenants are rejected (they should go to their own pods).
         if _ALLOWED_TENANTS and tenant_id not in _ALLOWED_TENANTS:
             return JSONResponse(
@@ -334,6 +358,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Attach context to request state
         request.state.tenant_id = tenant_id
         request.state.agent_id = agent_id
+        # SECURITY FIX (RC-07): Store auth metadata for streaming re-validation.
+        # During long-lived streaming responses, the token must be periodically
+        # re-checked for revocation to limit the window of access after revocation.
+        request.state.token_jti = getattr(request.state, "_auth_jti", None)
 
         return await call_next(request)
 

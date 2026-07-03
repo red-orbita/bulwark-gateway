@@ -66,8 +66,8 @@ class IntentScanner(InputScanner):
     AND escalation_attempt simultaneously.
 
     Configuration:
-      - SENTINEL_ML_ENABLED=true (required)
-      - SENTINEL_ML_BLOCKING=true (optional, adds latency)
+      - BULWARK_ML_ENABLED=true (required)
+      - BULWARK_ML_BLOCKING=true (optional, adds latency)
       - block_threshold: score above which a single intent triggers BLOCK (0.85)
       - warn_threshold: score above which a single intent triggers WARN (0.6)
       - aggregate_threshold: sum of adversarial intents that triggers WARN (1.2)
@@ -98,7 +98,7 @@ class IntentScanner(InputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="ML-based adversarial intent detection (multi-label)",
-            author="sentinel",
+            author="bulwark",
             priority=25,  # After regex (10), before topic (30)
         )
 
@@ -109,7 +109,7 @@ class IntentScanner(InputScanner):
             return
 
         if not settings.ml_enabled:
-            logger.info("ml_intent_skipped", extra={"reason": "SENTINEL_ML_ENABLED=false"})
+            logger.info("ml_intent_skipped", extra={"reason": "BULWARK_ML_ENABLED=false"})
             return
 
         manager = get_model_manager()
@@ -129,7 +129,19 @@ class IntentScanner(InputScanner):
         4. Otherwise → ALLOW
         """
         if not self._model_loaded:
-            return GuardrailResult(verdict=Verdict.ALLOW)
+            # SECURITY FIX (P7-01): Fail-closed when ML model unavailable.
+            return GuardrailResult(
+                verdict=Verdict.BLOCK,
+                events=[SecurityEvent(
+                    tenant_id="system",
+                    agent_id="ml_scanner",
+                    verdict=Verdict.BLOCK,
+                    category=ThreatCategory.PROMPT_INJECTION,
+                    description="ML intent scanner unavailable — fail-closed (model not loaded)",
+                    source="ml_intent_scanner",
+                    severity="high",
+                )],
+            )
 
         loop = asyncio.get_event_loop()
         scores = await loop.run_in_executor(

@@ -1,6 +1,6 @@
-# Sentinel Gateway — Benchmark Results
+# Bulwark Gateway — Benchmark Results
 
-Performance and detection benchmarks for the Sentinel Gateway security guardrail engine.
+Performance and detection benchmarks for the Bulwark Gateway security guardrail engine.
 
 All results are deterministic and reproducible (seeded random generators).
 Only the regex-based input scanner is benchmarked here — ML scanners are additive and async.
@@ -153,7 +153,7 @@ Note: Throughput is measured single-threaded. In production with 4 uvicorn worke
 | Full proxy (with backend) | 200-5000ms | 3000-8000ms | Dominated by LLM response time |
 | Enrichment (async) | +0ms | +0ms | Fire-and-forget, doesn't add to response time |
 | ML scanners (async) | +0ms | +0ms | Same — async, no latency impact |
-| ML scanners (blocking) | +30ms | +80ms | Only if `SENTINEL_ML_BLOCKING=true` |
+| ML scanners (blocking) | +30ms | +80ms | Only if `BULWARK_ML_BLOCKING=true` |
 
 ---
 

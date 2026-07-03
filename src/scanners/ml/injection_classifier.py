@@ -39,10 +39,10 @@ class InjectionClassifier(InputScanner):
     whether input text is a prompt injection attempt.
 
     Configuration:
-      - SENTINEL_ML_ENABLED=true (required to activate)
-      - SENTINEL_ML_BLOCKING=true (to run in hot path, adds latency)
-      - SENTINEL_ML_BLOCK_THRESHOLD=0.9 (confidence to auto-block)
-      - SENTINEL_ML_WARN_THRESHOLD=0.7 (confidence to warn)
+      - BULWARK_ML_ENABLED=true (required to activate)
+      - BULWARK_ML_BLOCKING=true (to run in hot path, adds latency)
+      - BULWARK_ML_BLOCK_THRESHOLD=0.9 (confidence to auto-block)
+      - BULWARK_ML_WARN_THRESHOLD=0.7 (confidence to warn)
       - Model files at: models/injection-classifier/{model.onnx, tokenizer.json}
     """
 
@@ -68,7 +68,7 @@ class InjectionClassifier(InputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="ML-based prompt injection detection (DeBERTa/ONNX)",
-            author="sentinel",
+            author="bulwark",
             priority=20,  # After regex (priority=10) if blocking
         )
 
@@ -79,7 +79,7 @@ class InjectionClassifier(InputScanner):
             return
 
         if not settings.ml_enabled:
-            logger.info("ml_injection_skipped", extra={"reason": "SENTINEL_ML_ENABLED=false"})
+            logger.info("ml_injection_skipped", extra={"reason": "BULWARK_ML_ENABLED=false"})
             return
 
         manager = get_model_manager()
@@ -100,7 +100,22 @@ class InjectionClassifier(InputScanner):
             ALLOW otherwise
         """
         if not self._model_loaded:
-            return GuardrailResult(verdict=Verdict.ALLOW)
+            # SECURITY FIX (P7-01): Fail-closed when ML model unavailable.
+            # Previously returned ALLOW, meaning attackers could force model unload
+            # (OOM, corrupted weights) then bypass ML detection entirely.
+            # Now returns BLOCK with informative event so operators notice.
+            return GuardrailResult(
+                verdict=Verdict.BLOCK,
+                events=[SecurityEvent(
+                    tenant_id="system",
+                    agent_id="ml_scanner",
+                    verdict=Verdict.BLOCK,
+                    category=ThreatCategory.PROMPT_INJECTION,
+                    description="ML injection classifier unavailable — fail-closed (model not loaded)",
+                    source="ml_injection_classifier",
+                    severity="high",
+                )],
+            )
 
         # Run inference in thread pool (CPU-bound)
         loop = asyncio.get_event_loop()

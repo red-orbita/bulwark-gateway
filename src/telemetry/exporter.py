@@ -26,10 +26,10 @@ from .schema import SecurityTelemetryEvent
 
 logger = logging.getLogger(__name__)
 
-EXPORTER_ENABLED = os.getenv("SENTINEL_TELEMETRY_ENABLED", "false").lower() == "true"
-BATCH_SIZE = int(os.getenv("SENTINEL_TELEMETRY_BATCH_SIZE", "100"))
-FLUSH_INTERVAL = float(os.getenv("SENTINEL_TELEMETRY_FLUSH_INTERVAL", "1.0"))
-STATS_FILE = Path(os.getenv("SENTINEL_SIEM_STATS_FILE", "shared/siem/siem_stats.json"))
+EXPORTER_ENABLED = os.getenv("BULWARK_TELEMETRY_ENABLED", "false").lower() == "true"
+BATCH_SIZE = int(os.getenv("BULWARK_TELEMETRY_BATCH_SIZE", "100"))
+FLUSH_INTERVAL = float(os.getenv("BULWARK_TELEMETRY_FLUSH_INTERVAL", "1.0"))
+STATS_FILE = Path(os.getenv("BULWARK_SIEM_STATS_FILE", "shared/siem/siem_stats.json"))
 STATS_FLUSH_INTERVAL = 5.0  # seconds
 
 
@@ -150,7 +150,7 @@ class TelemetryExporter:
 
     async def start(self) -> None:
         """Start the background exporter loop."""
-        enabled = os.getenv("SENTINEL_TELEMETRY_ENABLED", "false").lower() == "true"
+        enabled = os.getenv("BULWARK_TELEMETRY_ENABLED", "false").lower() == "true"
         if not enabled:
             logger.info("telemetry_exporter_disabled")
             return
@@ -248,10 +248,10 @@ class TelemetryExporter:
     def _persist_stats_redis(self) -> None:
         """Persist cumulative stats to Redis (shared across all pods)."""
         import redis
-        redis_url = os.getenv("SENTINEL_REDIS_URL", "")
+        redis_url = os.getenv("BULWARK_REDIS_URL", "")
         if not redis_url:
             return
-        pw_file = os.getenv("SENTINEL_REDIS_PASSWORD_FILE", "")
+        pw_file = os.getenv("BULWARK_REDIS_PASSWORD_FILE", "")
         password = None
         if pw_file:
             try:
@@ -260,7 +260,7 @@ class TelemetryExporter:
                 pass
         kwargs: dict = {"password": password, "decode_responses": True, "socket_timeout": 1.0}
         if redis_url.startswith("rediss://"):
-            tls_insecure = os.getenv("SENTINEL_REDIS_TLS_INSECURE", "false").lower() in ("1", "true", "yes")
+            tls_insecure = os.getenv("BULWARK_REDIS_TLS_INSECURE", "false").lower() in ("1", "true", "yes")
             if tls_insecure:
                 import ssl
                 kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
@@ -268,31 +268,31 @@ class TelemetryExporter:
         # Use INCRBY for cumulative counters (safe across multiple pods)
         pipe = r.pipeline()
         # Read current values from last flush to compute delta
-        prev_batches = int(r.get("sentinel:siem:_last_batches_sent") or 0)
-        prev_events = int(r.get("sentinel:siem:_last_events_exported") or 0)
-        prev_errors = int(r.get("sentinel:siem:_last_export_errors") or 0)
+        prev_batches = int(r.get("bulwark:siem:_last_batches_sent") or 0)
+        prev_events = int(r.get("bulwark:siem:_last_events_exported") or 0)
+        prev_errors = int(r.get("bulwark:siem:_last_export_errors") or 0)
         # Compute deltas since last flush
         d_batches = self._stats["batches_sent"] - prev_batches
         d_events = self._stats["events_exported"] - prev_events
         d_errors = self._stats["export_errors"] - prev_errors
         if d_batches > 0:
-            pipe.incrby("sentinel:siem:batches_sent", d_batches)
+            pipe.incrby("bulwark:siem:batches_sent", d_batches)
         if d_events > 0:
-            pipe.incrby("sentinel:siem:events_exported", d_events)
+            pipe.incrby("bulwark:siem:events_exported", d_events)
         if d_errors > 0:
-            pipe.incrby("sentinel:siem:export_errors", d_errors)
+            pipe.incrby("bulwark:siem:export_errors", d_errors)
         # Store current values as last-flushed reference
-        pipe.set("sentinel:siem:_last_batches_sent", self._stats["batches_sent"])
-        pipe.set("sentinel:siem:_last_events_exported", self._stats["events_exported"])
-        pipe.set("sentinel:siem:_last_export_errors", self._stats["export_errors"])
+        pipe.set("bulwark:siem:_last_batches_sent", self._stats["batches_sent"])
+        pipe.set("bulwark:siem:_last_events_exported", self._stats["events_exported"])
+        pipe.set("bulwark:siem:_last_export_errors", self._stats["export_errors"])
         # Transport state (overwrite — latest wins)
         transport_info = json.dumps([
             {"name": tw.transport.name, "circuit_state": tw.circuit.state.value}
             for tw in self._transports
         ])
-        pipe.set("sentinel:siem:transports", transport_info)
-        pipe.set("sentinel:siem:queue_memory_depth", self._queue.memory_depth)
-        pipe.set("sentinel:siem:updated_at", time.time())
+        pipe.set("bulwark:siem:transports", transport_info)
+        pipe.set("bulwark:siem:queue_memory_depth", self._queue.memory_depth)
+        pipe.set("bulwark:siem:updated_at", time.time())
         pipe.execute()
 
     async def _send_to_transports(self, batch: list[SecurityTelemetryEvent]) -> None:
@@ -312,9 +312,16 @@ class TelemetryExporter:
             else:
                 # Only send events belonging to this transport's allowed tenants
                 allowed_tenants = tw.tenant_scope if isinstance(tw.tenant_scope, set) else {tw.tenant_scope}
+                # SECURITY FIX (SGW-XT-001): SecurityTelemetryEvent stores tenant
+                # in nested structure event.tenant.id (TenantFields model), NOT event.tenant_id.
+                # Previous code used getattr(event, "tenant_id") which always returned None,
+                # causing ALL events to be sent to "global" transports regardless of scope.
                 filtered_batch = [
                     event for event in batch
-                    if getattr(event, "tenant_id", None) in allowed_tenants
+                    if (
+                        getattr(event, "tenant_id", None)
+                        or getattr(getattr(event, "tenant", None), "id", None)
+                    ) in allowed_tenants
                 ]
                 if not filtered_batch:
                     continue  # No events for this transport in this batch
@@ -370,7 +377,7 @@ def get_exporter() -> TelemetryExporter:
 
 def load_transports_from_config(exporter: TelemetryExporter) -> None:
     """Load transports from shared config file (written by admin)."""
-    config_file = Path(os.getenv("SENTINEL_SIEM_TRANSPORTS_FILE", "shared/siem/siem_transports.json"))
+    config_file = Path(os.getenv("BULWARK_SIEM_TRANSPORTS_FILE", "shared/siem/siem_transports.json"))
     if not config_file.exists():
         if not EXPORTER_ENABLED:
             logger.info("no_siem_transports_config", extra={"path": str(config_file)})
@@ -412,7 +419,7 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
             if transport_type == "file":
                 from .transports.file_shipper import FileShipperTransport, FileShipperConfig
                 file_t = FileShipperTransport(FileShipperConfig(
-                    path=cfg.get("endpoint", "/var/log/sentinel-gateway/events.ndjson"),
+                    path=cfg.get("endpoint", "/var/log/bulwark-gateway/events.ndjson"),
                 ))
                 exporter.add_transport(file_t)
             elif transport_type == "syslog":

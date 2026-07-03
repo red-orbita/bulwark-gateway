@@ -24,7 +24,7 @@ router = APIRouter()
 # In docker-compose: shared_data volume at /app/shared/enrichment
 # In K8s: siem-stats PVC or dedicated enrichment PVC
 _REPLAY_DB_PATH = Path(
-    os.environ.get("SENTINEL_REPLAY_DB_PATH", "/app/shared/enrichment/attack_replay.db")
+    os.environ.get("BULWARK_REPLAY_DB_PATH", "/app/shared/enrichment/attack_replay.db")
 )
 
 # Thread-safe read-only connection
@@ -90,7 +90,7 @@ class RegexReviewRequest(BaseModel):
 async def enrichment_status():
     """Get enrichment pipeline status and configuration."""
     db_exists = _REPLAY_DB_PATH.exists()
-    enabled = os.environ.get("SENTINEL_ENRICHMENT_ENABLED", "false").lower() == "true"
+    enabled = os.environ.get("BULWARK_ENRICHMENT_ENABLED", "false").lower() == "true"
 
     result = {
         "enabled": enabled,
@@ -100,16 +100,16 @@ async def enrichment_status():
             {
                 "name": "embedding_scanner",
                 "description": "Semantic similarity against known attack embeddings",
-                "model": os.environ.get("SENTINEL_EMBED_MODEL", "all-MiniLM-L6-v2"),
+                "model": os.environ.get("BULWARK_EMBED_MODEL", "all-MiniLM-L6-v2"),
                 "thresholds": {
-                    "suspicious": float(os.environ.get("SENTINEL_EMBED_THRESH_SUSPICIOUS", "0.78")),
-                    "threat": float(os.environ.get("SENTINEL_EMBED_THRESH_THREAT", "0.88")),
+                    "suspicious": float(os.environ.get("BULWARK_EMBED_THRESH_SUSPICIOUS", "0.78")),
+                    "threat": float(os.environ.get("BULWARK_EMBED_THRESH_THREAT", "0.88")),
                 },
             },
             {
                 "name": "skill_enrichment_scanner",
                 "description": "Background SkillSpector analysis on tool definitions",
-                "enabled": os.environ.get("SENTINEL_SKILL_ENRICHMENT_ENABLED", "false").lower() == "true",
+                "enabled": os.environ.get("BULWARK_SKILL_ENRICHMENT_ENABLED", "false").lower() == "true",
             },
         ],
     }

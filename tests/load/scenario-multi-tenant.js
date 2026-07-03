@@ -1,5 +1,5 @@
 /**
- * Sentinel Gateway — Multi-Tenant Isolation Scenario
+ * Bulwark Gateway — Multi-Tenant Isolation Scenario
  *
  * Validates that tenant isolation holds under concurrent load. Multiple
  * tenants sending traffic simultaneously should:

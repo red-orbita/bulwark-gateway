@@ -34,6 +34,10 @@ DEFAULT_DISK_PATH = "data/telemetry_fallback.db"
 class DiskFallback:
     """SQLite WAL-mode append-only fallback for queue overflow."""
 
+    _MAX_DB_SIZE_BYTES = int(os.environ.get("BULWARK_TELEMETRY_DB_MAX_SIZE", str(50 * 1024 * 1024)))  # 50MB
+    _ROTATION_BATCH = 1000  # Delete this many oldest events when limit reached
+    _MAX_EVENTS = int(os.environ.get("BULWARK_TELEMETRY_DB_MAX_EVENTS", "100000"))
+
     def __init__(self, path: str = DEFAULT_DISK_PATH):
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,10 +62,44 @@ class DiskFallback:
         payload = event.model_dump_json(by_alias=True, exclude_none=True)
         with self._lock:
             if self._conn:
+                # DOS-02 fix: Enforce max database size
+                self._maybe_rotate()
                 self._conn.execute(
                     "INSERT INTO events (payload, created_at) VALUES (?, ?)",
                     (payload, time.time()),
                 )
+
+    def _maybe_rotate(self) -> None:
+        """Delete oldest events if database exceeds size limit."""
+        if not self._conn:
+            return
+        try:
+            # Check page_count * page_size for actual DB size
+            cursor = self._conn.execute("PRAGMA page_count")
+            page_count = cursor.fetchone()[0]
+            cursor = self._conn.execute("PRAGMA page_size")
+            page_size = cursor.fetchone()[0]
+            db_size = page_count * page_size
+            if db_size > self._MAX_DB_SIZE_BYTES:
+                # Delete oldest N events
+                self._conn.execute(
+                    f"DELETE FROM events WHERE id IN "
+                    f"(SELECT id FROM events ORDER BY created_at ASC LIMIT {self._ROTATION_BATCH})"
+                )
+                # Reclaim space
+                self._conn.execute("PRAGMA incremental_vacuum(100)")
+
+            # Secondary guard: cap total event count
+            cursor = self._conn.execute("SELECT COUNT(*) FROM events")
+            count = cursor.fetchone()[0]
+            if count > self._MAX_EVENTS:
+                self._conn.execute(
+                    f"DELETE FROM events WHERE id IN "
+                    f"(SELECT id FROM events ORDER BY created_at ASC LIMIT {self._ROTATION_BATCH})"
+                )
+                self._conn.execute("PRAGMA incremental_vacuum(100)")
+        except Exception:
+            pass  # Non-critical: don't break event flow
 
     def drain(self, batch_size: int = 100) -> list[SecurityTelemetryEvent]:
         """Read and delete up to batch_size events from disk."""
@@ -197,7 +235,7 @@ _queue: Optional[TelemetryQueue] = None
 def get_telemetry_queue() -> TelemetryQueue:
     global _queue
     if _queue is None:
-        disk_path = os.getenv("SENTINEL_TELEMETRY_DISK_PATH", DEFAULT_DISK_PATH)
-        max_size = int(os.getenv("SENTINEL_TELEMETRY_QUEUE_SIZE", str(DEFAULT_QUEUE_SIZE)))
+        disk_path = os.getenv("BULWARK_TELEMETRY_DISK_PATH", DEFAULT_DISK_PATH)
+        max_size = int(os.getenv("BULWARK_TELEMETRY_QUEUE_SIZE", str(DEFAULT_QUEUE_SIZE)))
         _queue = TelemetryQueue(max_size=max_size, disk_path=disk_path)
     return _queue

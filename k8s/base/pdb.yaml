@@ -4,10 +4,10 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: proxy-pdb
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: proxy
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   minAvailable: 1
   selector:
@@ -19,10 +19,10 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: redis-pdb
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: redis
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   maxUnavailable: 1
   selector:

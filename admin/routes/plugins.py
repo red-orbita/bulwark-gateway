@@ -195,12 +195,12 @@ def _extract_archive(file_path: Path, dest_dir: Path) -> Path:
     else:
         raise ValueError("Unsupported archive format. Use .zip or .tar.gz")
 
-    # Find the plugin root (directory containing sentinel-plugin.yaml)
+    # Find the plugin root (directory containing bulwark-plugin.yaml)
     for root, dirs, files in os.walk(dest_dir):
-        if "sentinel-plugin.yaml" in files:
+        if "bulwark-plugin.yaml" in files:
             return Path(root)
 
-    raise ValueError("Archive does not contain sentinel-plugin.yaml")
+    raise ValueError("Archive does not contain bulwark-plugin.yaml")
 
 
 # --- Endpoints ---
@@ -237,7 +237,7 @@ async def install_from_upload(
 ) -> dict:
     """Install a plugin from an uploaded archive file.
 
-    The archive must contain a sentinel-plugin.yaml at the root (or one level deep).
+    The archive must contain a bulwark-plugin.yaml at the root (or one level deep).
     A security check runs automatically — installation fails if critical issues are found.
     """
     manager = _get_plugin_manager()
@@ -255,7 +255,7 @@ async def install_from_upload(
     # Extract to temp dir
     tmp_dir = None
     try:
-        tmp_dir = Path(tempfile.mkdtemp(prefix="sentinel-plugin-"))
+        tmp_dir = Path(tempfile.mkdtemp(prefix="bulwark-plugin-"))
         archive_path = tmp_dir / filename
         archive_path.write_bytes(content)
 
@@ -287,7 +287,7 @@ async def install_from_upload(
         if not success:
             # Try to give more specific error
             from src.plugins.spec import load_plugin_spec, validate_plugin_spec
-            spec_file = plugin_root / "sentinel-plugin.yaml"
+            spec_file = plugin_root / "bulwark-plugin.yaml"
             if spec_file.exists():
                 spec = load_plugin_spec(spec_file)
                 errors = validate_plugin_spec(spec)
@@ -304,7 +304,7 @@ async def install_from_upload(
 
         # Determine plugin name from spec
         from src.plugins.spec import load_plugin_spec
-        spec = load_plugin_spec(plugin_root / "sentinel-plugin.yaml")
+        spec = load_plugin_spec(plugin_root / "bulwark-plugin.yaml")
         logger.info("plugin_installed_upload", extra={"name": spec.name, "user": user.sub})
         return {"status": "installed", "name": spec.name, "version": spec.version, "source": "upload"}
 
@@ -346,7 +346,7 @@ async def install_from_url(
 
     tmp_dir = None
     try:
-        tmp_dir = Path(tempfile.mkdtemp(prefix="sentinel-plugin-git-"))
+        tmp_dir = Path(tempfile.mkdtemp(prefix="bulwark-plugin-git-"))
         clone_dir = tmp_dir / "repo"
 
         # Clone with depth 1 (minimal), timeout 30s
@@ -356,22 +356,37 @@ async def install_from_url(
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
         if result.returncode != 0:
-            error_msg = result.stderr.strip()[:200] if result.stderr else "Clone failed"
+            # SECURITY FIX (APT-20): Sanitize git stderr to prevent info disclosure.
+            # Git errors can reveal internal DNS, filesystem paths, and versions.
+            error_msg = "Clone failed"
+            if result.stderr:
+                stderr = result.stderr.strip()
+                # Only expose generic error categories, not raw stderr
+                if "not found" in stderr.lower() or "404" in stderr:
+                    error_msg = "Repository not found or inaccessible"
+                elif "authentication" in stderr.lower() or "403" in stderr:
+                    error_msg = "Authentication failed for repository"
+                elif "timeout" in stderr.lower():
+                    error_msg = "Connection timed out"
+                elif "branch" in stderr.lower() and "not found" in stderr.lower():
+                    error_msg = f"Branch '{req.branch}' not found in repository"
+                else:
+                    error_msg = "Clone failed (check URL and branch)"
             raise HTTPException(status_code=400, detail=f"Git clone failed: {error_msg}")
 
-        # Find sentinel-plugin.yaml
-        spec_file = clone_dir / "sentinel-plugin.yaml"
+        # Find bulwark-plugin.yaml
+        spec_file = clone_dir / "bulwark-plugin.yaml"
         if not spec_file.exists():
             # Try one level deep
             for child in clone_dir.iterdir():
-                if child.is_dir() and (child / "sentinel-plugin.yaml").exists():
+                if child.is_dir() and (child / "bulwark-plugin.yaml").exists():
                     clone_dir = child
-                    spec_file = child / "sentinel-plugin.yaml"
+                    spec_file = child / "bulwark-plugin.yaml"
                     break
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail="Repository does not contain sentinel-plugin.yaml"
+                    detail="Repository does not contain bulwark-plugin.yaml"
                 )
 
         # Remove .git directory (not needed, saves space)

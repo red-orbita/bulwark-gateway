@@ -154,7 +154,7 @@ async def get_data_inventory(
     inventory = await gdpr.data_inventory()
     return {
         "processing_activities": inventory,
-        "controller": "Sentinel Gateway operator (see deployment config)",
+        "controller": "Bulwark Gateway operator (see deployment config)",
         "dpo_contact": "Configured by deploying organization",
         "last_updated": "auto-generated",
         "total_categories": len(inventory),

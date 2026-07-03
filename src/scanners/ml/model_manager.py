@@ -9,7 +9,7 @@ Handles:
   - Health status per model
   - Graceful fallback when models unavailable
 
-Models are stored in the configured model directory (SENTINEL_ML_MODEL_DIR).
+Models are stored in the configured model directory (BULWARK_ML_MODEL_DIR).
 Expected structure:
   models/
     injection-classifier/
@@ -38,14 +38,14 @@ logger = logging.getLogger(__name__)
 # SECURITY FIX (H-08): Verify ONNX model integrity before loading.
 # A model manifest file maps model names to expected SHA-256 hashes.
 _MODEL_MANIFEST_PATH = Path(__file__).parent.parent.parent.parent / "config" / "model_manifest.json"
-_MODEL_DIR = Path(os.environ.get("SENTINEL_ML_MODEL_DIR",
+_MODEL_DIR = Path(os.environ.get("BULWARK_ML_MODEL_DIR",
                                   str(Path(__file__).parent.parent.parent.parent / "models")))
 
 
 def _verify_model_integrity(model_path: Path) -> bool:
     """Verify model file matches expected hash from manifest.
 
-    SECURITY FIX (H-12): Removed SENTINEL_ML_SKIP_INTEGRITY bypass.
+    SECURITY FIX (H-12): Removed BULWARK_ML_SKIP_INTEGRITY bypass.
     Model integrity verification is ALWAYS enforced. To deploy a new model:
     1. Compute SHA-256: sha256sum models/your_model.onnx
     2. Add to config/model_manifest.json: {"your_model.onnx": "<sha256>"}

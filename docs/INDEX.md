@@ -1,4 +1,4 @@
-# Sentinel Gateway — Documentation Index
+# Bulwark Gateway — Documentation Index
 
 > Security guardrail proxy for AI agents in cloud environments.
 

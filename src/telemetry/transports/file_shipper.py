@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class FileShipperConfig:
-    path: str = "/var/log/sentinel-gateway/events.ndjson"
+    path: str = "/var/log/bulwark-gateway/events.ndjson"
     max_size_bytes: int = 100 * 1024 * 1024  # 100MB
     rotate_count: int = 5
     format: str = "ndjson"  # ndjson, json_array

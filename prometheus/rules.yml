@@ -1,10 +1,10 @@
-# Sentinel Gateway - Prometheus Alerting Rules
+# Bulwark Gateway - Prometheus Alerting Rules
 # SOC 2 CC7.2 Monitoring Compliance
 # MITRE ATT&CK annotations included where applicable
 #
 # Metric sources:
-#   - sentinel-proxy (port 8080, /health/metrics)
-#   - sentinel-admin (port 8090, /admin/health/metrics)
+#   - bulwark-proxy (port 8080, /health/metrics)
+#   - bulwark-admin (port 8090, /admin/health/metrics)
 #   - cadvisor (container metrics)
 #   - kube-state-metrics (pod/deployment state)
 
@@ -13,17 +13,17 @@ groups:
   # CRITICAL ALERTS — Page immediately (PagerDuty/Opsgenie)
   # SOC 2 CC7.2: Real-time detection of security-relevant conditions
   # ============================================================================
-  - name: sentinel_critical
+  - name: bulwark_critical
     rules:
       # --- High Block Rate ---
       # A sustained high block rate indicates active attack or misconfiguration.
       # MITRE ATT&CK: T1190 (Exploit Public-Facing Application)
-      - alert: SentinelHighBlockRate
+      - alert: BulwarkHighBlockRate
         expr: |
           (
-            sum(rate(sentinel_verdicts_total{verdict="block"}[5m]))
+            sum(rate(bulwark_verdicts_total{verdict="block"}[5m]))
             /
-            clamp_min(sum(rate(sentinel_requests_total[5m])), 1)
+            clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
           ) > 0.10
         for: 2m
         labels:
@@ -36,16 +36,16 @@ groups:
           description: |
             {{ printf "%.1f" (printf "%f" $value | float64 | mulf 100) }}% of requests blocked in the last 5 minutes.
             This may indicate an active attack campaign or a guardrail misconfiguration causing false positives.
-            Investigate recent blocks via admin dashboard or `sentinel:recent_blocks` in Redis.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/high-block-rate"
-          dashboard_url: "/grafana/d/sentinel-security/security-overview"
+            Investigate recent blocks via admin dashboard or `bulwark:recent_blocks` in Redis.
+          runbook_url: "https://bulwark-gateway.internal/runbooks/high-block-rate"
+          dashboard_url: "/grafana/d/bulwark-security/security-overview"
 
       # --- Guardrail Latency P99 ---
       # Guardrails must not introduce unacceptable latency to the request path.
-      - alert: SentinelGuardrailLatencyHigh
+      - alert: BulwarkGuardrailLatencyHigh
         expr: |
           histogram_quantile(0.99,
-            sum(rate(sentinel_request_duration_seconds_bucket{phase="input_guardrail"}[5m])) by (le)
+            sum(rate(bulwark_request_duration_seconds_bucket{phase="input_guardrail"}[5m])) by (le)
           ) > 0.100
         for: 3m
         labels:
@@ -57,12 +57,12 @@ groups:
           description: |
             Guardrail processing P99 latency is {{ printf "%.0f" (mulf $value 1000) }}ms (threshold: 100ms).
             This degrades user experience and may indicate regex backtracking or resource exhaustion.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/guardrail-latency"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/guardrail-latency"
 
       # --- Redis Down ---
       # Redis is required for rate limiting, pattern sync, and distributed counters.
-      - alert: SentinelRedisDown
-        expr: up{job="sentinel-redis"} == 0
+      - alert: BulwarkRedisDown
+        expr: up{job="bulwark-redis"} == 0
         for: 1m
         labels:
           severity: critical
@@ -74,15 +74,15 @@ groups:
             The Redis target has been down for more than 1 minute.
             Impact: rate limiting falls back to in-memory (not distributed),
             pattern sync disabled, global counters unavailable.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/redis-down"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/redis-down"
 
       # --- Proxy Pod Count Below Minimum ---
       # Ensures HA requirements are met (minimum 2 replicas per HPA config).
-      - alert: SentinelProxyPodsDown
+      - alert: BulwarkProxyPodsDown
         expr: |
-          count(up{job="sentinel-proxy"} == 1) < 2
+          count(up{job="bulwark-proxy"} == 1) < 2
             or
-          absent(up{job="sentinel-proxy"})
+          absent(up{job="bulwark-proxy"})
         for: 2m
         labels:
           severity: critical
@@ -93,17 +93,17 @@ groups:
           description: |
             Fewer than 2 healthy proxy pods are running.
             This violates the high-availability requirement and may cause request failures.
-            Check pod status: `kubectl get pods -l app.kubernetes.io/name=sentinel-proxy`
-          runbook_url: "https://sentinel-gateway.internal/runbooks/proxy-pods-down"
+            Check pod status: `kubectl get pods -l app.kubernetes.io/name=bulwark-proxy`
+          runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-pods-down"
 
       # --- Backend Error Rate ---
       # High backend error rate means the LLM service is degraded.
-      - alert: SentinelBackendErrorRateHigh
+      - alert: BulwarkBackendErrorRateHigh
         expr: |
           (
-            sum(rate(sentinel_backend_errors_total[5m]))
+            sum(rate(bulwark_backend_errors_total[5m]))
             /
-            clamp_min(sum(rate(sentinel_requests_total[5m])), 1)
+            clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
           ) > 0.05
         for: 3m
         labels:
@@ -114,11 +114,11 @@ groups:
           description: |
             {{ printf "%.1f" (printf "%f" $value | float64 | mulf 100) }}% of forwarded requests are failing at the LLM backend.
             Check backend health endpoint and connectivity.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/backend-errors"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/backend-errors"
 
       # --- TLS Certificate Expiry ---
       # SOC 2 requires encrypted communications; cert expiry causes outages.
-      - alert: SentinelCertificateExpiringSoon
+      - alert: BulwarkCertificateExpiringSoon
         expr: |
           (probe_ssl_earliest_cert_expiry - time()) / 86400 < 7
         for: 1h
@@ -131,34 +131,34 @@ groups:
           description: |
             Certificate for {{ $labels.instance }} expires in {{ printf "%.1f" (divf (subf (printf "%f" $value | float64) (printf "%f" (time) | float64)) 86400) }} days.
             Renew immediately via cert-manager or manual process.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/cert-renewal"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/cert-renewal"
 
       # --- Proxy Target Down (Prometheus scrape failure) ---
-      - alert: SentinelProxyTargetDown
-        expr: up{job="sentinel-proxy"} == 0
+      - alert: BulwarkProxyTargetDown
+        expr: up{job="bulwark-proxy"} == 0
         for: 2m
         labels:
           severity: critical
           team: platform
         annotations:
-          summary: "Sentinel proxy target is down"
+          summary: "Bulwark proxy target is down"
           description: |
             Prometheus cannot scrape the proxy instance {{ $labels.instance }}.
             The proxy may have crashed or the network path is broken.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/proxy-target-down"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-target-down"
 
   # ============================================================================
   # WARNING ALERTS — Notify (Slack/Telegram) but don't page
   # SOC 2 CC7.2: Detection of conditions requiring attention
   # ============================================================================
-  - name: sentinel_warning
+  - name: bulwark_warning
     rules:
       # --- Rate Limit Rejections ---
       # High rejection count may indicate a brute-force or DoS attempt.
       # MITRE ATT&CK: T1498 (Network Denial of Service)
-      - alert: SentinelRateLimitRejectionsHigh
+      - alert: BulwarkRateLimitRejectionsHigh
         expr: |
-          sum(increase(sentinel_rate_limit_rejected_total[5m])) > 100
+          sum(increase(bulwark_rate_limit_rejected_total[5m])) > 100
         for: 2m
         labels:
           severity: warning
@@ -169,14 +169,14 @@ groups:
           description: |
             {{ printf "%.0f" $value }} rate limit rejections in the last 5 minutes.
             Top tenant: check per-tenant breakdown with
-            `sum by (tenant_id)(increase(sentinel_rate_limit_rejected_total[5m]))`.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/rate-limit-high"
+            `sum by (tenant_id)(increase(bulwark_rate_limit_rejected_total[5m]))`.
+          runbook_url: "https://bulwark-gateway.internal/runbooks/rate-limit-high"
 
       # --- Rate Limit Rejections per Tenant ---
       # Identifies specific tenants being throttled excessively.
-      - alert: SentinelTenantRateLimited
+      - alert: BulwarkTenantRateLimited
         expr: |
-          sum by (tenant_id)(increase(sentinel_rate_limit_rejected_total[5m])) > 50
+          sum by (tenant_id)(increase(bulwark_rate_limit_rejected_total[5m])) > 50
         for: 3m
         labels:
           severity: warning
@@ -190,8 +190,8 @@ groups:
 
       # --- Scanner Count Below Expected ---
       # If scanners deregister or fail to load, detection coverage degrades.
-      - alert: SentinelScannersLow
-        expr: sentinel_scanners_active < 3
+      - alert: BulwarkScannersLow
+        expr: bulwark_scanners_active < 3
         for: 5m
         labels:
           severity: warning
@@ -201,16 +201,16 @@ groups:
           description: |
             Only {{ printf "%.0f" $value }} scanners are active (expected >= 3).
             Check plugin loading errors in proxy logs.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/scanners-degraded"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/scanners-degraded"
 
       # --- Memory Pressure ---
       # Container approaching memory limit risks OOMKill.
-      - alert: SentinelMemoryPressure
+      - alert: BulwarkMemoryPressure
         expr: |
           (
-            container_memory_working_set_bytes{container="sentinel-proxy"}
+            container_memory_working_set_bytes{container="bulwark-proxy"}
             /
-            container_spec_memory_limit_bytes{container="sentinel-proxy"}
+            container_spec_memory_limit_bytes{container="bulwark-proxy"}
           ) > 0.80
         for: 5m
         labels:
@@ -221,15 +221,15 @@ groups:
           description: |
             Container {{ $labels.pod }} is using {{ printf "%.0f" (mulf $value 100) }}% of its memory limit.
             Risk of OOMKill. Consider increasing limits or investigating memory leaks.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/memory-pressure"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/memory-pressure"
 
       # --- Admin Memory Pressure ---
-      - alert: SentinelAdminMemoryPressure
+      - alert: BulwarkAdminMemoryPressure
         expr: |
           (
-            container_memory_working_set_bytes{container="sentinel-admin"}
+            container_memory_working_set_bytes{container="bulwark-admin"}
             /
-            container_spec_memory_limit_bytes{container="sentinel-admin"}
+            container_spec_memory_limit_bytes{container="bulwark-admin"}
           ) > 0.80
         for: 5m
         labels:
@@ -242,7 +242,7 @@ groups:
 
       # --- Disk Usage High ---
       # Prometheus TSDB or persistent volume filling up.
-      - alert: SentinelDiskUsageHigh
+      - alert: BulwarkDiskUsageHigh
         expr: |
           (
             kubelet_volume_stats_used_bytes
@@ -250,7 +250,7 @@ groups:
             kubelet_volume_stats_capacity_bytes
           ) > 0.80
             and
-          kubelet_volume_stats_used_bytes{namespace=~"sentinel.*"}
+          kubelet_volume_stats_used_bytes{namespace=~"bulwark.*"}
         for: 10m
         labels:
           severity: warning
@@ -260,13 +260,13 @@ groups:
           description: |
             PVC {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }}
             is at {{ printf "%.0f" (mulf $value 100) }}% capacity.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/disk-usage"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/disk-usage"
 
       # --- Audit Log Write Failures ---
       # SOC 2 CC7.2 requires reliable audit logging.
-      - alert: SentinelAuditLogFailures
+      - alert: BulwarkAuditLogFailures
         expr: |
-          increase(sentinel_audit_log_errors_total[5m]) > 0
+          increase(bulwark_audit_log_errors_total[5m]) > 0
         for: 1m
         labels:
           severity: warning
@@ -278,13 +278,13 @@ groups:
             {{ printf "%.0f" $value }} audit log write errors in the last 5 minutes.
             This may violate SOC 2 CC7.2 audit trail requirements.
             Check disk space, permissions, and log transport health.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/audit-failures"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/audit-failures"
 
       # --- SIEM Export Errors ---
       # Events not reaching SIEM means security monitoring is blind.
-      - alert: SentinelSIEMExportErrors
+      - alert: BulwarkSIEMExportErrors
         expr: |
-          increase(sentinel_siem_export_errors_total[5m]) > 0
+          increase(bulwark_siem_export_errors_total[5m]) > 0
         for: 3m
         labels:
           severity: warning
@@ -296,17 +296,17 @@ groups:
             {{ printf "%.0f" $value }} SIEM export errors in 5 minutes.
             Security events may not be reaching the SIEM platform.
             Check transport connectivity and circuit breaker state.
-          runbook_url: "https://sentinel-gateway.internal/runbooks/siem-export-errors"
+          runbook_url: "https://bulwark-gateway.internal/runbooks/siem-export-errors"
 
       # --- Cache Hit Ratio Very Low ---
       # Low cache hit ratio means excessive recomputation or cold cache.
-      - alert: SentinelCacheHitRatioLow
+      - alert: BulwarkCacheHitRatioLow
         expr: |
           (
-            sum(rate(sentinel_cache_hits_total[10m]))
+            sum(rate(bulwark_cache_hits_total[10m]))
             /
             clamp_min(
-              sum(rate(sentinel_cache_hits_total[10m])) + sum(rate(sentinel_cache_misses_total[10m])),
+              sum(rate(bulwark_cache_hits_total[10m])) + sum(rate(bulwark_cache_misses_total[10m])),
               1
             )
           ) < 0.10
@@ -323,9 +323,9 @@ groups:
 
       # --- High Error Rate in Guardrail Processing ---
       # Internal errors in the guardrail engine (not blocks, but failures).
-      - alert: SentinelGuardrailErrors
+      - alert: BulwarkGuardrailErrors
         expr: |
-          increase(sentinel_guardrail_errors_total[5m]) > 5
+          increase(bulwark_guardrail_errors_total[5m]) > 5
         for: 2m
         labels:
           severity: warning
@@ -337,9 +337,9 @@ groups:
             In fail-closed mode these result in 403 responses to users.
 
       # --- Notification Delivery Failures ---
-      - alert: SentinelNotificationFailures
+      - alert: BulwarkNotificationFailures
         expr: |
-          increase(sentinel_notification_errors_total[15m]) > 3
+          increase(bulwark_notification_errors_total[15m]) > 3
         for: 5m
         labels:
           severity: warning
@@ -354,20 +354,20 @@ groups:
   # INFO / SLO ALERTS — Informational, trend detection
   # SOC 2 CC7.3: Evaluation and communication of deficiencies
   # ============================================================================
-  - name: sentinel_info_slo
+  - name: bulwark_info_slo
     rules:
       # --- Request Throughput Anomaly ---
       # Significant deviation from 1h baseline may indicate attack or outage.
       # MITRE ATT&CK: T1498 (Network DoS), T1499 (Endpoint DoS)
-      - alert: SentinelThroughputAnomaly
+      - alert: BulwarkThroughputAnomaly
         expr: |
           abs(
-            sum(rate(sentinel_requests_total[5m]))
+            sum(rate(bulwark_requests_total[5m]))
             -
-            sum(rate(sentinel_requests_total[1h]))
+            sum(rate(bulwark_requests_total[1h]))
           )
           /
-          clamp_min(sum(rate(sentinel_requests_total[1h])), 0.1)
+          clamp_min(sum(rate(bulwark_requests_total[1h])), 0.1)
           > 3.0
         for: 5m
         labels:
@@ -383,12 +383,12 @@ groups:
       # --- Unusual Tenant Activity ---
       # A single tenant generating disproportionate traffic may indicate compromise.
       # MITRE ATT&CK: T1078 (Valid Accounts)
-      - alert: SentinelUnusualTenantActivity
+      - alert: BulwarkUnusualTenantActivity
         expr: |
           (
-            sum by (tenant_id)(rate(sentinel_requests_total[5m]))
+            sum by (tenant_id)(rate(bulwark_requests_total[5m]))
             /
-            clamp_min(sum(rate(sentinel_requests_total[5m])), 0.1)
+            clamp_min(sum(rate(bulwark_requests_total[5m])), 0.1)
           ) > 0.80
         for: 10m
         labels:
@@ -403,10 +403,10 @@ groups:
 
       # --- ML Scanner Inference Time High ---
       # ML scanners should not dominate request latency.
-      - alert: SentinelMLScannerSlow
+      - alert: BulwarkMLScannerSlow
         expr: |
           histogram_quantile(0.95,
-            sum(rate(sentinel_request_duration_seconds_bucket{phase="ml_scanner"}[5m])) by (le)
+            sum(rate(bulwark_request_duration_seconds_bucket{phase="ml_scanner"}[5m])) by (le)
           ) > 0.500
         for: 5m
         labels:
@@ -420,9 +420,9 @@ groups:
 
       # --- Pod Restart Count ---
       # Frequent restarts indicate instability (crashloop, OOMKill, etc).
-      - alert: SentinelPodRestartsHigh
+      - alert: BulwarkPodRestartsHigh
         expr: |
-          increase(kube_pod_container_status_restarts_total{namespace=~"sentinel.*"}[1h]) > 3
+          increase(kube_pod_container_status_restarts_total{namespace=~"bulwark.*"}[1h]) > 3
         for: 5m
         labels:
           severity: info
@@ -435,10 +435,10 @@ groups:
             Check `kubectl describe pod {{ $labels.pod }}` for termination reason.
 
       # --- Output Filter Latency Elevated ---
-      - alert: SentinelOutputFilterSlow
+      - alert: BulwarkOutputFilterSlow
         expr: |
           histogram_quantile(0.95,
-            sum(rate(sentinel_request_duration_seconds_bucket{phase="output_filter"}[5m])) by (le)
+            sum(rate(bulwark_request_duration_seconds_bucket{phase="output_filter"}[5m])) by (le)
           ) > 0.050
         for: 5m
         labels:
@@ -452,9 +452,9 @@ groups:
 
       # --- Tool Policy Violations Increasing ---
       # MITRE ATT&CK: T1059 (Command and Scripting Interpreter)
-      - alert: SentinelToolPolicyViolations
+      - alert: BulwarkToolPolicyViolations
         expr: |
-          sum(increase(sentinel_verdicts_total{verdict="block", category="tool_abuse"}[15m])) > 10
+          sum(increase(bulwark_verdicts_total{verdict="block", category="tool_abuse"}[15m])) > 10
         for: 5m
         labels:
           severity: info
@@ -468,9 +468,9 @@ groups:
 
       # --- Prompt Injection Attempts Spike ---
       # MITRE ATT&CK: T1059.006 (Python), T1190 (Exploit Public-Facing App)
-      - alert: SentinelPromptInjectionSpike
+      - alert: BulwarkPromptInjectionSpike
         expr: |
-          sum(increase(sentinel_verdicts_total{verdict="block", category="prompt_injection"}[10m])) > 20
+          sum(increase(bulwark_verdicts_total{verdict="block", category="prompt_injection"}[10m])) > 20
         for: 3m
         labels:
           severity: info
@@ -484,9 +484,9 @@ groups:
 
       # --- Exfiltration Attempts ---
       # MITRE ATT&CK: T1041 (Exfiltration Over C2 Channel)
-      - alert: SentinelExfiltrationAttempts
+      - alert: BulwarkExfiltrationAttempts
         expr: |
-          sum(increase(sentinel_verdicts_total{verdict="block", category="exfiltration"}[15m])) > 5
+          sum(increase(bulwark_verdicts_total{verdict="block", category="exfiltration"}[15m])) > 5
         for: 3m
         labels:
           severity: info
@@ -500,9 +500,9 @@ groups:
 
       # --- IOC Match Rate ---
       # MITRE ATT&CK: T1071 (Application Layer Protocol)
-      - alert: SentinelIOCMatchesElevated
+      - alert: BulwarkIOCMatchesElevated
         expr: |
-          sum(increase(sentinel_verdicts_total{verdict="block", category="malicious_domain"}[30m])) > 5
+          sum(increase(bulwark_verdicts_total{verdict="block", category="malicious_domain"}[30m])) > 5
         for: 5m
         labels:
           severity: info
@@ -515,12 +515,12 @@ groups:
             Requests are hitting known-malicious indicators (domains/IPs/hashes).
 
       # --- SLO: Request Success Rate ---
-      - alert: SentinelSLORequestSuccessLow
+      - alert: BulwarkSLORequestSuccessLow
         expr: |
           (
-            sum(rate(sentinel_requests_total{verdict!="block"}[30m]))
+            sum(rate(bulwark_requests_total{verdict!="block"}[30m]))
             /
-            clamp_min(sum(rate(sentinel_requests_total[30m])), 1)
+            clamp_min(sum(rate(bulwark_requests_total[30m])), 1)
           ) < 0.95
         for: 15m
         labels:
@@ -534,10 +534,10 @@ groups:
             SLO target is 95% over a 30-minute window.
 
       # --- SLO: End-to-End Latency ---
-      - alert: SentinelSLOLatencyBreach
+      - alert: BulwarkSLOLatencyBreach
         expr: |
           histogram_quantile(0.95,
-            sum(rate(sentinel_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+            sum(rate(bulwark_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
           ) > 1.0
         for: 10m
         labels:

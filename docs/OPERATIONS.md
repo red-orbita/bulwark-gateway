@@ -1,6 +1,6 @@
 # Operations Runbook
 
-Day-to-day operational procedures for Sentinel Gateway.
+Day-to-day operational procedures for Bulwark Gateway.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@ All operational scripts are located in the `scripts/` directory.
 Post-deploy infrastructure validation. Checks all critical components (pods, services, Redis, SIEM, ingress, TLS, backends) and reports pass/fail/warn status. Run this after every deployment or upgrade.
 
 ```bash
-# Basic usage (uses default namespace: sentinel-gateway)
+# Basic usage (uses default namespace: bulwark-gateway)
 ./scripts/validate-deployment.sh
 
 # Custom namespace
@@ -130,7 +130,7 @@ Accounts lock after 3 failed attempts per username (15-minute lockout). The lock
 # Option 1: Wait 15 minutes
 
 # Option 2: Restart admin pod (clears in-memory lockout cache)
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 ### Reset User Password (DB Reset)
@@ -139,10 +139,10 @@ If the user database is corrupted or passwords are unknown:
 
 ```bash
 # Delete user database (will re-seed from secrets on next startup)
-kubectl exec deploy/admin -n sentinel-gateway -- rm -f /app/data/users.db /app/data/users.db-shm /app/data/users.db-wal
+kubectl exec deploy/admin -n bulwark-gateway -- rm -f /app/data/users.db /app/data/users.db-shm /app/data/users.db-wal
 
 # Restart to trigger re-seed
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 > **Note**: As of v0.2.0, passwords auto-sync on startup. If you rotate the K8s secret, just restart the pod — no DB deletion needed.
@@ -153,21 +153,21 @@ The admin service compares the secret file content with stored hashes at every s
 
 ```bash
 # Rotate admin password
-kubectl create secret generic sentinel-admin-secrets \
+kubectl create secret generic bulwark-admin-secrets \
   --from-literal=admin-password="new-secure-password" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Restart to pick up new password
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 ### Default Users
 
 | Username | Secret Key | Role | Default Password |
 |----------|-----------|------|-----------------|
-| `admin` | `ADMIN_PASSWORD` | Admin | `sentinel-admin` |
-| `security` | `SECURITY_PASSWORD` | Security | `sentinel-security` |
-| `auditor` | `AUDITOR_PASSWORD` | Auditor | `sentinel-auditor` |
+| `admin` | `ADMIN_PASSWORD` | Admin | `bulwark-admin` |
+| `security` | `SECURITY_PASSWORD` | Security | `bulwark-security` |
+| `auditor` | `AUDITOR_PASSWORD` | Auditor | `bulwark-auditor` |
 
 ---
 
@@ -182,12 +182,12 @@ kubectl rollout restart deploy/admin -n sentinel-gateway
 NEW_JWT=$(openssl rand -base64 32)
 
 # Update K8s secret
-kubectl create secret generic sentinel-proxy-secrets \
+kubectl create secret generic bulwark-proxy-secrets \
   --from-literal=jwt-secret="$NEW_JWT" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Restart both proxy and admin
-kubectl rollout restart deploy/proxy deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/proxy deploy/admin -n bulwark-gateway
 ```
 
 ### Redis Password Rotation
@@ -198,13 +198,13 @@ kubectl rollout restart deploy/proxy deploy/admin -n sentinel-gateway
 NEW_REDIS_PW=$(openssl rand -base64 24)
 
 # Update Redis secret
-kubectl create secret generic sentinel-redis-secrets \
+kubectl create secret generic bulwark-redis-secrets \
   --from-literal=redis-password="$NEW_REDIS_PW" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Update admin and proxy secrets too (they reference redis password)
 # Then restart ALL pods simultaneously
-kubectl rollout restart deploy/redis deploy/proxy deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/redis deploy/proxy deploy/admin -n bulwark-gateway
 ```
 
 ### API Keys Rotation
@@ -213,11 +213,11 @@ kubectl rollout restart deploy/redis deploy/proxy deploy/admin -n sentinel-gatew
 
 ```bash
 # Update API keys
-kubectl create secret generic sentinel-proxy-secrets \
+kubectl create secret generic bulwark-proxy-secrets \
   --from-literal=api-keys="new-key-1,new-key-2" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl rollout restart deploy/proxy -n sentinel-gateway
+kubectl rollout restart deploy/proxy -n bulwark-gateway
 ```
 
 ### Using SealedSecrets
@@ -231,7 +231,7 @@ echo "new-value" > secrets/jwt_secret.txt
 
 # Apply and restart
 kubectl apply -f k8s/secrets/sealed-secrets.yaml
-kubectl rollout restart deploy -n sentinel-gateway
+kubectl rollout restart deploy -n bulwark-gateway
 ```
 
 ---
@@ -242,7 +242,7 @@ kubectl rollout restart deploy -n sentinel-gateway
 
 ```bash
 # Via admin API
-curl -X POST https://admin.sentinel.corp.com/admin/policies/reload \
+curl -X POST https://admin.bulwark.corp.com/admin/policies/reload \
   -H "Authorization: Bearer $TOKEN"
 
 # Via kubectl (if admin is port-forwarded)
@@ -255,7 +255,7 @@ curl -X POST http://localhost:8090/admin/policies/reload \
 ```bash
 # Copy policy file into the policies PVC
 kubectl cp config/policies/new-tenant.yaml \
-  $(kubectl get pod -l app.kubernetes.io/name=admin -n sentinel-gateway -o name):/app/config/policies/
+  $(kubectl get pod -l app.kubernetes.io/name=admin -n bulwark-gateway -o name):/app/config/policies/
 
 # Trigger reload
 curl -X POST http://localhost:8090/admin/policies/reload \
@@ -270,29 +270,29 @@ curl -X POST http://localhost:8090/admin/policies/reload \
 
 ```bash
 # Proxy only (no downtime if replicas > 1)
-kubectl rollout restart deploy/proxy -n sentinel-gateway
+kubectl rollout restart deploy/proxy -n bulwark-gateway
 
 # Admin only
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/admin -n bulwark-gateway
 
 # Redis (causes brief cache loss)
-kubectl rollout restart deploy/redis -n sentinel-gateway
+kubectl rollout restart deploy/redis -n bulwark-gateway
 
 # All components
-kubectl rollout restart deploy -n sentinel-gateway
+kubectl rollout restart deploy -n bulwark-gateway
 ```
 
 ### Verify Health After Restart
 
 ```bash
 # Check all pods are ready
-kubectl get pods -n sentinel-gateway
+kubectl get pods -n bulwark-gateway
 
 # Check proxy health
-curl -s https://sentinel.corp.com/health
+curl -s https://bulwark.corp.com/health
 
 # Check admin health
-curl -s https://admin.sentinel.corp.com/admin/health
+curl -s https://admin.bulwark.corp.com/admin/health
 ```
 
 ---
@@ -303,30 +303,30 @@ curl -s https://admin.sentinel.corp.com/admin/health
 
 ```bash
 # Copy user DB from pod
-kubectl cp sentinel-gateway/$(kubectl get pod -l app.kubernetes.io/name=admin -n sentinel-gateway -o jsonpath='{.items[0].metadata.name}'):/app/data/users.db ./backup-users.db
+kubectl cp bulwark-gateway/$(kubectl get pod -l app.kubernetes.io/name=admin -n bulwark-gateway -o jsonpath='{.items[0].metadata.name}'):/app/data/users.db ./backup-users.db
 ```
 
 ### Backup Audit Log
 
 ```bash
-kubectl cp sentinel-gateway/$(kubectl get pod -l app.kubernetes.io/name=admin -n sentinel-gateway -o jsonpath='{.items[0].metadata.name}'):/app/data/audit_log.db ./backup-audit.db
+kubectl cp bulwark-gateway/$(kubectl get pod -l app.kubernetes.io/name=admin -n bulwark-gateway -o jsonpath='{.items[0].metadata.name}'):/app/data/audit_log.db ./backup-audit.db
 ```
 
 ### Backup Redis (RDB Snapshot)
 
 ```bash
 # Trigger save
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli BGSAVE
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli BGSAVE
 
 # Copy RDB file
-kubectl cp sentinel-gateway/$(kubectl get pod -l app.kubernetes.io/name=redis -n sentinel-gateway -o jsonpath='{.items[0].metadata.name}'):/data/dump.rdb ./backup-redis.rdb
+kubectl cp bulwark-gateway/$(kubectl get pod -l app.kubernetes.io/name=redis -n bulwark-gateway -o jsonpath='{.items[0].metadata.name}'):/data/dump.rdb ./backup-redis.rdb
 ```
 
 ### Restore User Database
 
 ```bash
-kubectl cp ./backup-users.db sentinel-gateway/$(kubectl get pod -l app.kubernetes.io/name=admin -n sentinel-gateway -o jsonpath='{.items[0].metadata.name}'):/app/data/users.db
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl cp ./backup-users.db bulwark-gateway/$(kubectl get pod -l app.kubernetes.io/name=admin -n bulwark-gateway -o jsonpath='{.items[0].metadata.name}'):/app/data/users.db
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 ---
@@ -337,10 +337,10 @@ kubectl rollout restart deploy/admin -n sentinel-gateway
 
 ```bash
 # Scale proxy replicas
-kubectl scale deploy/proxy -n sentinel-gateway --replicas=3
+kubectl scale deploy/proxy -n bulwark-gateway --replicas=3
 
 # Or use HPA
-kubectl autoscale deploy/proxy -n sentinel-gateway --min=2 --max=10 --cpu-percent=70
+kubectl autoscale deploy/proxy -n bulwark-gateway --min=2 --max=10 --cpu-percent=70
 ```
 
 ### Admin (Single Replica Only)
@@ -355,26 +355,26 @@ The admin portal uses SQLite — it **cannot** be scaled beyond 1 replica withou
 
 ```bash
 # Real-time logs
-kubectl logs -f deploy/proxy -n sentinel-gateway
+kubectl logs -f deploy/proxy -n bulwark-gateway
 
 # Last 100 lines
-kubectl logs deploy/proxy -n sentinel-gateway --tail=100
+kubectl logs deploy/proxy -n bulwark-gateway --tail=100
 
 # Filter for blocks only
-kubectl logs deploy/proxy -n sentinel-gateway | grep "BLOCK"
+kubectl logs deploy/proxy -n bulwark-gateway | grep "BLOCK"
 ```
 
 ### View Admin Logs
 
 ```bash
-kubectl logs -f deploy/admin -n sentinel-gateway
+kubectl logs -f deploy/admin -n bulwark-gateway
 ```
 
 ### Export Audit Log
 
 ```bash
 # Via API
-curl -s https://admin.sentinel.corp.com/admin/audit/export \
+curl -s https://admin.bulwark.corp.com/admin/audit/export \
   -H "Authorization: Bearer $TOKEN" > audit-export.json
 ```
 
@@ -385,13 +385,13 @@ curl -s https://admin.sentinel.corp.com/admin/audit/export \
 ### Check Prometheus Targets
 
 ```bash
-kubectl port-forward svc/prometheus 9090:9090 -n sentinel-gateway
+kubectl port-forward svc/prometheus 9090:9090 -n bulwark-gateway
 # Open http://localhost:9090/targets
 ```
 
 ### Grafana Access
 
 ```bash
-kubectl port-forward svc/grafana 3000:3000 -n sentinel-gateway
+kubectl port-forward svc/grafana 3000:3000 -n bulwark-gateway
 # Open http://localhost:3000 (admin / <grafana-password>)
 ```

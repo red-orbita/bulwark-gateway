@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Sentinel Gateway — Kubernetes Deployment Script
+# Bulwark Gateway — Kubernetes Deployment Script
 #
 # Zero manual steps: builds images, loads into cluster, and deploys.
 #
@@ -36,8 +36,8 @@ PROXY_VERSION="0.2.0"
 ADMIN_VERSION="0.2.0"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
 
-PROXY_IMAGE="${IMAGE_REGISTRY}sentinel-gateway-proxy:${PROXY_VERSION}"
-ADMIN_IMAGE="${IMAGE_REGISTRY}sentinel-gateway-admin:${ADMIN_VERSION}"
+PROXY_IMAGE="${IMAGE_REGISTRY}bulwark-gateway-proxy:${PROXY_VERSION}"
+ADMIN_IMAGE="${IMAGE_REGISTRY}bulwark-gateway-admin:${ADMIN_VERSION}"
 
 # --- Parse args ---
 DRY_RUN=""
@@ -146,10 +146,10 @@ fi
 
 # --- 5. Create ConfigMap from large config files ---
 step "Creating static config ConfigMap..."
-kubectl create configmap sentinel-static-config \
+kubectl create configmap bulwark-static-config \
     --from-file=iocs.json="$PROJECT_DIR/config/iocs.json" \
     --from-file=agents.yaml="$PROJECT_DIR/config/agents.yaml" \
-    -n sentinel-gateway \
+    -n bulwark-gateway \
     --dry-run=client -o yaml | kubectl apply $DRY_RUN -f -
 
 # --- 6. Apply all manifests via Kustomize ---
@@ -161,20 +161,20 @@ if [ -z "$DRY_RUN" ]; then
     step "Waiting for services to be ready..."
 
     log "Waiting for Redis..."
-    kubectl rollout status deployment/redis -n sentinel-gateway --timeout=120s
+    kubectl rollout status deployment/redis -n bulwark-gateway --timeout=120s
 
     log "Waiting for Proxy..."
-    kubectl rollout status deployment/proxy -n sentinel-gateway --timeout=180s
+    kubectl rollout status deployment/proxy -n bulwark-gateway --timeout=180s
 
     log "Waiting for Admin..."
-    kubectl rollout status deployment/admin -n sentinel-gateway --timeout=120s
+    kubectl rollout status deployment/admin -n bulwark-gateway --timeout=120s
 
-    log "Waiting for Wazuh (sentinel-siem namespace)..."
-    kubectl rollout status statefulset/wazuh -n sentinel-siem --timeout=300s || warn "Wazuh not ready (may need manual pull of image)"
+    log "Waiting for Wazuh (bulwark-siem namespace)..."
+    kubectl rollout status statefulset/wazuh -n bulwark-siem --timeout=300s || warn "Wazuh not ready (may need manual pull of image)"
 
     echo ""
     log "=========================================="
-    log "  Sentinel Gateway deployed successfully!"
+    log "  Bulwark Gateway deployed successfully!"
     log "=========================================="
     echo ""
     echo "  Images:"
@@ -182,14 +182,14 @@ if [ -z "$DRY_RUN" ]; then
     echo "    Admin: $ADMIN_IMAGE"
     echo ""
     echo "  Access:"
-    echo "    Proxy:        https://sentinel-gateway.local/v1/chat/completions"
-    echo "    Admin:        https://admin.sentinel-gateway.local"
-    echo "    SkillSpector: https://admin.sentinel-gateway.local/skills"
+    echo "    Proxy:        https://bulwark-gateway.local/v1/chat/completions"
+    echo "    Admin:        https://admin.bulwark-gateway.local"
+    echo "    SkillSpector: https://admin.bulwark-gateway.local/skills"
     echo ""
     echo "  Port-forward (alternative):"
-    echo "    kubectl port-forward svc/proxy 8080:8080 -n sentinel-gateway"
-    echo "    kubectl port-forward svc/admin 8090:8090 -n sentinel-gateway"
-    echo "    kubectl port-forward svc/prometheus 9090:9090 -n sentinel-gateway"
-    echo "    kubectl port-forward svc/grafana 3000:3000 -n sentinel-gateway"
+    echo "    kubectl port-forward svc/proxy 8080:8080 -n bulwark-gateway"
+    echo "    kubectl port-forward svc/admin 8090:8090 -n bulwark-gateway"
+    echo "    kubectl port-forward svc/prometheus 9090:9090 -n bulwark-gateway"
+    echo "    kubectl port-forward svc/grafana 3000:3000 -n bulwark-gateway"
     echo ""
 fi

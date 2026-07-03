@@ -11,14 +11,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Ensure test-safe environment
-os.environ.setdefault("SENTINEL_JWT_SECRET", "test-secret-key-for-contract-tests-32chars!")
-os.environ.setdefault("SENTINEL_API_KEYS_ENABLED", "true")
-os.environ.setdefault("SENTINEL_API_KEYS", "test-contract-key-001,test-contract-key-002")
-os.environ.setdefault("SENTINEL_RATE_LIMIT_ENABLED", "false")
-os.environ.setdefault("SENTINEL_DEBUG", "true")
-os.environ.setdefault("SENTINEL_REDIS_URL", "")
-os.environ.setdefault("SENTINEL_BACKEND_URL", "http://localhost:11434")
-os.environ.setdefault("SENTINEL_REDTEAM_ENABLED", "true")
+os.environ.setdefault("BULWARK_JWT_SECRET", "test-secret-key-for-contract-tests-32chars!")
+os.environ.setdefault("BULWARK_API_KEYS_ENABLED", "true")
+os.environ.setdefault("BULWARK_API_KEYS", "test-contract-key-001,test-contract-key-002")
+os.environ.setdefault("BULWARK_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("BULWARK_DEBUG", "true")
+os.environ.setdefault("BULWARK_REDIS_URL", "")
+os.environ.setdefault("BULWARK_BACKEND_URL", "http://localhost:11434")
+os.environ.setdefault("BULWARK_REDTEAM_ENABLED", "true")
 
 
 @pytest.fixture(scope="session")

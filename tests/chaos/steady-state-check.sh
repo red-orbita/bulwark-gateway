@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Sentinel Gateway — Steady-State Health Check
+# Bulwark Gateway — Steady-State Health Check
 #
 # Validates that the system is in a healthy state before/after chaos experiments.
 # Used by run-chaos-suite.sh between experiments and can be run independently.
@@ -22,11 +22,11 @@ set -euo pipefail
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-NAMESPACE="sentinel-gateway"
+NAMESPACE="bulwark-gateway"
 QUIET=false
 STRICT=false
-PROXY_SERVICE="sentinel-proxy"
-ADMIN_SERVICE="sentinel-admin"
+PROXY_SERVICE="bulwark-proxy"
+ADMIN_SERVICE="bulwark-admin"
 PROXY_PORT=8080
 ADMIN_PORT=8090
 
@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [--namespace NS] [--quiet] [--strict]"
       echo ""
       echo "Options:"
-      echo "  --namespace, -n  Target namespace (default: sentinel-gateway)"
+      echo "  --namespace, -n  Target namespace (default: bulwark-gateway)"
       echo "  --quiet, -q      Only output on failure"
       echo "  --strict, -s     Fail on warnings (not just errors)"
       echo "  --help, -h       Show this help"
@@ -130,7 +130,7 @@ check_redis_pod_ready() {
     # Redis might be external — check if configured
     local redis_url
     redis_url=$(kubectl get configmap -n "$NAMESPACE" -o json 2>/dev/null | \
-      grep -o "SENTINEL_REDIS_URL[^,]*" | head -1 || echo "")
+      grep -o "BULWARK_REDIS_URL[^,]*" | head -1 || echo "")
 
     if [ -n "$redis_url" ]; then
       check_warn "No Redis pod (external Redis configured)"
@@ -329,7 +329,7 @@ check_no_recent_restarts() {
 
 main() {
   log ""
-  log "Sentinel Gateway — Steady-State Health Check"
+  log "Bulwark Gateway — Steady-State Health Check"
   log "Namespace: ${NAMESPACE}"
   log "─────────────────────────────────────────────"
   log ""

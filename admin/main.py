@@ -1,5 +1,5 @@
 """
-Sentinel Gateway — Admin Portal Backend
+Bulwark Gateway — Admin Portal Backend
 
 Separate FastAPI application for administration. Runs as independent service
 or mounted as sub-app on a different port. ZERO impact on proxy hot path.
@@ -16,6 +16,7 @@ Features:
 from __future__ import annotations
 
 import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -69,9 +70,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 _admin_debug = os.getenv("ADMIN_DEBUG", "false").lower() in ("true", "1")
 
 app = FastAPI(
-    title="Sentinel Gateway Admin Portal",
+    title="Bulwark Gateway Admin Portal",
     version="0.2.0",
-    description="Administration interface for Sentinel Gateway security proxy",
+    description="Administration interface for Bulwark Gateway security proxy",
     lifespan=lifespan,
     docs_url="/docs" if _admin_debug else None,
     redoc_url="/redoc" if _admin_debug else None,
@@ -166,14 +167,55 @@ _MAX_BODY_SIZE = 1 * 1024 * 1024  # 1MB
 @app.middleware("http")
 async def body_size_limit(request: Request, call_next):
     """Reject requests with bodies exceeding 1MB."""
+    # P9-02 fix: Also check actual body size (catches chunked encoding bypass)
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > _MAX_BODY_SIZE:
-        return Response(
-            content='{"detail":"Request body too large (max 1MB)"}',
-            status_code=413,
-            media_type="application/json",
-        )
+    if content_length:
+        if int(content_length) > _MAX_BODY_SIZE:
+            return Response(
+                content='{"detail":"Request body too large (max 1MB)"}',
+                status_code=413,
+                media_type="application/json",
+            )
+    else:
+        # No Content-Length: may be chunked. Read and check actual size.
+        if request.method in ("POST", "PUT", "PATCH"):
+            body = await request.body()
+            if len(body) > _MAX_BODY_SIZE:
+                return Response(
+                    content='{"detail":"Request body too large (max 1MB)"}',
+                    status_code=413,
+                    media_type="application/json",
+                )
     return await call_next(request)
+
+
+# P9-04: CSRF protection middleware for state-changing requests
+_CSRF_EXEMPT = {"/admin/auth/login", "/admin/auth/force-change-password", "/admin/health", "/admin/health/detailed", "/admin/health/sse"}
+
+
+@app.middleware("http")
+async def csrf_protection(request: Request, call_next):
+    """Validate CSRF token on state-changing requests."""
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        if request.url.path not in _CSRF_EXEMPT:
+            csrf_cookie = request.cookies.get("_csrf_token")
+            csrf_header = request.headers.get("x-csrf-token")
+            if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+                return Response(
+                    content='{"error":"CSRF validation failed"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
+
+    response = await call_next(request)
+
+    # Set CSRF cookie on all responses if not present
+    if "_csrf_token" not in request.cookies:
+        csrf_token = secrets.token_hex(32)
+        response.set_cookie(
+            "_csrf_token", csrf_token, httponly=False, samesite="strict", secure=True
+        )
+    return response
 
 
 # Static files + templates

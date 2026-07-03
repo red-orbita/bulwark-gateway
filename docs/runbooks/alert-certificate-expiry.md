@@ -1,9 +1,9 @@
-# Runbook: SentinelCertificateExpiringSoon
+# Runbook: BulwarkCertificateExpiringSoon
 
 ## Alert Details
 
 - **Severity**: Critical
-- **Alert rule**: `SentinelCertificateExpiringSoon`
+- **Alert rule**: `BulwarkCertificateExpiringSoon`
 - **Prometheus expression**:
   ```promql
   (probe_ssl_earliest_cert_expiry - time()) / 86400 < 7
@@ -25,23 +25,23 @@
 2. **Identify which certificate is expiring**:
    ```bash
    # Check ingress TLS secret
-   kubectl get secret -n sentinel-gateway -l cert-manager.io/certificate-name | \
-     xargs -I{} kubectl get secret {} -n sentinel-gateway -o jsonpath='{.data.tls\.crt}' | \
+   kubectl get secret -n bulwark-gateway -l cert-manager.io/certificate-name | \
+     xargs -I{} kubectl get secret {} -n bulwark-gateway -o jsonpath='{.data.tls\.crt}' | \
      base64 -d | openssl x509 -noout -dates -subject
 
    # Check all TLS secrets in namespace
-   kubectl get secrets -n sentinel-gateway --field-selector type=kubernetes.io/tls -o name | \
+   kubectl get secrets -n bulwark-gateway --field-selector type=kubernetes.io/tls -o name | \
      while read secret; do
        echo "=== $secret ==="
-       kubectl get $secret -n sentinel-gateway -o jsonpath='{.data.tls\.crt}' | \
+       kubectl get $secret -n bulwark-gateway -o jsonpath='{.data.tls\.crt}' | \
          base64 -d | openssl x509 -noout -enddate -subject 2>/dev/null
      done
    ```
 3. **Check cert-manager status** (if using cert-manager):
    ```bash
-   kubectl get certificates -n sentinel-gateway
-   kubectl get certificaterequests -n sentinel-gateway
-   kubectl describe certificate sentinel-tls -n sentinel-gateway
+   kubectl get certificates -n bulwark-gateway
+   kubectl get certificaterequests -n bulwark-gateway
+   kubectl describe certificate bulwark-tls -n bulwark-gateway
    ```
 4. **Decision point**: Is cert-manager renewal failing, or is this a manually-managed cert?
 
@@ -49,29 +49,29 @@
 
 ```bash
 # 1. Cert-manager certificate status
-kubectl get certificates -n sentinel-gateway -o wide
+kubectl get certificates -n bulwark-gateway -o wide
 
 # 2. Cert-manager events (renewal failures)
-kubectl get events -n sentinel-gateway --field-selector reason=Failed --sort-by='.lastTimestamp' | grep -i cert
+kubectl get events -n bulwark-gateway --field-selector reason=Failed --sort-by='.lastTimestamp' | grep -i cert
 
 # 3. CertificateRequest details (why renewal failed)
-kubectl get certificaterequests -n sentinel-gateway -o yaml | grep -A5 "status:"
+kubectl get certificaterequests -n bulwark-gateway -o yaml | grep -A5 "status:"
 
 # 4. Cert-manager logs
-kubectl logs deploy/cert-manager -n cert-manager --since=1h | grep -i "sentinel\|error\|fail"
+kubectl logs deploy/cert-manager -n cert-manager --since=1h | grep -i "bulwark\|error\|fail"
 
 # 5. Check ACME challenge completion (if Let's Encrypt)
-kubectl get challenges -n sentinel-gateway
-kubectl describe challenge -n sentinel-gateway
+kubectl get challenges -n bulwark-gateway
+kubectl describe challenge -n bulwark-gateway
 
 # 6. Verify DNS for ACME DNS-01 challenge
-kubectl exec deploy/proxy -n sentinel-gateway -- nslookup _acme-challenge.sentinel-gateway.yourdomain.com
+kubectl exec deploy/proxy -n bulwark-gateway -- nslookup _acme-challenge.bulwark-gateway.yourdomain.com
 
 # 7. Check ingress annotation for cert-manager
-kubectl get ingress -n sentinel-gateway -o yaml | grep -A3 "cert-manager"
+kubectl get ingress -n bulwark-gateway -o yaml | grep -A3 "cert-manager"
 
 # 8. Direct certificate inspection
-echo | openssl s_client -connect sentinel-gateway.yourdomain.com:443 -servername sentinel-gateway.yourdomain.com 2>/dev/null | \
+echo | openssl s_client -connect bulwark-gateway.yourdomain.com:443 -servername bulwark-gateway.yourdomain.com 2>/dev/null | \
   openssl x509 -noout -dates -issuer
 ```
 
@@ -93,13 +93,13 @@ echo | openssl s_client -connect sentinel-gateway.yourdomain.com:443 -servername
 
 ```bash
 # 1. Force renewal attempt
-kubectl cert-manager renew sentinel-tls -n sentinel-gateway
+kubectl cert-manager renew bulwark-tls -n bulwark-gateway
 
 # 2. Watch for completion
-kubectl get certificate sentinel-tls -n sentinel-gateway -w
+kubectl get certificate bulwark-tls -n bulwark-gateway -w
 
 # 3. If challenge is stuck, delete and recreate
-kubectl delete certificaterequest -n sentinel-gateway --all
+kubectl delete certificaterequest -n bulwark-gateway --all
 # cert-manager will create a new request
 
 # 4. If issuer credentials expired (e.g., DNS provider API key)
@@ -111,22 +111,22 @@ kubectl get secret cert-manager-dns-credentials -n cert-manager -o yaml
 
 ```bash
 # 1. Generate CSR or use existing private key
-openssl req -new -key server.key -out server.csr -subj "/CN=sentinel-gateway.yourdomain.com"
+openssl req -new -key server.key -out server.csr -subj "/CN=bulwark-gateway.yourdomain.com"
 
 # 2. Submit to CA (internal or public) and receive signed cert
 
 # 3. Update the TLS secret directly
-kubectl create secret tls sentinel-tls \
+kubectl create secret tls bulwark-tls \
   --cert=server.crt \
   --key=server.key \
-  --namespace sentinel-gateway \
+  --namespace bulwark-gateway \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # 4. Restart ingress controller to pick up new cert
 kubectl rollout restart deploy/ingress-nginx-controller -n ingress-nginx
 
 # 5. Verify
-echo | openssl s_client -connect sentinel-gateway.yourdomain.com:443 2>/dev/null | \
+echo | openssl s_client -connect bulwark-gateway.yourdomain.com:443 2>/dev/null | \
   openssl x509 -noout -dates
 ```
 
@@ -138,13 +138,13 @@ openssl req -x509 -nodes -days 90 \
   -newkey rsa:2048 \
   -keyout /tmp/tls.key \
   -out /tmp/tls.crt \
-  -subj "/CN=sentinel-gateway.internal"
+  -subj "/CN=bulwark-gateway.internal"
 
 # 2. Update secret
-kubectl create secret tls sentinel-tls \
+kubectl create secret tls bulwark-tls \
   --cert=/tmp/tls.crt \
   --key=/tmp/tls.key \
-  --namespace sentinel-gateway \
+  --namespace bulwark-gateway \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # 3. Clean up temp files
@@ -159,8 +159,8 @@ rm /tmp/tls.key /tmp/tls.crt
 ./scripts/generate-mtls-certs.sh
 
 # Verify mTLS connectivity
-kubectl exec deploy/proxy -n sentinel-gateway -- \
-  curl --cert /etc/sentinel/tls/client.crt --key /etc/sentinel/tls/client.key \
+kubectl exec deploy/proxy -n bulwark-gateway -- \
+  curl --cert /etc/bulwark/tls/client.crt --key /etc/bulwark/tls/client.key \
   https://backend:443/health
 ```
 
@@ -173,9 +173,9 @@ kubectl exec deploy/proxy -n sentinel-gateway -- \
 
 ## Related Alerts
 
-- [`SentinelProxyTargetDown`](alert-certificate-expiry.md) — expired cert causes scrape failures
-- [`SentinelBackendErrorRateHigh`](alert-backend-errors.md) — mTLS cert expiry can cause backend connection failures
-- [`SentinelAuditLogFailures`](alert-certificate-expiry.md) — TLS cert failure to SIEM can break audit export
+- [`BulwarkProxyTargetDown`](alert-certificate-expiry.md) — expired cert causes scrape failures
+- [`BulwarkBackendErrorRateHigh`](alert-backend-errors.md) — mTLS cert expiry can cause backend connection failures
+- [`BulwarkAuditLogFailures`](alert-certificate-expiry.md) — TLS cert failure to SIEM can break audit export
 
 ## Post-Incident
 

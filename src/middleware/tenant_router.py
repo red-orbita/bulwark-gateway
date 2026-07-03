@@ -6,13 +6,13 @@ this middleware forwards requests to the tenant's dedicated service instead
 of processing them locally in the shared pool.
 
 Configuration:
-  - SENTINEL_DEDICATED_TENANTS: JSON list of tenant names with dedicated pods
-  - SENTINEL_NAMESPACE: Kubernetes namespace for service discovery
-  - Redis key sentinel:dedicated_tenants: Dynamic updates (optional)
+  - BULWARK_DEDICATED_TENANTS: JSON list of tenant names with dedicated pods
+  - BULWARK_NAMESPACE: Kubernetes namespace for service discovery
+  - Redis key bulwark:dedicated_tenants: Dynamic updates (optional)
 
 Activation:
-  - Only active if SENTINEL_DEDICATED_TENANTS is set and non-empty
-  - If running ON a dedicated pod (SENTINEL_ALLOWED_TENANTS matches),
+  - Only active if BULWARK_DEDICATED_TENANTS is set and non-empty
+  - If running ON a dedicated pod (BULWARK_ALLOWED_TENANTS matches),
     routing is skipped (the pod processes the request locally)
 
 Architecture:
@@ -59,7 +59,7 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
 
     Skip conditions (processes locally):
     - Health check paths (/health, /ready)
-    - This pod IS the dedicated pod for this tenant (SENTINEL_ALLOWED_TENANTS set)
+    - This pod IS the dedicated pod for this tenant (BULWARK_ALLOWED_TENANTS set)
     - No dedicated tenants configured
     """
 
@@ -67,7 +67,7 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._dedicated_tenants: Set[str] = set()
         self._namespace: str = os.environ.get(
-            "SENTINEL_NAMESPACE", "sentinel-gateway"
+            "BULWARK_NAMESPACE", "bulwark-gateway"
         )
         self._allowed_tenants: Set[str] = set()
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -79,7 +79,7 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         self._load_from_env()
 
         # Determine if this pod is a dedicated pod (skip routing for self)
-        allowed_raw = os.environ.get("SENTINEL_ALLOWED_TENANTS", "")
+        allowed_raw = os.environ.get("BULWARK_ALLOWED_TENANTS", "")
         if allowed_raw:
             self._allowed_tenants = {
                 t.strip() for t in allowed_raw.split(",") if t.strip()
@@ -96,8 +96,8 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         )
 
     def _load_from_env(self) -> None:
-        """Load dedicated tenant list from SENTINEL_DEDICATED_TENANTS env var."""
-        raw = os.environ.get("SENTINEL_DEDICATED_TENANTS", "")
+        """Load dedicated tenant list from BULWARK_DEDICATED_TENANTS env var."""
+        raw = os.environ.get("BULWARK_DEDICATED_TENANTS", "")
         if not raw:
             return
         try:
@@ -120,12 +120,12 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         try:
             import redis
 
-            redis_url = os.environ.get("SENTINEL_REDIS_URL")
+            redis_url = os.environ.get("BULWARK_REDIS_URL")
             if redis_url:
                 kwargs = {"decode_responses": True, "socket_timeout": 1.0}
                 if redis_url.startswith("rediss://"):
                     tls_insecure = os.environ.get(
-                        "SENTINEL_REDIS_TLS_INSECURE", ""
+                        "BULWARK_REDIS_TLS_INSECURE", ""
                     ).lower() in ("1", "true")
                     if tls_insecure:
                         import ssl
@@ -144,7 +144,7 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
     def _maybe_sync_from_redis(self) -> None:
         """Periodically sync dedicated tenant list from Redis.
 
-        Redis key: sentinel:dedicated_tenants (JSON list)
+        Redis key: bulwark:dedicated_tenants (JSON list)
         This allows the admin to dynamically add/remove dedicated tenants
         without redeploying the shared proxy pool.
         """
@@ -157,7 +157,7 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         if not r:
             return
         try:
-            raw = r.get("sentinel:dedicated_tenants")
+            raw = r.get("bulwark:dedicated_tenants")
             if raw:
                 # SECURITY (H-03 fix): Verify HMAC before trusting Redis value.
                 # Prevents routing manipulation by attackers with Redis write access.
@@ -258,13 +258,13 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
             for k, v in request.headers.items()
             if k.lower() not in hop_by_hop
         }
-        headers["X-Forwarded-By"] = "sentinel-shared-pool"
+        headers["X-Forwarded-By"] = "bulwark-shared-pool"
         # SECURITY (M-16 fix): Sign the header so receiving pod can validate authenticity
         import hmac as _hmac_fwd
         import hashlib as _hashlib_fwd
         headers["X-Forwarded-Sig"] = _hmac_fwd.new(
             settings.jwt_secret.encode(),
-            b"sentinel-shared-pool",
+            b"bulwark-shared-pool",
             _hashlib_fwd.sha256,
         ).hexdigest()[:16]
         headers["X-Forwarded-For"] = request.client.host if request.client else "unknown"
@@ -358,7 +358,7 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         """Route request to dedicated proxy or process locally.
 
         Decision logic:
-        1. Skip if this IS a dedicated pod (SENTINEL_ALLOWED_TENANTS is set)
+        1. Skip if this IS a dedicated pod (BULWARK_ALLOWED_TENANTS is set)
         2. Skip if no dedicated tenants configured
         3. Skip if path is health/public (no tenant context yet)
         4. Skip if request was already forwarded (X-Forwarded-By header)
@@ -379,16 +379,16 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # SECURITY (M-16 fix): Prevent routing loop detection bypass.
-        # X-Forwarded-By is only valid from internal sentinel pods.
+        # X-Forwarded-By is only valid from internal bulwark pods.
         # Validate using a shared HMAC signature to prevent spoofing.
         forwarded_by = request.headers.get("X-Forwarded-By")
         forwarded_sig = request.headers.get("X-Forwarded-Sig")
-        if forwarded_by == "sentinel-shared-pool":
+        if forwarded_by == "bulwark-shared-pool":
             import hmac as _hmac
             import hashlib as _hashlib
             expected_sig = _hmac.new(
                 settings.jwt_secret.encode(),
-                b"sentinel-shared-pool",
+                b"bulwark-shared-pool",
                 _hashlib.sha256,
             ).hexdigest()[:16]
             if forwarded_sig and _hmac.compare_digest(forwarded_sig, expected_sig):

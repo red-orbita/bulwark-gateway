@@ -42,7 +42,7 @@ class RegexInputScanner(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Regex-based prompt injection and attack detection (4600+ patterns)",
-            author="sentinel",
+            author="bulwark",
             priority=10,  # Runs first — fast, comprehensive
         )
 

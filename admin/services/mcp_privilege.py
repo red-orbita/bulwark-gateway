@@ -1,5 +1,5 @@
 """
-MCP Least Privilege Analysis — Sentinel Gateway SkillSpector Integration
+MCP Least Privilege Analysis — Bulwark Gateway SkillSpector Integration
 
 Validates that MCP server/tool declarations match their actual code behavior.
 Detects over-permissioned tools (request more access than needed) and
@@ -11,7 +11,7 @@ Detection categories:
   LP3: Missing Permission Declaration — no permissions but code has capabilities
   LP4: Overdeclared Permission — permission declared but no matching code
 
-Adapted from opencode-security-agent for use within Sentinel Gateway's
+Adapted from opencode-security-agent for use within Bulwark Gateway's
 SkillSpector hybrid scanner. Works on both source code and manifest metadata.
 """
 
@@ -183,7 +183,7 @@ def analyze_permissions(
     # LP3: No permissions declared but code has capabilities
     if not declared_permissions and actual_capabilities:
         findings.append({
-            "rule_id": "SEN-MCP-LP3",
+            "rule_id": "BWK-MCP-LP3",
             "severity": "medium",
             "message": (
                 f"No permissions declared but code uses: "
@@ -200,7 +200,7 @@ def analyze_permissions(
     for perm in declared_permissions:
         if perm in _WILDCARD_INDICATORS:
             findings.append({
-                "rule_id": "SEN-MCP-LP2",
+                "rule_id": "BWK-MCP-LP2",
                 "severity": "medium",
                 "message": f"Wildcard permission declared: '{perm}'",
                 "confidence": 90,
@@ -218,7 +218,7 @@ def analyze_permissions(
         underdeclared = actual_capabilities - declared_capabilities
         for cap in underdeclared:
             findings.append({
-                "rule_id": "SEN-MCP-LP1",
+                "rule_id": "BWK-MCP-LP1",
                 "severity": "high",
                 "message": f"Code uses '{cap}' capability not declared in permissions",
                 "confidence": 80,
@@ -231,7 +231,7 @@ def analyze_permissions(
         overdeclared = declared_capabilities - actual_capabilities
         for cap in overdeclared:
             findings.append({
-                "rule_id": "SEN-MCP-LP4",
+                "rule_id": "BWK-MCP-LP4",
                 "severity": "low",
                 "message": f"Permission '{cap}' declared but no matching code found",
                 "confidence": 60,

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Skill Scanner — Sentinel Gateway Admin{% endblock %}
+{% block title %}Skill Scanner — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Skill Scanner{% endblock %}
 {% block content %}
 <div x-data="skillScanner()" x-init="init()" class="space-y-6">
@@ -7,7 +7,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Skill Security Scanner</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Pre-deployment vulnerability scanning — SkillSpector + MCP Security + Sentinel</p>
+            <p class="text-sm text-gray-400 mt-0.5">Pre-deployment vulnerability scanning — SkillSpector + MCP Security + Bulwark</p>
         </div>
         <div class="flex items-center gap-2">
             <span class="text-xs font-mono px-2 py-1 rounded"
@@ -56,7 +56,7 @@
                 </span>
                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20">
                     <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                    Sentinel <span x-text="'(' + status.sentinel_rules_count + ')'"></span>
+                    Bulwark <span x-text="'(' + status.bulwark_rules_count + ')'"></span>
                 </span>
                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-gray-800 text-gray-300 border border-gray-600">
                     Total: <span class="text-white font-semibold" x-text="status.total_patterns || 0"></span> patterns
@@ -186,7 +186,7 @@
                                                   :class="{
                                                       'bg-purple-500/10 text-purple-400': f.source === 'skillspector',
                                                       'bg-cyan-500/10 text-cyan-400': f.source === 'mcp_security',
-                                                      'bg-amber-500/10 text-amber-400': f.source === 'sentinel',
+                                                      'bg-amber-500/10 text-amber-400': f.source === 'bulwark',
                                                   }" x-text="f.source === 'mcp_security' ? 'MCP' : f.source === 'skillspector' ? 'SP' : 'SEN'"></span>
                                         </td>
                                         <td>

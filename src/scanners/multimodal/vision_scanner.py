@@ -12,7 +12,7 @@ Pipeline:
   Image → Content Classifier → Safety check
 
 Dependencies (optional):
-  pip install sentinel-gateway[vision]
+  pip install bulwark-gateway[vision]
   # Installs: pillow, easyocr (or pytesseract)
 
 Default mode: async (fire-and-forget enrichment)
@@ -86,7 +86,7 @@ class VisionScanner(InputScanner):
     5. Optional: content safety classification
 
     Configuration:
-      - SENTINEL_ML_ENABLED=true
+      - BULWARK_ML_ENABLED=true
       - Policy per agent: multimodal.allow_images, multimodal.ocr_scan
       - Max size: multimodal.max_image_size_mb (default: 5)
     """
@@ -114,7 +114,7 @@ class VisionScanner(InputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="Image OCR + injection detection for multimodal inputs",
-            author="sentinel",
+            author="bulwark",
             priority=15,  # After language (5), before ML classifiers (20+)
         )
 

@@ -56,7 +56,7 @@ class RedisRateLimiter:
             return True  # Fallback handled by caller
 
         effective_limit = limit if limit is not None else self.rate_rpm
-        redis_key = f"sentinel:ratelimit:{key}"
+        redis_key = f"bulwark:ratelimit:{key}"
         now = time.time()
         window_start = now - 60.0  # 1-minute sliding window
 
@@ -99,7 +99,7 @@ class InMemoryTokenBucket:
     def __init__(self, rate: float, burst: int, max_keys: int = 10000, ttl: int = 300):
         # Compensate for multi-worker over-allowance
         import os
-        worker_count = int(os.environ.get("SENTINEL_WORKERS", "4"))
+        worker_count = int(os.environ.get("BULWARK_WORKERS", "4"))
         self.rate = rate / max(worker_count, 1)
         self.burst = max(1, burst // max(worker_count, 1))
         from cachetools import TTLCache
@@ -129,7 +129,7 @@ class InMemoryTokenBucket:
 
             # L-07 fix: Use per-key rate if limit override provided
             import os
-            worker_count = int(os.environ.get("SENTINEL_WORKERS", "4"))
+            worker_count = int(os.environ.get("BULWARK_WORKERS", "4"))
             if limit is not None:
                 effective_rate = (limit / 60.0) / max(worker_count, 1)
                 effective_burst = max(1, (limit // 6) // max(worker_count, 1))
@@ -147,7 +147,7 @@ class InMemoryTokenBucket:
 
 
 # Per-tenant rate limit config (synced from Redis)
-_RATE_LIMIT_CONFIG_KEY = "sentinel:rate_limits:config"
+_RATE_LIMIT_CONFIG_KEY = "bulwark:rate_limits:config"
 _tenant_limits: dict[str, int] = {}  # tenant_id → RPM override
 _tenant_limits_version: int = 0
 
@@ -158,7 +158,7 @@ def _load_tenant_limits(r: Optional[redis.Redis]) -> None:
     if not r:
         return
     try:
-        ver = r.get("sentinel:rate_limits:version")
+        ver = r.get("bulwark:rate_limits:version")
         if ver and int(ver) > _tenant_limits_version:
             raw = r.get(_RATE_LIMIT_CONFIG_KEY)
             if raw:
@@ -208,7 +208,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Untrusted client headers should never influence application state.
         # Red team mode should only be enabled via environment variable.
         import os
-        request.state.redteam_mode = os.environ.get("SENTINEL_REDTEAM_MODE", "").lower() in ("1", "true")
+        request.state.redteam_mode = os.environ.get("BULWARK_REDTEAM_MODE", "").lower() in ("1", "true")
 
         # C-02: Rate limit by authenticated tenant_id (from request.state, set by AuthMiddleware)
         # Falls back to source IP if not authenticated yet (global per-IP limit)

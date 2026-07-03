@@ -4,9 +4,9 @@ The admin portal writes to Redis when patterns are toggled/created/deleted.
 The proxy reads from Redis with a local TTL cache to avoid per-request latency.
 
 Redis keys:
-  sentinel:guardrails:disabled   — SET of pattern_ids that are disabled
-  sentinel:guardrails:custom     — HASH { pattern_id: JSON(regex, severity, category, layer) }
-  sentinel:guardrails:version    — INT incremented on every change (cache invalidation)
+  bulwark:guardrails:disabled   — SET of pattern_ids that are disabled
+  bulwark:guardrails:custom     — HASH { pattern_id: JSON(regex, severity, category, layer) }
+  bulwark:guardrails:version    — INT incremented on every change (cache invalidation)
 """
 
 from __future__ import annotations
@@ -44,16 +44,19 @@ def _safe_compile(pattern: str) -> re.Pattern:
 
 from src.config import settings
 
-# Cache TTL — proxy re-reads Redis every N seconds
-_CACHE_TTL = 5.0
+# SECURITY FIX (M-04): Reduced cache TTL from 5s to 1s.
+# 5s staleness window allowed disabled patterns to still trigger for too long
+# after admin disables them. 1s is a reasonable balance between consistency
+# and Redis load (version check only, not full data read on every request).
+_CACHE_TTL = 1.0
 
 # Maximum time (seconds) for a single custom regex match
 _REGEX_TIMEOUT_SEC = 0.005  # 5ms
 
 # Redis keys
-KEY_DISABLED = "sentinel:guardrails:disabled"
-KEY_CUSTOM = "sentinel:guardrails:custom"
-KEY_VERSION = "sentinel:guardrails:version"
+KEY_DISABLED = "bulwark:guardrails:disabled"
+KEY_CUSTOM = "bulwark:guardrails:custom"
+KEY_VERSION = "bulwark:guardrails:version"
 
 
 class DynamicPatternRegistry:

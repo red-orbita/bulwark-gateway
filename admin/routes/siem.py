@@ -125,13 +125,13 @@ async def siem_status(user: TokenPayload = Depends(require_permission("siem:read
         from ..services.redis_sync import get_redis_client
         r = get_redis_client(timeout=1.0)
         if r:
-            batches = int(r.get("sentinel:siem:batches_sent") or 0)
-            events = int(r.get("sentinel:siem:events_exported") or 0)
-            errors = int(r.get("sentinel:siem:export_errors") or 0)
-            queue = int(r.get("sentinel:siem:queue_memory_depth") or 0)
-            transports_raw = r.get("sentinel:siem:transports")
+            batches = int(r.get("bulwark:siem:batches_sent") or 0)
+            events = int(r.get("bulwark:siem:events_exported") or 0)
+            errors = int(r.get("bulwark:siem:export_errors") or 0)
+            queue = int(r.get("bulwark:siem:queue_memory_depth") or 0)
+            transports_raw = r.get("bulwark:siem:transports")
             transports = json.loads(transports_raw) if transports_raw else []
-            updated = float(r.get("sentinel:siem:updated_at") or 0)
+            updated = float(r.get("bulwark:siem:updated_at") or 0)
             if batches or events or errors or transports:
                 return {
                     "batches_sent": batches,
@@ -305,7 +305,7 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
     wazuh_url = config.get("wazuh_api_url", "https://localhost:55000")
     wazuh_user = config.get("wazuh_user", "wazuh-wui")
     wazuh_password = config.get("wazuh_password", "wazuh-wui")
-    log_path = config.get("endpoint", "/var/log/sentinel-gateway/events.ndjson")
+    log_path = config.get("endpoint", "/var/log/bulwark-gateway/events.ndjson")
 
     # H-02: SSRF validation on wazuh_api_url
     try:
@@ -321,7 +321,7 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
             ipaddress.ip_network("127.0.0.0/8"),
         ]
         # Allow "wazuh" and "wazuh-manager" service names (internal K8s services)
-        _allowed_hosts = {"wazuh", "wazuh-manager", "wazuh.sentinel-siem.svc.cluster.local"}
+        _allowed_hosts = {"wazuh", "wazuh-manager", "wazuh.bulwark-siem.svc.cluster.local"}
 
         if hostname.lower() in _blocked_hosts:
             return SIEMTestResult(
@@ -352,7 +352,11 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
     start = time.time()
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+        # SECURITY FIX (APT-07): Enable TLS verification by default.
+        # Use BULWARK_WAZUH_TLS_VERIFY=false only for self-signed certs in dev.
+        import os
+        _tls_verify = os.getenv("BULWARK_WAZUH_TLS_VERIFY", "true").lower() not in ("false", "0", "no")
+        async with httpx.AsyncClient(verify=_tls_verify, timeout=10.0) as client:
             # Step 1: Authenticate
             auth_resp = await client.post(
                 f"{wazuh_url}/security/user/authenticate",

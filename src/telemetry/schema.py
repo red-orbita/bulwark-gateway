@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class TelemetryEventCategory(str, Enum):
-    """ECS event.category values relevant to Sentinel Gateway."""
+    """ECS event.category values relevant to Bulwark Gateway."""
 
     INTRUSION_DETECTION = "intrusion_detection"
     NETWORK = "network"
@@ -59,16 +59,16 @@ class ECSEvent(BaseModel):
 
 
 class ECSObserver(BaseModel):
-    """ECS observer (Sentinel Gateway instance)."""
+    """ECS observer (Bulwark Gateway instance)."""
 
-    type: str = "sentinel-gateway"
-    name: str = "sentinel-gateway"
+    type: str = "bulwark-gateway"
+    name: str = "bulwark-gateway"
     version: str = "0.2.0"
     hostname: Optional[str] = None
 
 
-class SentinelFields(BaseModel):
-    """Custom fields specific to Sentinel Gateway (nested under 'sentinel.')."""
+class BulwarkFields(BaseModel):
+    """Custom fields specific to Bulwark Gateway (nested under 'bulwark.')."""
 
     verdict: str  # allow, block, warn, redact
     rule_id: Optional[str] = None
@@ -93,7 +93,7 @@ class TenantFields(BaseModel):
 
 class SecurityTelemetryEvent(BaseModel):
     """
-    Root telemetry event model — ECS-aligned with Sentinel extensions.
+    Root telemetry event model — ECS-aligned with Bulwark extensions.
 
     Compatible with: ECS 8.x, OCSF 1.1, CEF (via converter), LEEF (via converter).
     """
@@ -104,7 +104,7 @@ class SecurityTelemetryEvent(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
     )
     message: str = ""
-    tags: list[str] = Field(default_factory=lambda: ["sentinel-gateway", "security"])
+    tags: list[str] = Field(default_factory=lambda: ["bulwark-gateway", "security"])
     labels: dict[str, str] = Field(default_factory=dict)
 
     # ECS structured fields
@@ -112,8 +112,8 @@ class SecurityTelemetryEvent(BaseModel):
     observer: ECSObserver = Field(default_factory=ECSObserver)
     source: ECSSource = Field(default_factory=ECSSource)
 
-    # Sentinel-specific fields
-    sentinel: SentinelFields
+    # Bulwark-specific fields
+    bulwark: BulwarkFields
     tenant: TenantFields
 
     model_config = {"populate_by_name": True}
@@ -135,34 +135,34 @@ class SecurityTelemetryEvent(BaseModel):
         """Convert to CEF (Common Event Format) for ArcSight, FortiSIEM, etc."""
         severity = self.event.severity.value
         # CEF severity is 0-10
-        name = self.sentinel.rule_description or self.sentinel.threat_category or "SecurityEvent"
+        name = self.bulwark.rule_description or self.bulwark.threat_category or "SecurityEvent"
         extension = (
             f"src={self.source.ip or '0.0.0.0'} "
-            f"act={self.sentinel.verdict} "
+            f"act={self.bulwark.verdict} "
             f"cat={self.event.category.value} "
             f"cs1={self.tenant.id} cs1Label=TenantID "
-            f"cs2={self.sentinel.guardrail_layer} cs2Label=GuardrailLayer "
-            f"cs3={self.sentinel.rule_id or 'none'} cs3Label=RuleID "
-            f"cn1={int(self.sentinel.latency_ms)} cn1Label=LatencyMs "
+            f"cs2={self.bulwark.guardrail_layer} cs2Label=GuardrailLayer "
+            f"cs3={self.bulwark.rule_id or 'none'} cs3Label=RuleID "
+            f"cn1={int(self.bulwark.latency_ms)} cn1Label=LatencyMs "
             f"msg={self.message}"
         )
         return (
-            f"CEF:0|SentinelGateway|Guardrail|{self.observer.version}|"
-            f"{self.sentinel.threat_category or 'generic'}|{name}|{severity}|{extension}"
+            f"CEF:0|BulwarkGateway|Guardrail|{self.observer.version}|"
+            f"{self.bulwark.threat_category or 'generic'}|{name}|{severity}|{extension}"
         )
 
     def to_leef(self) -> str:
         """Convert to LEEF 2.0 (Log Event Extended Format) for IBM QRadar."""
         return (
-            f"LEEF:2.0|SentinelGateway|Guardrail|{self.observer.version}|SecurityEvent|"
+            f"LEEF:2.0|BulwarkGateway|Guardrail|{self.observer.version}|SecurityEvent|"
             f"cat={self.event.category.value}\t"
             f"sev={self.event.severity.value}\t"
             f"src={self.source.ip or '0.0.0.0'}\t"
-            f"action={self.sentinel.verdict}\t"
+            f"action={self.bulwark.verdict}\t"
             f"tenantId={self.tenant.id}\t"
-            f"ruleId={self.sentinel.rule_id or 'none'}\t"
-            f"guardrailLayer={self.sentinel.guardrail_layer}\t"
-            f"latencyMs={int(self.sentinel.latency_ms)}\t"
+            f"ruleId={self.bulwark.rule_id or 'none'}\t"
+            f"guardrailLayer={self.bulwark.guardrail_layer}\t"
+            f"latencyMs={int(self.bulwark.latency_ms)}\t"
             f"msg={self.message}"
         )
 
@@ -195,7 +195,7 @@ def from_security_event(
     outcome = "failure" if verdict == "block" else "success"
     action = verdict
 
-    message = f"Sentinel Gateway {verdict.upper()}: {rule_description or threat_category or 'security event'}"
+    message = f"Bulwark Gateway {verdict.upper()}: {rule_description or threat_category or 'security event'}"
 
     return SecurityTelemetryEvent(
         **{"@timestamp": datetime.now(timezone.utc).isoformat()},  # type: ignore[arg-type]
@@ -208,7 +208,7 @@ def from_security_event(
             duration=int(latency_ms * 1_000_000),  # ms → ns
         ),
         source=ECSSource(ip=source_ip),
-        sentinel=SentinelFields(
+        bulwark=BulwarkFields(
             verdict=verdict,
             rule_id=rule_id,
             rule_description=rule_description,

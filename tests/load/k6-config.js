@@ -1,5 +1,5 @@
 /**
- * Sentinel Gateway — k6 Load Test Shared Configuration
+ * Bulwark Gateway — k6 Load Test Shared Configuration
  *
  * Shared constants, helpers, payload generators, and threshold definitions
  * used across all load test scenarios.

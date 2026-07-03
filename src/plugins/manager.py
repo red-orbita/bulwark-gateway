@@ -219,7 +219,7 @@ class PluginManager:
         for child in sorted(self.plugin_dir.iterdir()):
             if not child.is_dir():
                 continue
-            spec_file = child / "sentinel-plugin.yaml"
+            spec_file = child / "bulwark-plugin.yaml"
             if spec_file.exists():
                 try:
                     spec = load_plugin_spec(spec_file)
@@ -247,7 +247,7 @@ class PluginManager:
                 logger.error("plugin_install_not_dir", extra={"path": name})
                 return False
 
-            spec_file = source_path / "sentinel-plugin.yaml"
+            spec_file = source_path / "bulwark-plugin.yaml"
             if not spec_file.exists():
                 logger.error("plugin_install_no_spec", extra={"path": name})
                 return False
@@ -422,7 +422,7 @@ class PluginManager:
         sandbox = PluginSandbox(name, plugin_path, SandboxConfig(timeout_seconds=10.0))
 
         try:
-            module_name = f"sentinel_plugin_{name.replace('-', '_')}"
+            module_name = f"bulwark_plugin_{name.replace('-', '_')}"
 
             # Remove cached module if exists (force re-import with sandbox)
             sys.modules.pop(module_name, None)
@@ -465,11 +465,11 @@ class PluginManager:
                 extra={"plugin_name": name, "error": str(e), "type": type(e).__name__},
             )
             # Remove from sys.modules on failure
-            sys.modules.pop(f"sentinel_plugin_{name.replace('-', '_')}", None)
+            sys.modules.pop(f"bulwark_plugin_{name.replace('-', '_')}", None)
             return None
         except Exception as e:
             logger.error("plugin_load_error", extra={"plugin_name": name, "error": str(e)})
-            sys.modules.pop(f"sentinel_plugin_{name.replace('-', '_')}", None)
+            sys.modules.pop(f"bulwark_plugin_{name.replace('-', '_')}", None)
             return None
 
     def scaffold(self, name: str, output_dir: Path) -> Path:
@@ -487,12 +487,12 @@ class PluginManager:
         tests_dir = plugin_dir / "tests"
         tests_dir.mkdir(exist_ok=True)
 
-        # sentinel-plugin.yaml
+        # bulwark-plugin.yaml
         spec_content = f"""name: {name}
 version: 0.1.0
 author: your-name
 license: MIT
-description: A custom Sentinel Gateway scanner plugin.
+description: A custom Bulwark Gateway scanner plugin.
 type: input_scanner
 blocking: false
 requires: {{}}
@@ -504,11 +504,11 @@ config:
     default: 0.7
     description: Detection confidence threshold (0.0-1.0)
 """
-        (plugin_dir / "sentinel-plugin.yaml").write_text(spec_content, encoding="utf-8")
+        (plugin_dir / "bulwark-plugin.yaml").write_text(spec_content, encoding="utf-8")
 
         # scanner.py
         scanner_content = f'''"""
-{name} — Custom input scanner plugin for Sentinel Gateway.
+{name} — Custom input scanner plugin for Bulwark Gateway.
 """
 
 from __future__ import annotations
@@ -602,12 +602,12 @@ async def test_scanner_info(scanner: Scanner) -> None:
         # README.md
         readme_content = f"""# {name}
 
-A custom scanner plugin for Sentinel Gateway.
+A custom scanner plugin for Bulwark Gateway.
 
 ## Installation
 
 ```bash
-sentinel plugin install ./{name} --source local
+bulwark plugin install ./{name} --source local
 ```
 
 ## Configuration
@@ -623,8 +623,8 @@ sentinel plugin install ./{name} --source local
 cd {name}
 pytest tests/ -v
 
-# Test in sentinel
-sentinel plugin test ./{name}
+# Test in bulwark
+bulwark plugin test ./{name}
 ```
 """
         (plugin_dir / "README.md").write_text(readme_content, encoding="utf-8")

@@ -16,7 +16,7 @@ Activate when ANY of the following are confirmed:
 - Jailbreak attempt succeeded (LLM produced disallowed output)
 - Encoded/obfuscated attack evaded multi-layer decoding
 - Tool policy was circumvented (unauthorized tool execution confirmed)
-- An attacker publicly discloses a bypass technique affecting Sentinel Gateway
+- An attacker publicly discloses a bypass technique affecting Bulwark Gateway
 - Red team/penetration test identifies a live bypass
 
 **This differs from a data breach** in that no data was necessarily exfiltrated — the security control itself failed. If data was exposed, also activate [incident-data-breach.md](incident-data-breach.md).
@@ -28,7 +28,7 @@ Activate when ANY of the following are confirmed:
 ### 1.1 Declare the Incident
 
 ```
-Post to #sentinel-incidents:
+Post to #bulwark-incidents:
 
 :shield: P1 INCIDENT — Guardrail Bypass Confirmed
 
@@ -45,10 +45,10 @@ Immediate concern: Can this bypass be replicated at scale?
 
 ```bash
 # Collect evidence (includes attack payloads in recent_blocks and logs)
-./scripts/ir-collect-evidence.sh --namespace sentinel-gateway --since 1h
+./scripts/ir-collect-evidence.sh --namespace bulwark-gateway --since 1h
 
 # Specifically capture the bypass payload for pattern development
-kubectl logs deploy/proxy -n sentinel-gateway --since=1h | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=1h | \
   jq 'select(.verdict=="ALLOW") | select(.category!=null)' > /tmp/bypass-payloads.jsonl
 
 # If reported externally (bug bounty, public disclosure), save the original report
@@ -67,13 +67,13 @@ kubectl logs deploy/proxy -n sentinel-gateway --since=1h | \
 
 ```bash
 # Search for similar payloads (adjust pattern to match the bypass technique)
-kubectl logs deploy/proxy -n sentinel-gateway --since=24h | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=24h | \
   jq 'select(.verdict=="ALLOW")' | grep -i "<bypass_technique_indicator>"
 
 # Check if pattern was supposed to catch this
 # Review input_guardrail.py patterns for the relevant category
 # Example: check prompt injection patterns
-kubectl exec deploy/proxy -n sentinel-gateway -- \
+kubectl exec deploy/proxy -n bulwark-gateway -- \
   python -c "from src.guardrails.input_guardrail import InputGuardrail; g=InputGuardrail(); print(len(g.patterns))"
 ```
 
@@ -83,7 +83,7 @@ kubectl exec deploy/proxy -n sentinel-gateway -- \
 
 ```bash
 # Option 1: Tighten fail-closed mode (blocks on any internal error)
-kubectl set env deploy/proxy SENTINEL_FAIL_MODE=closed -n sentinel-gateway
+kubectl set env deploy/proxy BULWARK_FAIL_MODE=closed -n bulwark-gateway
 
 # Option 2: Add emergency pattern (quick regex to block the specific technique)
 curl -X POST http://admin:8090/admin/guardrails/ \
@@ -96,7 +96,7 @@ curl -X POST http://admin:8090/admin/guardrails/ \
   }'
 
 # Option 3: If bypass uses specific encoding, force strict decoding
-kubectl set env deploy/proxy SENTINEL_STRICT_DECODING=true -n sentinel-gateway
+kubectl set env deploy/proxy BULWARK_STRICT_DECODING=true -n bulwark-gateway
 
 # Option 4: If tool policy bypass, restrict all tool calls temporarily
 # Update policy to deny all tools except explicitly allowed
@@ -193,7 +193,7 @@ curl -X POST http://proxy:8080/admin/policies/reload
 # Use rolling update to avoid downtime
 
 # Verify fix in production
-kubectl logs deploy/proxy -n sentinel-gateway --since=2m | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=2m | \
   jq 'select(.event=="pattern_loaded")'
 
 # Run security smoke test
@@ -211,15 +211,15 @@ python scripts/security-smoke-test.py --host http://proxy:8080
 # Search for requests that may have exploited the gap
 
 # All ALLOW verdicts during the window that match the bypass pattern
-kubectl logs deploy/proxy -n sentinel-gateway --since=<window> | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=<window> | \
   jq 'select(.verdict=="ALLOW")' | grep -i "<bypass_indicator>"
 
 # Check if any backend responses contained harmful content
-kubectl logs deploy/proxy -n sentinel-gateway --since=<window> | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=<window> | \
   jq 'select(.event=="response_sent" and .output_filter_triggered==true)'
 
 # Check tool executions during the window
-kubectl logs deploy/proxy -n sentinel-gateway --since=<window> | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=<window> | \
   jq 'select(.event=="tool_call") | {tenant: .tenant_id, tool: .tool_name, args: .tool_args}'
 ```
 
@@ -254,7 +254,7 @@ curl -X POST http://admin:8090/admin/evaluation/run \
 
 # 4. Consider ML scanner addition if regex alone is insufficient
 # Check if ml scanner would have caught this:
-# Prometheus: sentinel_verdicts_total{verdict="block", source="ml_scanner"}
+# Prometheus: bulwark_verdicts_total{verdict="block", source="ml_scanner"}
 
 # 5. Update security smoke test with the bypass payload
 # Add to scripts/security-smoke-test.py

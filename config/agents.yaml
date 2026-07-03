@@ -1,5 +1,5 @@
 defaults:
-  backend_url: ${SENTINEL_BACKEND_URL:-http://ollama:11434}
+  backend_url: ${BULWARK_BACKEND_URL:-http://ollama:11434}
   timeout: 120.0
   auth_header: null
   health_endpoint: /health
@@ -30,7 +30,7 @@ tenants:
         status: active
         max_retries: 2
         fallback_backends:
-          - backend_url: ${SENTINEL_BACKEND_URL:-http://ollama:11434}
+          - backend_url: ${BULWARK_BACKEND_URL:-http://ollama:11434}
             path_prefix: /v1
             timeout: 120.0
     _meta:

@@ -27,7 +27,7 @@ Activate this playbook when ANY of the following are confirmed or strongly suspe
 ### 1.1 Declare the Incident
 
 ```
-Post to #sentinel-incidents:
+Post to #bulwark-incidents:
 
 :rotating_light: P1 INCIDENT DECLARED — Potential Data Breach
 
@@ -35,7 +35,7 @@ Post to #sentinel-incidents:
 **Discovered**: [timestamp UTC]
 **Discovered by**: [alert name / person / report]
 **IC**: @[name]
-**War Room**: #sentinel-incidents
+**War Room**: #bulwark-incidents
 **Bridge**: [zoom/meet link]
 
 ALL: Do NOT restart services or delete logs until evidence is preserved.
@@ -45,17 +45,17 @@ ALL: Do NOT restart services or delete logs until evidence is preserved.
 
 ```bash
 # CRITICAL: Run evidence collection FIRST
-./scripts/ir-collect-evidence.sh --namespace sentinel-gateway --since 2h
+./scripts/ir-collect-evidence.sh --namespace bulwark-gateway --since 2h
 
 # Additional: Capture output filter state
-kubectl logs deploy/proxy -n sentinel-gateway --since=2h > /tmp/proxy-logs-full.jsonl
+kubectl logs deploy/proxy -n bulwark-gateway --since=2h > /tmp/proxy-logs-full.jsonl
 
 # Capture Redis state (recent blocks contain the events)
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli --no-auth-warning \
-  LRANGE sentinel:recent_blocks 0 -1 > /tmp/redis-recent-blocks.json
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli --no-auth-warning \
+  LRANGE bulwark:recent_blocks 0 -1 > /tmp/redis-recent-blocks.json
 
 # Capture admin audit log
-kubectl logs deploy/admin -n sentinel-gateway --since=2h > /tmp/admin-audit-full.jsonl
+kubectl logs deploy/admin -n bulwark-gateway --since=2h > /tmp/admin-audit-full.jsonl
 
 # Package additional evidence
 tar -czf /tmp/breach-evidence-additional-$(date +%Y%m%d_%H%M%S).tar.gz \
@@ -71,7 +71,7 @@ Determine the following:
 
 | Question | How to Check |
 |----------|-------------|
-| What data was exposed? | Check output filter logs, `sentinel:recent_blocks` |
+| What data was exposed? | Check output filter logs, `bulwark:recent_blocks` |
 | Which tenant(s) affected? | `jq '.tenant_id' proxy-logs-full.jsonl \| sort -u` |
 | How many data subjects? | Count unique users in affected tenant's requests |
 | Was data sent externally? | Check for exfiltration verdicts, IOC matches |
@@ -80,16 +80,16 @@ Determine the following:
 
 ```bash
 # Check for output filter failures (redaction missed)
-kubectl logs deploy/proxy -n sentinel-gateway --since=2h | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=2h | \
   jq 'select(.event=="output_filter" and .verdict!="REDACT") | {tenant: .tenant_id, content_snippet: .content[:100]}'
 
 # Check for cross-tenant data leaks
-kubectl logs deploy/proxy -n sentinel-gateway --since=2h | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=2h | \
   jq 'select(.event=="response_sent") | {tenant: .tenant_id, response_tenant: .response_context_tenant}' | \
   jq 'select(.tenant != .response_context_tenant)'
 
 # Check exfiltration-category blocks (some may have succeeded before detection)
-kubectl logs deploy/proxy -n sentinel-gateway --since=2h | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=2h | \
   jq 'select(.category=="exfiltration")'
 ```
 
@@ -97,11 +97,11 @@ kubectl logs deploy/proxy -n sentinel-gateway --since=2h | \
 
 | Scenario | Action | Command |
 |----------|--------|---------|
-| Output filter not redacting | Enable strict output filtering | `kubectl set env deploy/proxy SENTINEL_OUTPUT_FILTER_STRICT=true` |
+| Output filter not redacting | Enable strict output filtering | `kubectl set env deploy/proxy BULWARK_OUTPUT_FILTER_STRICT=true` |
 | Cross-tenant leak | Isolate affected tenant | Scale proxy to 0, investigate routing |
 | Credential exposure | Rotate exposed credentials immediately | Revoke keys, rotate secrets |
 | Active exfiltration | Block the tenant/agent | Rate limit to 0, revoke API key |
-| Vulnerability in guardrail | Emergency fail-closed | `kubectl set env deploy/proxy SENTINEL_FAIL_MODE=closed` |
+| Vulnerability in guardrail | Emergency fail-closed | `kubectl set env deploy/proxy BULWARK_FAIL_MODE=closed` |
 
 ---
 
@@ -111,21 +111,21 @@ kubectl logs deploy/proxy -n sentinel-gateway --since=2h | \
 
 ```bash
 # When did the breach start? (first occurrence)
-kubectl logs deploy/proxy -n sentinel-gateway --since=24h | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=24h | \
   jq 'select(.event=="output_filter_bypass" or .verdict=="ALLOW" and .contains_sensitive==true) | .timestamp' | \
   sort | head -1
 
 # What pattern/filter failed?
-kubectl logs deploy/proxy -n sentinel-gateway --since=24h | \
+kubectl logs deploy/proxy -n bulwark-gateway --since=24h | \
   jq 'select(.event=="output_filter") | {pattern: .matched_pattern, result: .verdict}' | \
   sort | uniq -c
 
 # Was there a config change that caused the gap?
-kubectl logs deploy/admin -n sentinel-gateway --since=24h | \
+kubectl logs deploy/admin -n bulwark-gateway --since=24h | \
   jq 'select(.event=="config_change" or .event=="policy_reload")'
 
 # Check guardrail version history
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli GET sentinel:guardrails:version
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli GET bulwark:guardrails:version
 ```
 
 ### 2.2 Data Classification
@@ -201,7 +201,7 @@ Contact: [IC name and phone]
 # (output filter gap, cross-tenant routing bug, guardrail bypass, etc.)
 
 # 2. Deploy fix
-kubectl set image deploy/proxy sentinel-proxy=sentinel-gateway-proxy:<fixed-version> -n sentinel-gateway
+kubectl set image deploy/proxy bulwark-proxy=bulwark-gateway-proxy:<fixed-version> -n bulwark-gateway
 
 # 3. Verify fix
 python scripts/security-smoke-test.py --host http://proxy:8080 --rounds 3
@@ -222,10 +222,10 @@ curl -X POST http://admin:8090/admin/guardrails/ \
 # (Customer Success sends the notification)
 
 # Revoke and reissue JWT signing key
-kubectl delete secret sentinel-jwt-secret -n sentinel-gateway
-kubectl create secret generic sentinel-jwt-secret \
-  --from-literal=jwt-secret="$(openssl rand -base64 48)" -n sentinel-gateway
-kubectl rollout restart deploy/proxy deploy/admin -n sentinel-gateway
+kubectl delete secret bulwark-jwt-secret -n bulwark-gateway
+kubectl create secret generic bulwark-jwt-secret \
+  --from-literal=jwt-secret="$(openssl rand -base64 48)" -n bulwark-gateway
+kubectl rollout restart deploy/proxy deploy/admin -n bulwark-gateway
 ```
 
 ### 4.3 Restore and Validate
@@ -248,7 +248,7 @@ python scripts/security-smoke-test.py --host http://proxy:8080 --rounds 5
 ### 5.1 Internal "All Clear"
 
 ```
-Post to #sentinel-incidents:
+Post to #bulwark-incidents:
 
 :white_check_mark: INCIDENT RESOLVED — INC-[XXXX]
 

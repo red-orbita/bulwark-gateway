@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#0f172a">
-    <title>{% block title %}Sentinel Gateway Admin{% endblock %}</title>
+    <title>{% block title %}Bulwark Gateway Admin{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%230891b2'/><path d='M16 6l2 8h8l-6.5 4.5L22 27l-6-4.5L10 27l2.5-8.5L6 14h8z' fill='%23f0fdfa'/></svg>">
 
     <!-- Fonts: Inter (UI) + JetBrains Mono (data/code) -->
@@ -67,7 +67,7 @@
                 <i data-lucide="shield-check" class="w-5 h-5 text-white"></i>
             </div>
             <div x-show="sidebarOpen" x-transition class="overflow-hidden whitespace-nowrap">
-                <h1 class="text-sm font-bold text-white tracking-tight">Sentinel Gateway</h1>
+                <h1 class="text-sm font-bold text-white tracking-tight">Bulwark Gateway</h1>
                 <p class="text-[10px] text-gray-500 font-medium">Security Guardrail Proxy</p>
             </div>
         </div>
@@ -182,11 +182,11 @@
         <div class="p-3" style="border-top: 1px solid rgba(255,255,255,0.04);">
             <div class="flex items-center gap-3" x-show="sidebarOpen">
                 <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 cursor-pointer" style="background: linear-gradient(135deg, rgba(6,182,212,0.15), rgba(6,182,212,0.05)); box-shadow: inset 0 0 0 1px rgba(6,182,212,0.2);" @click="showProfile = true; loadProfile()">
-                    <span class="text-xs font-semibold text-cyan-300" x-text="(localStorage.getItem('sentinel_user') || 'U')[0].toUpperCase()"></span>
+                    <span class="text-xs font-semibold text-cyan-300" x-text="(localStorage.getItem('bulwark_user') || 'U')[0].toUpperCase()"></span>
                 </div>
                 <div class="flex-1 min-w-0 cursor-pointer" @click="showProfile = true; loadProfile()">
-                    <p class="text-xs font-medium text-gray-200 truncate" x-text="localStorage.getItem('sentinel_user') || ''"></p>
-                    <p class="text-[10px] text-gray-500 capitalize" x-text="localStorage.getItem('sentinel_role') || ''"></p>
+                    <p class="text-xs font-medium text-gray-200 truncate" x-text="localStorage.getItem('bulwark_user') || ''"></p>
+                    <p class="text-[10px] text-gray-500 capitalize" x-text="localStorage.getItem('bulwark_role') || ''"></p>
                 </div>
                 <button @click="showProfile = true; loadProfile()" class="p-1.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors" title="Profile Settings">
                     <i data-lucide="settings" class="w-4 h-4"></i>
@@ -449,9 +449,9 @@
                     this.profileSaving = false;
                 },
                 logout() {
-                    localStorage.removeItem('sentinel_token');
-                    localStorage.removeItem('sentinel_user');
-                    localStorage.removeItem('sentinel_role');
+                    localStorage.removeItem('bulwark_token');
+                    localStorage.removeItem('bulwark_user');
+                    localStorage.removeItem('bulwark_role');
                     window.location.href = '/login';
                 }
             };
@@ -562,7 +562,7 @@
 
         // === Auth ===
         window._rawFetch = window.fetch.bind(window);
-        window._authToken = localStorage.getItem('sentinel_token');
+        window._authToken = localStorage.getItem('bulwark_token');
         window._authReady = Promise.resolve();
 
         window.fetch = async function(url, opts = {}) {
@@ -580,7 +580,7 @@
             }
             const resp = await window._rawFetch(url, opts);
             if (resp.status === 401 && typeof url === 'string' && url.startsWith('/admin/') && !url.includes('/auth/login')) {
-                localStorage.removeItem('sentinel_token');
+                localStorage.removeItem('bulwark_token');
                 window._authToken = null;
                 if (window.location.pathname !== '/login') window.location.href = '/login';
             }

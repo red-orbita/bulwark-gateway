@@ -1,6 +1,6 @@
 # Security Hardening
 
-Summary of security audits, penetration tests, and remediations applied to Sentinel Gateway.
+Summary of security audits, penetration tests, and remediations applied to Bulwark Gateway.
 
 ## Table of Contents
 
@@ -99,7 +99,7 @@ Covered various hardening: CSP headers, cookie security, log injection preventio
 |----|---------|-------------|------|
 | M-01 | Backend errors disclosed architecture | Generic "Backend processing error" message | `src/routes/proxy.py` |
 | M-02 | Unregistered tenants got default backend | `resolve()` returns None → proxy returns 403 | `src/services/agent_registry.py` |
-| M-03 | Internal IPs in agent config | Uses `${SENTINEL_BACKEND_URL:-http://ollama:11434}` env expansion | `config/agents.yaml` |
+| M-03 | Internal IPs in agent config | Uses `${BULWARK_BACKEND_URL:-http://ollama:11434}` env expansion | `config/agents.yaml` |
 | M-04 | Telemetry PVC could persist sensitive data | Changed to `emptyDir` (Memory, 50Mi) — ephemeral | `k8s/base/proxy.yaml` |
 | M-05 | No default-deny egress | Added default-deny + explicit allow rules | `k8s/base/network-policies.yaml` |
 

@@ -1,4 +1,4 @@
-# Sentinel Gateway — Market Comparison & Growth Strategy
+# Bulwark Gateway — Market Comparison & Growth Strategy
 
 Date: June 13, 2026
 Version: 0.4.3 | Enterprise Score: 8.7/10
@@ -7,7 +7,7 @@ Version: 0.4.3 | Enterprise Score: 8.7/10
 
 ## Executive Summary
 
-Sentinel Gateway is the **only open-source, self-hosted AI security proxy** that combines:
+Bulwark Gateway is the **only open-source, self-hosted AI security proxy** that combines:
 - Zero-LLM-call hot path (pure regex, <5ms decision time)
 - Native SIEM/SOC integration (ECS format, 6 transports)
 - Multi-tenant architecture with per-agent RBAC
@@ -33,7 +33,7 @@ The market is consolidating rapidly (Lakera→Check Point, LLM Guard→Palo Alto
 
 ### Detailed Competitor Matrix
 
-| Capability | Sentinel Gateway | Lakera (Check Point) | LLM Guard (Palo Alto) | NeMo Guardrails | Guardrails AI | Prompt Security |
+| Capability | Bulwark Gateway | Lakera (Check Point) | LLM Guard (Palo Alto) | NeMo Guardrails | Guardrails AI | Prompt Security |
 |---|---|---|---|---|---|---|
 | **Deployment** | Self-hosted (K8s/Docker) | SaaS only | OSS library + Palo Alto SaaS | Self-hosted library | OSS + SaaS (Snowglobe) | SaaS + Self-hosted |
 | **License** | GPL-3.0 | Proprietary | MIT (OSS), Proprietary (enterprise) | Apache 2.0 | Apache 2.0 | Proprietary |
@@ -41,7 +41,7 @@ The market is consolidating rapidly (Lakera→Check Point, LLM Guard→Palo Alto
 | **Hot-path Latency** | <5ms (regex), <50ms (with ML blocking) | <50ms | Variable (ML model-dependent) | 200-2000ms (LLM calls) | Variable | Unknown |
 | **Detection Rate** | 98.2% (standard), 97.2% (exhaustive) | Unknown (claims <0.01% FPR) | Unknown | N/A | N/A | Unknown |
 | **False Positive Rate** | 0.0% (benchmarked) | <0.01% (claimed) | Unknown | Unknown | Unknown | Unknown |
-| **SIEM Integration** | Native (Splunk, Elastic, QRadar, Sentinel, Datadog, Wazuh) | Unknown | No | No | No | Unknown |
+| **SIEM Integration** | Native (Splunk, Elastic, QRadar, Bulwark, Datadog, Wazuh) | Unknown | No | No | No | Unknown |
 | **Multi-tenant** | Yes (per-tenant policies, rate limits, backends) | Unknown | No | No | No | Yes |
 | **Tool/Agent RBAC** | Yes (per-agent allowed/denied tools, argument validation) | Limited | No | Limited (Colang flows) | No | Yes (MCP Gateway) |
 | **IOC/Threat Intel** | Yes (ThreatFox, URLhaus, OTX, AbuseIPDB) | No (ML-based detection only) | MaliciousURLs scanner only | No | No | No |
@@ -53,7 +53,7 @@ The market is consolidating rapidly (Lakera→Check Point, LLM Guard→Palo Alto
 | **SSRF Protection** | Yes (RFC1918, CGNAT, cloud metadata, DNS rebinding) | N/A (SaaS) | No | No | No | Unknown |
 | **Pricing** | Free (GPL-3.0) | Enterprise (sales-driven) | Free (OSS) / Enterprise (Palo Alto) | Free | Free (OSS) / Enterprise | Enterprise (sales-driven) |
 
-### Where Sentinel Gateway Wins
+### Where Bulwark Gateway Wins
 
 1. **Security Operations Focus**: Only product with native SIEM integration, ECS-formatted events, Wazuh rules with MITRE ATT&CK mapping. Built FOR security teams, not just developers.
 
@@ -96,7 +96,7 @@ The market is consolidating rapidly (Lakera→Check Point, LLM Guard→Palo Alto
 | Pain Point | "We have AI agents in production but no visibility or control from the SOC" |
 | Budget | $50K-$500K/year for AI security tooling |
 
-**Why they choose Sentinel**: Self-hosted, SIEM-native, explainable blocks, multi-tenant, no data leaves the network.
+**Why they choose Bulwark**: Self-hosted, SIEM-native, explainable blocks, multi-tenant, no data leaves the network.
 
 ### Secondary: Platform Companies (Multi-Tenant)
 
@@ -111,7 +111,7 @@ The market is consolidating rapidly (Lakera→Check Point, LLM Guard→Palo Alto
 | Pain Point | "Each customer has different security requirements for their AI agents" |
 | Budget | $100K-$1M/year (or % of platform revenue) |
 
-**Why they choose Sentinel**: Multi-tenant architecture, per-agent policies, rate limiting, tenant-aware telemetry.
+**Why they choose Bulwark**: Multi-tenant architecture, per-agent policies, rate limiting, tenant-aware telemetry.
 
 ### Tertiary: Compliance-Driven Organizations
 
@@ -124,7 +124,7 @@ The market is consolidating rapidly (Lakera→Check Point, LLM Guard→Palo Alto
 | Requirements | Audit trail, explainable decisions, policy documentation, incident response |
 | Pain Point | "We need to prove our AI systems are safe for regulators" |
 
-**Why they choose Sentinel**: Deterministic decisions, audit log, MITRE ATT&CK mapping, policy-as-code, incident response integration.
+**Why they choose Bulwark**: Deterministic decisions, audit log, MITRE ATT&CK mapping, policy-as-code, incident response integration.
 
 ---
 
@@ -164,7 +164,7 @@ The market is consolidating rapidly (Lakera→Check Point, LLM Guard→Palo Alto
 | Managed SaaS option | For teams that don't want to self-host |
 | Partner integrations | LangChain, LlamaIndex, CrewAI official integration |
 | Consulting services | Deployment, policy design, custom patterns |
-| Training/certification | "Sentinel Gateway Administrator" program |
+| Training/certification | "Bulwark Gateway Administrator" program |
 | Plugin marketplace | Community-contributed scanners |
 
 ---
@@ -213,7 +213,7 @@ Price per protected agent per month (not per request — more predictable for en
 
 ## Appendix: OWASP LLM Top 10 Coverage
 
-| # | Risk | Sentinel Coverage |
+| # | Risk | Bulwark Coverage |
 |---|------|-------------------|
 | LLM01 | Prompt Injection | Input guardrail (4615 lines), ML async scanner, encoding detection |
 | LLM02 | Insecure Output Handling | Output filter (secrets/PII), schema validation |

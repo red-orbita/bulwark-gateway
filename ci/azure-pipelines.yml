@@ -1,10 +1,10 @@
-# Sentinel Gateway — Azure DevOps Pipeline
+# Bulwark Gateway — Azure DevOps Pipeline
 #
 # Prerequisites:
 #   - Service connection: 'acr-connection' (Azure Container Registry)
 #   - Service connection: 'aks-staging' (Kubernetes - staging cluster)
 #   - Service connection: 'aks-production' (Kubernetes - production cluster)
-#   - Variable group: 'sentinel-gateway-vars' containing:
+#   - Variable group: 'bulwark-gateway-vars' containing:
 #     * REGISTRY_URL (e.g., myregistry.azurecr.io)
 #     * BACKEND_IP
 #   - Secure file: 'values-staging.yaml'
@@ -28,15 +28,15 @@ pr:
       - main
 
 variables:
-  - group: sentinel-gateway-vars
+  - group: bulwark-gateway-vars
   - name: imageProxy
-    value: sentinel-gateway-proxy
+    value: bulwark-gateway-proxy
   - name: imageAdmin
-    value: sentinel-gateway-admin
+    value: bulwark-gateway-admin
   - name: helmRelease
-    value: sentinel-gateway
+    value: bulwark-gateway
   - name: namespace
-    value: sentinel-gateway
+    value: bulwark-gateway
   - name: isTag
     value: ${{ startsWith(variables['Build.SourceBranch'], 'refs/tags/v') }}
   - name: isMain
@@ -146,7 +146,7 @@ stages:
                     kubernetesServiceEndpoint: "aks-staging"
                     command: custom
                     customCommand: |
-                      helm upgrade --install $(helmRelease) ./helm/sentinel-gateway \
+                      helm upgrade --install $(helmRelease) ./helm/bulwark-gateway \
                         --namespace $(namespace) \
                         --create-namespace \
                         --values $(valuesFile.secureFilePath) \
@@ -196,7 +196,7 @@ stages:
                     kubernetesServiceEndpoint: "aks-production"
                     command: custom
                     customCommand: |
-                      helm upgrade --install $(helmRelease) ./helm/sentinel-gateway \
+                      helm upgrade --install $(helmRelease) ./helm/bulwark-gateway \
                         --namespace $(namespace) \
                         --create-namespace \
                         --values $(valuesFile.secureFilePath) \

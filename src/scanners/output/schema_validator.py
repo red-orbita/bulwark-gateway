@@ -69,7 +69,7 @@ class SchemaValidator(OutputScanner):
             version="1.0.0",
             scanner_type=ScannerType.OUTPUT_BLOCKING,
             description="JSON Schema validation for structured LLM outputs",
-            author="sentinel",
+            author="bulwark",
             priority=10,
         )
 

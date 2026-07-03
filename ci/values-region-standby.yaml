@@ -1,9 +1,9 @@
-# Sentinel Gateway — Region B (Standby) Helm Values
+# Bulwark Gateway — Region B (Standby) Helm Values
 #
 # Passive region: receives async-replicated data, promoted on failover.
-# Deploy: helm install sentinel ./helm/sentinel-gateway -f ci/values-region-standby.yaml \
+# Deploy: helm install bulwark ./helm/bulwark-gateway -f ci/values-region-standby.yaml \
 #           --set backend.ip=<IP> --set externalRedis.password=<PWD> \
-#           --namespace sentinel-gateway --create-namespace --kube-context region-b
+#           --namespace bulwark-gateway --create-namespace --kube-context region-b
 #
 # RTO target: < 5 minutes | RPO target: < 30 seconds
 #
@@ -61,9 +61,9 @@ admin:
     postgresql:
       host: ""  # Set via CI/CD: --set admin.database.postgresql.host=<PG_STANDBY_HOST>
       port: 5432
-      database: "sentinel_admin"
-      username: "sentinel"
-      existingSecret: "sentinel-postgresql-credentials"
+      database: "bulwark_admin"
+      username: "bulwark"
+      existingSecret: "bulwark-postgresql-credentials"
       existingSecretKey: "password"
       sslMode: "verify-full"
       poolMin: 2
@@ -81,12 +81,12 @@ externalRedis:
   port: 6380
   tls: true
   db: 0
-  existingSecret: "sentinel-redis-credentials"
+  existingSecret: "bulwark-redis-credentials"
   existingSecretKey: "password"
-  sentinel:
+  bulwark:
     enabled: true
-    masterName: "sentinel-master"
-    nodes: "redis-sentinel-0:26379,redis-sentinel-1:26379,redis-sentinel-2:26379"
+    masterName: "bulwark-master"
+    nodes: "redis-bulwark-0:26379,redis-bulwark-1:26379,redis-bulwark-2:26379"
 
 # Ingress — standby region (receives traffic only during failover)
 ingress:
@@ -98,13 +98,13 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    external-dns.alpha.kubernetes.io/hostname: "region-b.sentinel-gateway.example.com"
+    external-dns.alpha.kubernetes.io/hostname: "region-b.bulwark-gateway.example.com"
   tls:
     enabled: true
-    secretName: "sentinel-standby-tls"
+    secretName: "bulwark-standby-tls"
   hosts:
-    proxy: "region-b.sentinel-gateway.example.com"
-    admin: "admin-b.sentinel-gateway.example.com"
+    proxy: "region-b.bulwark-gateway.example.com"
+    admin: "admin-b.bulwark-gateway.example.com"
 
 # Telemetry — enabled but lower throughput in standby
 telemetry:
@@ -159,10 +159,10 @@ podTopologySpreadConstraints:
     whenUnsatisfiable: ScheduleAnyway
     labelSelector:
       matchLabels:
-        app.kubernetes.io/name: sentinel-gateway
+        app.kubernetes.io/name: bulwark-gateway
 
 # Region label (for multi-region monitoring)
 global:
   region: "b"
   role: "standby"
-  clusterName: "sentinel-region-b"
+  clusterName: "bulwark-region-b"

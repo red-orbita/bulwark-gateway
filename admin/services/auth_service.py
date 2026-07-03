@@ -23,23 +23,24 @@ from ..models.auth import UserRole, TokenPayload, ROLE_PERMISSIONS
 # ─── Session validation cache ─────────────────────────────────────────
 # SQLCipher is slow (50-800ms per operation). Cache session validity
 # in memory with a short TTL to avoid hitting the encrypted DB on every request.
-# SECURITY FIX (VULN 1.12): Reduced from 30s to 5s to minimize revocation delay.
-# Tradeoff: ~6x more DB lookups under load; SQLCipher ops are 50-800ms each.
-# If latency is unacceptable, consider Redis pub/sub for instant invalidation.
+# SECURITY FIX (APT-16): Reduced from 5s to 2s to further minimize the revocation window.
+# Previous 5s window allowed stolen sessions to remain valid after logout.
+# Tradeoff: ~15x more DB lookups vs 30s original; mitigated by SQLCipher connection pooling.
+# For zero-delay revocation, deploy with Redis and set ADMIN_SESSION_CACHE_TTL=0.
 _session_cache: dict[str, float] = {}  # token_hash -> last_validated_at (monotonic)
-_SESSION_CACHE_TTL = float(os.getenv("ADMIN_SESSION_CACHE_TTL", "5.0"))  # seconds (was 30s)
+_SESSION_CACHE_TTL = float(os.getenv("ADMIN_SESSION_CACHE_TTL", "2.0"))  # seconds (was 5s, was 30s)
 from .secrets import read_secret
 
 # Read JWT secret from Docker secret file or env var
-JWT_SECRET = read_secret("ADMIN_JWT_SECRET", default="sentinel-admin-change-me-in-production")
+JWT_SECRET = read_secret("ADMIN_JWT_SECRET", default="bulwark-admin-change-me-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = int(os.getenv("ADMIN_JWT_EXPIRY_HOURS", "8"))
 SESSION_IDLE_TIMEOUT_MINUTES = int(os.getenv("ADMIN_SESSION_IDLE_TIMEOUT", "30"))
-JWT_ISSUER = "sentinel-admin"
-JWT_AUDIENCE = "sentinel-admin"
+JWT_ISSUER = "bulwark-admin"
+JWT_AUDIENCE = "bulwark-admin"
 
 # Validate JWT secret at import time (skip in tests)
-_INSECURE_SECRETS = {"sentinel-admin-change-me-in-production", "", "secret", "test", "dev", "change-me"}
+_INSECURE_SECRETS = {"bulwark-admin-change-me-in-production", "", "secret", "test", "dev", "change-me"}
 if JWT_SECRET.lower().strip() in _INSECURE_SECRETS:
     _debug = os.getenv("ADMIN_DEBUG", "false").lower() in ("true", "1")
     _testing = "pytest" in sys.modules or "unittest" in sys.modules
@@ -140,7 +141,7 @@ class AuthService:
         """Verify username/password + MFA.
 
         Returns:
-            {"success": True, "username": str, "role": UserRole, "user_id": str}
+            {"success": True, "username": str, "role": UserRole, "user_id": str, "force_password_change": bool}
             {"success": False, "error": str}
             {"success": False, "mfa_required": True}
         """
@@ -160,7 +161,13 @@ class AuthService:
             if not store.verify_mfa(user["id"], mfa_code):
                 return {"success": False, "error": "Invalid MFA code"}
 
-        return {"success": True, "username": username, "role": role, "user_id": user["id"]}
+        return {
+            "success": True,
+            "username": username,
+            "role": role,
+            "user_id": user["id"],
+            "force_password_change": bool(user.get("force_password_change")),
+        }
 
 
 async def get_current_user(

@@ -8,6 +8,7 @@ standard SQLite (for development).
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -78,16 +79,23 @@ def _hash_password(password: str) -> str:
 
 
 def _verify_password(password: str, password_hash: str) -> bool:
-    """Verify password against stored hash. Supports legacy for migration."""
+    """Verify password against stored hash. Supports legacy for migration.
+
+    SECURITY FIX (APT-09): All comparisons use hmac.compare_digest for
+    constant-time comparison, preventing timing oracle attacks.
+    """
+    import hmac
     if _HAS_BCRYPT and password_hash.startswith("$2"):
         return bcrypt.checkpw(password.encode(), password_hash.encode())
     elif password_hash.startswith("sha256$"):
-        # L-02: Accept legacy but flag for rehash
+        # L-02: Accept legacy salted sha256 but flag for rehash
         _, salt, h = password_hash.split("$", 2)
-        return hashlib.sha256((salt + password).encode()).hexdigest() == h
+        computed = hashlib.sha256((salt + password).encode()).hexdigest()
+        return hmac.compare_digest(computed, h)
     else:
         # Legacy plain sha256 — accept for migration only
-        return hashlib.sha256(password.encode()).hexdigest() == password_hash
+        computed = hashlib.sha256(password.encode()).hexdigest()
+        return hmac.compare_digest(computed, password_hash)
 
 
 # Pre-computed dummy bcrypt hash for constant-time comparison on invalid usernames
@@ -203,14 +211,42 @@ class UserStore:
                 self._sync_passwords()
 
     def _seed_defaults(self) -> None:
-        """Seed admin/security/auditor from Docker secrets or env vars. Mark as requiring password change."""
+        """Seed admin/security/auditor from Docker secrets or env vars. Mark as requiring password change.
+
+        SECURITY FIX (APT-01): Refuse to start with default credentials in production.
+        Default passwords are only accepted when ADMIN_DEBUG=true or during testing.
+        """
+        import logging
+        import sys
         from .secrets import read_secret
         now = datetime.now(timezone.utc).isoformat()
+
+        _INSECURE_DEFAULTS = {"bulwark-admin", "bulwark-security", "bulwark-auditor"}
+        _debug = os.environ.get("ADMIN_DEBUG", "false").lower() in ("true", "1")
+        _testing = "pytest" in sys.modules or "unittest" in sys.modules
+
         defaults = [
-            ("admin", read_secret("ADMIN_PASSWORD", default="sentinel-admin"), UserRole.ADMIN),
-            ("security", read_secret("SECURITY_PASSWORD", default="sentinel-security"), UserRole.SECURITY),
-            ("auditor", read_secret("AUDITOR_PASSWORD", default="sentinel-auditor"), UserRole.AUDITOR),
+            ("admin", read_secret("ADMIN_PASSWORD", default="bulwark-admin"), UserRole.ADMIN),
+            ("security", read_secret("SECURITY_PASSWORD", default="bulwark-security"), UserRole.SECURITY),
+            ("auditor", read_secret("AUDITOR_PASSWORD", default="bulwark-auditor"), UserRole.AUDITOR),
         ]
+
+        # Check if any password is still using the insecure default
+        using_defaults = [u for u, p, _ in defaults if p in _INSECURE_DEFAULTS]
+        if using_defaults and not _debug and not _testing:
+            raise SystemExit(
+                f"FATAL: Default credentials detected for users: {using_defaults}. "
+                f"Mount Docker secrets (ADMIN_PASSWORD_FILE, SECURITY_PASSWORD_FILE, "
+                f"AUDITOR_PASSWORD_FILE) or set environment variables with strong passwords. "
+                f"Run ./secrets/init.sh to auto-generate secrets."
+            )
+        elif using_defaults and _debug:
+            logging.getLogger(__name__).warning(
+                "INSECURE: Using default credentials in debug mode for users: %s. "
+                "This is ONLY acceptable for local development.",
+                using_defaults,
+            )
+
         for username, password, role in defaults:
             self._conn.execute(
                 "INSERT INTO users (id, username, password_hash, role, active, created_at, updated_at, force_password_change) VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
@@ -230,9 +266,9 @@ class UserStore:
         from .secrets import read_secret
 
         sync_targets = [
-            ("admin", "ADMIN_PASSWORD", "sentinel-admin"),
-            ("security", "SECURITY_PASSWORD", "sentinel-security"),
-            ("auditor", "AUDITOR_PASSWORD", "sentinel-auditor"),
+            ("admin", "ADMIN_PASSWORD", "bulwark-admin"),
+            ("security", "SECURITY_PASSWORD", "bulwark-security"),
+            ("auditor", "AUDITOR_PASSWORD", "bulwark-auditor"),
         ]
 
         for username, secret_key, fallback in sync_targets:
@@ -252,15 +288,15 @@ class UserStore:
             if _verify_password(current_secret, stored_hash):
                 continue
 
-            # Secret changed — update hash
+            # Secret changed — update hash and force password change on next login
             new_hash = _hash_password(current_secret)
             now = datetime.now(timezone.utc).isoformat()
             self._conn.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?",
+                "UPDATE users SET password_hash = ?, force_password_change = 1, updated_at = ? WHERE username = ?",
                 (new_hash, now, username),
             )
             self._conn.commit()
-            log.info(f"Password synced for user '{username}' (secret rotation detected)")
+            log.info(f"Password synced for user '{username}' (secret rotation detected, force_password_change=1)")
 
     def create_user(self, username: str, password: str, role: str, tenant_scope: Optional[str] = None,
                     email: Optional[str] = None, phone: Optional[str] = None,
@@ -373,7 +409,7 @@ class UserStore:
             self._conn.commit()
         user = self.get_user_by_id(user_id)
         totp = pyotp.TOTP(secret)
-        uri = totp.provisioning_uri(name=user["username"], issuer_name="SentinelGateway")
+        uri = totp.provisioning_uri(name=user["username"], issuer_name="BulwarkGateway")
         return {"secret": secret, "provisioning_uri": uri}
 
     def verify_mfa(self, user_id: str, code: str) -> bool:
@@ -528,51 +564,67 @@ class PostgreSQLUserStore(UserStore):
 
     def initialize(self) -> None:
         """No-op for PostgreSQL — tables created by migrations.py."""
-        # Seed defaults if needed (run in background)
-        import asyncio
+        # Seed defaults if needed (run synchronously using direct connection)
         try:
-            asyncio.get_running_loop()  # Check if in async context
-            loop.create_task(self._async_seed_defaults())
-        except RuntimeError:
-            # No running loop — we're in sync startup, skip seeding
-            # (will be handled on first request)
+            db = self._get_db()
+            if hasattr(db, 'sync_fetch_one'):
+                self._sync_seed_defaults(db)
+        except Exception:
+            # DB may not be initialized yet during app startup; seeding
+            # will happen on first request via lifespan hook
             pass
 
-    async def _async_seed_defaults(self) -> None:
-        """Seed default users if table is empty (async version)."""
-        db = self._get_db()
-        row = await db.fetch_one("SELECT COUNT(*) as cnt FROM users")
+    def _sync_seed_defaults(self, db) -> None:
+        """Seed default users if table is empty (sync version)."""
+        row = db.sync_fetch_one("SELECT COUNT(*) as cnt FROM users")
         if row and row.get("cnt", 0) == 0:
             from .secrets import read_secret
             now = datetime.now(timezone.utc).isoformat()
             defaults = [
-                ("admin", read_secret("ADMIN_PASSWORD", default="sentinel-admin"), UserRole.ADMIN),
-                ("security", read_secret("SECURITY_PASSWORD", default="sentinel-security"), UserRole.SECURITY),
-                ("auditor", read_secret("AUDITOR_PASSWORD", default="sentinel-auditor"), UserRole.AUDITOR),
+                ("admin", read_secret("ADMIN_PASSWORD", default="bulwark-admin"), UserRole.ADMIN),
+                ("security", read_secret("SECURITY_PASSWORD", default="bulwark-security"), UserRole.SECURITY),
+                ("auditor", read_secret("AUDITOR_PASSWORD", default="bulwark-auditor"), UserRole.AUDITOR),
             ]
             for username, password, role in defaults:
-                await db.execute(
+                db.sync_execute(
                     "INSERT INTO users (id, username, password_hash, role, active, created_at, updated_at, force_password_change) "
                     "VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
                     (str(uuid4()), username, _hash_password(password), role.value, now, now),
                 )
 
     def get_user(self, username: str) -> Optional[dict]:
-        """Get user by username (sync wrapper)."""
+        """Get user by username (sync-safe, uses direct connection)."""
+        db = self._get_db()
+        if hasattr(db, 'sync_fetch_one'):
+            row = db.sync_fetch_one("SELECT * FROM users WHERE username = ?", (username,))
+            return dict(row) if row else None
+        # Fallback for SQLite backend
         import asyncio
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            # We're in an async context — use thread for sync call
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(self._sync_get_user, username).result(timeout=5)
-        except RuntimeError:
-            return self._sync_get_user(username)
+        return asyncio.run(self._async_get_user(username))
 
     def _sync_get_user(self, username: str) -> Optional[dict]:
         """Synchronous DB query using a new connection."""
-        import asyncio
-        return asyncio.run(self._async_get_user(username))
+        return self.get_user(username)
+
+    def verify_password(self, username: str, password: str) -> Optional[dict]:
+        """Verify credentials (PostgreSQL override — no self._conn usage)."""
+        user = self.get_user(username)
+        if not user or not user.get("active"):
+            _verify_password(password, _DUMMY_HASH)
+            return None
+        if _verify_password(password, user["password_hash"]):
+            # L-02: Rehash legacy passwords to bcrypt on successful login
+            if not user["password_hash"].startswith("$2"):
+                new_hash = _hash_password(password)
+                db = self._get_db()
+                db.sync_execute(
+                    "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                    (new_hash, datetime.now(timezone.utc).isoformat(), user["id"]),
+                )
+            # Update last_login
+            self.update_user(user["id"], last_login=datetime.now(timezone.utc).isoformat())
+            return user
+        return None
 
     async def _async_get_user(self, username: str) -> Optional[dict]:
         db = self._get_db()
@@ -580,15 +632,13 @@ class PostgreSQLUserStore(UserStore):
         return dict(row) if row else None
 
     def get_user_by_id(self, user_id: str) -> Optional[dict]:
-        """Get user by ID (sync wrapper using asyncio)."""
+        """Get user by ID (sync-safe, uses direct connection)."""
+        db = self._get_db()
+        if hasattr(db, 'sync_fetch_one'):
+            row = db.sync_fetch_one("SELECT * FROM users WHERE id = ?", (user_id,))
+            return dict(row) if row else None
         import asyncio
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(self._async_get_user_by_id(user_id))).result(timeout=5)
-        except RuntimeError:
-            return asyncio.run(self._async_get_user_by_id(user_id))
+        return asyncio.run(self._async_get_user_by_id(user_id))
 
     async def _async_get_user_by_id(self, user_id: str) -> Optional[dict]:
         db = self._get_db()
@@ -596,14 +646,12 @@ class PostgreSQLUserStore(UserStore):
         return dict(row) if row else None
 
     def list_users(self) -> list[dict]:
+        db = self._get_db()
+        if hasattr(db, 'sync_fetch_all'):
+            rows = db.sync_fetch_all("SELECT * FROM users ORDER BY created_at")
+            return [dict(r) for r in rows]
         import asyncio
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(self._async_list_users())).result(timeout=5)
-        except RuntimeError:
-            return asyncio.run(self._async_list_users())
+        return asyncio.run(self._async_list_users())
 
     async def _async_list_users(self) -> list[dict]:
         db = self._get_db()
@@ -616,25 +664,14 @@ class PostgreSQLUserStore(UserStore):
         valid, err = validate_password_complexity(password)
         if not valid:
             raise ValueError(err)
-        import asyncio
         user_id = str(uuid4())
         now = datetime.now(timezone.utc).isoformat()
-
-        async def _create():
-            db = self._get_db()
-            await db.execute(
-                "INSERT INTO users (id, username, password_hash, role, tenant_scope, email, phone, first_name, last_name, active, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (user_id, username, _hash_password(password), role, tenant_scope, email, phone, first_name, last_name, now, now),
-            )
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(lambda: asyncio.run(_create())).result(timeout=5)
-        except RuntimeError:
-            asyncio.run(_create())
+        db = self._get_db()
+        db.sync_execute(
+            "INSERT INTO users (id, username, password_hash, role, tenant_scope, email, phone, first_name, last_name, active, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (user_id, username, _hash_password(password), role, tenant_scope, email, phone, first_name, last_name, now, now),
+        )
         return self.get_user_by_id(user_id)
 
     def update_user(self, user_id: str, **fields) -> Optional[dict]:
@@ -645,59 +682,26 @@ class PostgreSQLUserStore(UserStore):
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [user_id]
-        import asyncio
-
-        async def _update():
-            db = self._get_db()
-            await db.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(lambda: asyncio.run(_update())).result(timeout=5)
-        except RuntimeError:
-            asyncio.run(_update())
+        db = self._get_db()
+        db.sync_execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
         return self.get_user_by_id(user_id)
 
     def delete_user(self, user_id: str) -> bool:
-        import asyncio
-
-        async def _delete():
-            db = self._get_db()
-            await db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
-            result = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            return result > 0 if isinstance(result, int) else True
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(_delete())).result(timeout=5)
-        except RuntimeError:
-            return asyncio.run(_delete())
+        db = self._get_db()
+        db.sync_execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        result = db.sync_execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return result > 0 if isinstance(result, int) else True
 
     def change_password(self, user_id: str, new_password: str) -> bool:
         valid, err = validate_password_complexity(new_password)
         if not valid:
             raise ValueError(err)
-        import asyncio
         now = datetime.now(timezone.utc).isoformat()
-
-        async def _change():
-            db = self._get_db()
-            await db.execute(
-                "UPDATE users SET password_hash = ?, force_password_change = 0, updated_at = ? WHERE id = ?",
-                (_hash_password(new_password), now, user_id),
-            )
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(lambda: asyncio.run(_change())).result(timeout=5)
-        except RuntimeError:
-            asyncio.run(_change())
+        db = self._get_db()
+        db.sync_execute(
+            "UPDATE users SET password_hash = ?, force_password_change = 0, updated_at = ? WHERE id = ?",
+            (_hash_password(new_password), now, user_id),
+        )
         return True
 
     def create_session(self, user_id: str, token: str, ip: Optional[str], user_agent: Optional[str], expires_at: str) -> dict:
@@ -705,141 +709,76 @@ class PostgreSQLUserStore(UserStore):
         session_id = str(uuid4())
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         now = datetime.now(timezone.utc).isoformat()
-        import asyncio
-
-        async def _create():
-            db = self._get_db()
-            row = await db.fetch_one("SELECT COUNT(*) as cnt FROM sessions WHERE user_id = ?", (user_id,))
-            existing = row["cnt"] if row else 0
-            if existing >= MAX_SESSIONS_PER_USER:
-                await db.execute(
-                    "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
-                    (user_id, existing - MAX_SESSIONS_PER_USER + 1),
-                )
-            await db.execute(
-                "INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, revoked, ip_address, user_agent) "
-                "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-                (session_id, user_id, token_hash, now, expires_at, ip, user_agent),
+        db = self._get_db()
+        # Evict oldest sessions if over limit
+        row = db.sync_fetch_one("SELECT COUNT(*) as cnt FROM sessions WHERE user_id = ?", (user_id,))
+        existing = row["cnt"] if row else 0
+        if existing >= MAX_SESSIONS_PER_USER:
+            db.sync_execute(
+                "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
+                (user_id, existing - MAX_SESSIONS_PER_USER + 1),
             )
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(lambda: asyncio.run(_create())).result(timeout=5)
-        except RuntimeError:
-            asyncio.run(_create())
+        db.sync_execute(
+            "INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, revoked, ip_address, user_agent) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+            (session_id, user_id, token_hash, now, expires_at, ip, user_agent),
+        )
         return {"id": session_id, "token_hash": token_hash, "created_at": now, "expires_at": expires_at}
 
     def is_session_valid(self, token_hash: str) -> bool:
         now = datetime.now(timezone.utc).isoformat()
-        import asyncio
-
-        async def _check():
-            db = self._get_db()
-            row = await db.fetch_one(
-                "SELECT id FROM sessions WHERE token_hash = ? AND revoked = 0 AND expires_at > ?",
-                (token_hash, now),
-            )
-            return row is not None
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(_check())).result(timeout=5)
-        except RuntimeError:
-            return asyncio.run(_check())
+        db = self._get_db()
+        row = db.sync_fetch_one(
+            "SELECT id FROM sessions WHERE token_hash = ? AND revoked = 0 AND expires_at > ?",
+            (token_hash, now),
+        )
+        return row is not None
 
     def revoke_session(self, session_id: str) -> bool:
-        import asyncio
-
-        async def _revoke():
-            db = self._get_db()
-            await db.execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(lambda: asyncio.run(_revoke())).result(timeout=5)
-        except RuntimeError:
-            asyncio.run(_revoke())
+        db = self._get_db()
+        db.sync_execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
         return True
 
     def revoke_all_sessions(self, user_id: str) -> int:
-        import asyncio
-
-        async def _revoke_all():
-            db = self._get_db()
-            result = await db.execute(
-                "UPDATE sessions SET revoked = 1 WHERE user_id = ? AND revoked = 0", (user_id,)
-            )
-            return result if isinstance(result, int) else 0
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(_revoke_all())).result(timeout=5)
-        except RuntimeError:
-            return asyncio.run(_revoke_all())
+        db = self._get_db()
+        result = db.sync_execute(
+            "UPDATE sessions SET revoked = 1 WHERE user_id = ? AND revoked = 0", (user_id,)
+        )
+        return result if isinstance(result, int) else 0
 
     def get_active_sessions(self, user_id: str) -> list[dict]:
         now = datetime.now(timezone.utc).isoformat()
-        import asyncio
-
-        async def _get():
-            db = self._get_db()
-            rows = await db.fetch_all(
-                "SELECT * FROM sessions WHERE user_id = ? AND revoked = 0 AND expires_at > ? ORDER BY created_at DESC",
-                (user_id, now),
-            )
-            return [dict(r) for r in rows]
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(_get())).result(timeout=5)
-        except RuntimeError:
-            return asyncio.run(_get())
+        db = self._get_db()
+        rows = db.sync_fetch_all(
+            "SELECT * FROM sessions WHERE user_id = ? AND revoked = 0 AND expires_at > ? ORDER BY created_at DESC",
+            (user_id, now),
+        )
+        return [dict(r) for r in rows]
 
     def check_and_update_activity(self, token_hash: str, idle_timeout_minutes: int) -> bool:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
-        import asyncio
-
-        async def _check():
-            db = self._get_db()
-            row = await db.fetch_one(
-                "SELECT id, last_activity FROM sessions WHERE token_hash = ? AND revoked = 0",
-                (token_hash,),
-            )
-            if not row:
-                return False
-            last_activity = row.get("last_activity")
-            if last_activity:
-                try:
-                    last_dt = datetime.fromisoformat(str(last_activity)) if not isinstance(last_activity, datetime) else last_activity
-                    age_seconds = (now - last_dt).total_seconds()
-                    if age_seconds > idle_timeout_minutes * 60:
-                        await db.execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
-                        return False
-                    if age_seconds < 60:
-                        return True
-                except (ValueError, TypeError):
-                    pass
-            await db.execute("UPDATE sessions SET last_activity = ? WHERE token_hash = ?", (now_iso, token_hash))
-            return True
-
-        try:
-            asyncio.get_running_loop()  # Check if in async context
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(lambda: asyncio.run(_check())).result(timeout=5)
-        except RuntimeError:
-            return asyncio.run(_check())
+        db = self._get_db()
+        row = db.sync_fetch_one(
+            "SELECT id, last_activity FROM sessions WHERE token_hash = ? AND revoked = 0",
+            (token_hash,),
+        )
+        if not row:
+            return False
+        last_activity = row.get("last_activity")
+        if last_activity:
+            try:
+                last_dt = datetime.fromisoformat(str(last_activity)) if not isinstance(last_activity, datetime) else last_activity
+                age_seconds = (now - last_dt).total_seconds()
+                if age_seconds > idle_timeout_minutes * 60:
+                    db.sync_execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
+                    return False
+                if age_seconds < 60:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        db.sync_execute("UPDATE sessions SET last_activity = ? WHERE token_hash = ?", (now_iso, token_hash))
+        return True
 
 
 # ─── Singleton ────────────────────────────────────────────────────────────────
@@ -851,7 +790,7 @@ _store_lock = threading.Lock()
 def get_user_store() -> UserStore:
     """Get or create the singleton user store instance.
 
-    M-11: Selects PostgreSQL backend when SENTINEL_ADMIN_DB_URL starts with
+    M-11: Selects PostgreSQL backend when BULWARK_ADMIN_DB_URL starts with
     'postgresql'. Otherwise uses legacy SQLite (backward compatible).
     """
     global _store

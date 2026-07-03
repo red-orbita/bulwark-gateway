@@ -1,6 +1,6 @@
 # API Reference
 
-Complete API documentation for Sentinel Gateway proxy and admin services.
+Complete API documentation for Bulwark Gateway proxy and admin services.
 
 ## Table of Contents
 
@@ -32,7 +32,7 @@ Obtain a token via `POST /admin/auth/login`.
 
 ## Proxy API (Data Plane)
 
-Base URL: `https://sentinel.corp.com` (port 8080)
+Base URL: `https://bulwark.corp.com` (port 8080)
 
 ### POST /v1/chat/completions
 
@@ -91,7 +91,7 @@ Proxied legacy completions request.
 
 ## Admin API (Control Plane)
 
-Base URL: `https://admin.sentinel.corp.com` (port 8090)
+Base URL: `https://admin.bulwark.corp.com` (port 8090)
 
 ### Authentication
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# generate-mtls-certs.sh — Generate mTLS certificates for Sentinel Gateway inter-service communication.
+# generate-mtls-certs.sh — Generate mTLS certificates for Bulwark Gateway inter-service communication.
 #
 # Generates:
-#   - Self-signed CA (sentinel-internal-ca)
+#   - Self-signed CA (bulwark-internal-ca)
 #   - Server certificate for proxy service
 #   - Server certificate for admin service
 #   - Client certificate for proxy→admin communication
@@ -23,16 +23,16 @@
 #
 # Environment variables:
 #   CERT_VALIDITY_DAYS  — Certificate validity (default: 365)
-#   NAMESPACE           — Kubernetes namespace (default: sentinel-gateway)
-#   CA_CN               — CA Common Name (default: sentinel-internal-ca)
+#   NAMESPACE           — Kubernetes namespace (default: bulwark-gateway)
+#   CA_CN               — CA Common Name (default: bulwark-internal-ca)
 
 set -euo pipefail
 
 # --- Configuration ---
 OUTPUT_DIR="${1:-./certs/mtls}"
 VALIDITY_DAYS="${CERT_VALIDITY_DAYS:-365}"
-NAMESPACE="${NAMESPACE:-sentinel-gateway}"
-CA_CN="${CA_CN:-sentinel-internal-ca}"
+NAMESPACE="${NAMESPACE:-bulwark-gateway}"
+CA_CN="${CA_CN:-bulwark-internal-ca}"
 
 # Service DNS names (Kubernetes FQDN pattern)
 PROXY_DNS="proxy.${NAMESPACE}.svc.cluster.local"
@@ -58,7 +58,7 @@ generate_ec_key() {
 }
 
 # --- Main ---
-log "Generating mTLS certificates for Sentinel Gateway"
+log "Generating mTLS certificates for Bulwark Gateway"
 log "Output directory: $OUTPUT_DIR"
 log "Validity: $VALIDITY_DAYS days"
 log "Namespace: $NAMESPACE"
@@ -81,7 +81,7 @@ openssl req -new -x509 \
     -key ca.key \
     -out ca.crt \
     -days "$VALIDITY_DAYS" \
-    -subj "/O=Sentinel Gateway/OU=Internal PKI/CN=${CA_CN}" \
+    -subj "/O=Bulwark Gateway/OU=Internal PKI/CN=${CA_CN}" \
     -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
     -addext "keyUsage=critical,keyCertSign,cRLSign" \
     -addext "subjectKeyIdentifier=hash" \
@@ -106,7 +106,7 @@ req_extensions = v3_req
 prompt = no
 
 [req_dn]
-O = Sentinel Gateway
+O = Bulwark Gateway
 OU = Proxy Service
 CN = ${PROXY_DNS}
 
@@ -122,7 +122,7 @@ DNS.2 = proxy.${NAMESPACE}.svc
 DNS.3 = proxy.${NAMESPACE}
 DNS.4 = proxy
 DNS.5 = localhost
-DNS.6 = sentinel-proxy
+DNS.6 = bulwark-proxy
 IP.1 = 127.0.0.1
 IP.2 = ::1
 EOF
@@ -162,7 +162,7 @@ req_extensions = v3_req
 prompt = no
 
 [req_dn]
-O = Sentinel Gateway
+O = Bulwark Gateway
 OU = Admin Service
 CN = ${ADMIN_DNS}
 
@@ -178,7 +178,7 @@ DNS.2 = admin.${NAMESPACE}.svc
 DNS.3 = admin.${NAMESPACE}
 DNS.4 = admin
 DNS.5 = localhost
-DNS.6 = sentinel-admin
+DNS.6 = bulwark-admin
 IP.1 = 127.0.0.1
 IP.2 = ::1
 EOF
@@ -218,7 +218,7 @@ req_extensions = v3_req
 prompt = no
 
 [req_dn]
-O = Sentinel Gateway
+O = Bulwark Gateway
 OU = Proxy Service
 CN = ${PROXY_DNS}
 
@@ -231,7 +231,7 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = ${PROXY_DNS}
 DNS.2 = proxy.${NAMESPACE}
-DNS.3 = sentinel-proxy
+DNS.3 = bulwark-proxy
 EOF
 
 openssl req -new \
@@ -269,7 +269,7 @@ req_extensions = v3_req
 prompt = no
 
 [req_dn]
-O = Sentinel Gateway
+O = Bulwark Gateway
 OU = Admin Service
 CN = ${ADMIN_DNS}
 
@@ -282,7 +282,7 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = ${ADMIN_DNS}
 DNS.2 = admin.${NAMESPACE}
-DNS.3 = sentinel-admin
+DNS.3 = bulwark-admin
 EOF
 
 openssl req -new \
@@ -333,27 +333,27 @@ log "  Admin Client:  admin-client.crt, admin-client.key"
 log ""
 log "Deployment:"
 log "  1. Create K8s secrets:"
-log "     kubectl create secret generic sentinel-mtls-ca \\"
+log "     kubectl create secret generic bulwark-mtls-ca \\"
 log "       --from-file=ca.crt=ca.crt -n $NAMESPACE"
 log ""
-log "     kubectl create secret tls sentinel-proxy-mtls \\"
+log "     kubectl create secret tls bulwark-proxy-mtls \\"
 log "       --cert=proxy-server.crt --key=proxy-server.key -n $NAMESPACE"
 log ""
-log "     kubectl create secret tls sentinel-admin-mtls \\"
+log "     kubectl create secret tls bulwark-admin-mtls \\"
 log "       --cert=admin-server.crt --key=admin-server.key -n $NAMESPACE"
 log ""
-log "     kubectl create secret tls sentinel-proxy-client-mtls \\"
+log "     kubectl create secret tls bulwark-proxy-client-mtls \\"
 log "       --cert=proxy-client.crt --key=proxy-client.key -n $NAMESPACE"
 log ""
-log "     kubectl create secret tls sentinel-admin-client-mtls \\"
+log "     kubectl create secret tls bulwark-admin-client-mtls \\"
 log "       --cert=admin-client.crt --key=admin-client.key -n $NAMESPACE"
 log ""
 log "  2. Or use Helm with existing secrets:"
-log "     helm install sentinel ./helm/sentinel-gateway \\"
+log "     helm install bulwark ./helm/bulwark-gateway \\"
 log "       --set mtls.enabled=true \\"
-log "       --set mtls.existingSecrets.ca=sentinel-mtls-ca \\"
-log "       --set mtls.existingSecrets.proxyCert=sentinel-proxy-mtls \\"
-log "       --set mtls.existingSecrets.adminCert=sentinel-admin-mtls"
+log "       --set mtls.existingSecrets.ca=bulwark-mtls-ca \\"
+log "       --set mtls.existingSecrets.proxyCert=bulwark-proxy-mtls \\"
+log "       --set mtls.existingSecrets.adminCert=bulwark-admin-mtls"
 log ""
 log "  SECURITY: Keep ca.key secure! It can sign new certificates."
 log "            Consider storing it in a vault (HashiCorp Vault, AWS KMS, etc.)"

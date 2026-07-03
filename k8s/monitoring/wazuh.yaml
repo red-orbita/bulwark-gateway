@@ -1,97 +1,97 @@
 ---
-# ConfigMap — Sentinel Gateway custom decoder and rules for Wazuh
+# ConfigMap — Bulwark Gateway custom decoder and rules for Wazuh
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: wazuh-sentinel-decoder-rules
-  namespace: sentinel-siem
+  name: wazuh-bulwark-decoder-rules
+  namespace: bulwark-siem
   labels:
     app.kubernetes.io/name: wazuh
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: siem
 data:
   local_decoder.xml: |
-    <!-- Sentinel Gateway security event decoder -->
-    <decoder name="sentinel-gateway">
+    <!-- Bulwark Gateway security event decoder -->
+    <decoder name="bulwark-gateway">
       <prematch>^security_event\s+</prematch>
       <regex offset="after_prematch">agent=(\S+) category=(\S+) description='([^']+)' pattern='([^']*?)' severity=(\S+) tenant=(\S+) tool=(\S+) verdict=(\S+)</regex>
       <order>dstuser,extra_data,data,system_name,status,user,url,action</order>
     </decoder>
   local_rules.xml: |
-    <!-- Sentinel Gateway detection rules -->
-    <group name="sentinel-gateway,">
+    <!-- Bulwark Gateway detection rules -->
+    <group name="bulwark-gateway,">
 
       <rule id="100100" level="3">
-        <decoded_as>sentinel-gateway</decoded_as>
-        <description>Sentinel Gateway: Security event</description>
-        <group>sentinel-gateway,</group>
+        <decoded_as>bulwark-gateway</decoded_as>
+        <description>Bulwark Gateway: Security event</description>
+        <group>bulwark-gateway,</group>
       </rule>
 
       <rule id="100101" level="12">
         <if_sid>100100</if_sid>
         <field name="action">BLOCK</field>
-        <description>Sentinel Gateway: Critical security event — action blocked</description>
-        <group>sentinel-gateway,attack,</group>
+        <description>Bulwark Gateway: Critical security event — action blocked</description>
+        <group>bulwark-gateway,attack,</group>
       </rule>
 
       <rule id="100102" level="14">
         <if_sid>100100</if_sid>
         <field name="extra_data">jailbreak</field>
-        <description>Sentinel Gateway: Jailbreak attempt detected</description>
+        <description>Bulwark Gateway: Jailbreak attempt detected</description>
         <mitre>
           <id>T1059</id>
         </mitre>
-        <group>sentinel-gateway,jailbreak,</group>
+        <group>bulwark-gateway,jailbreak,</group>
       </rule>
 
       <rule id="100103" level="14">
         <if_sid>100100</if_sid>
         <field name="extra_data">exfiltration</field>
-        <description>Sentinel Gateway: Data exfiltration attempt detected</description>
+        <description>Bulwark Gateway: Data exfiltration attempt detected</description>
         <mitre>
           <id>T1041</id>
         </mitre>
-        <group>sentinel-gateway,exfiltration,</group>
+        <group>bulwark-gateway,exfiltration,</group>
       </rule>
 
       <rule id="100104" level="10">
         <if_sid>100100</if_sid>
         <field name="extra_data">prompt_injection</field>
-        <description>Sentinel Gateway: Prompt injection attempt detected</description>
+        <description>Bulwark Gateway: Prompt injection attempt detected</description>
         <mitre>
           <id>T1190</id>
         </mitre>
-        <group>sentinel-gateway,injection,</group>
+        <group>bulwark-gateway,injection,</group>
       </rule>
 
       <rule id="100105" level="13">
         <if_sid>100100</if_sid>
         <field name="extra_data">credential</field>
-        <description>Sentinel Gateway: Credential access attempt detected</description>
+        <description>Bulwark Gateway: Credential access attempt detected</description>
         <mitre>
           <id>T1552</id>
         </mitre>
-        <group>sentinel-gateway,credential_access,</group>
+        <group>bulwark-gateway,credential_access,</group>
       </rule>
 
       <rule id="100106" level="12">
         <if_sid>100100</if_sid>
         <field name="extra_data">tool_abuse</field>
-        <description>Sentinel Gateway: Tool abuse detected</description>
+        <description>Bulwark Gateway: Tool abuse detected</description>
         <mitre>
           <id>T1059</id>
         </mitre>
-        <group>sentinel-gateway,tool_abuse,</group>
+        <group>bulwark-gateway,tool_abuse,</group>
       </rule>
 
       <rule id="100107" level="14">
         <if_sid>100100</if_sid>
         <field name="extra_data">ssrf</field>
-        <description>Sentinel Gateway: SSRF attempt detected</description>
+        <description>Bulwark Gateway: SSRF attempt detected</description>
         <mitre>
           <id>T1552.005</id>
         </mitre>
-        <group>sentinel-gateway,ssrf,</group>
+        <group>bulwark-gateway,ssrf,</group>
       </rule>
 
     </group>
@@ -100,23 +100,23 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: wazuh-sentinel-fetch-script
-  namespace: sentinel-siem
+  name: wazuh-bulwark-fetch-script
+  namespace: bulwark-siem
   labels:
     app.kubernetes.io/name: wazuh
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: siem
 data:
-  fetch_sentinel_logs.sh: |
+  fetch_bulwark_logs.sh: |
     #!/bin/bash
-    # fetch_sentinel_logs.sh — Fetch security events from sentinel-gateway proxy pods
+    # fetch_bulwark_logs.sh — Fetch security events from bulwark-gateway proxy pods
     # Executed by Wazuh command wodle every 30s
     set -euo pipefail
 
-    NAMESPACE="sentinel-gateway"
+    NAMESPACE="bulwark-gateway"
     LABEL_SELECTOR="app.kubernetes.io/name=proxy"
-    OUTPUT_FILE="/var/log/sentinel-gateway/security_events.log"
-    STATE_FILE="/var/ossec/data/sentinel_fetch_state"
+    OUTPUT_FILE="/var/log/bulwark-gateway/security_events.log"
+    STATE_FILE="/var/ossec/data/bulwark_fetch_state"
     KUBE_API="https://kubernetes.default.svc"
     SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
     TOKEN="$(cat ${SA_DIR}/token)"
@@ -156,15 +156,15 @@ data:
     date +%s > "$STATE_FILE"
 ---
 # Wazuh Manager — StatefulSet (single-node)
-# Deployed in sentinel-siem namespace (baseline PSS — Wazuh needs elevated privileges)
+# Deployed in bulwark-siem namespace (baseline PSS — Wazuh needs elevated privileges)
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: wazuh
-  namespace: sentinel-siem
+  namespace: bulwark-siem
   labels:
     app.kubernetes.io/name: wazuh
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: siem
 spec:
   serviceName: wazuh
@@ -176,22 +176,45 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: wazuh
-        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/part-of: bulwark-gateway
         app.kubernetes.io/component: siem
     spec:
       securityContext:
         fsGroup: 1000
+      automountServiceAccountToken: false
       initContainers:
         - name: init-filebeat
           image: wazuh/wazuh-manager:4.9.2
           command: ["sh", "-c", "cp -a /etc/filebeat/* /filebeat-etc/ 2>/dev/null || true; echo '#!/bin/sh\nexec sleep infinity' > /filebeat-bin/filebeat; chmod +x /filebeat-bin/filebeat"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            limits:
+              memory: 64Mi
+              cpu: 100m
           volumeMounts:
             - name: filebeat-etc
               mountPath: /filebeat-etc
             - name: filebeat-bin
               mountPath: /filebeat-bin
-        - name: init-sentinel-config
+        - name: init-bulwark-config
           image: wazuh/wazuh-manager:4.9.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            limits:
+              memory: 64Mi
+              cpu: 100m
           command:
             - sh
             - -c
@@ -205,53 +228,60 @@ spec:
               # Create directories for custom decoders and rules
               mkdir -p /mnt/wazuh-etc/decoders /mnt/wazuh-etc/rules
 
-              # Install sentinel-gateway decoder, rules, and fetch script
-              cp /tmp/sentinel-config/local_decoder.xml /mnt/wazuh-etc/decoders/local_decoder.xml
-              cp /tmp/sentinel-config/local_rules.xml /mnt/wazuh-etc/rules/local_rules.xml
-              cp /tmp/sentinel-fetch/fetch_sentinel_logs.sh /mnt/wazuh-etc/fetch_sentinel_logs.sh
-              chmod +x /mnt/wazuh-etc/fetch_sentinel_logs.sh
+              # Install bulwark-gateway decoder, rules, and fetch script
+              cp /tmp/bulwark-config/local_decoder.xml /mnt/wazuh-etc/decoders/local_decoder.xml
+              cp /tmp/bulwark-config/local_rules.xml /mnt/wazuh-etc/rules/local_rules.xml
+              cp /tmp/bulwark-fetch/fetch_bulwark_logs.sh /mnt/wazuh-etc/fetch_bulwark_logs.sh
+              chmod +x /mnt/wazuh-etc/fetch_bulwark_logs.sh
 
               # Ensure output log directory exists
-              mkdir -p /mnt/sentinel-logs
+              mkdir -p /mnt/bulwark-logs
 
               # Append localfile and command wodle to ossec.conf
-              if ! grep -q "fetch_sentinel_logs" /mnt/wazuh-etc/ossec.conf 2>/dev/null; then
-                cat >> /mnt/wazuh-etc/ossec.conf << 'SENTINEL_CONF'
+              if ! grep -q "fetch_bulwark_logs" /mnt/wazuh-etc/ossec.conf 2>/dev/null; then
+                cat >> /mnt/wazuh-etc/ossec.conf << 'BULWARK_CONF'
 
-              <!-- Sentinel Gateway integration — auto-injected by init container -->
+              <!-- Bulwark Gateway integration — auto-injected by init container -->
               <ossec_config>
                 <localfile>
                   <log_format>syslog</log_format>
-                  <location>/var/log/sentinel-gateway/security_events.log</location>
+                  <location>/var/log/bulwark-gateway/security_events.log</location>
                 </localfile>
 
                 <wodle name="command">
                   <disabled>no</disabled>
-                  <command>/var/ossec/etc/fetch_sentinel_logs.sh</command>
+                  <command>/var/ossec/etc/fetch_bulwark_logs.sh</command>
                   <interval>30s</interval>
                   <run_on_start>yes</run_on_start>
                   <timeout>20</timeout>
                 </wodle>
               </ossec_config>
-              SENTINEL_CONF
+              BULWARK_CONF
               fi
 
-              echo "[init-sentinel-config] Configuration injected successfully"
+              echo "[init-bulwark-config] Configuration injected successfully"
           volumeMounts:
             - name: wazuh-etc
               mountPath: /mnt/wazuh-etc
-            - name: sentinel-decoder-rules
-              mountPath: /tmp/sentinel-config
-            - name: sentinel-fetch-script
-              mountPath: /tmp/sentinel-fetch
+            - name: bulwark-decoder-rules
+              mountPath: /tmp/bulwark-config
+            - name: bulwark-fetch-script
+              mountPath: /tmp/bulwark-fetch
             - name: siem-stats
-              mountPath: /mnt/sentinel-logs
+              mountPath: /mnt/bulwark-logs
       containers:
         - name: wazuh-manager
           image: wazuh/wazuh-manager:4.9.2
+          # SECURITY FIX (APT-04): Run as non-root. Wazuh 4.9+ supports
+          # running as UID 1000 with NET_BIND_SERVICE for port 1514.
           securityContext:
-            runAsUser: 0
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
+            capabilities:
+              add: ["NET_BIND_SERVICE"]
+              drop: ["ALL"]
           env:
             - name: WAZUH_CLUSTER_DISABLED
               value: "true"
@@ -292,7 +322,7 @@ spec:
             - name: filebeat-bin
               mountPath: /usr/share/filebeat/bin
             - name: siem-stats
-              mountPath: /var/log/sentinel-gateway
+              mountPath: /var/log/bulwark-gateway
           livenessProbe:
             tcpSocket:
               port: 55000
@@ -327,12 +357,12 @@ spec:
         - name: filebeat-config
           configMap:
             name: wazuh-filebeat-config
-        - name: sentinel-decoder-rules
+        - name: bulwark-decoder-rules
           configMap:
-            name: wazuh-sentinel-decoder-rules
-        - name: sentinel-fetch-script
+            name: wazuh-bulwark-decoder-rules
+        - name: bulwark-fetch-script
           configMap:
-            name: wazuh-sentinel-fetch-script
+            name: wazuh-bulwark-fetch-script
             defaultMode: 0755
   volumeClaimTemplates:
     - metadata:
@@ -348,7 +378,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: siem-stats-wazuh
-  namespace: sentinel-siem
+  namespace: bulwark-siem
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:
@@ -360,10 +390,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: wazuh-filebeat-config
-  namespace: sentinel-siem
+  namespace: bulwark-siem
   labels:
     app.kubernetes.io/name: wazuh
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 data:
   filebeat.yml: |
     filebeat.inputs:
@@ -378,10 +408,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: wazuh
-  namespace: sentinel-siem
+  namespace: bulwark-siem
   labels:
     app.kubernetes.io/name: wazuh
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   type: ClusterIP
   ports:
@@ -405,7 +435,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-proxy-to-wazuh
-  namespace: sentinel-siem
+  namespace: bulwark-siem
 spec:
   podSelector:
     matchLabels:
@@ -416,7 +446,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              app.kubernetes.io/part-of: sentinel-gateway
+              app.kubernetes.io/part-of: bulwark-gateway
           podSelector:
             matchLabels:
               app.kubernetes.io/name: proxy

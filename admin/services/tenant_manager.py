@@ -43,7 +43,7 @@ def get_tenant_manager() -> "TenantManager":
 
 
 # Writable path for agent config (env-configurable, defaults to persistent volume)
-_AGENTS_DATA_DIR = os.environ.get("SENTINEL_AGENTS_DATA_DIR", "/app/data")
+_AGENTS_DATA_DIR = os.environ.get("BULWARK_AGENTS_DATA_DIR", "/app/data")
 _AGENTS_SEED_PATH = Path("config/agents.yaml")  # Read-only seed from image
 
 

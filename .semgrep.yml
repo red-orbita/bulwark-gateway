@@ -1,4 +1,4 @@
-# Sentinel Gateway — Custom Semgrep Rules
+# Bulwark Gateway — Custom Semgrep Rules
 #
 # These rules detect patterns that are specifically dangerous in the context
 # of a security proxy that handles untrusted input from users and LLM outputs.
@@ -14,11 +14,11 @@
 rules:
   # ─── Code Execution ──────────────────────────────────────────────────────────
 
-  - id: sentinel-no-eval
+  - id: bulwark-no-eval
     patterns:
       - pattern: eval(...)
     message: >
-      Use of eval() is prohibited in Sentinel Gateway. Adversarial input from
+      Use of eval() is prohibited in Bulwark Gateway. Adversarial input from
       users or LLM outputs could achieve code execution. Use ast.literal_eval()
       for safe parsing of literals, or json.loads() for structured data.
     languages: [python]
@@ -32,11 +32,11 @@ rules:
       references:
         - https://cwe.mitre.org/data/definitions/95.html
 
-  - id: sentinel-no-exec
+  - id: bulwark-no-exec
     patterns:
       - pattern: exec(...)
     message: >
-      Use of exec() is prohibited in Sentinel Gateway. This allows arbitrary
+      Use of exec() is prohibited in Bulwark Gateway. This allows arbitrary
       code execution if any part of the input is attacker-controlled.
     languages: [python]
     severity: ERROR
@@ -47,7 +47,7 @@ rules:
       confidence: HIGH
       impact: CRITICAL
 
-  - id: sentinel-no-compile-exec
+  - id: bulwark-no-compile-exec
     patterns:
       - pattern: compile($CODE, ..., "exec")
       - pattern: compile($CODE, ..., "eval")
@@ -64,13 +64,13 @@ rules:
 
   # ─── Deserialization ─────────────────────────────────────────────────────────
 
-  - id: sentinel-no-pickle-loads
+  - id: bulwark-no-pickle-loads
     patterns:
       - pattern: pickle.loads(...)
       - pattern: pickle.load(...)
       - pattern: _pickle.loads(...)
     message: >
-      Pickle deserialization is prohibited in Sentinel Gateway. Pickle allows
+      Pickle deserialization is prohibited in Bulwark Gateway. Pickle allows
       arbitrary code execution during deserialization. Use json.loads() or
       Pydantic model_validate_json() instead.
     languages: [python]
@@ -84,7 +84,7 @@ rules:
       references:
         - https://cwe.mitre.org/data/definitions/502.html
 
-  - id: sentinel-no-pickle-dumps
+  - id: bulwark-no-pickle-dumps
     patterns:
       - pattern: pickle.dumps(...)
       - pattern: pickle.dump(...)
@@ -100,7 +100,7 @@ rules:
       confidence: MEDIUM
       impact: HIGH
 
-  - id: sentinel-no-shelve
+  - id: bulwark-no-shelve
     patterns:
       - pattern: shelve.open(...)
     message: >
@@ -114,7 +114,7 @@ rules:
       confidence: HIGH
       impact: CRITICAL
 
-  - id: sentinel-no-yaml-unsafe-load
+  - id: bulwark-no-yaml-unsafe-load
     patterns:
       - pattern: yaml.load($DATA, ...)
       - pattern-not: yaml.load($DATA, Loader=yaml.SafeLoader)
@@ -132,12 +132,12 @@ rules:
 
   # ─── Unsafe Redis Commands ───────────────────────────────────────────────────
 
-  - id: sentinel-redis-no-eval
+  - id: bulwark-redis-no-eval
     patterns:
       - pattern: $REDIS.eval(...)
       - pattern: $REDIS.evalsha(...)
     message: >
-      Redis EVAL/EVALSHA executes Lua scripts on the Redis server. In Sentinel
+      Redis EVAL/EVALSHA executes Lua scripts on the Redis server. In Bulwark
       Gateway, if an attacker can influence the script content, they can execute
       arbitrary commands on Redis. Use dedicated Redis commands instead.
     languages: [python]
@@ -148,14 +148,14 @@ rules:
       confidence: MEDIUM
       impact: HIGH
 
-  - id: sentinel-redis-no-config-set
+  - id: bulwark-redis-no-config-set
     patterns:
       - pattern: $REDIS.config_set(...)
       - pattern: $REDIS.execute_command("CONFIG", "SET", ...)
     message: >
       Redis CONFIG SET can be used to modify server behavior (e.g., change
       persistence settings, load modules, or write arbitrary files via
-      dir/dbfilename manipulation). This is prohibited in Sentinel Gateway.
+      dir/dbfilename manipulation). This is prohibited in Bulwark Gateway.
     languages: [python]
     severity: ERROR
     metadata:
@@ -164,7 +164,7 @@ rules:
       confidence: HIGH
       impact: HIGH
 
-  - id: sentinel-redis-no-flushall
+  - id: bulwark-redis-no-flushall
     patterns:
       - pattern: $REDIS.flushall(...)
       - pattern: $REDIS.flushdb(...)
@@ -182,7 +182,7 @@ rules:
       confidence: HIGH
       impact: CRITICAL
 
-  - id: sentinel-redis-no-keys-pattern
+  - id: bulwark-redis-no-keys-pattern
     patterns:
       - pattern: $REDIS.keys(...)
     message: >
@@ -199,7 +199,7 @@ rules:
 
   # ─── Subprocess / Shell Injection ────────────────────────────────────────────
 
-  - id: sentinel-no-shell-true
+  - id: bulwark-no-shell-true
     patterns:
       - pattern: subprocess.run(..., shell=True, ...)
       - pattern: subprocess.Popen(..., shell=True, ...)
@@ -219,7 +219,7 @@ rules:
       confidence: HIGH
       impact: CRITICAL
 
-  - id: sentinel-no-os-system
+  - id: bulwark-no-os-system
     patterns:
       - pattern: os.system(...)
       - pattern: os.popen(...)
@@ -236,7 +236,7 @@ rules:
 
   # ─── Path Traversal ─────────────────────────────────────────────────────────
 
-  - id: sentinel-path-traversal-open
+  - id: bulwark-path-traversal-open
     patterns:
       - pattern: open($PATH + ..., ...)
       - pattern: open(f"...{$VAR}...", ...)
@@ -255,7 +255,7 @@ rules:
 
   # ─── Hardcoded Secrets ───────────────────────────────────────────────────────
 
-  - id: sentinel-no-hardcoded-jwt-secret
+  - id: bulwark-no-hardcoded-jwt-secret
     patterns:
       - pattern: |
           $VAR = "..."
@@ -267,7 +267,7 @@ rules:
       - pattern-not: |
           $VAR = "change-me-in-production"
     message: >
-      Possible hardcoded secret detected. Sentinel Gateway uses SENTINEL_*
+      Possible hardcoded secret detected. Bulwark Gateway uses BULWARK_*
       environment variables and file-mounted secrets. Never hardcode credentials.
     languages: [python]
     severity: WARNING
@@ -279,14 +279,14 @@ rules:
 
   # ─── SSRF / Unsafe Network ──────────────────────────────────────────────────
 
-  - id: sentinel-no-requests-unvalidated
+  - id: bulwark-no-requests-unvalidated
     patterns:
       - pattern: requests.get($URL, ...)
       - pattern: requests.post($URL, ...)
       - pattern-not-inside: |
           ... # SSRF-SAFE: ...
     message: >
-      Direct use of 'requests' library without SSRF validation. Sentinel Gateway
+      Direct use of 'requests' library without SSRF validation. Bulwark Gateway
       uses httpx with SSRF protection (RFC1918/CGNAT/metadata blocking). Use the
       proxy's validated HTTP client instead of raw requests.
     languages: [python]
@@ -300,7 +300,7 @@ rules:
 
   # ─── Dangerous Imports ───────────────────────────────────────────────────────
 
-  - id: sentinel-no-marshal
+  - id: bulwark-no-marshal
     patterns:
       - pattern: import marshal
       - pattern: from marshal import ...
@@ -315,7 +315,7 @@ rules:
       confidence: HIGH
       impact: CRITICAL
 
-  - id: sentinel-no-ctypes
+  - id: bulwark-no-ctypes
     patterns:
       - pattern: import ctypes
       - pattern: from ctypes import ...
@@ -333,7 +333,7 @@ rules:
 
   # ─── Timing Attacks ─────────────────────────────────────────────────────────
 
-  - id: sentinel-no-string-comparison-secrets
+  - id: bulwark-no-string-comparison-secrets
     patterns:
       - pattern: |
           if $SECRET == $INPUT: ...

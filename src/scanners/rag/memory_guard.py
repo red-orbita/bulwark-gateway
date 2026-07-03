@@ -230,7 +230,7 @@ class MemoryGuard(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Multi-turn conversation manipulation detector",
-            author="sentinel",
+            author="bulwark",
             priority=4,  # Very early, before language detector (5)
         )
 

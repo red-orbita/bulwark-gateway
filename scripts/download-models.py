@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download ML models for Sentinel Gateway async scanner pipeline.
+"""Download ML models for Bulwark Gateway async scanner pipeline.
 
 Usage:
     python scripts/download-models.py [--all | --injection | --toxicity]
@@ -11,7 +11,7 @@ Models:
 Requirements:
     pip install huggingface-hub
 
-Destination: models/ (configurable via SENTINEL_ML_MODEL_DIR)
+Destination: models/ (configurable via BULWARK_ML_MODEL_DIR)
 """
 
 import argparse
@@ -37,7 +37,7 @@ def download_model(repo_id: str, files: list[tuple[str, str]], dest: Path) -> bo
             local = hf_hub_download(
                 repo_id=repo_id,
                 filename=remote_file,
-                local_dir="/tmp/sentinel-models-dl",
+                local_dir="/tmp/bulwark-models-dl",
             )
             target = dest / local_name
             shutil.copy2(local, target)
@@ -77,14 +77,14 @@ def download_toxicity(model_dir: Path) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download ML models for Sentinel Gateway")
+    parser = argparse.ArgumentParser(description="Download ML models for Bulwark Gateway")
     parser.add_argument("--all", action="store_true", help="Download all models")
     parser.add_argument("--injection", action="store_true", help="Download injection classifier")
     parser.add_argument("--toxicity", action="store_true", help="Download toxicity classifier")
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path(os.environ.get("SENTINEL_ML_MODEL_DIR", "models")),
+        default=Path(os.environ.get("BULWARK_ML_MODEL_DIR", "models")),
         help="Model directory (default: models/)",
     )
     args = parser.parse_args()
@@ -105,7 +105,7 @@ def main():
 
     if success:
         print(f"\nModels ready at: {model_dir.resolve()}")
-        print("Enable with: SENTINEL_ML_ENABLED=true")
+        print("Enable with: BULWARK_ML_ENABLED=true")
     else:
         print("\nSome downloads failed.", file=sys.stderr)
         sys.exit(1)

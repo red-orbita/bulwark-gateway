@@ -126,7 +126,7 @@ class TokenBudgetTracker:
     def _redis_key(self, tenant_id: str) -> str:
         """Redis key for tenant's daily token counter."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        return f"sentinel:quota:tokens:{tenant_id}:{today}"
+        return f"bulwark:quota:tokens:{tenant_id}:{today}"
 
     def _ensure_fallback_day(self) -> None:
         """Reset in-memory fallback at day boundary."""

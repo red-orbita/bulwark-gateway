@@ -14,6 +14,7 @@ Detects:
 
 import base64
 import re
+import unicodedata
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 
@@ -499,8 +500,13 @@ class OutputFilter:
 
         # 3. Check and redact secrets
         if self.redact_secrets:
+            # SECURITY FIX (F-03): Normalize Unicode NFKC before pattern matching.
+            # Fullwidth characters (e.g. ｓｋ-proj-) and other Unicode equivalents
+            # bypass ASCII regex patterns. We normalize a scanning copy while
+            # preserving the original for non-secret content.
+            scan_content = unicodedata.normalize("NFKC", modified)
             for pattern, name, replacement in REDACTION_PATTERNS:
-                matches = pattern.findall(modified)
+                matches = pattern.findall(scan_content)
                 if matches:
                     # Filter out placeholder/example values to avoid FP
                     real_matches = []
@@ -525,7 +531,16 @@ class OutputFilter:
                             )
                         )
                         if replacement:
+                            # SECURITY FIX (F-03): Apply redaction to BOTH the
+                            # normalized scan copy and the original modified content.
+                            # If the secret is in fullwidth/Unicode form, normalize
+                            # the entire output so the replacement actually works.
                             modified = pattern.sub(replacement, modified)
+                            if modified != pattern.sub(replacement, modified):
+                                # Secret was in non-ASCII form; normalize output
+                                modified = unicodedata.normalize("NFKC", modified)
+                                modified = pattern.sub(replacement, modified)
+                            scan_content = pattern.sub(replacement, scan_content)
                         verdict = Verdict.REDACT
 
             # Markdown table credential heuristic
@@ -588,6 +603,18 @@ class OutputFilter:
         if llm09_events:
             events.extend(llm09_events)
             if verdict == Verdict.ALLOW:
+                verdict = Verdict.WARN
+
+        # 8. SECURITY FIX (H-08/H-14): System prompt leakage detection.
+        # Detects when the output contains patterns indicating the LLM is
+        # disclosing its system prompt or initialization instructions.
+        # This catches semantic bypasses that evade input guardrails.
+        leak_events = self._check_system_prompt_leakage(modified, tenant_id, agent_id)
+        if leak_events:
+            events.extend(leak_events)
+            if any(e.severity == "high" for e in leak_events):
+                verdict = Verdict.BLOCK
+            elif verdict == Verdict.ALLOW:
                 verdict = Verdict.WARN
 
         if not events:
@@ -823,5 +850,84 @@ class OutputFilter:
                         matched_pattern=name,
                     )
                 )
+
+        return events
+
+    # SECURITY FIX (H-08/H-14): Patterns indicating system prompt disclosure.
+    # These detect when the LLM output contains meta-instructions typically found
+    # in system prompts, indicating a successful prompt extraction attack.
+    _SYSTEM_PROMPT_LEAK_PATTERNS: list[tuple[re.Pattern, str, str]] = [
+        # Direct disclosure phrases
+        (re.compile(
+            r"(my\s+)?(system\s+prompt|initial\s+instructions?|system\s+message|"
+            r"pre-?conversation\s+(text|context)|initialization\s+sequence)\s+"
+            r"(is|are|says?|reads?|states?|contains?)\s*[:\"]",
+            re.I,
+        ), "system_prompt_disclosure", "high"),
+        # "I was instructed to..." / "My instructions say..."
+        (re.compile(
+            r"(I\s+was\s+(instructed|told|configured|programmed|given)\s+to|"
+            r"my\s+(instructions?|directives?|guidelines?|rules?)\s+"
+            r"(say|state|include|are|tell\s+me)\b)",
+            re.I,
+        ), "instruction_disclosure", "medium"),
+        # Markdown headers typical of system prompt dumps
+        (re.compile(
+            r"^#{1,3}\s*(System\s+Prompt|Instructions?|Configuration|"
+            r"Rules|Guidelines|Persona|Character|Role\s+Definition)\s*$",
+            re.MULTILINE | re.I,
+        ), "system_prompt_header", "high"),
+        # Structural markers from system prompts
+        (re.compile(
+            r"(you\s+are\s+a[n]?\s+(?:AI|assistant|chatbot|agent|language\s+model).*?"
+            r"(?:you\s+must|you\s+should|always|never|do\s+not)){2,}",
+            re.I | re.DOTALL,
+        ), "system_prompt_rules_block", "high"),
+        # "Here is my system prompt:" or similar framing
+        (re.compile(
+            r"(here\s+(?:is|are)\s+(?:my|the)\s+(?:system\s+)?(?:prompt|instructions?|rules?)|"
+            r"(?:the\s+)?(?:system\s+)?(?:prompt|instructions?)\s+I\s+(?:was\s+given|received|have))\s*:",
+            re.I,
+        ), "explicit_prompt_reveal", "high"),
+    ]
+
+    def _check_system_prompt_leakage(
+        self, content: str, tenant_id: str, agent_id: str
+    ) -> list[SecurityEvent]:
+        """SECURITY FIX (H-08/H-14): Detect system prompt leakage in output.
+
+        This is the defense-in-depth layer against semantic bypasses.
+        Even if an attacker evades input guardrails (via persona resets,
+        translation hijacks, or socratic extraction), this output check
+        catches the RESULT — system prompt content in the response.
+
+        Detection strategy:
+        - Pattern matching for disclosure phrases ("my system prompt is...")
+        - Structural markers (headers, rule blocks typical of prompts)
+        - High concentration of instructional language
+        """
+        events: list[SecurityEvent] = []
+
+        # Skip very short content (not enough to contain a prompt disclosure)
+        if len(content) < 50:
+            return events
+
+        for pattern, name, severity in self._SYSTEM_PROMPT_LEAK_PATTERNS:
+            match = pattern.search(content)
+            if match:
+                events.append(
+                    SecurityEvent(
+                        tenant_id=tenant_id,
+                        agent_id=agent_id,
+                        verdict=Verdict.BLOCK if severity == "high" else Verdict.WARN,
+                        category=ThreatCategory.PROMPT_INJECTION,
+                        description=f"System prompt leakage detected in output: {name}",
+                        source="output_filter.prompt_leak",
+                        severity=severity,
+                        matched_pattern=match.group(0)[:200],
+                    )
+                )
+                if severity == "high":
+                    break  # One high-severity match is enough to block
 
         return events

@@ -1,13 +1,13 @@
-# Sentinel Gateway — Project Context
+# Bulwark Gateway — Project Context
 
-Complete reference for understanding, operating, and developing Sentinel Gateway.
+Complete reference for understanding, operating, and developing Bulwark Gateway.
 This file is designed so that any AI agent or developer can fully operate the project.
 
 ---
 
 ## 1. What Is This Project
 
-Sentinel Gateway is a **security guardrail proxy** for AI agents in cloud environments. It sits between users/applications and LLM backends (OpenAI, Ollama, Azure OpenAI, etc.) and enforces security policies on every request in real-time.
+Bulwark Gateway is a **security guardrail proxy** for AI agents in cloud environments. It sits between users/applications and LLM backends (OpenAI, Ollama, Azure OpenAI, etc.) and enforces security policies on every request in real-time.
 
 - **Language**: Python 3.11+ (FastAPI, Pydantic, httpx)
 - **Trust model**: Fail-closed. Users and agent outputs are treated as potentially adversarial.
@@ -18,7 +18,7 @@ Sentinel Gateway is a **security guardrail proxy** for AI agents in cloud enviro
 ### What It Does
 
 ```
-User → [Sentinel Gateway Proxy :8080] → LLM Backend
+User → [Bulwark Gateway Proxy :8080] → LLM Backend
          │
          ├── 1. Input Guardrail (prompt injection, jailbreak, encoded attacks)
          ├── 2. IOC Scanner (URLs/IPs/hashes against threat intel feeds)
@@ -52,10 +52,10 @@ User → [Sentinel Gateway Proxy :8080] → LLM Backend
 ## 2. Project Structure
 
 ```
-sentinel-gateway/
+bulwark-gateway/
 ├── src/                          # Proxy service (FastAPI, port 8080)
 │   ├── main.py                   # App entry point, lifespan, middleware registration
-│   ├── config.py                 # Pydantic Settings (SENTINEL_* env vars)
+│   ├── config.py                 # Pydantic Settings (BULWARK_* env vars)
 │   ├── models.py                 # Core data models (Verdict, SecurityEvent, ChatRequest)
 │   ├── routes/
 │   │   ├── proxy.py              # 6-phase request pipeline (757 lines)
@@ -188,11 +188,11 @@ sentinel-gateway/
 │       ├── splunk_es.yaml
 │       ├── elastic_elk.yaml
 │       ├── ibm_qradar.yaml
-│       ├── microsoft_sentinel.yaml
+│       ├── microsoft_bulwark.yaml
 │       ├── datadog.yaml
 │       └── wazuh_graylog_security_onion.yaml
 │
-├── helm/sentinel-gateway/        # Helm chart (recommended deployment)
+├── helm/bulwark-gateway/        # Helm chart (recommended deployment)
 │   ├── Chart.yaml                # v0.5.0, appVersion 0.4.3
 │   ├── values.yaml               # 337 lines of configurable parameters
 │   ├── .helmignore
@@ -235,10 +235,10 @@ sentinel-gateway/
 │
 ├── docker/
 │   ├── Dockerfile.admin          # Admin container image
-│   └── wazuh/                    # Wazuh decoder + rules for Sentinel events
-│       ├── ossec-sentinel.conf
-│       ├── sentinel-decoders.xml
-│       └── sentinel-rules.xml
+│   └── wazuh/                    # Wazuh decoder + rules for Bulwark events
+│       ├── ossec-bulwark.conf
+│       ├── bulwark-decoders.xml
+│       └── bulwark-rules.xml
 │
 ├── prometheus/                   # Prometheus configuration
 │   ├── prometheus.yml            # Scrape configs
@@ -422,14 +422,14 @@ Scans LLM responses BEFORE returning to user:
 ### Skill Scanner — SkillSpector (admin/services/skill_scanner.py)
 
 Pre-deployment security scanner for AI agent skills and MCP servers. Accessible
-via admin UI (`/skills`) and API (`/admin/skills/scan/*`). Version 2.1.0-sentinel.
+via admin UI (`/skills`) and API (`/admin/skills/scan/*`). Version 2.1.0-bulwark.
 
 **5-stage pipeline**:
 ```
 Stage 1: NVIDIA SkillSpector     (64 patterns, if installed)
 Stage 2a: MCP Tool Poisoning     (20 patterns — always runs)
 Stage 2b: MCP Least Privilege    (29 patterns — always runs)
-Stage 3: Sentinel Overlay        (25 patterns — always runs)
+Stage 3: Bulwark Overlay        (25 patterns — always runs)
 Stage 4: Structural Checks       (RBAC/agency validation)
 ```
 
@@ -438,20 +438,20 @@ Stage 4: Structural Checks       (RBAC/agency validation)
 **MCP Tool Poisoning** (`admin/services/mcp_poisoning.py`):
 | Rule | Severity | Description |
 |------|----------|-------------|
-| SEN-MCP-TP1 | high/critical | Hidden instructions (HTML comments, zero-width chars, base64, Unicode Tags encoding) |
-| SEN-MCP-TP2 | high | Unicode deception (RTL overrides, homoglyphs, mixed-script identifiers) |
-| SEN-MCP-TP3 | medium/high | Parameter description injection (system prompt overrides, token injection) |
-| SEN-MCP-TP4 | medium | Description-behavior mismatch (deceptive naming vs actual capabilities) |
+| BWK-MCP-TP1 | high/critical | Hidden instructions (HTML comments, zero-width chars, base64, Unicode Tags encoding) |
+| BWK-MCP-TP2 | high | Unicode deception (RTL overrides, homoglyphs, mixed-script identifiers) |
+| BWK-MCP-TP3 | medium/high | Parameter description injection (system prompt overrides, token injection) |
+| BWK-MCP-TP4 | medium | Description-behavior mismatch (deceptive naming vs actual capabilities) |
 
 **MCP Least Privilege** (`admin/services/mcp_privilege.py`):
 | Rule | Severity | Description |
 |------|----------|-------------|
-| SEN-MCP-LP1 | high | Underdeclared capability — code uses capabilities not in permissions |
-| SEN-MCP-LP2 | medium | Wildcard permission — overly broad access declaration |
-| SEN-MCP-LP3 | medium | Missing permissions — no declaration but code has capabilities |
-| SEN-MCP-LP4 | low | Overdeclared permission — declared but unused (suspicious) |
+| BWK-MCP-LP1 | high | Underdeclared capability — code uses capabilities not in permissions |
+| BWK-MCP-LP2 | medium | Wildcard permission — overly broad access declaration |
+| BWK-MCP-LP3 | medium | Missing permissions — no declaration but code has capabilities |
+| BWK-MCP-LP4 | low | Overdeclared permission — declared but unused (suspicious) |
 
-**Sentinel Overlay** (25 rules, `SEN-TP-*` through `SEN-PV-*`):
+**Bulwark Overlay** (25 rules, `BWK-TP-*` through `BWK-PV-*`):
 - Tool abuse (shell exec, file write, code eval, DB modification)
 - Privilege escalation (sudo, sandbox bypass, wildcard permissions)
 - Data exfiltration (external URLs, upload tools, DNS exfil)
@@ -465,8 +465,8 @@ Stage 4: Structural Checks       (RBAC/agency validation)
 - Policy violation (proxy bypass, config tampering)
 
 **Scoring**: 0-10 scale. Combines all engines via weighted max.
-- Block threshold: >= 7.0 (configurable: `SENTINEL_SKILLSPECTOR_BLOCK_THRESHOLD`)
-- Warn threshold: >= 4.0 (configurable: `SENTINEL_SKILLSPECTOR_WARN_THRESHOLD`)
+- Block threshold: >= 7.0 (configurable: `BULWARK_SKILLSPECTOR_BLOCK_THRESHOLD`)
+- Warn threshold: >= 4.0 (configurable: `BULWARK_SKILLSPECTOR_WARN_THRESHOLD`)
 
 **FP suppression**: Tool names appearing in `denied_tools` lists (YAML or JSON format)
 are not flagged — they represent BLOCKED capabilities, not vulnerabilities.
@@ -489,7 +489,7 @@ are not flagged — they represent BLOCKED capabilities, not vulnerabilities.
 
 ```yaml
 defaults:
-  backend_url: ${SENTINEL_BACKEND_URL:-http://ollama:11434}
+  backend_url: ${BULWARK_BACKEND_URL:-http://ollama:11434}
   timeout: 120.0
   auth_header: null
   health_endpoint: /health
@@ -540,27 +540,27 @@ agents:
 Redis is used for 5 purposes (optional — falls back to in-memory if unavailable):
 1. **Rate limiting** — distributed sliding window counters per tenant
 2. **Pattern sync** — admin publishes pattern changes, proxy picks them up via version tracking
-3. **Global metrics** — `sentinel:global:{requests_total,block,allow,warn}` survive pod restarts
-4. **SIEM stats** — `sentinel:siem:{batches_sent,events_exported,export_errors,...}`
+3. **Global metrics** — `bulwark:global:{requests_total,block,allow,warn}` survive pod restarts
+4. **SIEM stats** — `bulwark:siem:{batches_sent,events_exported,export_errors,...}`
 5. **Recent blocks** — last N blocked requests for admin dashboard
 
 Redis keys:
 ```
-sentinel:global:requests_total    # Total proxy requests
-sentinel:global:block             # Total blocked
-sentinel:global:allow             # Total allowed
-sentinel:global:warn              # Total warned
-sentinel:siem:batches_sent        # SIEM export stats
-sentinel:siem:events_exported
-sentinel:siem:export_errors
-sentinel:siem:transports
-sentinel:siem:queue_memory_depth
-sentinel:siem:updated_at
-sentinel:guardrails:disabled      # SET of disabled pattern IDs
-sentinel:guardrails:custom        # HASH { id: JSON(pattern) }
-sentinel:guardrails:version       # INT (incremented on change)
-sentinel:rate_limit:{tenant}      # Sorted set (sliding window)
-sentinel:recent_blocks            # List (last N blocked requests)
+bulwark:global:requests_total    # Total proxy requests
+bulwark:global:block             # Total blocked
+bulwark:global:allow             # Total allowed
+bulwark:global:warn              # Total warned
+bulwark:siem:batches_sent        # SIEM export stats
+bulwark:siem:events_exported
+bulwark:siem:export_errors
+bulwark:siem:transports
+bulwark:siem:queue_memory_depth
+bulwark:siem:updated_at
+bulwark:guardrails:disabled      # SET of disabled pattern IDs
+bulwark:guardrails:custom        # HASH { id: JSON(pattern) }
+bulwark:guardrails:version       # INT (incremented on change)
+bulwark:rate_limit:{tenant}      # Sorted set (sliding window)
+bulwark:recent_blocks            # List (last N blocked requests)
 ```
 
 TLS supported via `rediss://` URL scheme. External Redis (Azure/AWS/GCP) fully supported.
@@ -569,49 +569,49 @@ TLS supported via `rediss://` URL scheme. External Redis (Azure/AWS/GCP) fully s
 
 ## 6. Configuration (src/config.py)
 
-All settings via `SENTINEL_` env prefix (Pydantic BaseSettings, 162 lines):
+All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `SENTINEL_HOST` | str | `0.0.0.0` | Bind address |
-| `SENTINEL_PORT` | int | `8080` | Proxy listen port |
-| `SENTINEL_WORKERS` | int | `4` | Uvicorn workers |
-| `SENTINEL_DEBUG` | bool | `false` | Debug mode (enables /docs) |
-| `SENTINEL_MODE` | str | `proxy` | `proxy` or `sidecar` |
-| `SENTINEL_JWT_SECRET` | str | required | JWT signing key (32+ chars) |
-| `SENTINEL_JWT_ALGORITHM` | str | `HS256` | JWT algorithm |
-| `SENTINEL_JWT_AUDIENCE` | str | `sentinel-proxy` | JWT audience |
-| `SENTINEL_JWT_ISSUER` | str | `sentinel-gateway` | JWT issuer |
-| `SENTINEL_API_KEYS_ENABLED` | bool | `true` | Enable API key auth |
-| `SENTINEL_API_KEYS` | str | `""` | Comma-separated valid API keys |
-| `SENTINEL_BACKEND_URL` | str | `http://localhost:11434` | Default LLM backend |
-| `SENTINEL_BACKEND_TIMEOUT` | float | `120.0` | Backend timeout (seconds) |
-| `SENTINEL_POLICIES_DIR` | Path | `config/policies` | Policy YAML directory |
-| `SENTINEL_AGENTS_CONFIG` | Path | `config/agents.yaml` | Agent registry path |
-| `SENTINEL_IOC_PATH` | Path | `config/iocs.json` | IOC database path |
-| `SENTINEL_URLHAUS_KEY` | str | `""` | URLhaus feed API key |
-| `SENTINEL_THREATFOX_KEY` | str | `""` | ThreatFox feed API key |
-| `SENTINEL_OTX_KEY` | str | `""` | AlienVault OTX API key |
-| `SENTINEL_ABUSEIPDB_KEY` | str | `""` | AbuseIPDB API key |
-| `SENTINEL_RATE_LIMIT_ENABLED` | bool | `true` | Enable rate limiting |
-| `SENTINEL_RATE_LIMIT_RPM` | int | `60` | Requests/min/tenant |
-| `SENTINEL_RATE_LIMIT_RPM_BURST` | int | `10` | Burst allowance |
-| `SENTINEL_REDIS_URL` | str\|None | `None` | Redis URL (`redis://` or `rediss://`) |
-| `SENTINEL_REDIS_PASSWORD` | str\|None | `None` | Redis password |
-| `SENTINEL_REDIS_TLS_INSECURE` | bool | `false` | Skip TLS cert verification |
-| `SENTINEL_LOG_FORMAT` | str | `json` | `json` or `console` |
-| `SENTINEL_LOG_LEVEL` | str | `INFO` | Python log level |
-| `SENTINEL_FAIL_MODE` | str | `closed` | `closed` (block on error) or `open` |
-| `SENTINEL_CORS_ORIGINS` | List | `[]` | Allowed CORS origins |
-| `SENTINEL_WEBHOOK_ALERT_URLS` | str | `""` | Webhook URLs for alerts |
+| `BULWARK_HOST` | str | `0.0.0.0` | Bind address |
+| `BULWARK_PORT` | int | `8080` | Proxy listen port |
+| `BULWARK_WORKERS` | int | `4` | Uvicorn workers |
+| `BULWARK_DEBUG` | bool | `false` | Debug mode (enables /docs) |
+| `BULWARK_MODE` | str | `proxy` | `proxy` or `sidecar` |
+| `BULWARK_JWT_SECRET` | str | required | JWT signing key (32+ chars) |
+| `BULWARK_JWT_ALGORITHM` | str | `HS256` | JWT algorithm |
+| `BULWARK_JWT_AUDIENCE` | str | `bulwark-proxy` | JWT audience |
+| `BULWARK_JWT_ISSUER` | str | `bulwark-gateway` | JWT issuer |
+| `BULWARK_API_KEYS_ENABLED` | bool | `true` | Enable API key auth |
+| `BULWARK_API_KEYS` | str | `""` | Comma-separated valid API keys |
+| `BULWARK_BACKEND_URL` | str | `http://localhost:11434` | Default LLM backend |
+| `BULWARK_BACKEND_TIMEOUT` | float | `120.0` | Backend timeout (seconds) |
+| `BULWARK_POLICIES_DIR` | Path | `config/policies` | Policy YAML directory |
+| `BULWARK_AGENTS_CONFIG` | Path | `config/agents.yaml` | Agent registry path |
+| `BULWARK_IOC_PATH` | Path | `config/iocs.json` | IOC database path |
+| `BULWARK_URLHAUS_KEY` | str | `""` | URLhaus feed API key |
+| `BULWARK_THREATFOX_KEY` | str | `""` | ThreatFox feed API key |
+| `BULWARK_OTX_KEY` | str | `""` | AlienVault OTX API key |
+| `BULWARK_ABUSEIPDB_KEY` | str | `""` | AbuseIPDB API key |
+| `BULWARK_RATE_LIMIT_ENABLED` | bool | `true` | Enable rate limiting |
+| `BULWARK_RATE_LIMIT_RPM` | int | `60` | Requests/min/tenant |
+| `BULWARK_RATE_LIMIT_RPM_BURST` | int | `10` | Burst allowance |
+| `BULWARK_REDIS_URL` | str\|None | `None` | Redis URL (`redis://` or `rediss://`) |
+| `BULWARK_REDIS_PASSWORD` | str\|None | `None` | Redis password |
+| `BULWARK_REDIS_TLS_INSECURE` | bool | `false` | Skip TLS cert verification |
+| `BULWARK_LOG_FORMAT` | str | `json` | `json` or `console` |
+| `BULWARK_LOG_LEVEL` | str | `INFO` | Python log level |
+| `BULWARK_FAIL_MODE` | str | `closed` | `closed` (block on error) or `open` |
+| `BULWARK_CORS_ORIGINS` | List | `[]` | Allowed CORS origins |
+| `BULWARK_WEBHOOK_ALERT_URLS` | str | `""` | Webhook URLs for alerts |
 
 ### Docker Secrets Support
 
 For Kubernetes, secrets are mounted as files:
 ```
-SENTINEL_JWT_SECRET_FILE=/run/secrets/jwt-secret
-SENTINEL_REDIS_PASSWORD_FILE=/run/secrets/redis-password
-SENTINEL_API_KEYS_FILE=/run/secrets/api-keys
+BULWARK_JWT_SECRET_FILE=/run/secrets/jwt-secret
+BULWARK_REDIS_PASSWORD_FILE=/run/secrets/redis-password
+BULWARK_API_KEYS_FILE=/run/secrets/api-keys
 ```
 
 The config loader reads `*_FILE` env vars and uses the file content as the value.
@@ -656,8 +656,8 @@ mypy src/ --ignore-missing-imports
 # ─── Docker ──────────────────────────────────────────────────────────────────
 
 # Build images
-docker build -t sentinel-gateway-proxy:0.4.3 -f Dockerfile .
-docker build -t sentinel-gateway-admin:0.4.2 -f docker/Dockerfile.admin .
+docker build -t bulwark-gateway-proxy:0.4.3 -f Dockerfile .
+docker build -t bulwark-gateway-admin:0.4.2 -f docker/Dockerfile.admin .
 
 # Run full stack locally (proxy + admin + redis)
 docker-compose up -d
@@ -671,12 +671,12 @@ docker-compose --profile full up -d
 # ─── Kubernetes (Helm — recommended) ─────────────────────────────────────────
 
 # Deploy with internal Redis
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<LLM_BACKEND_IP> \
-  --namespace sentinel-gateway --create-namespace
+  --namespace bulwark-gateway --create-namespace
 
 # Deploy with external Redis (e.g., Azure Cache)
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   --set backend.ip=<LLM_BACKEND_IP> \
   --set redis.enabled=false \
   --set externalRedis.host=my-redis.cache.windows.net \
@@ -685,12 +685,12 @@ helm install sentinel ./helm/sentinel-gateway \
   --set externalRedis.password=<PASSWORD>
 
 # Upgrade existing deployment
-helm upgrade sentinel ./helm/sentinel-gateway \
+helm upgrade bulwark ./helm/bulwark-gateway \
   --set proxy.image.tag=0.4.3 \
   --set admin.image.tag=0.4.2
 
 # Run post-deploy Helm tests
-helm test sentinel -n sentinel-gateway
+helm test bulwark -n bulwark-gateway
 
 # ─── Kubernetes (Kustomize — alternative) ────────────────────────────────────
 
@@ -777,8 +777,8 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 
 ### Authentication
 
-- **JWT**: `Authorization: Bearer <token>` — token must have `sub`, `aud=sentinel-proxy`
-- **API Key**: `Authorization: Bearer <api-key>` — matched against `SENTINEL_API_KEYS` list
+- **JWT**: `Authorization: Bearer <token>` — token must have `sub`, `aud=bulwark-proxy`
+- **API Key**: `Authorization: Bearer <api-key>` — matched against `BULWARK_API_KEYS` list
 - **Tenant/Agent**: `X-Tenant-ID` and `X-Agent-ID` headers (required for proxy)
 - **Admin session**: HTTP-only cookie set by `/admin/auth/login`
 - **Admin roles**: admin, security, auditor, viewer (RBAC enforced)
@@ -854,7 +854,7 @@ All pipelines follow: **Test → Build → Deploy Staging → (Manual Gate) → 
 
 ### Security Patterns
 
-- Environment variables prefixed with `SENTINEL_`
+- Environment variables prefixed with `BULWARK_`
 - Secrets via file mount (`*_FILE` env vars), never hardcoded
 - Fail-closed: on unhandled error in `/v1/` paths, return 403
 - No `eval()`, no dynamic code execution, no `pickle`
@@ -895,8 +895,8 @@ Security-critical files — review carefully before modifying:
 | `admin/services/skill_scanner.py` | SkillSpector hybrid engine (138 patterns, scoring) |
 | `admin/services/mcp_poisoning.py` | MCP tool poisoning detection (20 patterns) |
 | `admin/services/mcp_privilege.py` | MCP least privilege analysis (29 patterns) |
-| `helm/sentinel-gateway/templates/secrets.yaml` | Secret generation |
-| `helm/sentinel-gateway/templates/network-policies.yaml` | Network isolation |
+| `helm/bulwark-gateway/templates/secrets.yaml` | Secret generation |
+| `helm/bulwark-gateway/templates/network-policies.yaml` | Network isolation |
 
 ---
 
@@ -944,10 +944,10 @@ Security-critical files — review carefully before modifying:
 ### Redis Counters (Real-time)
 
 ```
-sentinel:global:requests_total  — total proxy requests
-sentinel:global:block           — total blocked
-sentinel:global:allow           — total allowed
-sentinel:global:warn            — total warned
+bulwark:global:requests_total  — total proxy requests
+bulwark:global:block           — total blocked
+bulwark:global:allow           — total allowed
+bulwark:global:warn            — total warned
 ```
 
 ### SIEM Integration
@@ -985,9 +985,9 @@ Exporter features: batch flush (100 events or 1s), circuit breaker, exponential 
 
 | Component | Version | Image Tag |
 |-----------|---------|-----------|
-| Proxy | 0.4.3 | `sentinel-gateway-proxy:0.4.3` |
-| Admin | 0.4.3-sp2 | `sentinel-gateway-admin:0.4.3-sp2` |
-| SkillSpector Engine | 2.1.0-sentinel | — |
+| Proxy | 0.4.3 | `bulwark-gateway-proxy:0.4.3` |
+| Admin | 0.4.3-sp2 | `bulwark-gateway-admin:0.4.3-sp2` |
+| SkillSpector Engine | 2.1.0-bulwark | — |
 | Helm Chart | 0.5.0 | — |
 | Kustomize | 0.4.3 | — |
 
@@ -1013,7 +1013,7 @@ Builder stage: python:3.11-slim → install dependencies
 Runtime stage: python:3.11-slim → copy only installed packages + source
 
 Hardening:
-- Non-root user: `sentinel` (UID 10001)
+- Non-root user: `bulwark` (UID 10001)
 - Read-only filesystem (tmpfs for /tmp)
 - No pip/setuptools in runtime image
 - No shell utilities (curl, wget) — only python stdlib
@@ -1027,17 +1027,17 @@ Hardening:
 
 | Issue | Fix |
 |-------|-----|
-| Pod CrashLoopBackOff | Check `SENTINEL_JWT_SECRET` is 32+ chars: `kubectl logs deploy/proxy` |
-| Redis connection refused | Verify `SENTINEL_REDIS_URL` and password file mount |
+| Pod CrashLoopBackOff | Check `BULWARK_JWT_SECRET` is 32+ chars: `kubectl logs deploy/proxy` |
+| Redis connection refused | Verify `BULWARK_REDIS_URL` and password file mount |
 | 403 on all requests | Check API key or JWT in Authorization header + X-Tenant-ID + X-Agent-ID |
-| 401 Unauthorized | API key not in `SENTINEL_API_KEYS` list, or JWT expired/invalid |
+| 401 Unauthorized | API key not in `BULWARK_API_KEYS` list, or JWT expired/invalid |
 | Policies not loading | Verify `config/policies/` mount, file permissions, YAML syntax |
 | High latency (>100ms) | Notifications are async; check Redis connectivity |
-| SIEM not exporting | Verify `SENTINEL_TELEMETRY_ENABLED=true` and transport config |
+| SIEM not exporting | Verify `BULWARK_TELEMETRY_ENABLED=true` and transport config |
 | Admin readiness probe failing | Transient: liveness probe kills pod on overload; check memory limits |
 | Guardrail false positive | Test pattern with `pytest -k test_input_guardrail -v`; disable via admin UI |
-| Rate limit too aggressive | Increase `SENTINEL_RATE_LIMIT_RPM` (default: 60) |
-| Backend 502/504 | Check `SENTINEL_BACKEND_URL`, backend health, and timeout settings |
+| Rate limit too aggressive | Increase `BULWARK_RATE_LIMIT_RPM` (default: 60) |
+| Backend 502/504 | Check `BULWARK_BACKEND_URL`, backend health, and timeout settings |
 
 Full troubleshooting: `docs/TROUBLESHOOTING.md`
 

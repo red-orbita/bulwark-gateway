@@ -16,7 +16,7 @@ from .base import BaseEnrichmentScanner, EnrichmentResult, EnrichmentStatus
 
 logger = logging.getLogger(__name__)
 
-ENRICHMENT_ENABLED = os.getenv("SENTINEL_ENRICHMENT_ENABLED", "false").lower() == "true"
+ENRICHMENT_ENABLED = os.getenv("BULWARK_ENRICHMENT_ENABLED", "false").lower() == "true"
 
 
 class EnrichmentManager:

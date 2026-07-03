@@ -1,4 +1,4 @@
-# Sentinel Gateway — CI/CD Pipeline (GitHub Actions)
+# Bulwark Gateway — CI/CD Pipeline (GitHub Actions)
 #
 # Triggers:
 #   - Push to main → build, test, deploy to staging
@@ -25,10 +25,10 @@ on:
 
 env:
   REGISTRY: ${{ secrets.REGISTRY_URL || 'ghcr.io' }}
-  IMAGE_PROXY: sentinel-gateway-proxy
-  IMAGE_ADMIN: sentinel-gateway-admin
-  HELM_RELEASE: sentinel-gateway
-  NAMESPACE: sentinel-gateway
+  IMAGE_PROXY: bulwark-gateway-proxy
+  IMAGE_ADMIN: bulwark-gateway-admin
+  HELM_RELEASE: bulwark-gateway
+  NAMESPACE: bulwark-gateway
 
 jobs:
   # ─── Stage 1: Lint & Test ────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ jobs:
           # Decode environment-specific values
           echo "${{ secrets.HELM_VALUES_STAGING }}" | base64 -d > /tmp/values-staging.yaml
 
-          helm upgrade --install ${{ env.HELM_RELEASE }} ./helm/sentinel-gateway \
+          helm upgrade --install ${{ env.HELM_RELEASE }} ./helm/bulwark-gateway \
             --namespace ${{ env.NAMESPACE }} \
             --create-namespace \
             --values /tmp/values-staging.yaml \
@@ -185,7 +185,7 @@ jobs:
         run: |
           echo "${{ secrets.HELM_VALUES_PROD }}" | base64 -d > /tmp/values-prod.yaml
 
-          helm upgrade --install ${{ env.HELM_RELEASE }} ./helm/sentinel-gateway \
+          helm upgrade --install ${{ env.HELM_RELEASE }} ./helm/bulwark-gateway \
             --namespace ${{ env.NAMESPACE }} \
             --create-namespace \
             --values /tmp/values-prod.yaml \

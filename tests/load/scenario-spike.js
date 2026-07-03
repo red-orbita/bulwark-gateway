@@ -1,5 +1,5 @@
 /**
- * Sentinel Gateway — Spike/Burst Traffic Scenario
+ * Bulwark Gateway — Spike/Burst Traffic Scenario
  *
  * Simulates sudden traffic spikes (10x normal load) to validate:
  *   - Rate limiter handles bursts without cascading failures

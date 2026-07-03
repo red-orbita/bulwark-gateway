@@ -2,7 +2,7 @@
 Scanner Discovery — Plugin loading from entry points and drop-in directories.
 
 Supports two discovery mechanisms:
-  1. Python entry_points (pip-installable packages under 'sentinel.scanners' group)
+  1. Python entry_points (pip-installable packages under 'bulwark.scanners' group)
   2. Drop-in directory (Python files in config/scanners/)
 
 Security: Drop-in scanners are loaded but NOT executed until explicitly
@@ -28,7 +28,7 @@ def discover_entry_point_scanners() -> list[Type[InputScanner | OutputScanner]]:
     """Discover scanner classes from installed packages via entry_points.
 
     Packages register scanners in pyproject.toml:
-        [project.entry-points."sentinel.scanners"]
+        [project.entry-points."bulwark.scanners"]
         my_scanner = "my_package.scanner:MyScannerClass"
 
     Returns:
@@ -40,9 +40,9 @@ def discover_entry_point_scanners() -> list[Type[InputScanner | OutputScanner]]:
         eps = importlib.metadata.entry_points()
         # Python 3.12+ returns SelectableGroups, earlier returns dict
         if hasattr(eps, "select"):
-            scanner_eps = eps.select(group="sentinel.scanners")
+            scanner_eps = eps.select(group="bulwark.scanners")
         else:
-            scanner_eps = eps.get("sentinel.scanners", [])  # type: ignore[attr-defined]
+            scanner_eps = eps.get("bulwark.scanners", [])  # type: ignore[attr-defined]
 
         for ep in scanner_eps:
             try:
@@ -188,7 +188,7 @@ def _is_valid_scanner_class(cls: type) -> bool:
 
 def _load_module_from_path(path: Path):
     """Dynamically load a Python module from a file path."""
-    module_name = f"sentinel_scanner_plugin_{path.stem}"
+    module_name = f"bulwark_scanner_plugin_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         return None

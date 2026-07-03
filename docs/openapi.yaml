@@ -1,6 +1,6 @@
 openapi: "3.1.0"
 info:
-  title: Sentinel Gateway API
+  title: Bulwark Gateway API
   version: "0.2.0"
   description: |
     Security guardrail proxy for AI agents. Sits between users/applications and LLM
@@ -30,8 +30,8 @@ info:
     {"error": {"message": "...", "type": "...", "code": "..."}}
     ```
   contact:
-    name: Sentinel Gateway Team
-    url: https://github.com/sentinel-gateway/sentinel-gateway
+    name: Bulwark Gateway Team
+    url: https://github.com/bulwark-gateway/bulwark-gateway
   license:
     name: GPL-3.0-or-later
     url: https://www.gnu.org/licenses/gpl-3.0.html
@@ -39,7 +39,7 @@ info:
 servers:
   - url: http://localhost:8080
     description: Local development
-  - url: https://api.sentinel-gateway.example.com
+  - url: https://api.bulwark-gateway.example.com
     description: Production
 
 security:
@@ -221,7 +221,7 @@ paths:
       summary: Pre-execution tool call validation (sidecar mode)
       description: |
         Validates a tool call against the agent's RBAC policy BEFORE execution.
-        Used in sidecar mode where the agent framework calls Sentinel before
+        Used in sidecar mode where the agent framework calls Bulwark before
         executing a tool.
 
         Returns a verdict (allow/block) with details if blocked.
@@ -460,7 +460,7 @@ paths:
                 healthy:
                   value:
                     status: "ok"
-                    service: "sentinel-gateway"
+                    service: "bulwark-gateway"
 
   /health/live:
     get:
@@ -578,7 +578,7 @@ paths:
       description: |
         Accepts adversarial payloads for guardrail validation. Tests guardrails
         locally without forwarding to backend. Requires authentication AND
-        `SENTINEL_REDTEAM_ENABLED=true` AND `X-Redteam-Mode: true` header.
+        `BULWARK_REDTEAM_ENABLED=true` AND `X-Redteam-Mode: true` header.
 
         Disabled by default in production.
       tags: [Health]
@@ -663,13 +663,13 @@ components:
       bearerFormat: JWT
       description: |
         JWT token with required claims: `sub` (subject), `aud` (must include
-        "sentinel-proxy"). Optional claims: `role` (for admin endpoints),
+        "bulwark-proxy"). Optional claims: `role` (for admin endpoints),
         `tenant_id`, `agent_id`.
     APIKey:
       type: http
       scheme: bearer
       description: |
-        API key passed as Bearer token. Must be listed in `SENTINEL_API_KEYS`
+        API key passed as Bearer token. Must be listed in `BULWARK_API_KEYS`
         configuration. Tenant and agent IDs are extracted from request headers.
 
   parameters:
@@ -1237,7 +1237,7 @@ components:
           enum: ["ok"]
         service:
           type: string
-          example: "sentinel-gateway"
+          example: "bulwark-gateway"
 
     ProxyStats:
       type: object

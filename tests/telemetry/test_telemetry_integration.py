@@ -66,7 +66,7 @@ class TestFileShipperIntegration:
                 for line in lines:
                     data = json.loads(line)
                     assert "@timestamp" in data
-                    assert data["sentinel"]["verdict"] == "block"
+                    assert data["bulwark"]["verdict"] == "block"
 
         asyncio.run(_test())
 
@@ -76,7 +76,7 @@ class TestExporterIntegration:
         async def _test():
             import os
 
-            os.environ["SENTINEL_TELEMETRY_ENABLED"] = "true"
+            os.environ["BULWARK_TELEMETRY_ENABLED"] = "true"
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 queue = TelemetryQueue(max_size=1000, disk_path=f"{tmpdir}/q.db")
@@ -108,7 +108,7 @@ class TestExporterIntegration:
                 assert total_events == 50
                 assert exporter.stats["events_exported"] == 50
 
-                os.environ.pop("SENTINEL_TELEMETRY_ENABLED", None)
+                os.environ.pop("BULWARK_TELEMETRY_ENABLED", None)
                 queue.close()
 
         asyncio.run(_test())
@@ -117,7 +117,7 @@ class TestExporterIntegration:
         async def _test():
             import os
 
-            os.environ["SENTINEL_TELEMETRY_ENABLED"] = "true"
+            os.environ["BULWARK_TELEMETRY_ENABLED"] = "true"
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 queue = TelemetryQueue(max_size=1000, disk_path=f"{tmpdir}/q.db")
@@ -149,7 +149,7 @@ class TestExporterIntegration:
                 transport_stats = exporter.stats["transports"][0]
                 assert transport_stats["circuit_stats"]["failures"] >= 5
 
-                os.environ.pop("SENTINEL_TELEMETRY_ENABLED", None)
+                os.environ.pop("BULWARK_TELEMETRY_ENABLED", None)
                 queue.close()
 
         asyncio.run(_test())
@@ -181,11 +181,11 @@ class TestFormatValidation:
         assert ecs["event"]["category"] == "intrusion_detection"
         assert ecs["event"]["kind"] == "alert"
         assert "observer" in ecs
-        assert ecs["observer"]["type"] == "sentinel-gateway"
-        # Sentinel custom fields
-        assert ecs["sentinel"]["verdict"] == "block"
-        assert ecs["sentinel"]["rule_id"] == "PI-042"
-        assert ecs["sentinel"]["input_hash"]  # Hash present
+        assert ecs["observer"]["type"] == "bulwark-gateway"
+        # Bulwark custom fields
+        assert ecs["bulwark"]["verdict"] == "block"
+        assert ecs["bulwark"]["rule_id"] == "PI-042"
+        assert ecs["bulwark"]["input_hash"]  # Hash present
         assert "inject payload" not in json.dumps(ecs)  # Raw NOT present
 
     def test_cef_format_structure(self):
@@ -193,7 +193,7 @@ class TestFormatValidation:
         cef = event.to_cef()
         parts = cef.split("|")
         assert parts[0] == "CEF:0"
-        assert parts[1] == "SentinelGateway"
+        assert parts[1] == "BulwarkGateway"
         assert parts[2] == "Guardrail"
         # parts[3]=version, parts[4]=signatureID, parts[5]=name, parts[6]=severity
         assert int(parts[6]) >= 0  # severity is numeric
@@ -201,6 +201,6 @@ class TestFormatValidation:
     def test_leef_format_structure(self):
         event = self._make_event()
         leef = event.to_leef()
-        assert leef.startswith("LEEF:2.0|SentinelGateway|")
+        assert leef.startswith("LEEF:2.0|BulwarkGateway|")
         assert "action=block" in leef
         assert "tenantId=healthcare-corp" in leef

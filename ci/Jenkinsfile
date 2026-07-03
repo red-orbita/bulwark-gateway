@@ -1,4 +1,4 @@
-// Sentinel Gateway — Jenkins Declarative Pipeline
+// Bulwark Gateway — Jenkins Declarative Pipeline
 //
 // Prerequisites:
 //   - Jenkins plugins: Docker Pipeline, Kubernetes CLI, Pipeline Utility Steps
@@ -45,10 +45,10 @@ spec:
 
     environment {
         REGISTRY       = credentials('registry-url')       // e.g., myregistry.azurecr.io
-        IMAGE_PROXY    = 'sentinel-gateway-proxy'
-        IMAGE_ADMIN    = 'sentinel-gateway-admin'
-        HELM_RELEASE   = 'sentinel-gateway'
-        NAMESPACE      = 'sentinel-gateway'
+        IMAGE_PROXY    = 'bulwark-gateway-proxy'
+        IMAGE_ADMIN    = 'bulwark-gateway-admin'
+        HELM_RELEASE   = 'bulwark-gateway'
+        NAMESPACE      = 'bulwark-gateway'
     }
 
     stages {
@@ -111,7 +111,7 @@ spec:
                         file(credentialsId: 'helm-values-staging', variable: 'VALUES_FILE')
                     ]) {
                         sh """
-                            helm upgrade --install ${HELM_RELEASE} ./helm/sentinel-gateway \
+                            helm upgrade --install ${HELM_RELEASE} ./helm/bulwark-gateway \
                                 --namespace ${NAMESPACE} \
                                 --create-namespace \
                                 --values \$VALUES_FILE \
@@ -150,7 +150,7 @@ spec:
                         file(credentialsId: 'helm-values-production', variable: 'VALUES_FILE')
                     ]) {
                         sh """
-                            helm upgrade --install ${HELM_RELEASE} ./helm/sentinel-gateway \
+                            helm upgrade --install ${HELM_RELEASE} ./helm/bulwark-gateway \
                                 --namespace ${NAMESPACE} \
                                 --create-namespace \
                                 --values \$VALUES_FILE \

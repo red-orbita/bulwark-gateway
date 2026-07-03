@@ -1,4 +1,4 @@
-# Sentinel Gateway — Runbook Index
+# Bulwark Gateway — Runbook Index
 
 Operational runbooks for incident response, alert handling, and security event procedures.
 
@@ -20,11 +20,11 @@ These runbooks are linked directly from Prometheus alert rules (`prometheus/rule
 
 | Alert | Severity | Runbook | Team |
 |-------|----------|---------|------|
-| `SentinelHighBlockRate` | Critical | [alert-high-block-rate.md](alert-high-block-rate.md) | Security |
-| `SentinelRedisDown` | Critical | [alert-redis-down.md](alert-redis-down.md) | Platform |
-| `SentinelBackendErrorRateHigh` | Critical | [alert-backend-errors.md](alert-backend-errors.md) | Platform |
-| `SentinelGuardrailLatencyHigh` | Critical | [alert-guardrail-latency.md](alert-guardrail-latency.md) | Platform |
-| `SentinelCertificateExpiringSoon` | Critical | [alert-certificate-expiry.md](alert-certificate-expiry.md) | Platform |
+| `BulwarkHighBlockRate` | Critical | [alert-high-block-rate.md](alert-high-block-rate.md) | Security |
+| `BulwarkRedisDown` | Critical | [alert-redis-down.md](alert-redis-down.md) | Platform |
+| `BulwarkBackendErrorRateHigh` | Critical | [alert-backend-errors.md](alert-backend-errors.md) | Platform |
+| `BulwarkGuardrailLatencyHigh` | Critical | [alert-guardrail-latency.md](alert-guardrail-latency.md) | Platform |
+| `BulwarkCertificateExpiringSoon` | Critical | [alert-certificate-expiry.md](alert-certificate-expiry.md) | Platform |
 
 ## Evidence Collection
 
@@ -47,8 +47,8 @@ These runbooks are linked directly from Prometheus alert rules (`prometheus/rule
 
 | Channel | Purpose | Tool |
 |---------|---------|------|
-| `#sentinel-incidents` | Active incident coordination | Slack |
-| `#sentinel-alerts` | Automated alert routing | Slack (PagerDuty integration) |
+| `#bulwark-incidents` | Active incident coordination | Slack |
+| `#bulwark-alerts` | Automated alert routing | Slack (PagerDuty integration) |
 | Security on-call | P1/P2 escalation | PagerDuty |
 | Platform on-call | Infrastructure issues | PagerDuty |
 | `security-team@company.com` | Post-incident reports | Email |

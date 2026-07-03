@@ -29,22 +29,22 @@
 apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosEngine
 metadata:
-  name: sentinel-network-partition
-  namespace: sentinel-gateway
+  name: bulwark-network-partition
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
-    chaos.sentinel.io/experiment: network-partition
-    chaos.sentinel.io/category: network
+    app.kubernetes.io/part-of: bulwark-gateway
+    chaos.bulwark.io/experiment: network-partition
+    chaos.bulwark.io/category: network
   annotations:
     mitre-attack/technique: T1498
     mitre-attack/tactic: Impact
-    sentinel.io/steady-state: "proxy-healthy,redis-connected,counters-active"
-    sentinel.io/pass-criteria: "no-500-errors,warn-log-emitted,guardrails-active"
-    sentinel.io/expected-behavior: "fallback-to-local-state"
+    bulwark.io/steady-state: "proxy-healthy,redis-connected,counters-active"
+    bulwark.io/pass-criteria: "no-500-errors,warn-log-emitted,guardrails-active"
+    bulwark.io/expected-behavior: "fallback-to-local-state"
 spec:
   engineState: active
   appinfo:
-    appns: sentinel-gateway
+    appns: bulwark-gateway
     applabel: app.kubernetes.io/component=proxy
     appkind: deployment
   chaosServiceAccount: litmus-chaos-sa
@@ -59,7 +59,7 @@ spec:
             - name: DESTINATION_IPS
               value: ""
             - name: DESTINATION_HOSTS
-              value: "sentinel-redis.sentinel-gateway.svc.cluster.local"
+              value: "bulwark-redis.bulwark-gateway.svc.cluster.local"
             # Block both TCP ports Redis uses
             - name: NETWORK_INTERFACE
               value: "eth0"
@@ -80,7 +80,7 @@ spec:
             type: httpProbe
             mode: Continuous
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/health
               insecureSkipVerify: true
               method:
                 get:
@@ -96,7 +96,7 @@ spec:
             type: httpProbe
             mode: Continuous
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/v1/chat/completions
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/v1/chat/completions
               insecureSkipVerify: true
               method:
                 post:
@@ -120,7 +120,7 @@ spec:
             cmdProbe/inputs:
               command: |
                 kubectl logs -l app.kubernetes.io/component=proxy \
-                  -n sentinel-gateway --since=50s | \
+                  -n bulwark-gateway --since=50s | \
                   grep -c "Redis.*unavailable\|degraded mode\|fallback" || echo "0"
               comparator:
                 type: int
@@ -138,7 +138,7 @@ spec:
             cmdProbe/inputs:
               command: |
                 kubectl logs -l app.kubernetes.io/component=proxy \
-                  -n sentinel-gateway --since=50s | \
+                  -n bulwark-gateway --since=50s | \
                   grep -c '"status_code": 500' || echo "0"
               comparator:
                 type: int
@@ -155,9 +155,9 @@ apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosExperiment
 metadata:
   name: pod-network-partition
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   definition:
     scope: Namespaced

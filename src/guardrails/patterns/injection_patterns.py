@@ -888,7 +888,7 @@ INJECTION_PATTERNS: list[Pattern] = [
     ),
     Pattern(
         re.compile(
-            r"s/\w+.{0,30}/\w+.{0,30}/[gims]*\s*;?\s*.*s/.{0,40}(safety|restrict|constraint|filter)",
+            r"s/\w+.{0,30}/\w+.{0,30}/[gims]*\s*;?\s*.{0,100}s/.{0,40}(safety|restrict|constraint|filter)",
             re.I,
         ),
         ThreatCategory.JAILBREAK,

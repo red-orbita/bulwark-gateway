@@ -32,7 +32,7 @@ from .base import EnrichmentResult, EnrichmentStatus
 
 logger = logging.getLogger(__name__)
 
-REPLAY_DB_PATH = Path(os.getenv("SENTINEL_REPLAY_DB_PATH", "data/attack_replay.db"))
+REPLAY_DB_PATH = Path(os.getenv("BULWARK_REPLAY_DB_PATH", "data/attack_replay.db"))
 MAX_PAYLOAD_SIZE = 4096  # Store only first N chars of payload (privacy)
 
 
@@ -214,7 +214,27 @@ class AttackReplayDB:
         return entry
 
     def _handle_evasion(self, entry: ReplayEntry) -> None:
-        """Handle a detected evasion — generate regex candidate."""
+        """Handle a detected evasion — generate regex candidate.
+
+        SECURITY FIX (M-08): Rate-limit evasion processing to prevent
+        DB poisoning via high-volume benign-looking payloads. Maximum 10
+        regex candidates per minute to prevent flooding the review queue.
+        """
+        # M-08: Rate limit regex generation to prevent poisoning
+        import time
+        now = time.time()
+        if not hasattr(self, "_evasion_timestamps"):
+            self._evasion_timestamps: list[float] = []
+        # Expire timestamps older than 60 seconds
+        self._evasion_timestamps = [t for t in self._evasion_timestamps if now - t < 60]
+        if len(self._evasion_timestamps) >= 10:
+            logger.warning(
+                "evasion_rate_limited",
+                extra={"count": len(self._evasion_timestamps), "entry_id": entry.id},
+            )
+            return
+        self._evasion_timestamps.append(now)
+
         logger.warning(
             "evasion_detected",
             extra={

@@ -1,4 +1,4 @@
-# Sentinel Gateway
+# Bulwark Gateway
 
 Security guardrail proxy for AI agents in cloud environments.
 
@@ -23,7 +23,7 @@ Intercepts, validates, and enforces policies on tool calls between users and LLM
 
 ## Overview
 
-Sentinel Gateway sits between your users/applications and your LLM backends (OpenAI, Ollama, vLLM, Azure, etc.). Every request passes through multiple security layers before reaching the backend:
+Bulwark Gateway sits between your users/applications and your LLM backends (OpenAI, Ollama, vLLM, Azure, etc.). Every request passes through multiple security layers before reaching the backend:
 
 1. **Authentication** — JWT/API key validation (fail-closed)
 2. **Input Guardrail** — Detects prompt injections, jailbreaks, encoding evasion
@@ -40,7 +40,7 @@ If any layer detects a threat, the request is **blocked immediately** (fail-clos
 
 ```
                     ┌──────────────────────────────────────────────┐
-                    │             Sentinel Gateway                  │
+                    │             Bulwark Gateway                  │
                     │                                              │
  User Request ─────►  Auth ► Input Guardrail ► IOC Check          │
   X-Tenant-ID      │                              │               │
@@ -103,18 +103,18 @@ If any layer detects a threat, the request is **blocked immediately** (fail-clos
 ./secrets/init.sh
 
 # 2. Build images
-docker build -t sentinel-gateway-proxy:latest -f Dockerfile .
-docker build -t sentinel-gateway-admin:latest -f docker/Dockerfile.admin .
+docker build -t bulwark-gateway-proxy:latest -f Dockerfile .
+docker build -t bulwark-gateway-admin:latest -f docker/Dockerfile.admin .
 
 # For minikube:
-minikube image load sentinel-gateway-proxy:latest
-minikube image load sentinel-gateway-admin:latest
+minikube image load bulwark-gateway-proxy:latest
+minikube image load bulwark-gateway-admin:latest
 
 # 3. Deploy
 ./k8s/deploy.sh
 
 # 4. Verify
-kubectl get pods -n sentinel-gateway
+kubectl get pods -n bulwark-gateway
 ```
 
 ### Docker Compose (Development)
@@ -136,12 +136,12 @@ docker compose up -d
 
 ```bash
 # Port-forward (K8s)
-kubectl port-forward svc/proxy 8080:8080 -n sentinel-gateway
-kubectl port-forward svc/admin 8090:8090 -n sentinel-gateway
+kubectl port-forward svc/proxy 8080:8080 -n bulwark-gateway
+kubectl port-forward svc/admin 8090:8090 -n bulwark-gateway
 
 # Or via Ingress:
-#   Proxy:  https://sentinel-gateway.local
-#   Admin:  https://admin.sentinel-gateway.local
+#   Proxy:  https://bulwark-gateway.local
+#   Admin:  https://admin.bulwark-gateway.local
 ```
 
 ### Test the Proxy
@@ -178,18 +178,18 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 
 | Variable | Description |
 |----------|-------------|
-| `SENTINEL_JWT_SECRET` | JWT signing key (or `*_FILE` variant) |
-| `SENTINEL_REDIS_URL` | Redis connection URL |
-| `SENTINEL_REDIS_PASSWORD` | Redis auth (or `*_FILE` variant) |
-| `SENTINEL_API_KEYS` | Comma-separated API keys (or `*_FILE`) |
-| `SENTINEL_WEBHOOK_ALERT_URLS` | Legacy notification webhooks |
-| `SENTINEL_LOG_LEVEL` | Logging level (INFO, DEBUG, etc.) |
+| `BULWARK_JWT_SECRET` | JWT signing key (or `*_FILE` variant) |
+| `BULWARK_REDIS_URL` | Redis connection URL |
+| `BULWARK_REDIS_PASSWORD` | Redis auth (or `*_FILE` variant) |
+| `BULWARK_API_KEYS` | Comma-separated API keys (or `*_FILE`) |
+| `BULWARK_WEBHOOK_ALERT_URLS` | Legacy notification webhooks |
+| `BULWARK_LOG_LEVEL` | Logging level (INFO, DEBUG, etc.) |
 
 All secrets support the **`*_FILE` pattern** — point an env var to a mounted file:
 
 ```yaml
 env:
-  - name: SENTINEL_JWT_SECRET_FILE
+  - name: BULWARK_JWT_SECRET_FILE
     value: /run/secrets/jwt-secret
 ```
 
@@ -199,7 +199,7 @@ env:
 # config/agents.yaml
 tenants:
   example-corp:
-    backend_url: "${SENTINEL_BACKEND_URL:-http://ollama:11434}"
+    backend_url: "${BULWARK_BACKEND_URL:-http://ollama:11434}"
     auth_token: "${BACKEND_AUTH_TOKEN}"
     allowed_models: ["gpt-4", "gpt-3.5-turbo"]
     rate_limit_rpm: 60
@@ -250,9 +250,9 @@ Web-based management interface at `/` (port 8090).
 
 | User | Role | Default Password | Secret Key |
 |------|------|-----------------|-----------|
-| `admin` | Admin | `sentinel-admin` | `ADMIN_PASSWORD` |
-| `security` | Security | `sentinel-security` | `SECURITY_PASSWORD` |
-| `auditor` | Auditor | `sentinel-auditor` | `AUDITOR_PASSWORD` |
+| `admin` | Admin | `bulwark-admin` | `ADMIN_PASSWORD` |
+| `security` | Security | `bulwark-security` | `SECURITY_PASSWORD` |
+| `auditor` | Auditor | `bulwark-auditor` | `AUDITOR_PASSWORD` |
 
 > Change these immediately in production via K8s secrets.
 
@@ -278,7 +278,7 @@ Detailed guides are in the [`docs/`](docs/) directory:
 ## Project Structure
 
 ```
-sentinel-gateway/
+bulwark-gateway/
 ├── src/                        # Proxy source code
 │   ├── main.py                 # FastAPI app entry point
 │   ├── models.py               # Core data models (SecurityEvent, Verdict)

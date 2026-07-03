@@ -22,10 +22,29 @@ from admin.services.tenant_manager import TenantManager, get_tenant_manager
 router = APIRouter(prefix="/admin", tags=["tenants"])
 
 # Blocked hosts for SSRF prevention
+# SECURITY FIX (APT-02): Complete SSRF blocklist — previously only blocked
+# 169.254.0.0/16, allowing SSRF to loopback, RFC1918, and CGNAT ranges.
+# Aligned with the comprehensive blocklist in admin/routes/siem.py.
 _SSRF_BLOCKED_RANGES = [
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud metadata
+    ipaddress.ip_network("127.0.0.0/8"),       # loopback
+    ipaddress.ip_network("10.0.0.0/8"),        # RFC1918 Class A
+    ipaddress.ip_network("172.16.0.0/12"),     # RFC1918 Class B
+    ipaddress.ip_network("192.168.0.0/16"),    # RFC1918 Class C
+    ipaddress.ip_network("169.254.0.0/16"),    # link-local / cloud metadata
+    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT (RFC6598)
+    ipaddress.ip_network("0.0.0.0/8"),         # "this" network
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),          # IPv6 ULA
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
 ]
-_SSRF_BLOCKED_HOSTNAMES = {"metadata.google.internal", "metadata.internal"}
+_SSRF_BLOCKED_HOSTNAMES = {
+    "metadata.google.internal",
+    "metadata.internal",
+    "localhost",
+    "kubernetes.default",
+    "kubernetes.default.svc",
+    "kubernetes.default.svc.cluster.local",
+}
 
 
 def _validate_backend_url(url: str) -> None:

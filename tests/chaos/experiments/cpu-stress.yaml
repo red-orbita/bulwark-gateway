@@ -27,22 +27,22 @@
 apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosEngine
 metadata:
-  name: sentinel-cpu-stress
-  namespace: sentinel-gateway
+  name: bulwark-cpu-stress
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
-    chaos.sentinel.io/experiment: cpu-stress
-    chaos.sentinel.io/category: resource
+    app.kubernetes.io/part-of: bulwark-gateway
+    chaos.bulwark.io/experiment: cpu-stress
+    chaos.bulwark.io/category: resource
   annotations:
     mitre-attack/technique: T1499
     mitre-attack/tactic: Impact
-    sentinel.io/steady-state: "p99<50ms,cpu<30%,pods-ready"
-    sentinel.io/pass-criteria: "p99<500ms,no-timeouts"
-    sentinel.io/expected-behavior: "latency-increase,no-failures"
+    bulwark.io/steady-state: "p99<50ms,cpu<30%,pods-ready"
+    bulwark.io/pass-criteria: "p99<500ms,no-timeouts"
+    bulwark.io/expected-behavior: "latency-increase,no-failures"
 spec:
   engineState: active
   appinfo:
-    appns: sentinel-gateway
+    appns: bulwark-gateway
     applabel: app.kubernetes.io/component=proxy
     appkind: deployment
   chaosServiceAccount: litmus-chaos-sa
@@ -76,7 +76,7 @@ spec:
             type: httpProbe
             mode: Continuous
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/health
               insecureSkipVerify: true
               method:
                 get:
@@ -92,7 +92,7 @@ spec:
             type: httpProbe
             mode: Continuous
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health/stats
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/health/stats
               insecureSkipVerify: true
               method:
                 get:
@@ -110,8 +110,8 @@ spec:
             mode: Continuous
             cmdProbe/inputs:
               command: |
-                RESPONSE=$(kubectl exec -n sentinel-gateway \
-                  $(kubectl get pod -n sentinel-gateway \
+                RESPONSE=$(kubectl exec -n bulwark-gateway \
+                  $(kubectl get pod -n bulwark-gateway \
                     -l app.kubernetes.io/component=proxy \
                     -o jsonpath='{.items[0].metadata.name}') \
                   -- wget -qO- http://localhost:8080/health/stats 2>/dev/null)
@@ -144,7 +144,7 @@ spec:
             cmdProbe/inputs:
               command: |
                 kubectl logs -l app.kubernetes.io/component=proxy \
-                  -n sentinel-gateway --since=130s | \
+                  -n bulwark-gateway --since=130s | \
                   grep -c "timeout\|408\|504" || echo "0"
               comparator:
                 type: int
@@ -161,9 +161,9 @@ apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosExperiment
 metadata:
   name: pod-cpu-hog
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   definition:
     scope: Namespaced

@@ -1,17 +1,17 @@
 # Elastic / ELK Stack — Direct Elasticsearch or Logstash HTTP input
-# Sentinel Gateway SIEM Integration Template
+# Bulwark Gateway SIEM Integration Template
 ---
 transport: http_rest
 platform: elastic_elk
 
 connection:
   # Option A: Direct to Elasticsearch
-  url: "https://elasticsearch.example.com:9200/sentinel-gateway-events/_bulk"
+  url: "https://elasticsearch.example.com:9200/bulwark-gateway-events/_bulk"
   # Option B: Via Logstash HTTP input
   # url: "http://logstash.example.com:8080"
   auth_method: basic
-  username: "${SENTINEL_ELASTIC_USER}"
-  password: "${SENTINEL_ELASTIC_PASSWORD}"
+  username: "${BULWARK_ELASTIC_USER}"
+  password: "${BULWARK_ELASTIC_PASSWORD}"
   verify_ssl: true
   timeout_seconds: 10
 
@@ -24,13 +24,13 @@ format: ndjson  # Elasticsearch _bulk API format
 field_mapping:
   # ECS native — fields map 1:1
   # Index lifecycle management (ILM):
-  index_pattern: "sentinel-gateway-events-{now/d}"
-  ilm_policy: "sentinel-gateway-ilm"
+  index_pattern: "bulwark-gateway-events-{now/d}"
+  ilm_policy: "bulwark-gateway-ilm"
   # Recommended ILM: hot(7d) → warm(30d) → cold(90d) → delete
 
-# Index template (PUT _index_template/sentinel-gateway):
+# Index template (PUT _index_template/bulwark-gateway):
 # {
-#   "index_patterns": ["sentinel-gateway-events-*"],
+#   "index_patterns": ["bulwark-gateway-events-*"],
 #   "template": {
 #     "settings": {"number_of_shards": 1, "number_of_replicas": 1},
 #     "mappings": {"properties": {"@timestamp": {"type": "date"}, "event.severity": {"type": "integer"}}}

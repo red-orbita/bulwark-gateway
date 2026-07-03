@@ -1,5 +1,5 @@
 /**
- * Sentinel Gateway — Guardrail-Only Scenario
+ * Bulwark Gateway — Guardrail-Only Scenario
  *
  * Measures the raw regex guardrail processing overhead in isolation.
  * Sends requests that exercise the input guardrail (prompt injection,

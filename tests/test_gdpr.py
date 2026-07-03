@@ -230,7 +230,7 @@ class TestPseudonymization:
     @pytest.mark.asyncio
     async def test_pseudonymize_with_redis_erasure(self, gdpr_service, audit_logger_with_data, mock_redis):
         """Pseudonymization should also erase Redis keys containing subject."""
-        mock_redis.keys.return_value = ["sentinel:ratelimit:user-123"]
+        mock_redis.keys.return_value = ["bulwark:ratelimit:user-123"]
         mock_redis.lrange.return_value = [
             json.dumps({"tenant": "user-123", "description": "blocked"}),
             json.dumps({"tenant": "other-user", "description": "blocked"}),
@@ -569,9 +569,9 @@ class TestGDPRSecurity:
 
         # Verify correct patterns were scanned
         calls = [str(c) for c in mock_redis.keys.call_args_list]
-        assert any("sentinel:ratelimit:*tenant-acme*" in c for c in calls)
-        assert any("sentinel:quota:*tenant-acme*" in c for c in calls)
-        assert any("sentinel:tenant:tenant-acme:*" in c for c in calls)
+        assert any("bulwark:ratelimit:*tenant-acme*" in c for c in calls)
+        assert any("bulwark:quota:*tenant-acme*" in c for c in calls)
+        assert any("bulwark:tenant:tenant-acme:*" in c for c in calls)
 
 
 # ─── Factory Function Tests (CRIT-A fix) ─────────────────────────────────────
@@ -595,7 +595,7 @@ class TestFactoryFunction:
         monkeypatch.setattr("admin.services.gdpr._service", None)
         monkeypatch.setattr(
             "admin.services.database.ADMIN_DB_URL",
-            "postgresql://user:pass@localhost/sentinel"
+            "postgresql://user:pass@localhost/bulwark"
         )
 
         from admin.services.gdpr import get_gdpr_service, PostgreSQLGDPRService
@@ -608,7 +608,7 @@ class TestFactoryFunction:
         monkeypatch.setattr("admin.services.gdpr._service", None)
         monkeypatch.setattr(
             "admin.services.database.ADMIN_DB_URL",
-            "postgres://user:pass@localhost/sentinel"
+            "postgres://user:pass@localhost/bulwark"
         )
 
         from admin.services.gdpr import get_gdpr_service, PostgreSQLGDPRService

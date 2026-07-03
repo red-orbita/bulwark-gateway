@@ -26,9 +26,84 @@ from cachetools import TTLCache
 _LOGIN_ATTEMPTS: TTLCache = TTLCache(maxsize=5000, ttl=_LOCKOUT_SECONDS)
 _USERNAME_ATTEMPTS: TTLCache = TTLCache(maxsize=5000, ttl=_LOCKOUT_SECONDS)
 
+# SECURITY FIX (APT-08): Distributed rate limiting via Redis.
+# In-memory rate limiting is per-process — with 4 workers * 2 replicas,
+# an attacker gets 40 attempts instead of 5. Redis provides a single
+# authoritative counter shared across all processes/pods.
+_rate_limit_redis = None
+_rate_limit_redis_init = False
+
+
+def _get_rate_limit_redis():
+    """Lazy-initialize Redis client for distributed rate limiting."""
+    global _rate_limit_redis, _rate_limit_redis_init
+    if _rate_limit_redis_init:
+        return _rate_limit_redis
+    _rate_limit_redis_init = True
+    try:
+        redis_url = os.getenv("BULWARK_REDIS_URL")
+        if redis_url:
+            import redis
+            from admin.services.redis_sync import get_redis_client
+            _rate_limit_redis = get_redis_client()
+    except Exception:
+        _rate_limit_redis = None
+    return _rate_limit_redis
+
 
 def _check_login_rate_limit(ip: str, username: str | None = None) -> None:
-    """Block login if IP or username has exceeded max attempts in window."""
+    """Block login if IP or username has exceeded max attempts in window.
+
+    SECURITY FIX (APT-08): Uses Redis for distributed counting when available.
+    Falls back to in-memory TTLCache when Redis is unavailable (degraded but functional).
+    """
+    # Try distributed (Redis) rate limiting first
+    r = _get_rate_limit_redis()
+    if r:
+        try:
+            return _check_rate_limit_redis(r, ip, username)
+        except Exception:
+            pass  # Fall through to local rate limiting
+
+    # Fallback: local in-memory rate limiting (per-process)
+    _check_rate_limit_local(ip, username)
+
+
+def _check_rate_limit_redis(r, ip: str, username: str | None) -> None:
+    """Redis-based distributed rate limiting using sliding window."""
+    now = time.time()
+    pipe = r.pipeline(transaction=True)
+
+    # Check IP-based rate limit
+    ip_key = f"bulwark:admin:login_attempts:ip:{ip}"
+    pipe.zremrangebyscore(ip_key, 0, now - _LOCKOUT_SECONDS)
+    pipe.zcard(ip_key)
+    results = pipe.execute()
+    ip_count = results[1]
+
+    if ip_count >= _MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many login attempts. Try again in {_LOCKOUT_SECONDS // 60} minutes.",
+        )
+
+    # Check per-username rate limit
+    if username:
+        user_key = f"bulwark:admin:login_attempts:user:{username}"
+        pipe.zremrangebyscore(user_key, 0, now - _LOCKOUT_SECONDS)
+        pipe.zcard(user_key)
+        results = pipe.execute()
+        user_count = results[1]
+
+        if user_count >= _MAX_USERNAME_ATTEMPTS:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Account temporarily locked. Try again in {_LOCKOUT_SECONDS // 60} minutes.",
+            )
+
+
+def _check_rate_limit_local(ip: str, username: str | None) -> None:
+    """In-memory rate limiting fallback (per-process, not distributed)."""
     now = time.time()
     # Clean old entries and check IP
     attempts = _LOGIN_ATTEMPTS.get(ip, [])
@@ -56,7 +131,26 @@ def _check_login_rate_limit(ip: str, username: str | None = None) -> None:
 
 
 def _record_login_attempt(ip: str, username: str | None = None) -> None:
-    """Record a failed login attempt."""
+    """Record a failed login attempt (distributed via Redis when available)."""
+    # Try Redis first for distributed counting
+    r = _get_rate_limit_redis()
+    if r:
+        try:
+            now = time.time()
+            pipe = r.pipeline(transaction=True)
+            ip_key = f"bulwark:admin:login_attempts:ip:{ip}"
+            pipe.zadd(ip_key, {f"{now}": now})
+            pipe.expire(ip_key, _LOCKOUT_SECONDS)
+            if username:
+                user_key = f"bulwark:admin:login_attempts:user:{username}"
+                pipe.zadd(user_key, {f"{now}": now})
+                pipe.expire(user_key, _LOCKOUT_SECONDS)
+            pipe.execute()
+            return
+        except Exception:
+            pass  # Fall through to local
+
+    # Fallback: local in-memory
     attempts = _LOGIN_ATTEMPTS.get(ip, [])
     attempts.append(time.time())
     _LOGIN_ATTEMPTS[ip] = attempts
@@ -98,9 +192,7 @@ async def login(req: LoginRequest, request: Request, response: Response):
     user_id = result["user_id"]
 
     # Check if user must change password before getting full access
-    store = get_user_store()
-    db_user = store.get_user(username)
-    if db_user and db_user.get("force_password_change"):
+    if result.get("force_password_change"):
         return LoginResponse(
             access_token="",
             role=role,
@@ -125,9 +217,9 @@ async def login(req: LoginRequest, request: Request, response: Response):
     )
     # Set HttpOnly cookie for browser-based auth
     # SECURITY FIX (VULN 1.11): Default to secure=True in production.
-    # Only disable for explicit local development (SENTINEL_HTTPS=false).
+    # Only disable for explicit local development (BULWARK_HTTPS=false).
     # Do NOT trust X-Forwarded-Proto from client — it's easily spoofed.
-    is_secure = os.environ.get("SENTINEL_HTTPS", "true").lower() not in ("0", "false", "no")
+    is_secure = os.environ.get("BULWARK_HTTPS", "true").lower() not in ("0", "false", "no")
     response.set_cookie(
         key="admin_token",
         value=token,
@@ -162,9 +254,14 @@ async def logout(request: Request, response: Response, user: TokenPayload = Depe
     if token:
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         store = get_user_store()
-        # Find and revoke session by token hash
-        store._conn.execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
-        store._conn.commit()
+        # Revoke session by token hash — works for both SQLite and PostgreSQL
+        if hasattr(store, '_conn') and store._conn:
+            store._conn.execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
+            store._conn.commit()
+        elif hasattr(store, '_get_db'):
+            db = store._get_db()
+            if hasattr(db, 'sync_execute'):
+                db.sync_execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
 
     audit = get_audit_logger()
     await audit.log(actor=user.sub, action="auth.logout", resource_type="user", resource_id=user.sub)
@@ -178,20 +275,24 @@ async def change_password(req: ChangePasswordRequest, request: Request, user: To
     ip = request.client.host if request.client else "unknown"
     _check_login_rate_limit(ip, user.sub)
 
+    import asyncio
+    loop = asyncio.get_running_loop()
     store = get_user_store()
-    db_user = store.get_user(user.sub)
+
+    db_user = await loop.run_in_executor(None, store.get_user, user.sub)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
     # Verify current password (MANDATORY)
     if not req.current_password:
         raise HTTPException(status_code=400, detail="current_password is required")
-    if not store.verify_password(user.sub, req.current_password):
+    verified = await loop.run_in_executor(None, store.verify_password, user.sub, req.current_password)
+    if not verified:
         _record_login_attempt(ip, user.sub)
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     try:
-        store.change_password(db_user["id"], req.new_password)
+        await loop.run_in_executor(None, store.change_password, db_user["id"], req.new_password)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -223,15 +324,18 @@ async def force_change_password(request: Request):
     if len(new_password) < 12:
         raise HTTPException(status_code=400, detail="New password must be at least 12 characters")
 
+    import asyncio
+    loop = asyncio.get_running_loop()
     store = get_user_store()
 
     # Verify credentials
-    if not store.verify_password(username, current_password):
+    verified = await loop.run_in_executor(None, store.verify_password, username, current_password)
+    if not verified:
         _record_login_attempt(ip, username)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     # Only allow if force_password_change is set
-    db_user = store.get_user(username)
+    db_user = await loop.run_in_executor(None, store.get_user, username)
     if not db_user or not db_user.get("force_password_change"):
         raise HTTPException(status_code=403, detail="Password change not required")
 
@@ -240,7 +344,7 @@ async def force_change_password(request: Request):
         raise HTTPException(status_code=400, detail="New password must be different from current password")
 
     try:
-        store.change_password(db_user["id"], new_password)
+        await loop.run_in_executor(None, store.change_password, db_user["id"], new_password)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

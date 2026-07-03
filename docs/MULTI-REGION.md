@@ -1,6 +1,6 @@
 # Multi-Region Deployment Guide
 
-Deploying Sentinel Gateway across multiple regions for high availability, disaster recovery, and geographic resilience.
+Deploying Bulwark Gateway across multiple regions for high availability, disaster recovery, and geographic resilience.
 
 ---
 
@@ -40,7 +40,7 @@ Deploying Sentinel Gateway across multiple regions for high availability, disast
              │  └────────┬───────────┘  │   │  └────────┬───────────┘  │
              │           │              │   │           │              │
              │  ┌────────▼───────────┐  │   │  ┌────────▼───────────┐  │
-             │  │  Redis Sentinel    │  │   │  │  Redis Sentinel    │  │
+             │  │  Redis Bulwark    │  │   │  │  Redis Bulwark    │  │
              │  │  (3 nodes)         │──┼───┼─▶│  (3 nodes)         │  │
              │  │  1 master + 2 repl │  │   │  │  async replication │  │
              │  └────────┬───────────┘  │   │  └────────┬───────────┘  │
@@ -64,7 +64,7 @@ Deploying Sentinel Gateway across multiple regions for high availability, disast
 ## Prerequisites
 
 - Kubernetes clusters in 2+ regions (EKS, AKS, or GKE)
-- External Redis (managed: ElastiCache, Azure Cache, Memorystore) or self-managed with Sentinel
+- External Redis (managed: ElastiCache, Azure Cache, Memorystore) or self-managed with Bulwark
 - PostgreSQL with streaming replication (RDS, Cloud SQL, Azure DB, or Patroni)
 - DNS provider with health-check failover (Route53, CloudFlare, Azure Traffic Manager)
 - Object storage with cross-region replication (S3, GCS, Azure Blob)
@@ -79,11 +79,11 @@ File: `ci/values-region-primary.yaml`
 
 Deploy with:
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   -f ci/values-region-primary.yaml \
   --set backend.ip=<LLM_BACKEND_IP> \
   --set externalRedis.password=<REDIS_PASSWORD> \
-  --namespace sentinel-gateway --create-namespace \
+  --namespace bulwark-gateway --create-namespace \
   --kube-context region-a
 ```
 
@@ -97,11 +97,11 @@ File: `ci/values-region-standby.yaml`
 
 Deploy with:
 ```bash
-helm install sentinel ./helm/sentinel-gateway \
+helm install bulwark ./helm/bulwark-gateway \
   -f ci/values-region-standby.yaml \
   --set backend.ip=<LLM_BACKEND_IP_REGION_B> \
   --set externalRedis.password=<REDIS_PASSWORD> \
-  --namespace sentinel-gateway --create-namespace \
+  --namespace bulwark-gateway --create-namespace \
   --kube-context region-b
 ```
 
@@ -118,27 +118,27 @@ Redis replication is **eventually consistent** between regions. Configuration de
 **AWS ElastiCache Global Datastore**:
 ```bash
 aws elasticache create-global-replication-group \
-  --global-replication-group-id-suffix sentinel-redis \
-  --primary-replication-group-id sentinel-region-a \
-  --global-replication-group-description "Sentinel Gateway cross-region Redis"
+  --global-replication-group-id-suffix bulwark-redis \
+  --primary-replication-group-id bulwark-region-a \
+  --global-replication-group-description "Bulwark Gateway cross-region Redis"
 
 aws elasticache create-replication-group \
-  --replication-group-id sentinel-region-b \
-  --global-replication-group-id sentinel-redis \
-  --replication-group-description "Sentinel Redis standby (region-b)"
+  --replication-group-id bulwark-region-b \
+  --global-replication-group-id bulwark-redis \
+  --replication-group-description "Bulwark Redis standby (region-b)"
 ```
 
 **Azure Cache for Redis (Geo-Replication)**:
 ```bash
-az redis create --name sentinel-redis-primary --resource-group sentinel-rg \
+az redis create --name bulwark-redis-primary --resource-group bulwark-rg \
   --location eastus --sku Premium --vm-size P1
 
-az redis create --name sentinel-redis-secondary --resource-group sentinel-rg \
+az redis create --name bulwark-redis-secondary --resource-group bulwark-rg \
   --location westus --sku Premium --vm-size P1
 
 az redis server-link create \
-  --name sentinel-redis-primary --resource-group sentinel-rg \
-  --linked-server-name sentinel-redis-secondary \
+  --name bulwark-redis-primary --resource-group bulwark-rg \
+  --linked-server-name bulwark-redis-secondary \
   --replication-role Secondary \
   --linked-server-location westus
 ```
@@ -155,16 +155,16 @@ Used for: admin service state, audit logs, tenant configuration, user accounts.
 **AWS RDS**:
 ```bash
 aws rds create-db-instance-read-replica \
-  --db-instance-identifier sentinel-db-standby \
-  --source-db-instance-identifier sentinel-db-primary \
+  --db-instance-identifier bulwark-db-standby \
+  --source-db-instance-identifier bulwark-db-primary \
   --source-region us-east-1 \
   --region us-west-2
 ```
 
 **GCP Cloud SQL**:
 ```bash
-gcloud sql instances create sentinel-db-standby \
-  --master-instance-name=sentinel-db-primary \
+gcloud sql instances create bulwark-db-standby \
+  --master-instance-name=bulwark-db-primary \
   --region=us-west1 \
   --tier=db-custom-2-8192 \
   --database-version=POSTGRES_15
@@ -176,7 +176,7 @@ gcloud sql instances create sentinel-db-standby \
 bootstrap:
   dcs:
     standby_cluster:
-      host: sentinel-db-primary.region-a.internal
+      host: bulwark-db-primary.region-a.internal
       port: 5432
       primary_slot_name: region_b_slot
       create_replica_methods:
@@ -190,11 +190,11 @@ Telemetry NDJSON files are written to object storage and replicated cross-region
 **AWS S3 Cross-Region Replication**:
 ```json
 {
-  "Role": "arn:aws:iam::ACCOUNT:role/sentinel-replication",
+  "Role": "arn:aws:iam::ACCOUNT:role/bulwark-replication",
   "Rules": [{
     "Status": "Enabled",
     "Destination": {
-      "Bucket": "arn:aws:s3:::sentinel-telemetry-region-b",
+      "Bucket": "arn:aws:s3:::bulwark-telemetry-region-b",
       "StorageClass": "STANDARD_IA"
     },
     "Filter": { "Prefix": "telemetry/" }
@@ -205,8 +205,8 @@ Telemetry NDJSON files are written to object storage and replicated cross-region
 **GCS Transfer Service**:
 ```bash
 gcloud transfer jobs create \
-  gs://sentinel-telemetry-region-a \
-  gs://sentinel-telemetry-region-b \
+  gs://bulwark-telemetry-region-a \
+  gs://bulwark-telemetry-region-b \
   --schedule-repeats-every=5m
 ```
 
@@ -218,12 +218,12 @@ gcloud transfer jobs create \
 
 ```json
 {
-  "Comment": "Sentinel Gateway failover record set",
+  "Comment": "Bulwark Gateway failover record set",
   "Changes": [
     {
       "Action": "CREATE",
       "ResourceRecordSet": {
-        "Name": "api.sentinel-gateway.example.com",
+        "Name": "api.bulwark-gateway.example.com",
         "Type": "A",
         "SetIdentifier": "primary-region-a",
         "Failover": "PRIMARY",
@@ -238,7 +238,7 @@ gcloud transfer jobs create \
     {
       "Action": "CREATE",
       "ResourceRecordSet": {
-        "Name": "api.sentinel-gateway.example.com",
+        "Name": "api.bulwark-gateway.example.com",
         "Type": "A",
         "SetIdentifier": "standby-region-b",
         "Failover": "SECONDARY",
@@ -259,7 +259,7 @@ gcloud transfer jobs create \
 {
   "Type": "HTTPS",
   "ResourcePath": "/health",
-  "FullyQualifiedDomainName": "region-a.sentinel-gateway.example.com",
+  "FullyQualifiedDomainName": "region-a.bulwark-gateway.example.com",
   "Port": 443,
   "RequestInterval": 10,
   "FailureThreshold": 3,
@@ -274,7 +274,7 @@ gcloud transfer jobs create \
 curl -X POST "https://api.cloudflare.com/client/v4/zones/ZONE_ID/load_balancers" \
   -H "Authorization: Bearer $CF_TOKEN" \
   -d '{
-    "name": "api.sentinel-gateway.example.com",
+    "name": "api.bulwark-gateway.example.com",
     "fallback_pool": "pool-region-b",
     "default_pools": ["pool-region-a"],
     "proxied": true,
@@ -287,7 +287,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/user/load_balancers/monitors"
   -H "Authorization: Bearer $CF_TOKEN" \
   -d '{
     "type": "https",
-    "description": "Sentinel Proxy Health",
+    "description": "Bulwark Proxy Health",
     "method": "GET",
     "path": "/health",
     "expected_codes": "200",
@@ -303,7 +303,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/user/load_balancers/pools" \
   -H "Authorization: Bearer $CF_TOKEN" \
   -d '{
     "name": "pool-region-a",
-    "origins": [{"name": "region-a", "address": "region-a.sentinel-gateway.example.com", "enabled": true}],
+    "origins": [{"name": "region-a", "address": "region-a.bulwark-gateway.example.com", "enabled": true}],
     "monitor": "MONITOR_ID",
     "notification_email": "ops@example.com",
     "enabled": true
@@ -339,44 +339,44 @@ REGION_B_CONTEXT="region-b"
 REGION_A_CONTEXT="region-a"
 
 echo "=== Step 1: Scale up Region B proxy ==="
-kubectl --context=$REGION_B_CONTEXT -n sentinel-gateway \
-  scale deployment/sentinel-proxy --replicas=5
+kubectl --context=$REGION_B_CONTEXT -n bulwark-gateway \
+  scale deployment/bulwark-proxy --replicas=5
 
 echo "=== Step 2: Wait for Region B pods ready ==="
-kubectl --context=$REGION_B_CONTEXT -n sentinel-gateway \
-  rollout status deployment/sentinel-proxy --timeout=120s
+kubectl --context=$REGION_B_CONTEXT -n bulwark-gateway \
+  rollout status deployment/bulwark-proxy --timeout=120s
 
 echo "=== Step 3: Promote Redis standby (if self-managed) ==="
 # For AWS ElastiCache Global Datastore:
 # aws elasticache failover-global-replication-group \
-#   --global-replication-group-id sentinel-redis \
+#   --global-replication-group-id bulwark-redis \
 #   --primary-region us-west-2 \
-#   --primary-replication-group-id sentinel-region-b
+#   --primary-replication-group-id bulwark-region-b
 
-# For self-managed Redis Sentinel:
-kubectl --context=$REGION_B_CONTEXT -n sentinel-gateway exec -it redis-sentinel-0 -- \
-  redis-cli -p 26379 SENTINEL FAILOVER sentinel-master
+# For self-managed Redis Bulwark:
+kubectl --context=$REGION_B_CONTEXT -n bulwark-gateway exec -it redis-bulwark-0 -- \
+  redis-cli -p 26379 SENTINEL FAILOVER bulwark-master
 
 echo "=== Step 4: Promote PostgreSQL standby ==="
 # For AWS RDS:
-# aws rds promote-read-replica --db-instance-identifier sentinel-db-standby
+# aws rds promote-read-replica --db-instance-identifier bulwark-db-standby
 
 # For Patroni:
-kubectl --context=$REGION_B_CONTEXT -n sentinel-gateway exec -it postgresql-0 -- \
-  patronictl switchover --master sentinel-db-primary --candidate sentinel-db-standby --force
+kubectl --context=$REGION_B_CONTEXT -n bulwark-gateway exec -it postgresql-0 -- \
+  patronictl switchover --master bulwark-db-primary --candidate bulwark-db-standby --force
 
 echo "=== Step 5: Update DNS (if not automatic) ==="
 # Route53: Change failover records
 # CloudFlare: Disable pool-region-a
 
 echo "=== Step 6: Scale down Region A (graceful) ==="
-kubectl --context=$REGION_A_CONTEXT -n sentinel-gateway \
-  scale deployment/sentinel-proxy --replicas=0
-kubectl --context=$REGION_A_CONTEXT -n sentinel-gateway \
-  scale deployment/sentinel-admin --replicas=0
+kubectl --context=$REGION_A_CONTEXT -n bulwark-gateway \
+  scale deployment/bulwark-proxy --replicas=0
+kubectl --context=$REGION_A_CONTEXT -n bulwark-gateway \
+  scale deployment/bulwark-admin --replicas=0
 
 echo "=== Step 7: Verify ==="
-curl -s https://api.sentinel-gateway.example.com/health | jq .
+curl -s https://api.bulwark-gateway.example.com/health | jq .
 echo "Failover complete. Region B is now primary."
 ```
 
@@ -393,10 +393,10 @@ echo "=== Step 1: Ensure Region A data stores are synced ==="
 # Redis: REPLICAOF new master
 
 echo "=== Step 2: Scale up Region A ==="
-kubectl --context=region-a -n sentinel-gateway \
-  scale deployment/sentinel-proxy --replicas=5
-kubectl --context=region-a -n sentinel-gateway \
-  scale deployment/sentinel-admin --replicas=3
+kubectl --context=region-a -n bulwark-gateway \
+  scale deployment/bulwark-proxy --replicas=5
+kubectl --context=region-a -n bulwark-gateway \
+  scale deployment/bulwark-admin --replicas=3
 
 echo "=== Step 3: Wait for sync completion ==="
 # Wait for Redis replication lag < 0 bytes
@@ -408,10 +408,10 @@ echo "=== Step 4: Switch traffic back ==="
 # PostgreSQL: Switchover back
 
 echo "=== Step 5: Scale down Region B to standby ==="
-kubectl --context=region-b -n sentinel-gateway \
-  scale deployment/sentinel-proxy --replicas=2
-kubectl --context=region-b -n sentinel-gateway \
-  scale deployment/sentinel-admin --replicas=1
+kubectl --context=region-b -n bulwark-gateway \
+  scale deployment/bulwark-proxy --replicas=2
+kubectl --context=region-b -n bulwark-gateway \
+  scale deployment/bulwark-admin --replicas=1
 ```
 
 ---
@@ -430,7 +430,7 @@ kubectl --context=region-b -n sentinel-gateway \
 
 **Mitigation**: After failover, trigger pattern reload via admin API:
 ```bash
-curl -X POST https://api.sentinel-gateway.example.com/admin/policies/reload
+curl -X POST https://api.bulwark-gateway.example.com/admin/policies/reload
 ```
 
 ### PostgreSQL (Synchronous Optional)
@@ -445,7 +445,7 @@ curl -X POST https://api.sentinel-gateway.example.com/admin/policies/reload
 For zero-RPO on critical data, configure synchronous replication (higher latency):
 ```sql
 -- On primary, for critical tenants:
-ALTER SYSTEM SET synchronous_standby_names = 'sentinel-db-standby';
+ALTER SYSTEM SET synchronous_standby_names = 'bulwark-db-standby';
 SELECT pg_reload_conf();
 ```
 
@@ -476,15 +476,15 @@ apiVersion: chaos-mesh.org/v1alpha1
 kind: NetworkChaos
 metadata:
   name: region-a-network-partition
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   action: partition
   mode: all
   selector:
     namespaces:
-      - sentinel-gateway
+      - bulwark-gateway
     labelSelectors:
-      app.kubernetes.io/name: sentinel-gateway
+      app.kubernetes.io/name: bulwark-gateway
   direction: both
   duration: "5m"
   scheduler:
@@ -499,17 +499,17 @@ spec:
 set -euo pipefail
 
 echo "=== Pre-test: Verify both regions healthy ==="
-curl -sf https://region-a.sentinel-gateway.example.com/health || exit 1
-curl -sf https://region-b.sentinel-gateway.example.com/health || exit 1
+curl -sf https://region-a.bulwark-gateway.example.com/health || exit 1
+curl -sf https://region-b.bulwark-gateway.example.com/health || exit 1
 
 echo "=== Inject failure: Scale Region A to 0 ==="
-kubectl --context=region-a -n sentinel-gateway \
-  scale deployment/sentinel-proxy --replicas=0
+kubectl --context=region-a -n bulwark-gateway \
+  scale deployment/bulwark-proxy --replicas=0
 
 echo "=== Wait for DNS failover (max 60s) ==="
 START=$(date +%s)
 while true; do
-  RESPONSE=$(curl -sf https://api.sentinel-gateway.example.com/health 2>/dev/null || echo "")
+  RESPONSE=$(curl -sf https://api.bulwark-gateway.example.com/health 2>/dev/null || echo "")
   if [ -n "$RESPONSE" ]; then
     ELAPSED=$(($(date +%s) - START))
     echo "Failover detected after ${ELAPSED}s"
@@ -523,11 +523,11 @@ while true; do
 done
 
 echo "=== Verify traffic routing to Region B ==="
-RESULT=$(curl -s https://api.sentinel-gateway.example.com/health)
+RESULT=$(curl -s https://api.bulwark-gateway.example.com/health)
 echo "$RESULT" | jq .
 
 echo "=== Send test request through standby ==="
-curl -s -X POST https://api.sentinel-gateway.example.com/v1/chat/completions \
+curl -s -X POST https://api.bulwark-gateway.example.com/v1/chat/completions \
   -H "Authorization: Bearer $TEST_API_KEY" \
   -H "X-Tenant-ID: chaos-test" \
   -H "X-Agent-ID: chaos-tester" \
@@ -535,12 +535,12 @@ curl -s -X POST https://api.sentinel-gateway.example.com/v1/chat/completions \
   -d '{"model":"test","messages":[{"role":"user","content":"hello"}]}' | jq .status
 
 echo "=== Restore Region A ==="
-kubectl --context=region-a -n sentinel-gateway \
-  scale deployment/sentinel-proxy --replicas=5
+kubectl --context=region-a -n bulwark-gateway \
+  scale deployment/bulwark-proxy --replicas=5
 
 echo "=== Wait for Region A recovery ==="
-kubectl --context=region-a -n sentinel-gateway \
-  rollout status deployment/sentinel-proxy --timeout=120s
+kubectl --context=region-a -n bulwark-gateway \
+  rollout status deployment/bulwark-proxy --timeout=120s
 
 echo "=== PASS: Failover test completed successfully ==="
 ```
@@ -568,7 +568,7 @@ echo "=== PASS: Failover test completed successfully ==="
 |----------|--------------------|---------------------|--------------|
 | EKS Cluster | 1 cluster | 1 cluster | $146 x 2 = $292 |
 | EC2 Workers (m5.large) | 4 nodes | 2 nodes | $280 + $140 = $420 |
-| ElastiCache (r6g.large) | 3 nodes (Sentinel) | 3 nodes (replica) | $390 + $390 = $780 |
+| ElastiCache (r6g.large) | 3 nodes (Bulwark) | 3 nodes (replica) | $390 + $390 = $780 |
 | RDS PostgreSQL (db.r5.large) | 1 writer + 2 read | 1 standby | $520 + $260 = $780 |
 | ALB | 1 | 1 | $22 x 2 = $44 |
 | Route53 Health Checks | 3 checks | — | $2.25 |
@@ -612,8 +612,8 @@ echo "=== PASS: Failover test completed successfully ==="
 
 ```promql
 # Regional request rate
-sum(rate(sentinel_requests_total{region="a"}[5m]))
-sum(rate(sentinel_requests_total{region="b"}[5m]))
+sum(rate(bulwark_requests_total{region="a"}[5m]))
+sum(rate(bulwark_requests_total{region="b"}[5m]))
 
 # Cross-region replication lag (Redis)
 redis_replication_lag_seconds{role="slave", region="b"}
@@ -622,7 +622,7 @@ redis_replication_lag_seconds{role="slave", region="b"}
 pg_replication_lag_seconds{instance="standby"}
 
 # Failover events
-count(sentinel_failover_events_total) by (region, direction)
+count(bulwark_failover_events_total) by (region, direction)
 ```
 
 ### Alerting Rules
@@ -649,7 +649,7 @@ groups:
           summary: "PostgreSQL replication lag exceeds RPO target (30s)"
 
       - alert: StandbyRegionUnhealthy
-        expr: probe_success{job="sentinel-region-b-health"} == 0
+        expr: probe_success{job="bulwark-region-b-health"} == 0
         for: 5m
         labels:
           severity: warning
@@ -675,7 +675,7 @@ groups:
 |----------|--------|------------|
 | Region A total failure | DNS failover + promote standby | Automated (DNS health check) |
 | Region A degraded (high latency) | Manual failover decision | Alert → human decision |
-| Redis master failure (single region) | Sentinel auto-promotes replica | Automated (Redis Sentinel) |
+| Redis master failure (single region) | Bulwark auto-promotes replica | Automated (Redis Bulwark) |
 | PostgreSQL primary failure (single region) | RDS/Patroni auto-failover | Automated |
 | Cross-region replication break | Alert + investigate | Alert only |
 | Planned maintenance (Region A) | Manual failover → maintain → failback | Manual with script |

@@ -45,6 +45,33 @@ class TestSecretRedaction:
         assert result.verdict == Verdict.ALLOW
 
 
+class TestToolCallArgumentFiltering:
+    """AC-01: Verify output filter catches secrets in tool call argument strings."""
+
+    def test_aws_key_in_tool_args(self, filter):
+        """Secrets in tool_call arguments must be redacted."""
+        args_str = '{"path": "/tmp/out.txt", "content": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"}'
+        result = filter.inspect_and_redact(args_str)
+        assert result.verdict == Verdict.REDACT
+        assert "AKIAIOSFODNN7EXAMPLE" not in result.modified_content
+
+    def test_private_key_in_tool_args(self, filter):
+        args_str = '{"data": "-----BEGIN RSA PRIVATE KEY-----\\nMIIEpAIBAAK..."}'
+        result = filter.inspect_and_redact(args_str)
+        assert result.verdict == Verdict.REDACT
+
+    def test_db_url_in_tool_args(self, filter):
+        args_str = '{"connection": "postgresql://admin:secret@db.internal:5432/app"}'
+        result = filter.inspect_and_redact(args_str)
+        assert result.verdict == Verdict.REDACT
+        assert "secret" not in result.modified_content
+
+    def test_clean_tool_args_allowed(self, filter):
+        args_str = '{"query": "SELECT id, name FROM users WHERE active = true"}'
+        result = filter.inspect_and_redact(args_str)
+        assert result.verdict == Verdict.ALLOW
+
+
 class TestPIIRedaction:
     def test_credit_card_redacted(self, filter):
         content = "Card number: 4111111111111111"

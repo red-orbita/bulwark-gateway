@@ -35,15 +35,15 @@ async def get_sse_token(user: TokenPayload = Depends(require_permission("admin:r
 
 # Proxy URL for fetching telemetry (internal network)
 # Use FQDN with trailing dot to bypass ndots search in K8s
-_raw_proxy_url = os.getenv("SENTINEL_PROXY_URL", "http://proxy:8080")
+_raw_proxy_url = os.getenv("BULWARK_PROXY_URL", "http://proxy:8080")
 PROXY_URL = _raw_proxy_url
 
 # SSE interval — how often to push updates (seconds)
-SSE_INTERVAL = float(os.getenv("SENTINEL_SSE_INTERVAL", "5"))
+SSE_INTERVAL = float(os.getenv("BULWARK_SSE_INTERVAL", "5"))
 
 def _load_proxy_api_key() -> str:
     """Load proxy API key from file or env."""
-    key_file = os.getenv("SENTINEL_PROXY_API_KEY_FILE", "")
+    key_file = os.getenv("BULWARK_PROXY_API_KEY_FILE", "")
     if key_file and os.path.isfile(key_file):
         with open(key_file) as f:
             # api_keys file may have multiple lines; use first non-empty
@@ -51,7 +51,7 @@ def _load_proxy_api_key() -> str:
                 line = line.strip()
                 if line and not line.startswith("#"):
                     return line
-    return os.getenv("SENTINEL_PROXY_API_KEY", "")
+    return os.getenv("BULWARK_PROXY_API_KEY", "")
 
 
 @router.get("")
@@ -315,10 +315,10 @@ def _fetch_redis_all_sync() -> tuple[dict, dict]:
         start = _t.perf_counter()
         # Pipeline: counters + ping in one round-trip
         pipe = r.pipeline(transaction=False)
-        pipe.get("sentinel:global:requests_total")
-        pipe.get("sentinel:global:block")
-        pipe.get("sentinel:global:warn")
-        pipe.get("sentinel:global:allow")
+        pipe.get("bulwark:global:requests_total")
+        pipe.get("bulwark:global:block")
+        pipe.get("bulwark:global:warn")
+        pipe.get("bulwark:global:allow")
         pipe.ping()
         results = pipe.execute()
 
@@ -353,10 +353,10 @@ def _fetch_redis_global_counters_sync() -> dict:
             return {}
         # Pipeline all gets in a single round-trip
         pipe = r.pipeline(transaction=False)
-        pipe.get("sentinel:global:requests_total")
-        pipe.get("sentinel:global:block")
-        pipe.get("sentinel:global:warn")
-        pipe.get("sentinel:global:allow")
+        pipe.get("bulwark:global:requests_total")
+        pipe.get("bulwark:global:block")
+        pipe.get("bulwark:global:warn")
+        pipe.get("bulwark:global:allow")
         results = pipe.execute()
         return {
             "requests_total": int(results[0] or 0),
@@ -380,7 +380,7 @@ async def recent_blocks(
             r = get_redis_client(timeout=1.0)
             if r is None:
                 return []
-            raw = r.lrange("sentinel:recent_blocks", 0, lim - 1)
+            raw = r.lrange("bulwark:recent_blocks", 0, lim - 1)
             return [json.loads(item) for item in raw]
         except Exception:
             return []
@@ -436,9 +436,9 @@ async def tenant_usage(
             if r is None:
                 return {}
             pipe = r.pipeline(transaction=False)
-            pipe.hgetall("sentinel:usage:total")
-            pipe.hgetall("sentinel:usage:block")
-            pipe.hgetall("sentinel:usage:allow")
+            pipe.hgetall("bulwark:usage:total")
+            pipe.hgetall("bulwark:usage:block")
+            pipe.hgetall("bulwark:usage:allow")
             total, blocked, allowed = pipe.execute()
             total = total or {}
             blocked = blocked or {}

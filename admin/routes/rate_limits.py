@@ -52,8 +52,8 @@ def _sync_to_redis() -> None:
         r = get_redis_client()
         if not r:
             return
-        r.set("sentinel:rate_limits:config", json.dumps(_tenant_limits))
-        r.incr("sentinel:rate_limits:version")
+        r.set("bulwark:rate_limits:config", json.dumps(_tenant_limits))
+        r.incr("bulwark:rate_limits:version")
     except Exception:
         pass
 
@@ -70,9 +70,9 @@ async def rate_limit_status(
     import os
     return {
         "global": {
-            "enabled": os.environ.get("SENTINEL_RATE_LIMIT_ENABLED", "true").lower() in ("true", "1"),
-            "default_rpm": int(os.environ.get("SENTINEL_RATE_LIMIT_RPM", "60")),
-            "burst": int(os.environ.get("SENTINEL_RATE_LIMIT_RPM_BURST", "10")),
+            "enabled": os.environ.get("BULWARK_RATE_LIMIT_ENABLED", "true").lower() in ("true", "1"),
+            "default_rpm": int(os.environ.get("BULWARK_RATE_LIMIT_RPM", "60")),
+            "burst": int(os.environ.get("BULWARK_RATE_LIMIT_RPM_BURST", "10")),
         },
         "tenants": _tenant_limits,
         "total_overrides": len(_tenant_limits),

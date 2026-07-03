@@ -1,5 +1,5 @@
 {
-  "name": "sentinel-gateway-admin",
+  "name": "bulwark-gateway-admin",
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i admin/static/css/input.css -o admin/static/css/tailwind.min.css --minify",

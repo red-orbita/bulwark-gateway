@@ -1,7 +1,7 @@
 {
-  "name": "@sentinel-gateway/sdk",
+  "name": "@bulwark-gateway/sdk",
   "version": "0.2.0",
-  "description": "TypeScript SDK for Sentinel Gateway — AI security guardrail proxy",
+  "description": "TypeScript SDK for Bulwark Gateway — AI security guardrail proxy",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "module": "dist/index.mjs",
@@ -19,11 +19,11 @@
     "test": "vitest run",
     "lint": "eslint src/"
   },
-  "keywords": ["sentinel", "gateway", "llm", "security", "guardrail", "proxy", "ai-safety"],
+  "keywords": ["bulwark", "gateway", "llm", "security", "guardrail", "proxy", "ai-safety"],
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/anomalyco/sentinel-gateway",
+    "url": "https://github.com/anomalyco/bulwark-gateway",
     "directory": "sdk/typescript"
   },
   "devDependencies": {

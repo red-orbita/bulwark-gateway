@@ -30,7 +30,7 @@ async def list_security_events(
             if r is None:
                 return []
             # Fetch from recent_blocks (up to 200 items to allow client-side post-filter)
-            raw = r.lrange("sentinel:recent_blocks", 0, 199)
+            raw = r.lrange("bulwark:recent_blocks", 0, 199)
             events = []
             for item in raw:
                 try:
@@ -63,7 +63,7 @@ async def event_summary(
             r = get_redis_client(timeout=2.0)
             if r is None:
                 return {"by_tenant": {}, "by_category": {}, "by_severity": {}, "total": 0}
-            raw = r.lrange("sentinel:recent_blocks", 0, 499)
+            raw = r.lrange("bulwark:recent_blocks", 0, 499)
             by_tenant: dict = {}
             by_category: dict = {}
             by_severity: dict = {}
@@ -103,10 +103,10 @@ async def tenant_analytics(
                 return {"tenants": {}}
 
             pipe = r.pipeline(transaction=False)
-            pipe.hgetall("sentinel:usage:total")
-            pipe.hgetall("sentinel:usage:block")
-            pipe.hgetall("sentinel:usage:allow")
-            pipe.lrange("sentinel:recent_blocks", 0, 499)
+            pipe.hgetall("bulwark:usage:total")
+            pipe.hgetall("bulwark:usage:block")
+            pipe.hgetall("bulwark:usage:allow")
+            pipe.lrange("bulwark:recent_blocks", 0, 499)
             total, blocked, allowed, recent_raw = pipe.execute()
 
             total = total or {}

@@ -1,5 +1,5 @@
 /**
- * Sentinel Gateway — Full Pipeline Scenario
+ * Bulwark Gateway — Full Pipeline Scenario
  *
  * Measures end-to-end latency through the complete request pipeline:
  *   Auth -> Rate Limit -> Input Guardrail -> IOC Check -> Forward -> Tool Policy -> Output Filter
@@ -141,7 +141,7 @@ export function fullPipeline() {
     "latency under 8ms (p99 target)": () => elapsed < 8,
   });
 
-  // Extract timing headers if available (custom Sentinel headers)
+  // Extract timing headers if available (custom Bulwark headers)
   const guardrailHeader = res.headers["X-Guardrail-Time"];
   if (guardrailHeader) {
     inputGuardrailTime.add(parseFloat(guardrailHeader));

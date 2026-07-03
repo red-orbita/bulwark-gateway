@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 AUDIT_DB_PATH = "data/audit_log.db"
 
 # Redis key for persisting chain head across restarts
-REDIS_KEY_CHAIN_HEAD = "sentinel:audit:chain_head"
-REDIS_KEY_CHAIN_SEQ = "sentinel:audit:chain_sequence"
+REDIS_KEY_CHAIN_HEAD = "bulwark:audit:chain_head"
+REDIS_KEY_CHAIN_SEQ = "bulwark:audit:chain_sequence"
 
 # Genesis previous_hash (first entry in the chain)
 GENESIS_HASH = "sha256:" + "0" * 64
@@ -581,7 +581,7 @@ _logger: Optional[AuditLogger] = None
 def get_audit_logger() -> AuditLogger:
     """Get or create the singleton audit logger.
 
-    M-11: Uses PostgreSQL backend when SENTINEL_ADMIN_DB_URL starts with
+    M-11: Uses PostgreSQL backend when BULWARK_ADMIN_DB_URL starts with
     'postgresql'. Otherwise uses legacy SQLite (backward compatible).
     """
     global _logger

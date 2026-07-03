@@ -26,22 +26,22 @@
 apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosEngine
 metadata:
-  name: sentinel-proxy-pod-kill
-  namespace: sentinel-gateway
+  name: bulwark-proxy-pod-kill
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
-    chaos.sentinel.io/experiment: proxy-pod-kill
-    chaos.sentinel.io/category: availability
+    app.kubernetes.io/part-of: bulwark-gateway
+    chaos.bulwark.io/experiment: proxy-pod-kill
+    chaos.bulwark.io/category: availability
   annotations:
     mitre-attack/technique: T1489
     mitre-attack/tactic: Impact
-    sentinel.io/steady-state: "proxy-replicas>=2,pdb-configured,hpa-active"
-    sentinel.io/pass-criteria: "recovery<5s,zero-dropped-connections"
-    sentinel.io/expected-behavior: "hpa-recovers,pdb-prevents-total-outage"
+    bulwark.io/steady-state: "proxy-replicas>=2,pdb-configured,hpa-active"
+    bulwark.io/pass-criteria: "recovery<5s,zero-dropped-connections"
+    bulwark.io/expected-behavior: "hpa-recovers,pdb-prevents-total-outage"
 spec:
   engineState: active
   appinfo:
-    appns: sentinel-gateway
+    appns: bulwark-gateway
     applabel: app.kubernetes.io/component=proxy
     appkind: deployment
   chaosServiceAccount: litmus-chaos-sa
@@ -69,7 +69,7 @@ spec:
             type: httpProbe
             mode: Continuous
             httpProbe/inputs:
-              url: http://sentinel-proxy.sentinel-gateway.svc.cluster.local:8080/health
+              url: http://bulwark-proxy.bulwark-gateway.svc.cluster.local:8080/health
               insecureSkipVerify: true
               method:
                 get:
@@ -88,8 +88,8 @@ spec:
               group: policy
               version: v1
               resource: poddisruptionbudgets
-              namespace: sentinel-gateway
-              fieldSelector: metadata.name=sentinel-proxy-pdb
+              namespace: bulwark-gateway
+              fieldSelector: metadata.name=bulwark-proxy-pdb
               operation: present
             runProperties:
               probeTimeout: 5s
@@ -102,7 +102,7 @@ spec:
             cmdProbe/inputs:
               command: |
                 START=$(date +%s)
-                while ! kubectl get pods -n sentinel-gateway \
+                while ! kubectl get pods -n bulwark-gateway \
                   -l app.kubernetes.io/component=proxy \
                   -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | \
                   grep -q "True"; do
@@ -131,7 +131,7 @@ spec:
             cmdProbe/inputs:
               command: |
                 ERROR_COUNT=$(kubectl logs -l app.kubernetes.io/component=proxy \
-                  -n sentinel-gateway --since=40s 2>/dev/null | \
+                  -n bulwark-gateway --since=40s 2>/dev/null | \
                   grep -c "connection refused\|connection reset" || echo "0")
                 echo "$ERROR_COUNT"
               comparator:
@@ -149,9 +149,9 @@ apiVersion: litmuschaos.io/v1alpha1
 kind: ChaosExperiment
 metadata:
   name: proxy-pod-delete
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   definition:
     scope: Namespaced

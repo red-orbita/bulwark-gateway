@@ -468,18 +468,28 @@ class ToolPolicyEngine:
     def evaluate_tool_calls(
         self, tool_calls: list[ToolCall], tenant_id: str, agent_id: str
     ) -> GuardrailResult:
-        """Evaluate a batch of tool calls."""
+        """Evaluate a batch of tool calls.
+
+        SECURITY FIX (F-02): Evaluate ALL tool calls before returning.
+        Previously short-circuited on first BLOCK, leaving subsequent malicious
+        tools unevaluated and unblocked. Now collects all blocked tools so the
+        removal step in proxy.py strips every unauthorized tool call.
+        """
         all_events: list[SecurityEvent] = []
         blocked: list[str] = []
+        has_block = False
 
         for i, tc in enumerate(tool_calls):
             result = self.evaluate_tool_call(tc, tenant_id, agent_id, call_count=i)
             all_events.extend(result.events)
             blocked.extend(result.blocked_tools)
             if result.verdict == Verdict.BLOCK:
-                return GuardrailResult(
-                    verdict=Verdict.BLOCK, events=all_events, blocked_tools=blocked
-                )
+                has_block = True
+
+        if has_block:
+            return GuardrailResult(
+                verdict=Verdict.BLOCK, events=all_events, blocked_tools=blocked
+            )
 
         return GuardrailResult(verdict=Verdict.ALLOW, events=all_events)
 
@@ -656,15 +666,16 @@ class ToolPolicyEngine:
     ) -> GuardrailResult | None:
         """Block read access to sensitive files (credentials, keys, configs).
 
-        Applies to ALL read-capable tools regardless of policy configuration.
-        Inspects ALL argument values (flat + nested JSON) for sensitive paths.
+        SECURITY FIX (TP-02+03): Check ALL tools, not just those in _READ_TOOLS.
+        Previously a tool named 'access_resource' or 'kubectl_exec' would bypass
+        this check entirely because it wasn't in the hardcoded set.
+        Now we inspect argument CONTENT universally — any tool passing sensitive
+        paths in its arguments gets blocked, regardless of its name.
         """
-        read_tools = _READ_TOOLS
-        if tool_call.name not in read_tools:
-            return None
-
         # Extract ALL string values from arguments (flat + nested)
         path_values = self._extract_path_values(tool_call.arguments)
+        if not path_values:
+            return None
         for value in path_values:
             value_normalized = value.replace("\\", "/")
             # Normalize Unicode dot leaders/confusables to ASCII
@@ -746,12 +757,17 @@ class ToolPolicyEngine:
         return None
 
     @staticmethod
-    def _extract_path_values(arguments: dict, max_depth: int = 4) -> list[str]:
+    def _extract_path_values(arguments: dict, max_depth: int = 20) -> list[str]:
         """Recursively extract all string values from arguments dict.
 
         This ensures sensitive path checks cover ALL argument names
         (source, input, location, resource, nested JSON, etc.)
         not just the predefined path_args list.
+
+        SECURITY FIX (TP-01): Raised max_depth from 4 to 20.
+        Depth 4 allowed attackers to hide sensitive paths at depth 5+.
+        Depth 20 covers any realistic nested structure while still preventing
+        stack overflow from adversarial inputs.
         """
         values: list[str] = []
 

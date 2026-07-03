@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}SIEM Export — Sentinel Gateway Admin{% endblock %}
+{% block title %}SIEM Export — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}SIEM Integration{% endblock %}
 {% block content %}
 <div x-data="siemManager()" x-init="init()" class="space-y-6">
@@ -114,7 +114,7 @@
                             <option value="splunk">Splunk</option>
                             <option value="elastic">Elastic/ELK</option>
                             <option value="datadog">Datadog</option>
-                            <option value="sentinel">Azure Sentinel</option>
+                            <option value="bulwark">Azure Bulwark</option>
                             <option value="qradar">IBM QRadar</option>
                             <option value="arcsight">ArcSight</option>
                             <option value="wazuh">Wazuh</option>
@@ -137,7 +137,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="sg-label" x-text="form.platform === 'wazuh' ? 'Log File Path' : 'Endpoint'"></label>
-                        <input type="text" x-model="form.endpoint" class="sg-input w-full" :placeholder="form.platform === 'wazuh' ? '/var/log/sentinel-gateway/events.ndjson' : 'siem.company.com'">
+                        <input type="text" x-model="form.endpoint" class="sg-input w-full" :placeholder="form.platform === 'wazuh' ? '/var/log/bulwark-gateway/events.ndjson' : 'siem.company.com'">
                     </div>
                     <div x-show="form.platform !== 'wazuh'">
                         <label class="sg-label">Port</label>
@@ -238,7 +238,7 @@ function siemManager() {
         onPlatformChange() {
             if (this.form.platform === 'wazuh') {
                 this.form.transport_type = 'file';
-                this.form.endpoint = '/var/log/sentinel-gateway/events.ndjson';
+                this.form.endpoint = '/var/log/bulwark-gateway/events.ndjson';
                 this.form.port = 55000;
                 this.form.format = 'ecs_json';
                 this.form.auth_type = 'none';

@@ -1,4 +1,4 @@
-# Sentinel Gateway — Security Scanning Pipeline
+# Bulwark Gateway — Security Scanning Pipeline
 #
 # SOC 2 CC8.1 compliance: SAST, SCA, SBOM, Secret Scanning, License Compliance
 #
@@ -32,8 +32,8 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.11"
-  IMAGE_PROXY: sentinel-gateway-proxy
-  IMAGE_ADMIN: sentinel-gateway-admin
+  IMAGE_PROXY: bulwark-gateway-proxy
+  IMAGE_ADMIN: bulwark-gateway-admin
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════════════

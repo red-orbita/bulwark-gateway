@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-Common issues and their solutions for Sentinel Gateway.
+Common issues and their solutions for Bulwark Gateway.
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@ Common issues and their solutions for Sentinel Gateway.
 # Option 1: Wait 15 minutes (lockout auto-expires)
 
 # Option 2: Restart admin pod (lockout is in-memory)
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 ### "Invalid credentials" after secret rotation
@@ -38,14 +38,14 @@ kubectl rollout restart deploy/admin -n sentinel-gateway
 **Solution (v0.2.0+)**: Simply restart the admin pod — password sync is automatic.
 
 ```bash
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 **Solution (older versions)**: Delete the user database to force re-seed.
 
 ```bash
-kubectl exec deploy/admin -n sentinel-gateway -- rm -f /app/data/users.db /app/data/users.db-shm /app/data/users.db-wal
-kubectl rollout restart deploy/admin -n sentinel-gateway
+kubectl exec deploy/admin -n bulwark-gateway -- rm -f /app/data/users.db /app/data/users.db-shm /app/data/users.db-wal
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 ### "Invalid token or API key" on proxy
@@ -58,10 +58,10 @@ kubectl rollout restart deploy/admin -n sentinel-gateway
 **Solution**:
 ```bash
 # Verify the JWT secret matches
-kubectl exec deploy/proxy -n sentinel-gateway -- cat /run/secrets/jwt-secret
+kubectl exec deploy/proxy -n bulwark-gateway -- cat /run/secrets/jwt-secret
 
 # Check API keys file
-kubectl exec deploy/proxy -n sentinel-gateway -- cat /run/secrets/api-keys
+kubectl exec deploy/proxy -n bulwark-gateway -- cat /run/secrets/api-keys
 
 # Verify token hasn't expired
 # Decode JWT at jwt.io or: echo "<token>" | cut -d. -f2 | base64 -d | jq .exp
@@ -82,27 +82,27 @@ kubectl exec deploy/proxy -n sentinel-gateway -- cat /run/secrets/api-keys
 **Diagnosis**:
 ```bash
 # Check Redis pod is running
-kubectl get pods -l app.kubernetes.io/name=redis -n sentinel-gateway
+kubectl get pods -l app.kubernetes.io/name=redis -n bulwark-gateway
 
 # Test connectivity from admin pod
-kubectl exec deploy/admin -n sentinel-gateway -- env | grep REDIS
+kubectl exec deploy/admin -n bulwark-gateway -- env | grep REDIS
 
 # Check if password file is mounted correctly
-kubectl exec deploy/admin -n sentinel-gateway -- cat /run/secrets/redis-password
+kubectl exec deploy/admin -n bulwark-gateway -- cat /run/secrets/redis-password
 
 # Test Redis PING directly
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli PING
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli PING
 ```
 
 **Solution (password mismatch)**:
 ```bash
 # Ensure all pods use the same Redis password
 # Check proxy and admin have the same password file content
-kubectl exec deploy/proxy -n sentinel-gateway -- cat /run/secrets/redis-password
-kubectl exec deploy/admin -n sentinel-gateway -- cat /run/secrets/redis-password
+kubectl exec deploy/proxy -n bulwark-gateway -- cat /run/secrets/redis-password
+kubectl exec deploy/admin -n bulwark-gateway -- cat /run/secrets/redis-password
 
 # If different, update the secrets and restart all
-kubectl rollout restart deploy -n sentinel-gateway
+kubectl rollout restart deploy -n bulwark-gateway
 ```
 
 ### Redis "connection refused"
@@ -111,23 +111,23 @@ kubectl rollout restart deploy -n sentinel-gateway
 
 ```bash
 # Check Redis pod
-kubectl get pods -l app.kubernetes.io/name=redis -n sentinel-gateway
+kubectl get pods -l app.kubernetes.io/name=redis -n bulwark-gateway
 
 # Check service exists
-kubectl get svc redis -n sentinel-gateway
+kubectl get svc redis -n bulwark-gateway
 
 # Test DNS resolution from another pod
-kubectl exec deploy/admin -n sentinel-gateway -- nslookup redis.sentinel-gateway.svc.cluster.local
+kubectl exec deploy/admin -n bulwark-gateway -- nslookup redis.bulwark-gateway.svc.cluster.local
 ```
 
 ### Redis high memory usage
 
 ```bash
 # Check memory
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli INFO memory
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli INFO memory
 
 # Flush non-essential caches (rate limit counters)
-kubectl exec deploy/redis -n sentinel-gateway -- redis-cli DEL sentinel:rate_limits
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli DEL bulwark:rate_limits
 ```
 
 ---
@@ -138,7 +138,7 @@ kubectl exec deploy/redis -n sentinel-gateway -- redis-cli DEL sentinel:rate_lim
 
 ```bash
 # Check pod logs
-kubectl logs <pod-name> -n sentinel-gateway --previous
+kubectl logs <pod-name> -n bulwark-gateway --previous
 
 # Common causes:
 # 1. Missing secrets (FATAL: ADMIN_JWT_SECRET is insecure)
@@ -149,7 +149,7 @@ kubectl logs <pod-name> -n sentinel-gateway --previous
 **Fix for missing secrets**:
 ```bash
 # Verify secrets exist
-kubectl get secrets -n sentinel-gateway
+kubectl get secrets -n bulwark-gateway
 
 # Re-generate if needed
 ./k8s/secrets/generate-sealed-secrets.sh
@@ -160,7 +160,7 @@ kubectl apply -f k8s/secrets/sealed-secrets.yaml
 
 ```bash
 # Check events
-kubectl describe pod <pod-name> -n sentinel-gateway
+kubectl describe pod <pod-name> -n bulwark-gateway
 
 # Common causes:
 # 1. PVC not bound (no StorageClass provisioner)
@@ -191,13 +191,13 @@ kubectl describe pod <pod-name> -n sentinel-gateway
 **Diagnosis**:
 ```bash
 # Check transport configuration
-kubectl exec deploy/admin -n sentinel-gateway -- cat /app/shared/siem/siem_transports.json
+kubectl exec deploy/admin -n bulwark-gateway -- cat /app/shared/siem/siem_transports.json
 
 # Check proxy can read the transport file
-kubectl exec deploy/proxy -n sentinel-gateway -- cat /app/shared/siem/siem_transports.json
+kubectl exec deploy/proxy -n bulwark-gateway -- cat /app/shared/siem/siem_transports.json
 
 # Check SIEM stats
-kubectl exec deploy/proxy -n sentinel-gateway -- cat /app/shared/siem/siem_stats.json
+kubectl exec deploy/proxy -n bulwark-gateway -- cat /app/shared/siem/siem_stats.json
 ```
 
 ### Transport shows "circuit_breaker: open"
@@ -213,10 +213,10 @@ kubectl exec deploy/proxy -n sentinel-gateway -- cat /app/shared/siem/siem_stats
 
 ```bash
 # Check Wazuh API connectivity from proxy pod
-kubectl exec deploy/proxy -n sentinel-gateway -- curl -sk https://wazuh-manager:55000/security/user/authenticate -u admin:password
+kubectl exec deploy/proxy -n bulwark-gateway -- curl -sk https://wazuh-manager:55000/security/user/authenticate -u admin:password
 
 # Verify log file path exists
-kubectl exec deploy/proxy -n sentinel-gateway -- ls -la /var/ossec/logs/
+kubectl exec deploy/proxy -n bulwark-gateway -- ls -la /var/ossec/logs/
 ```
 
 ---
@@ -234,7 +234,7 @@ kubectl exec deploy/proxy -n sentinel-gateway -- ls -la /var/ossec/logs/
 **Diagnosis**:
 ```bash
 # Check Prometheus metrics
-# sentinel_request_duration_seconds histogram
+# bulwark_request_duration_seconds histogram
 
 # Check guardrail pattern count
 curl -s http://localhost:8080/health/stats -H "X-Tenant-ID: ..." -H "Authorization: ..."
@@ -246,10 +246,10 @@ curl -s http://localhost:8080/health/stats -H "X-Tenant-ID: ..." -H "Authorizati
 
 ```bash
 # Check agent registry
-kubectl exec deploy/proxy -n sentinel-gateway -- cat /app/config/agents.yaml
+kubectl exec deploy/proxy -n bulwark-gateway -- cat /app/config/agents.yaml
 
 # Check policy exists
-kubectl exec deploy/proxy -n sentinel-gateway -- ls /app/config/policies/
+kubectl exec deploy/proxy -n bulwark-gateway -- ls /app/config/policies/
 ```
 
 ---
@@ -284,7 +284,7 @@ curl -X POST http://localhost:8090/admin/notifications/channels/<id>/test \
 
 ```bash
 # Check admin logs for SMTP errors
-kubectl logs deploy/admin -n sentinel-gateway | grep "SMTP"
+kubectl logs deploy/admin -n bulwark-gateway | grep "SMTP"
 ```
 
 ### Slack webhook returns 404
@@ -301,28 +301,28 @@ kubectl logs deploy/admin -n sentinel-gateway | grep "SMTP"
 
 ```bash
 # Set log level via environment
-kubectl set env deploy/proxy -n sentinel-gateway SENTINEL_LOG_LEVEL=DEBUG
-kubectl set env deploy/admin -n sentinel-gateway ADMIN_DEBUG=true
+kubectl set env deploy/proxy -n bulwark-gateway BULWARK_LOG_LEVEL=DEBUG
+kubectl set env deploy/admin -n bulwark-gateway ADMIN_DEBUG=true
 
 # Don't forget to disable after debugging
-kubectl set env deploy/proxy -n sentinel-gateway SENTINEL_LOG_LEVEL=INFO
-kubectl set env deploy/admin -n sentinel-gateway ADMIN_DEBUG=false
+kubectl set env deploy/proxy -n bulwark-gateway BULWARK_LOG_LEVEL=INFO
+kubectl set env deploy/admin -n bulwark-gateway ADMIN_DEBUG=false
 ```
 
 ### Port-forward for local debugging
 
 ```bash
 # Proxy
-kubectl port-forward svc/proxy 8080:8080 -n sentinel-gateway
+kubectl port-forward svc/proxy 8080:8080 -n bulwark-gateway
 
 # Admin
-kubectl port-forward svc/admin 8090:8090 -n sentinel-gateway
+kubectl port-forward svc/admin 8090:8090 -n bulwark-gateway
 
 # Redis
-kubectl port-forward svc/redis 6379:6379 -n sentinel-gateway
+kubectl port-forward svc/redis 6379:6379 -n bulwark-gateway
 
 # Grafana
-kubectl port-forward svc/grafana 3000:3000 -n sentinel-gateway
+kubectl port-forward svc/grafana 3000:3000 -n bulwark-gateway
 ```
 
 ---
@@ -337,12 +337,12 @@ kubectl port-forward svc/grafana 3000:3000 -n sentinel-gateway
 
 ```bash
 # Verify the initContainer is present
-kubectl get pod wazuh-0 -n sentinel-siem -o jsonpath='{.spec.initContainers[*].name}'
+kubectl get pod wazuh-0 -n bulwark-siem -o jsonpath='{.spec.initContainers[*].name}'
 # Expected: init-filebeat
 
 # If Filebeat is still crashing, delete the PVC and recreate
-kubectl delete statefulset wazuh -n sentinel-siem
-kubectl delete pvc wazuh-data-wazuh-0 -n sentinel-siem
+kubectl delete statefulset wazuh -n bulwark-siem
+kubectl delete pvc wazuh-data-wazuh-0 -n bulwark-siem
 kubectl apply -f k8s/monitoring/wazuh.yaml
 ```
 
@@ -358,7 +358,7 @@ kubectl apply -f k8s/monitoring/wazuh.yaml
 
 **Solution**: Wait for readiness probe to pass:
 ```bash
-kubectl wait --for=condition=ready pod/wazuh-0 -n sentinel-siem --timeout=180s
+kubectl wait --for=condition=ready pod/wazuh-0 -n bulwark-siem --timeout=180s
 ```
 
 ---
@@ -382,7 +382,7 @@ kubectl wait --for=condition=ready pod/wazuh-0 -n sentinel-siem --timeout=180s
 
 **Verify** (check response headers):
 ```bash
-curl -sk -I https://admin.sentinel-gateway.local/login | grep content-security
+curl -sk -I https://admin.bulwark-gateway.local/login | grep content-security
 ```
 
 ---
@@ -404,10 +404,10 @@ ERROR: Application startup failed. Exiting.
 1. **Wrong key format**: Regenerate with `openssl rand -hex 32` (NOT `-base64`)
 2. **Key changed after DB creation**: Delete the admin-data PVC to recreate the database:
    ```bash
-   kubectl scale deployment admin -n sentinel-gateway --replicas=0
-   kubectl delete pvc admin-data -n sentinel-gateway
+   kubectl scale deployment admin -n bulwark-gateway --replicas=0
+   kubectl delete pvc admin-data -n bulwark-gateway
    kubectl apply -f k8s/base/volumes.yaml
-   kubectl scale deployment admin -n sentinel-gateway --replicas=1
+   kubectl scale deployment admin -n bulwark-gateway --replicas=1
    ```
 3. **Key contains invalid characters**: Only `[a-zA-Z0-9+/=\-_]` are accepted
 
@@ -429,17 +429,17 @@ Issues commonly encountered during first-time deployments and upgrades.
 **Diagnosis**:
 ```bash
 # Check telemetry is enabled
-kubectl exec deploy/proxy -n sentinel-gateway -- env | grep SENTINEL_TELEMETRY
+kubectl exec deploy/proxy -n bulwark-gateway -- env | grep BULWARK_TELEMETRY
 
 # Check volume is writable
-kubectl exec deploy/proxy -n sentinel-gateway -- touch /app/shared/siem/test && echo "writable" || echo "READ-ONLY"
+kubectl exec deploy/proxy -n bulwark-gateway -- touch /app/shared/siem/test && echo "writable" || echo "READ-ONLY"
 
 # Check proxy logs for transport errors
-kubectl logs deploy/proxy -n sentinel-gateway | grep -E "transport_load_error|telemetry_no_transports"
+kubectl logs deploy/proxy -n bulwark-gateway | grep -E "transport_load_error|telemetry_no_transports"
 ```
 
 **Solution**:
-1. Ensure `SENTINEL_TELEMETRY_ENABLED=true` is set in the proxy deployment
+1. Ensure `BULWARK_TELEMETRY_ENABLED=true` is set in the proxy deployment
 2. Verify the shared volume mount is **read-write** (not `readOnly: true`)
 3. Configure at least one SIEM transport via Admin UI > SIEM or the API
 4. If you see `transport_load_error` in logs, the `siem_transports.json` file is missing or malformed
@@ -474,14 +474,14 @@ This requires running the security smoke test (`python scripts/security-smoke-te
 **Diagnosis**:
 ```bash
 # Check channel config
-kubectl exec deploy/admin -n sentinel-gateway -- cat /app/data/channels.json
+kubectl exec deploy/admin -n bulwark-gateway -- cat /app/data/channels.json
 
 # Test Telegram API directly
 BOT_TOKEN="<your-token>"
 CHAT_ID="<your-chat-id>"
 curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
   -d "chat_id=${CHAT_ID}" \
-  -d "text=Test from sentinel-gateway" \
+  -d "text=Test from bulwark-gateway" \
   -d "parse_mode=HTML"
 ```
 
@@ -503,11 +503,11 @@ curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
 
 ```bash
 # Check Redis connectivity from admin
-kubectl exec deploy/admin -n sentinel-gateway -- python -c "
+kubectl exec deploy/admin -n bulwark-gateway -- python -c "
 import redis, os
 r = redis.Redis(host='redis', port=6379, password=open('/run/secrets/redis-password').read().strip())
 print('PING:', r.ping())
-print('Keys:', r.keys('sentinel:metrics:*'))
+print('Keys:', r.keys('bulwark:metrics:*'))
 "
 ```
 
@@ -528,13 +528,13 @@ If Redis is connected but counters are still zero, the migration from in-memory 
 **Diagnosis**:
 ```bash
 # Test backend reachability from proxy pod
-kubectl exec deploy/proxy -n sentinel-gateway -- curl -s -o /dev/null -w "%{http_code}" http://ollama:11434/
+kubectl exec deploy/proxy -n bulwark-gateway -- curl -s -o /dev/null -w "%{http_code}" http://ollama:11434/
 
 # Check if SSRF pattern is matching backend IP
-kubectl logs deploy/proxy -n sentinel-gateway | grep -i "ssrf"
+kubectl logs deploy/proxy -n bulwark-gateway | grep -i "ssrf"
 
 # Verify backend IP in config
-kubectl exec deploy/proxy -n sentinel-gateway -- env | grep -i BACKEND
+kubectl exec deploy/proxy -n bulwark-gateway -- env | grep -i BACKEND
 ```
 
 **Solution**:
@@ -547,33 +547,33 @@ kubectl exec deploy/proxy -n sentinel-gateway -- env | grep -i BACKEND
 
 ### Wazuh Not Receiving Events
 
-**Symptom**: Wazuh `alerts.json` has no sentinel-gateway entries despite events being generated.
+**Symptom**: Wazuh `alerts.json` has no bulwark-gateway entries despite events being generated.
 
 **Causes**:
-1. Missing decoders/rules for sentinel-gateway log format
+1. Missing decoders/rules for bulwark-gateway log format
 2. Fetch script not configured or not running
 3. ServiceAccount missing RBAC permissions to read proxy logs
 
 **Diagnosis**:
 ```bash
 # Check if Wazuh decoders are loaded
-kubectl exec -n sentinel-siem wazuh-0 -- cat /var/ossec/etc/decoders/sentinel-gateway.xml
+kubectl exec -n bulwark-siem wazuh-0 -- cat /var/ossec/etc/decoders/bulwark-gateway.xml
 
 # Check rules
-kubectl exec -n sentinel-siem wazuh-0 -- cat /var/ossec/etc/rules/sentinel-gateway-rules.xml
+kubectl exec -n bulwark-siem wazuh-0 -- cat /var/ossec/etc/rules/bulwark-gateway-rules.xml
 
 # Check init-container logs for fetch script
-kubectl logs wazuh-0 -n sentinel-siem -c init-fetch-script
+kubectl logs wazuh-0 -n bulwark-siem -c init-fetch-script
 
 # Test the fetch script manually
-kubectl exec -n sentinel-siem wazuh-0 -- /var/ossec/integrations/sentinel-fetch.sh
+kubectl exec -n bulwark-siem wazuh-0 -- /var/ossec/integrations/bulwark-fetch.sh
 ```
 
 **Solution**:
 1. Verify ConfigMaps with decoders and rules are mounted into the Wazuh pod
-2. Check init-container completed successfully (`kubectl describe pod wazuh-0 -n sentinel-siem`)
-3. Ensure the ServiceAccount has `get`/`list` permissions on pods/logs in the `sentinel-gateway` namespace
-4. Restart Wazuh after applying decoder/rule changes: `kubectl exec -n sentinel-siem wazuh-0 -- /var/ossec/bin/wazuh-control restart`
+2. Check init-container completed successfully (`kubectl describe pod wazuh-0 -n bulwark-siem`)
+3. Ensure the ServiceAccount has `get`/`list` permissions on pods/logs in the `bulwark-gateway` namespace
+4. Restart Wazuh after applying decoder/rule changes: `kubectl exec -n bulwark-siem wazuh-0 -- /var/ossec/bin/wazuh-control restart`
 
 ---
 
@@ -593,13 +593,13 @@ kubectl exec -n sentinel-siem wazuh-0 -- /var/ossec/integrations/sentinel-fetch.
 ./scripts/validate-deployment.sh
 
 # Check pod events
-kubectl describe pod -l app=proxy -n sentinel-gateway | tail -20
+kubectl describe pod -l app=proxy -n bulwark-gateway | tail -20
 
 # Check previous container logs
-kubectl logs -l app=proxy -n sentinel-gateway --previous
+kubectl logs -l app=proxy -n bulwark-gateway --previous
 
 # Verify all secrets exist
-kubectl get secrets -n sentinel-gateway -o name | sort
+kubectl get secrets -n bulwark-gateway -o name | sort
 ```
 
 **Solution**:
@@ -619,13 +619,13 @@ kubectl get secrets -n sentinel-gateway -o name | sort
 **Diagnosis**:
 ```bash
 # Check if shared volume is mounted
-kubectl exec deploy/proxy -n sentinel-gateway -- df -h /app/shared/siem/
+kubectl exec deploy/proxy -n bulwark-gateway -- df -h /app/shared/siem/
 
 # Check file exists and has content
-kubectl exec deploy/proxy -n sentinel-gateway -- cat /app/shared/siem/siem_transports.json
+kubectl exec deploy/proxy -n bulwark-gateway -- cat /app/shared/siem/siem_transports.json
 
 # Check permissions
-kubectl exec deploy/proxy -n sentinel-gateway -- ls -la /app/shared/siem/
+kubectl exec deploy/proxy -n bulwark-gateway -- ls -la /app/shared/siem/
 ```
 
 **Solution**:

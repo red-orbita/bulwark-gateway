@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build script for Sentinel Gateway Admin UI
+# Build script for Bulwark Gateway Admin UI
 # Downloads and vendors all CDN dependencies with SRI hashes
 # Usage: ./scripts/build-ui.sh
 

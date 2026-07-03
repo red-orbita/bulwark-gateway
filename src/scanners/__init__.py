@@ -1,5 +1,5 @@
 """
-Sentinel Scanners — Pluggable security scanner framework.
+Bulwark Scanners — Pluggable security scanner framework.
 
 This package provides the protocol, pipeline, and discovery mechanisms
 for all security scanners (input, output, enrichment). Both built-in

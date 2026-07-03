@@ -1,4 +1,4 @@
-# Sentinel Gateway — Production Environment Values
+# Bulwark Gateway — Production Environment Values
 #
 # This file is used by CI/CD pipelines for production deployments.
 # Copy and customize for your environment.
@@ -49,7 +49,7 @@ externalRedis:
   tls: true
   db: 0
   # Password via existing secret (managed by External Secrets Operator or Vault)
-  existingSecret: "sentinel-redis-credentials"
+  existingSecret: "bulwark-redis-credentials"
   existingSecretKey: "password"
 
 # Ingress
@@ -62,10 +62,10 @@ ingress:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
   tls:
     enabled: true
-    secretName: "sentinel-prod-tls"
+    secretName: "bulwark-prod-tls"
   hosts:
-    proxy: "api.sentinel-gateway.mycompany.com"
-    admin: "admin.sentinel-gateway.mycompany.com"
+    proxy: "api.bulwark-gateway.mycompany.com"
+    admin: "admin.bulwark-gateway.mycompany.com"
 
 # Telemetry
 telemetry:

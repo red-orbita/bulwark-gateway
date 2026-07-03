@@ -1,7 +1,7 @@
 """
-Guard — Main SDK class for embeddable Sentinel security scanning.
+Guard — Main SDK class for embeddable Bulwark security scanning.
 
-Allows Sentinel to be used as a pure Python library without running
+Allows Bulwark to be used as a pure Python library without running
 the FastAPI gateway. Manages scanner lifecycle, provides sync/async
 scanning APIs, and supports decorator-based protection.
 

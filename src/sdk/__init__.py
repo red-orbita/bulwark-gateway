@@ -1,7 +1,7 @@
 """
-Sentinel SDK — Embeddable Python library for AI security guardrails.
+Bulwark SDK — Embeddable Python library for AI security guardrails.
 
-Use Sentinel as a library without running the full gateway proxy.
+Use Bulwark as a library without running the full gateway proxy.
 Provides input/output scanning, framework integrations, and decorators
 for wrapping LLM calls with security guardrails.
 

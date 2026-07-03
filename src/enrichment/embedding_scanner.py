@@ -22,16 +22,16 @@ from .base import BaseEnrichmentScanner, EnrichmentResult, EnrichmentStatus
 logger = logging.getLogger(__name__)
 
 # Threshold tuning: above this cosine similarity → suspicious
-SIMILARITY_THRESHOLD_SUSPICIOUS = float(os.getenv("SENTINEL_EMBED_THRESH_SUSPICIOUS", "0.78"))
-SIMILARITY_THRESHOLD_THREAT = float(os.getenv("SENTINEL_EMBED_THRESH_THREAT", "0.88"))
+SIMILARITY_THRESHOLD_SUSPICIOUS = float(os.getenv("BULWARK_EMBED_THRESH_SUSPICIOUS", "0.78"))
+SIMILARITY_THRESHOLD_THREAT = float(os.getenv("BULWARK_EMBED_THRESH_THREAT", "0.88"))
 
 # Path to attack embeddings database
 ATTACK_EMBEDDINGS_PATH = Path(os.getenv(
-    "SENTINEL_ATTACK_EMBEDDINGS_PATH", "data/attack_embeddings.json"
+    "BULWARK_ATTACK_EMBEDDINGS_PATH", "data/attack_embeddings.json"
 ))
 
 # Model selection — small, fast models for server-side inference
-MODEL_NAME = os.getenv("SENTINEL_EMBED_MODEL", "all-MiniLM-L6-v2")
+MODEL_NAME = os.getenv("BULWARK_EMBED_MODEL", "all-MiniLM-L6-v2")
 
 
 class EmbeddingScanner(BaseEnrichmentScanner):

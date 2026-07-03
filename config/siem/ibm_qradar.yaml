@@ -1,11 +1,11 @@
 # IBM QRadar — Syslog TCP/TLS with LEEF format
-# Sentinel Gateway SIEM Integration Template
+# Bulwark Gateway SIEM Integration Template
 ---
 transport: syslog
 platform: ibm_qradar
 
 connection:
-  host: "${SENTINEL_QRADAR_HOST}"
+  host: "${BULWARK_QRADAR_HOST}"
   port: 514
   protocol: tcp  # or tls (port 6514)
   # TLS settings (if protocol: tls)
@@ -15,14 +15,14 @@ connection:
 
 format: leef  # QRadar native format (Log Event Extended Format 2.0)
 # LEEF output example:
-# LEEF:2.0|SentinelGateway|Guardrail|0.2.0|SecurityEvent|cat=intrusion_detection\tsev=7\tsrc=192.168.1.1\taction=block\ttenantId=example-corp\truleId=PI-001\tguardrailLayer=input\tlatencyMs=3\tmsg=Prompt injection detected
+# LEEF:2.0|BulwarkGateway|Guardrail|0.2.0|SecurityEvent|cat=intrusion_detection\tsev=7\tsrc=192.168.1.1\taction=block\ttenantId=example-corp\truleId=PI-001\tguardrailLayer=input\tlatencyMs=3\tmsg=Prompt injection detected
 
 field_mapping:
   facility: 1  # user-level messages
   # QRadar Log Source configuration:
   # - Log Source Type: Universal LEEF
   # - Protocol: Syslog
-  # - Log Source Identifier Pattern: SentinelGateway
+  # - Log Source Identifier Pattern: BulwarkGateway
 
 batching:
   batch_size: 50

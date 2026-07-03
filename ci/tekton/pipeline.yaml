@@ -1,4 +1,4 @@
-# Sentinel Gateway — Tekton Pipeline
+# Bulwark Gateway — Tekton Pipeline
 #
 # Kubernetes-native CI/CD using Tekton Pipelines.
 #
@@ -17,12 +17,12 @@
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: sentinel-gateway-deploy
+  name: bulwark-gateway-deploy
   namespace: tekton-pipelines
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
-  description: "Build, test, and deploy Sentinel Gateway"
+  description: "Build, test, and deploy Bulwark Gateway"
   params:
     - name: git-url
       type: string
@@ -98,7 +98,7 @@ spec:
           workspace: docker-credentials
       params:
         - name: IMAGE
-          value: "$(params.image-registry)/sentinel-gateway-proxy:$(params.version)"
+          value: "$(params.image-registry)/bulwark-gateway-proxy:$(params.version)"
         - name: DOCKERFILE
           value: "Dockerfile"
         - name: CONTEXT
@@ -117,7 +117,7 @@ spec:
           workspace: docker-credentials
       params:
         - name: IMAGE
-          value: "$(params.image-registry)/sentinel-gateway-admin:$(params.version)"
+          value: "$(params.image-registry)/bulwark-gateway-admin:$(params.version)"
         - name: DOCKERFILE
           value: "docker/Dockerfile.admin"
         - name: CONTEXT
@@ -151,13 +151,13 @@ spec:
               set -ex
               VALUES_FILE=$(workspaces.values.path)/values-$(params.environment).yaml
 
-              helm upgrade --install sentinel-gateway ./helm/sentinel-gateway \
-                --namespace sentinel-gateway \
+              helm upgrade --install bulwark-gateway ./helm/bulwark-gateway \
+                --namespace bulwark-gateway \
                 --create-namespace \
                 --values "$VALUES_FILE" \
-                --set proxy.image.repository=$(params.registry)/sentinel-gateway-proxy \
+                --set proxy.image.repository=$(params.registry)/bulwark-gateway-proxy \
                 --set proxy.image.tag=$(params.version) \
-                --set admin.image.repository=$(params.registry)/sentinel-gateway-admin \
+                --set admin.image.repository=$(params.registry)/bulwark-gateway-admin \
                 --set admin.image.tag=$(params.version) \
                 --wait \
                 --timeout 5m
@@ -169,10 +169,10 @@ spec:
               set -ex
               kubectl wait --for=condition=ready pod \
                 -l app.kubernetes.io/name=proxy \
-                -n sentinel-gateway --timeout=120s
+                -n bulwark-gateway --timeout=120s
               kubectl wait --for=condition=ready pod \
                 -l app.kubernetes.io/name=admin \
-                -n sentinel-gateway --timeout=120s
+                -n bulwark-gateway --timeout=120s
               echo "Deployment validated successfully"
       params:
         - name: registry
@@ -186,14 +186,14 @@ spec:
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
-  generateName: sentinel-gateway-deploy-
+  generateName: bulwark-gateway-deploy-
   namespace: tekton-pipelines
 spec:
   pipelineRef:
-    name: sentinel-gateway-deploy
+    name: bulwark-gateway-deploy
   params:
     - name: git-url
-      value: "https://github.com/myorg/sentinel-gateway.git"
+      value: "https://github.com/myorg/bulwark-gateway.git"
     - name: git-revision
       value: "main"
     - name: image-registry
@@ -215,4 +215,4 @@ spec:
         secretName: registry-credentials
     - name: helm-values
       configMap:
-        name: sentinel-gateway-helm-values
+        name: bulwark-gateway-helm-values

@@ -503,7 +503,7 @@ class MultilingualPatterns(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Language-specific attack pattern detection (10 languages)",
-            author="sentinel",
+            author="bulwark",
             priority=8,  # After language detector (5), before English regex (10)
         )
 

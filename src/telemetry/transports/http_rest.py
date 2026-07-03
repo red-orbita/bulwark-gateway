@@ -1,5 +1,5 @@
 """
-HTTP/REST Transport — for Splunk HEC, Microsoft Sentinel, Datadog, Elasticsearch.
+HTTP/REST Transport — for Splunk HEC, Microsoft Bulwark, Datadog, Elasticsearch.
 
 Supports:
     - Bearer token auth (Splunk HEC)
@@ -95,10 +95,10 @@ class HttpTransportConfig:
     api_key_header: str = "Authorization"
     username: Optional[str] = None
     password: Optional[str] = None
-    # HMAC (Azure Sentinel)
+    # HMAC (Azure Bulwark)
     workspace_id: Optional[str] = None
     shared_key: Optional[str] = None
-    log_type: str = "SentinelGateway"
+    log_type: str = "BulwarkGateway"
     # TLS
     tls_cert: Optional[str] = None
     tls_key: Optional[str] = None

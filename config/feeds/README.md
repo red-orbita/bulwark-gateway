@@ -14,8 +14,8 @@ See the main README.md section "Threat Intelligence Feeds" for configuration det
 For simple feeds, use environment variables instead of YAML:
 
 ```bash
-SENTINEL_URLHAUS_KEY=your-key
-SENTINEL_THREATFOX_KEY=your-key
-SENTINEL_OTX_KEY=your-key
-SENTINEL_ABUSEIPDB_KEY=your-key
+BULWARK_URLHAUS_KEY=your-key
+BULWARK_THREATFOX_KEY=your-key
+BULWARK_OTX_KEY=your-key
+BULWARK_ABUSEIPDB_KEY=your-key
 ```

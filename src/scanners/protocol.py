@@ -40,7 +40,7 @@ class ScannerInfo:
     version: str
     scanner_type: ScannerType
     description: str = ""
-    author: str = "sentinel"
+    author: str = "bulwark"
     enabled: bool = True
     priority: int = 50  # Lower = runs first (0-100)
 

@@ -1,4 +1,4 @@
-"""Built-in scanners — Wrappers around existing Sentinel guardrail engines."""
+"""Built-in scanners — Wrappers around existing Bulwark guardrail engines."""
 
 from src.scanners.builtin.regex_scanner import RegexInputScanner
 from src.scanners.builtin.output_redaction_scanner import OutputRedactionScanner

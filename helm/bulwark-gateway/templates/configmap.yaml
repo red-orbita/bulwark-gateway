@@ -1,0 +1,142 @@
+{{- /* Validate required values */ -}}
+{{- include "bulwark-gateway.validateValues" . }}
+---
+# Proxy ConfigMap — environment variables for the proxy container
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-config
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.proxy.labels" . | nindent 4 }}
+data:
+  BULWARK_AGENTS_FILE: "/app/shared/admin/agents.yaml"
+  BULWARK_FAIL_MODE: {{ .Values.proxy.failMode | quote }}
+  BULWARK_LOG_FORMAT: "json"
+  BULWARK_LOG_LEVEL: {{ .Values.proxy.logLevel | quote }}
+  BULWARK_RATE_LIMIT_RPM: {{ .Values.proxy.rateLimit | quote }}
+  BULWARK_WORKERS: {{ .Values.proxy.workers | quote }}
+  BULWARK_TELEMETRY_ENABLED: {{ .Values.telemetry.enabled | quote }}
+  BULWARK_TELEMETRY_BATCH_SIZE: {{ .Values.telemetry.batchSize | quote }}
+  BULWARK_TELEMETRY_FLUSH_INTERVAL: {{ .Values.telemetry.flushInterval | quote }}
+  BULWARK_SIEM_STATS_FILE: "/app/shared/siem/siem_stats.json"
+  BULWARK_SIEM_TRANSPORTS_FILE: "/app/shared/siem/siem_transports.json"
+  BULWARK_REDIS_URL: {{ include "bulwark-gateway.redis.url" . | quote }}
+  {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls .Values.externalRedis.tlsInsecure }}
+  BULWARK_REDIS_TLS_INSECURE: "true"
+  {{- end }}
+  # File paths for secrets mounted as volumes
+  BULWARK_JWT_SECRET_FILE: "/run/secrets/jwt-secret"
+  BULWARK_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  BULWARK_API_KEYS_FILE: "/run/secrets/api-keys"
+  BULWARK_URLHAUS_KEY_FILE: "/run/secrets/urlhaus-key"
+  BULWARK_THREATFOX_KEY_FILE: "/run/secrets/threatfox-key"
+  BULWARK_OTX_KEY_FILE: "/run/secrets/otx-key"
+  BULWARK_ABUSEIPDB_KEY_FILE: "/run/secrets/abuseipdb-key"
+  BULWARK_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  {{- if .Values.proxy.ml.enabled }}
+  BULWARK_ML_ENABLED: "true"
+  BULWARK_ML_MODEL_DIR: {{ .Values.proxy.ml.modelDir | quote }}
+  BULWARK_ML_BLOCKING: {{ .Values.proxy.ml.blocking | quote }}
+  {{- end }}
+  {{- if .Values.proxy.enrichment.enabled }}
+  BULWARK_ENRICHMENT_ENABLED: "true"
+  BULWARK_REPLAY_DB_PATH: {{ .Values.proxy.enrichment.replayDbPath | quote }}
+  BULWARK_EMBED_MODEL: {{ .Values.proxy.enrichment.model | quote }}
+  BULWARK_EMBED_THRESH_SUSPICIOUS: {{ .Values.proxy.enrichment.suspiciousThreshold | quote }}
+  BULWARK_EMBED_THRESH_THREAT: {{ .Values.proxy.enrichment.threatThreshold | quote }}
+  SENTENCE_TRANSFORMERS_HOME: {{ .Values.proxy.enrichment.modelCachePath | quote }}
+  HF_HOME: "/tmp/hf_cache"
+  {{- end }}
+  {{- if .Values.proxy.cache.enabled }}
+  BULWARK_CACHE_ENABLED: "true"
+  BULWARK_CACHE_TTL: {{ .Values.proxy.cache.ttl | quote }}
+  BULWARK_CACHE_MAX_SIZE: {{ .Values.proxy.cache.maxSize | quote }}
+  {{- end }}
+  {{- if and .Values.dedicatedTenants.enabled .Values.dedicatedTenants.tenants }}
+  # Tier 2 Multi-Tenancy: list of tenants with dedicated proxy pods
+  # The shared proxy pool uses this to route requests to dedicated services
+  {{- $tenantNames := list }}
+  {{- range .Values.dedicatedTenants.tenants }}
+  {{- $tenantNames = append $tenantNames .name }}
+  {{- end }}
+  BULWARK_DEDICATED_TENANTS: {{ $tenantNames | toJson | quote }}
+  BULWARK_NAMESPACE: {{ include "bulwark-gateway.namespace" . | quote }}
+  {{- end }}
+---
+# Admin ConfigMap — environment variables for the admin container
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: admin-config
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.admin.labels" . | nindent 4 }}
+data:
+  ADMIN_JWT_EXPIRY_HOURS: {{ .Values.admin.jwtExpiryHours | quote }}
+  ADMIN_CORS_ORIGINS: {{ .Values.admin.corsOrigins | quote }}
+  BULWARK_TELEMETRY_ENABLED: {{ .Values.telemetry.enabled | quote }}
+  BULWARK_REDIS_URL: {{ include "bulwark-gateway.redis.url" . | quote }}
+  {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls .Values.externalRedis.tlsInsecure }}
+  BULWARK_REDIS_TLS_INSECURE: "true"
+  {{- end }}
+  # File paths for secrets mounted as volumes
+  BULWARK_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  ADMIN_JWT_SECRET_FILE: "/run/secrets/admin-jwt-secret"
+  ADMIN_PASSWORD_FILE: "/run/secrets/admin-password"
+  SECURITY_PASSWORD_FILE: "/run/secrets/security-password"
+  AUDITOR_PASSWORD_FILE: "/run/secrets/auditor-password"
+  DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
+  BULWARK_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
+  BULWARK_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  {{- if eq .Values.admin.database.type "postgresql" }}
+  # PostgreSQL database configuration
+  BULWARK_ADMIN_DB_URL_FILE: "/run/secrets-pg/postgresql-url"
+  BULWARK_ADMIN_DB_POOL_MIN: {{ .Values.admin.database.postgresql.poolMin | quote }}
+  BULWARK_ADMIN_DB_POOL_MAX: {{ .Values.admin.database.postgresql.poolMax | quote }}
+  BULWARK_ADMIN_DB_SSL_MODE: {{ .Values.admin.database.postgresql.sslMode | quote }}
+  {{- end }}
+  # SkillSpector configuration
+  BULWARK_SKILLSPECTOR_ENABLED: {{ .Values.admin.skillspector.enabled | quote }}
+  BULWARK_SKILLSPECTOR_BLOCK_THRESHOLD: {{ .Values.admin.skillspector.blockThreshold | quote }}
+  BULWARK_SKILLSPECTOR_WARN_THRESHOLD: {{ .Values.admin.skillspector.warnThreshold | quote }}
+  BULWARK_SKILLSPECTOR_TIMEOUT: {{ .Values.admin.skillspector.timeout | quote }}
+  BULWARK_SKILLSPECTOR_CACHE_TTL: {{ .Values.admin.skillspector.cacheTTL | quote }}
+  {{- if .Values.proxy.enrichment.enabled }}
+  BULWARK_ENRICHMENT_ENABLED: "true"
+  BULWARK_REPLAY_DB_PATH: {{ .Values.proxy.enrichment.replayDbPath | quote }}
+  BULWARK_EMBED_MODEL: {{ .Values.proxy.enrichment.model | quote }}
+  BULWARK_EMBED_THRESH_SUSPICIOUS: {{ .Values.proxy.enrichment.suspiciousThreshold | quote }}
+  BULWARK_EMBED_THRESH_THREAT: {{ .Values.proxy.enrichment.threatThreshold | quote }}
+  {{- end }}
+{{- if .Values.redis.enabled }}
+---
+# Redis ConfigMap — hardened redis.conf
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.redis.labels" . | nindent 4 }}
+data:
+  redis.conf: |
+    maxmemory {{ .Values.redis.maxMemory }}
+    maxmemory-policy allkeys-lru
+    save 60 1000
+    appendonly yes
+    protected-mode yes
+    # Block dangerous commands entirely
+    rename-command FLUSHALL ""
+    rename-command FLUSHDB ""
+    rename-command CONFIG ""
+    rename-command DEBUG ""
+    rename-command KEYS ""
+    rename-command SHUTDOWN ""
+    rename-command SLAVEOF ""
+    rename-command REPLICAOF ""
+    rename-command MODULE ""
+    rename-command SCRIPT ""
+    rename-command EVAL ""
+    rename-command EVALSHA ""
+{{- end }}

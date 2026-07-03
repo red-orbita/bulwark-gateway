@@ -40,7 +40,7 @@ class OutputRedactionScanner(OutputScanner):
             version="1.0.0",
             scanner_type=ScannerType.OUTPUT_BLOCKING,
             description="Secret/PII/credential redaction in LLM outputs",
-            author="sentinel",
+            author="bulwark",
             priority=10,  # Runs first in output pipeline
         )
 

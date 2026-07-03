@@ -4,10 +4,10 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: prometheus
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: prometheus
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: monitoring
 spec:
   serviceName: prometheus
@@ -19,7 +19,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: prometheus
-        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/part-of: bulwark-gateway
         app.kubernetes.io/component: monitoring
     spec:
       automountServiceAccountToken: false  # C-04: No SA token needed
@@ -94,10 +94,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: prometheus
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 data:
   prometheus.yml: |
     global:
@@ -108,15 +108,15 @@ data:
       - "rules.yml"
 
     scrape_configs:
-      - job_name: "sentinel-proxy"
+      - job_name: "bulwark-proxy"
         static_configs:
-          - targets: ["proxy.sentinel-gateway.svc.cluster.local:8080"]
+          - targets: ["proxy.bulwark-gateway.svc.cluster.local:8080"]
         metrics_path: "/health/metrics"
         scrape_interval: 10s
 
-      - job_name: "sentinel-admin"
+      - job_name: "bulwark-admin"
         static_configs:
-          - targets: ["admin.sentinel-gateway.svc.cluster.local:8090"]
+          - targets: ["admin.bulwark-gateway.svc.cluster.local:8090"]
         metrics_path: "/admin/health/metrics"
         scrape_interval: 10s
 
@@ -132,10 +132,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: prometheus
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: prometheus
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   type: ClusterIP
   ports:
@@ -151,10 +151,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: grafana
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: monitoring
 spec:
   replicas: 1
@@ -165,7 +165,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: grafana
-        app.kubernetes.io/part-of: sentinel-gateway
+        app.kubernetes.io/part-of: bulwark-gateway
         app.kubernetes.io/component: monitoring
     spec:
       automountServiceAccountToken: false  # C-04: No SA token needed
@@ -182,7 +182,7 @@ spec:
             - name: GF_SECURITY_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: sentinel-monitoring-secrets
+                  name: bulwark-monitoring-secrets
                   key: grafana-password
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: "false"
@@ -229,7 +229,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: grafana-data
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
 spec:
   accessModes:
     - ReadWriteOnce
@@ -242,10 +242,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: grafana
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: grafana
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   type: ClusterIP
   ports:

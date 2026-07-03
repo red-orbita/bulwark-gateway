@@ -1,7 +1,7 @@
 """
 TCP/TLS Transport — Raw TCP with optional TLS for CEF/LEEF forwarding.
 
-Used by: ArcSight, LogRhythm, CrowdStrike Falcon NG SIEM, SentinelOne, FortiSIEM.
+Used by: ArcSight, LogRhythm, CrowdStrike Falcon NG SIEM, BulwarkOne, FortiSIEM.
 """
 
 from __future__ import annotations

@@ -1,0 +1,848 @@
+{{- if .Values.monitoring.prometheus.enabled }}
+---
+# Prometheus ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.monitoring.prometheus.scrapeInterval }}
+      evaluation_interval: {{ .Values.monitoring.prometheus.scrapeInterval }}
+
+    rule_files:
+      - "rules.yml"
+      - "recording-rules.yml"
+
+    scrape_configs:
+      - job_name: "bulwark-proxy"
+        static_configs:
+          - targets: ["proxy.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:8080"]
+        metrics_path: "/health/metrics"
+        scrape_interval: 10s
+
+      - job_name: "bulwark-admin"
+        static_configs:
+          - targets: ["admin.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:8090"]
+        metrics_path: "/admin/health/metrics"
+        scrape_interval: 10s
+
+  rules.yml: |
+    # Bulwark Gateway - Prometheus Alerting Rules
+    # SOC 2 CC7.2 Monitoring Compliance
+    # MITRE ATT&CK annotations included where applicable
+    groups:
+      # ====================================================================
+      # CRITICAL ALERTS - Page immediately
+      # ====================================================================
+      - name: bulwark_critical
+        rules:
+          - alert: BulwarkHighBlockRate
+            expr: |
+              (
+                sum(rate(bulwark_verdicts_total{verdict="block"}[5m]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
+              ) > 0.10
+            for: 2m
+            labels:
+              severity: critical
+              team: security
+              compliance: "SOC2-CC7.2"
+              mitre_attack: "T1190,T1059"
+            annotations:
+              summary: "High guardrail block rate exceeds 10%"
+              description: "More than 10% of requests blocked in 5min window. Investigate active attacks or guardrail misconfiguration."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/high-block-rate"
+
+          - alert: BulwarkGuardrailLatencyHigh
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(bulwark_request_duration_seconds_bucket{phase="input_guardrail"}[5m])) by (le)
+              ) > 0.100
+            for: 3m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Input guardrail P99 latency above 100ms"
+              description: "Guardrail processing latency is degrading request performance."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/guardrail-latency"
+
+          - alert: BulwarkRedisDown
+            expr: up{job="bulwark-redis"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Redis instance is unreachable"
+              description: "Rate limiting, pattern sync, and distributed counters are degraded."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/redis-down"
+
+          - alert: BulwarkProxyPodsDown
+            expr: |
+              count(up{job="bulwark-proxy"} == 1) < 2
+                or
+              absent(up{job="bulwark-proxy"})
+            for: 2m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Proxy pod count below minimum replicas"
+              description: "Fewer than 2 healthy proxy pods. HA requirement violated."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-pods-down"
+
+          - alert: BulwarkBackendErrorRateHigh
+            expr: |
+              (
+                sum(rate(bulwark_backend_errors_total[5m]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
+              ) > 0.05
+            for: 3m
+            labels:
+              severity: critical
+              team: platform
+            annotations:
+              summary: "Backend error rate exceeds 5%"
+              description: "LLM backend is returning errors for more than 5% of forwarded requests."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/backend-errors"
+
+          - alert: BulwarkCertificateExpiringSoon
+            expr: |
+              (probe_ssl_earliest_cert_expiry - time()) / 86400 < 7
+            for: 1h
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC6.1"
+            annotations:
+              summary: "TLS certificate expires in less than 7 days"
+              description: "Renew certificate immediately to prevent outage."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/cert-renewal"
+
+          - alert: BulwarkProxyTargetDown
+            expr: up{job="bulwark-proxy"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              team: platform
+            annotations:
+              summary: "Bulwark proxy target is down"
+              description: "Prometheus cannot scrape proxy instance {{ "{{" }} $labels.instance {{ "}}" }}."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-target-down"
+
+      # ====================================================================
+      # WARNING ALERTS - Notify but don't page
+      # ====================================================================
+      - name: bulwark_warning
+        rules:
+          - alert: BulwarkRateLimitRejectionsHigh
+            expr: |
+              sum(increase(bulwark_rate_limit_rejected_total[5m])) > 100
+            for: 2m
+            labels:
+              severity: warning
+              team: security
+              mitre_attack: "T1498"
+            annotations:
+              summary: "High rate limit rejections (>100 in 5min)"
+              description: "Possible brute-force or DoS attempt detected."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/rate-limit-high"
+
+          - alert: BulwarkScannersLow
+            expr: bulwark_scanners_active < 3
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Active scanner count below expected minimum"
+              description: "Only {{ "{{" }} $value {{ "}}" }} scanners active (expected >= 3). Detection coverage degraded."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/scanners-degraded"
+
+          - alert: BulwarkMemoryPressure
+            expr: |
+              (
+                container_memory_working_set_bytes{container="bulwark-proxy"}
+                /
+                container_spec_memory_limit_bytes{container="bulwark-proxy"}
+              ) > 0.80
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Proxy container memory usage above 80%"
+              description: "Risk of OOMKill. Consider increasing memory limits."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/memory-pressure"
+
+          - alert: BulwarkDiskUsageHigh
+            expr: |
+              (
+                kubelet_volume_stats_used_bytes{namespace=~"bulwark.*"}
+                /
+                kubelet_volume_stats_capacity_bytes{namespace=~"bulwark.*"}
+              ) > 0.80
+            for: 10m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Persistent volume usage above 80%"
+              description: "PVC {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} at >80% capacity."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/disk-usage"
+
+          - alert: BulwarkAuditLogFailures
+            expr: |
+              increase(bulwark_audit_log_errors_total[5m]) > 0
+            for: 1m
+            labels:
+              severity: warning
+              team: security
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Audit log write failures detected"
+              description: "Audit trail integrity may be compromised. SOC 2 CC7.2 violation risk."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/audit-failures"
+
+          - alert: BulwarkSIEMExportErrors
+            expr: |
+              increase(bulwark_siem_export_errors_total[5m]) > 0
+            for: 3m
+            labels:
+              severity: warning
+              team: security
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "SIEM export errors detected"
+              description: "Security events may not be reaching the SIEM platform."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/siem-export-errors"
+
+          - alert: BulwarkCacheHitRatioLow
+            expr: |
+              (
+                sum(rate(bulwark_cache_hits_total[10m]))
+                /
+                clamp_min(
+                  sum(rate(bulwark_cache_hits_total[10m])) + sum(rate(bulwark_cache_misses_total[10m])),
+                  1
+                )
+              ) < 0.10
+            for: 10m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Cache hit ratio below 10%"
+              description: "Excessive cache misses indicate cold cache or eviction pressure."
+
+          - alert: BulwarkNotificationFailures
+            expr: |
+              increase(bulwark_notification_errors_total[15m]) > 3
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Alert notification delivery failures"
+              description: "Security alerts may not be reaching the operations team."
+
+      # ====================================================================
+      # INFO / SLO ALERTS - Informational, trend detection
+      # ====================================================================
+      - name: bulwark_info_slo
+        rules:
+          - alert: BulwarkThroughputAnomaly
+            expr: |
+              abs(
+                sum(rate(bulwark_requests_total[5m]))
+                -
+                sum(rate(bulwark_requests_total[1h]))
+              )
+              /
+              clamp_min(sum(rate(bulwark_requests_total[1h])), 0.1)
+              > 3.0
+            for: 5m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1498,T1499"
+            annotations:
+              summary: "Request throughput deviates significantly from baseline"
+              description: "Current rate deviates >3x from 1h baseline. Possible surge or DDoS."
+
+          - alert: BulwarkUnusualTenantActivity
+            expr: |
+              (
+                sum by (tenant_id)(rate(bulwark_requests_total[5m]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[5m])), 0.1)
+              ) > 0.80
+            for: 10m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1078"
+            annotations:
+              summary: "Tenant {{ "{{" }} $labels.tenant_id {{ "}}" }} generating >80% of all traffic"
+              description: "Investigate whether traffic concentration is expected."
+
+          - alert: BulwarkMLScannerSlow
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(bulwark_request_duration_seconds_bucket{phase="ml_scanner"}[5m])) by (le)
+              ) > 0.500
+            for: 5m
+            labels:
+              severity: info
+              team: platform
+            annotations:
+              summary: "ML scanner P95 inference time above 500ms"
+              description: "Consider model optimization or GPU scaling."
+
+          - alert: BulwarkPodRestartsHigh
+            expr: |
+              increase(kube_pod_container_status_restarts_total{namespace=~"bulwark.*"}[1h]) > 3
+            for: 5m
+            labels:
+              severity: info
+              team: platform
+            annotations:
+              summary: "Pod {{ "{{" }} $labels.pod {{ "}}" }} restarted >3 times in 1 hour"
+              description: "Check pod events for OOMKill or CrashLoopBackOff."
+
+          - alert: BulwarkToolPolicyViolations
+            expr: |
+              sum(increase(bulwark_verdicts_total{verdict="block", category="tool_abuse"}[15m])) > 10
+            for: 5m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1059,T1203"
+            annotations:
+              summary: "Elevated tool policy violations (>10 in 15min)"
+              description: "An agent may be attempting to exceed its allowed tool permissions."
+
+          - alert: BulwarkPromptInjectionSpike
+            expr: |
+              sum(increase(bulwark_verdicts_total{verdict="block", category="prompt_injection"}[10m])) > 20
+            for: 3m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1190,T1059.006"
+            annotations:
+              summary: "Prompt injection attempt spike detected"
+              description: "Automated adversarial testing or active attack in progress."
+
+          - alert: BulwarkSLORequestSuccessLow
+            expr: |
+              (
+                sum(rate(bulwark_requests_total{verdict!="block"}[30m]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[30m])), 1)
+              ) < 0.95
+            for: 15m
+            labels:
+              severity: info
+              team: platform
+              slo: "availability"
+            annotations:
+              summary: "Request success rate SLO below 95%"
+              description: "30-minute success rate has dropped below 95% SLO target."
+
+          - alert: BulwarkSLOLatencyBreach
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(bulwark_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              ) > 1.0
+            for: 10m
+            labels:
+              severity: info
+              team: platform
+              slo: "latency"
+            annotations:
+              summary: "End-to-end P95 latency SLO breach (>1s)"
+              description: "Total request P95 latency exceeds 1s SLO target."
+
+  recording-rules.yml: |
+    # SLO Recording Rules — Pre-computed metrics for dashboard performance
+    groups:
+      - name: bulwark_slo_recording
+        interval: 30s
+        rules:
+          - record: bulwark:slo:availability:ratio_30d
+            expr: |
+              1 - (
+                sum(rate(bulwark_requests_total{status=~"5.."}[30d]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[30d])), 1)
+              )
+          - record: bulwark:slo:availability:ratio_7d
+            expr: |
+              1 - (
+                sum(rate(bulwark_requests_total{status=~"5.."}[7d]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[7d])), 1)
+              )
+          - record: bulwark:slo:availability:ratio_1h
+            expr: |
+              1 - (
+                sum(rate(bulwark_requests_total{status=~"5.."}[1h]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[1h])), 1)
+              )
+          - record: bulwark:slo:latency:ratio_30d
+            expr: |
+              sum(rate(bulwark_request_duration_seconds_bucket{le="0.1"}[30d]))
+              /
+              clamp_min(sum(rate(bulwark_request_duration_seconds_count[30d])), 1)
+          - record: bulwark:slo:latency:ratio_7d
+            expr: |
+              sum(rate(bulwark_request_duration_seconds_bucket{le="0.1"}[7d]))
+              /
+              clamp_min(sum(rate(bulwark_request_duration_seconds_count[7d])), 1)
+          - record: bulwark:slo:latency:ratio_1h
+            expr: |
+              sum(rate(bulwark_request_duration_seconds_bucket{le="0.1"}[1h]))
+              /
+              clamp_min(sum(rate(bulwark_request_duration_seconds_count[1h])), 1)
+          - record: bulwark:slo:false_positive:ratio_30d
+            expr: |
+              sum(rate(bulwark_false_positives_total[30d]))
+              /
+              clamp_min(sum(rate(bulwark_verdicts_total{verdict="allow"}[30d])), 1)
+          - record: bulwark:slo:detection:ratio_30d
+            expr: |
+              sum(rate(bulwark_verdicts_total{verdict="block"}[30d]))
+              /
+              clamp_min(
+                sum(rate(bulwark_verdicts_total{verdict="block"}[30d]))
+                + sum(rate(bulwark_false_negatives_total[30d])),
+                1
+              )
+          - record: bulwark:error_budget:availability:remaining
+            expr: |
+              1 - (
+                (1 - bulwark:slo:availability:ratio_30d)
+                /
+                (1 - 0.999)
+              )
+          - record: bulwark:error_budget:latency:remaining
+            expr: |
+              1 - (
+                (1 - bulwark:slo:latency:ratio_30d)
+                /
+                (1 - 0.99)
+              )
+          - record: bulwark:error_budget:false_positive:remaining
+            expr: |
+              1 - (
+                bulwark:slo:false_positive:ratio_30d
+                /
+                0.001
+              )
+          - record: bulwark:error_budget:detection:remaining
+            expr: |
+              1 - (
+                (1 - bulwark:slo:detection:ratio_30d)
+                /
+                (1 - 0.99)
+              )
+          - record: bulwark:error_budget:availability:burn_rate_1h
+            expr: |
+              (1 - bulwark:slo:availability:ratio_1h)
+              /
+              (1 - 0.999)
+          - record: bulwark:error_budget:availability:burn_rate_6h
+            expr: |
+              (
+                1 - (
+                  1 - (
+                    sum(rate(bulwark_requests_total{status=~"5.."}[6h]))
+                    /
+                    clamp_min(sum(rate(bulwark_requests_total[6h])), 1)
+                  )
+                )
+              )
+              /
+              (1 - 0.999)
+          - record: bulwark:error_budget:latency:burn_rate_1h
+            expr: |
+              (1 - bulwark:slo:latency:ratio_1h)
+              /
+              (1 - 0.99)
+
+      - name: bulwark_operational_recording
+        interval: 30s
+        rules:
+          - record: bulwark:requests:rate5m:by_tenant
+            expr: sum by (tenant_id)(rate(bulwark_requests_total[5m]))
+          - record: bulwark:verdicts:rate5m:by_verdict
+            expr: sum by (verdict)(rate(bulwark_verdicts_total[5m]))
+          - record: bulwark:blocks:rate5m:by_category
+            expr: sum by (category)(rate(bulwark_verdicts_total{verdict="block"}[5m]))
+          - record: bulwark:latency:p50
+            expr: |
+              histogram_quantile(0.50,
+                sum(rate(bulwark_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              )
+          - record: bulwark:latency:p95
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(bulwark_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              )
+          - record: bulwark:latency:p99
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(bulwark_request_duration_seconds_bucket{phase="total"}[5m])) by (le)
+              )
+          - record: bulwark:backend:error_ratio_5m
+            expr: |
+              sum(rate(bulwark_backend_errors_total[5m]))
+              /
+              clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
+          - record: bulwark:siem:export_rate_5m
+            expr: sum(rate(bulwark_siem_events_exported_total[5m]))
+          - record: bulwark:notifications:success_ratio_5m
+            expr: |
+              1 - (
+                sum(rate(bulwark_notification_errors_total[5m]))
+                /
+                clamp_min(sum(rate(bulwark_notifications_sent_total[5m])), 1)
+              )
+
+  web.yml: |
+    # Basic auth disabled in K8s (use NetworkPolicy instead)
+    {}
+---
+# Prometheus StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prometheus
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: monitoring
+spec:
+  serviceName: prometheus
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/part-of: bulwark-gateway
+        app.kubernetes.io/component: monitoring
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: "{{ .Values.monitoring.prometheus.image.repository }}:{{ .Values.monitoring.prometheus.image.tag }}"
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.retention.time={{ .Values.monitoring.prometheus.retention }}'
+            - '--web.config.file=/etc/prometheus/web.yml'
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.monitoring.prometheus.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: prometheus-data
+              mountPath: /prometheus
+            - name: prometheus-config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: prometheus-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.monitoring.prometheus.storage }}
+---
+# Prometheus Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: prometheus
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: prometheus
+{{- end }}
+{{- if .Values.monitoring.grafana.enabled }}
+---
+# Grafana Provisioning ConfigMap — Datasources
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning-datasources
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: "10s"
+          httpMethod: POST
+---
+# Grafana Provisioning ConfigMap — Dashboard Provider
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning-dashboards
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+data:
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: Bulwark Gateway
+        orgId: 1
+        folder: Bulwark Gateway
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+# Grafana Dashboard JSON ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+  annotations:
+    bulwark-gateway.io/dashboard-version: "1"
+data:
+  {{- (.Files.Glob "dashboards/bulwark-*.json").AsConfig | nindent 2 }}
+---
+# Grafana Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/part-of: bulwark-gateway
+        app.kubernetes.io/component: monitoring
+      annotations:
+        checksum/config: "{{ .Values.monitoring | toJson | sha256sum | trunc 8 }}"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: "{{ .Values.monitoring.grafana.image.repository }}:{{ .Values.monitoring.grafana.image.tag }}"
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bulwark-monitoring-secrets
+                  key: grafana-password
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_SERVER_ROOT_URL
+              value: "/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+            - name: GF_PATHS_PROVISIONING
+              value: "/etc/grafana/provisioning"
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.monitoring.grafana.resources | nindent 12 }}
+          # SECURITY FIX (VULN 2.8): Added readOnlyRootFilesystem + tmpfs for Grafana sessions
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 472
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+            - name: grafana-tmp
+              mountPath: /tmp
+            - name: grafana-provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: grafana-provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: grafana-dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: grafana-data
+          persistentVolumeClaim:
+            claimName: grafana-data
+        - name: grafana-tmp
+          emptyDir:
+            sizeLimit: 50Mi
+        - name: grafana-provisioning-datasources
+          configMap:
+            name: grafana-provisioning-datasources
+        - name: grafana-provisioning-dashboards
+          configMap:
+            name: grafana-provisioning-dashboards
+        - name: grafana-dashboards
+          configMap:
+            name: grafana-dashboards
+---
+# Grafana PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.monitoring.grafana.storage }}
+---
+# Grafana Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: grafana
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: grafana
+{{- end }}

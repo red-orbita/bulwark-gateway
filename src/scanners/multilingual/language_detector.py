@@ -107,7 +107,7 @@ class LanguageDetector(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Language identification + policy enforcement",
-            author="sentinel",
+            author="bulwark",
             priority=5,  # Highest priority: must run first
         )
 

@@ -463,7 +463,7 @@ class EvaluationRunner:
         return f"""<!DOCTYPE html>
 <html>
 <head>
-  <title>Sentinel Gateway — Evaluation Report</title>
+  <title>Bulwark Gateway — Evaluation Report</title>
   <style>
     body {{ font-family: monospace; margin: 2em; background: #1a1a2e; color: #e0e0e0; }}
     h1 {{ color: #00d4aa; }}
@@ -477,7 +477,7 @@ class EvaluationRunner:
   </style>
 </head>
 <body>
-  <h1>Sentinel Gateway — Evaluation Report</h1>
+  <h1>Bulwark Gateway — Evaluation Report</h1>
   <p>Timestamp: {report.timestamp}</p>
 
   <h2>Summary</h2>

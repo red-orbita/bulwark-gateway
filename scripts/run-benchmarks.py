@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sentinel Gateway — Public Benchmark Suite
+Bulwark Gateway — Public Benchmark Suite
 
 Runs the evaluation framework against standard datasets and produces
 publishable results with FPR/FNR/detection rates and latency percentiles.
@@ -168,7 +168,7 @@ async def run_benchmarks(
     # === Build machine-readable results ===
     results = {
         "benchmark_version": "1.0.0",
-        "sentinel_version": "0.2.0",
+        "bulwark_version": "0.2.0",
         "engine": "regex_input (deterministic, no ML)",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
@@ -213,7 +213,7 @@ async def run_benchmarks(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sentinel Gateway Benchmark Suite")
+    parser = argparse.ArgumentParser(description="Bulwark Gateway Benchmark Suite")
     parser.add_argument(
         "--mode", choices=["standard", "exhaustive"], default="standard",
         help="Benchmark mode: standard (200 attacks) or exhaustive (1000 attacks)"

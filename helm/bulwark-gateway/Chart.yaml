@@ -1,0 +1,18 @@
+apiVersion: v2
+name: bulwark-gateway
+description: Security guardrail proxy for AI agents in cloud environments
+type: application
+version: 0.5.0
+appVersion: "0.2.0"
+home: https://github.com/anomalyco/bulwark-gateway
+keywords:
+  - security
+  - ai
+  - llm
+  - guardrail
+  - proxy
+  - siem
+maintainers:
+  - name: bulwark-gateway
+sources:
+  - https://github.com/anomalyco/bulwark-gateway

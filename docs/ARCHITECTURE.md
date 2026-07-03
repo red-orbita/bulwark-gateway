@@ -1,6 +1,6 @@
 # Architecture
 
-Sentinel Gateway is a security guardrail proxy that intercepts tool calls between users/applications and LLM agents, enforcing security policies in real-time.
+Bulwark Gateway is a security guardrail proxy that intercepts tool calls between users/applications and LLM agents, enforcing security policies in real-time.
 
 ## Table of Contents
 
@@ -19,7 +19,7 @@ Sentinel Gateway is a security guardrail proxy that intercepts tool calls betwee
 
 ```
                     ┌──────────────────────────────────────────────────────┐
-                    │                  Sentinel Gateway                     │
+                    │                  Bulwark Gateway                     │
                     │                                                       │
 User/Agent ───────▶│  [Auth] → [Input Guardrail] → [Tool Policy] → [LLM] │
                     │                                                  │    │

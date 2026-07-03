@@ -3,9 +3,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: policies
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   accessModes:
     - ReadWriteOnce
@@ -17,9 +17,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: siem-stats
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   accessModes:
     - ReadWriteOnce
@@ -31,9 +31,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: telemetry-data
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   accessModes:
     - ReadWriteOnce
@@ -45,9 +45,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: admin-data
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   accessModes:
     - ReadWriteOnce
@@ -59,9 +59,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: reports
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 spec:
   accessModes:
     - ReadWriteOnce
@@ -73,9 +73,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: notifications-data
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
     app.kubernetes.io/component: notifications
 spec:
   accessModes:

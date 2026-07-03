@@ -120,7 +120,10 @@ class PolicyLoader:
             await logger.aerror("policy_reload_rejected", reason="new_engine_empty", keeping="previous")
             return
 
-        # Atomic swap
+        # SECURITY FIX (M-03): Atomic swap with version monotonic counter.
+        # The version counter allows request handlers to detect mid-request
+        # policy changes and re-evaluate if needed (TOCTOU mitigation).
+        self._policy_version = getattr(self, "_policy_version", 0) + 1
         self.engine = new_engine
         self._policies = new_policies
 
@@ -132,7 +135,7 @@ class PolicyLoader:
         except Exception:
             pass  # Cache may not be initialized yet
 
-        await logger.ainfo("policy_reload_complete", count=len(new_policies))
+        await logger.ainfo("policy_reload_complete", count=len(new_policies), version=self._policy_version)
 
     async def start_hot_reload(self, interval_seconds: int = 5):
         """Start background polling for policy file changes."""

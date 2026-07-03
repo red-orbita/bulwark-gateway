@@ -4,84 +4,84 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: proxy-config
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: proxy
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 data:
-  # SENTINEL_BACKEND_URL: omitted — agents.yaml default uses k8s Service DNS (ollama:11434)
+  # BULWARK_BACKEND_URL: omitted — agents.yaml default uses k8s Service DNS (ollama:11434)
   # Override per-agent in agents.yaml for multi-cloud backends
-  SENTINEL_AGENTS_FILE: "/app/shared/admin/agents.yaml"
-  SENTINEL_IOC_PATH: "/app/shared/admin/iocs.json"
-  SENTINEL_FAIL_MODE: "closed"
-  SENTINEL_LOG_FORMAT: "json"
-  SENTINEL_LOG_LEVEL: "INFO"
-  SENTINEL_RATE_LIMIT_RPM: "60"
-  SENTINEL_WORKERS: "1"
-  SENTINEL_TELEMETRY_ENABLED: "true"
-  SENTINEL_TELEMETRY_BATCH_SIZE: "100"
-  SENTINEL_TELEMETRY_FLUSH_INTERVAL: "1.0"
-  SENTINEL_SIEM_STATS_FILE: "/app/shared/siem/siem_stats.json"
-  SENTINEL_SIEM_TRANSPORTS_FILE: "/app/shared/siem/siem_transports.json"
+  BULWARK_AGENTS_FILE: "/app/shared/admin/agents.yaml"
+  BULWARK_IOC_PATH: "/app/shared/admin/iocs.json"
+  BULWARK_FAIL_MODE: "closed"
+  BULWARK_LOG_FORMAT: "json"
+  BULWARK_LOG_LEVEL: "INFO"
+  BULWARK_RATE_LIMIT_RPM: "60"
+  BULWARK_WORKERS: "1"
+  BULWARK_TELEMETRY_ENABLED: "true"
+  BULWARK_TELEMETRY_BATCH_SIZE: "100"
+  BULWARK_TELEMETRY_FLUSH_INTERVAL: "1.0"
+  BULWARK_SIEM_STATS_FILE: "/app/shared/siem/siem_stats.json"
+  BULWARK_SIEM_TRANSPORTS_FILE: "/app/shared/siem/siem_transports.json"
   # SECURITY NOTE (VULN 2.9): Internal Redis uses plaintext by default.
   # This is acceptable when:
   #   1. NetworkPolicies restrict Redis access to proxy+admin pods ONLY (enforced)
   #   2. No untrusted workloads share the namespace
   # For higher security (e.g., shared cluster), switch to rediss:// with TLS:
-  #   SENTINEL_REDIS_URL: "rediss://redis.sentinel-gateway.svc.cluster.local:6379/0"
-  #   SENTINEL_REDIS_TLS_INSECURE: "true"  (if using self-signed cert on internal Redis)
-  SENTINEL_REDIS_URL: "redis://redis.sentinel-gateway.svc.cluster.local:6379/0"
+  #   BULWARK_REDIS_URL: "rediss://redis.bulwark-gateway.svc.cluster.local:6379/0"
+  #   BULWARK_REDIS_TLS_INSECURE: "true"  (if using self-signed cert on internal Redis)
+  BULWARK_REDIS_URL: "redis://redis.bulwark-gateway.svc.cluster.local:6379/0"
   # File paths for secrets mounted as volumes
-  SENTINEL_JWT_SECRET_FILE: "/run/secrets/jwt-secret"
-  SENTINEL_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
-  SENTINEL_API_KEYS_FILE: "/run/secrets/api-keys"
-  SENTINEL_URLHAUS_KEY_FILE: "/run/secrets/urlhaus-key"
-  SENTINEL_THREATFOX_KEY_FILE: "/run/secrets/threatfox-key"
-  SENTINEL_OTX_KEY_FILE: "/run/secrets/otx-key"
-  SENTINEL_ABUSEIPDB_KEY_FILE: "/run/secrets/abuseipdb-key"
-  SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  BULWARK_JWT_SECRET_FILE: "/run/secrets/jwt-secret"
+  BULWARK_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  BULWARK_API_KEYS_FILE: "/run/secrets/api-keys"
+  BULWARK_URLHAUS_KEY_FILE: "/run/secrets/urlhaus-key"
+  BULWARK_THREATFOX_KEY_FILE: "/run/secrets/threatfox-key"
+  BULWARK_OTX_KEY_FILE: "/run/secrets/otx-key"
+  BULWARK_ABUSEIPDB_KEY_FILE: "/run/secrets/abuseipdb-key"
+  BULWARK_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: admin-config
-  namespace: sentinel-gateway
+  namespace: bulwark-gateway
   labels:
     app.kubernetes.io/name: admin
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 data:
   ADMIN_JWT_EXPIRY_HOURS: "8"
   ADMIN_CORS_ORIGINS: ""
-  SENTINEL_TELEMETRY_ENABLED: "true"
-  SENTINEL_REDIS_URL: "redis://redis.sentinel-gateway.svc.cluster.local:6379/0"
+  BULWARK_TELEMETRY_ENABLED: "true"
+  BULWARK_REDIS_URL: "redis://redis.bulwark-gateway.svc.cluster.local:6379/0"
   # External Redis: same URL as proxy-config (see above for examples)
   # File paths for secrets mounted as volumes
-  SENTINEL_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
+  BULWARK_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
   ADMIN_JWT_SECRET_FILE: "/run/secrets/admin-jwt-secret"
   ADMIN_PASSWORD_FILE: "/run/secrets/admin-password"
   SECURITY_PASSWORD_FILE: "/run/secrets/security-password"
   AUDITOR_PASSWORD_FILE: "/run/secrets/auditor-password"
   DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
-  SENTINEL_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
-  SENTINEL_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  BULWARK_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
+  BULWARK_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
   # SkillSpector — pre-deployment skill security scanning
-  SENTINEL_SKILLSPECTOR_ENABLED: "true"
-  SENTINEL_SKILLSPECTOR_BLOCK_THRESHOLD: "7.0"
-  SENTINEL_SKILLSPECTOR_WARN_THRESHOLD: "4.0"
-  SENTINEL_SKILLSPECTOR_TIMEOUT: "60"
-  SENTINEL_SKILLSPECTOR_CACHE_TTL: "300"
+  BULWARK_SKILLSPECTOR_ENABLED: "true"
+  BULWARK_SKILLSPECTOR_BLOCK_THRESHOLD: "7.0"
+  BULWARK_SKILLSPECTOR_WARN_THRESHOLD: "4.0"
+  BULWARK_SKILLSPECTOR_TIMEOUT: "60"
+  BULWARK_SKILLSPECTOR_CACHE_TTL: "300"
 ---
 # Static config files (iocs, agents, siem)
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: sentinel-static-config
-  namespace: sentinel-gateway
+  name: bulwark-static-config
+  namespace: bulwark-gateway
   labels:
-    app.kubernetes.io/part-of: sentinel-gateway
+    app.kubernetes.io/part-of: bulwark-gateway
 data: {}
 # NOTE: For large config files (iocs.json, agents.yaml), use:
-#   kubectl create configmap sentinel-static-config \
+#   kubectl create configmap bulwark-static-config \
 #     --from-file=iocs.json=config/iocs.json \
 #     --from-file=agents.yaml=config/agents.yaml \
-#     -n sentinel-gateway --dry-run=client -o yaml | kubectl apply -f -
+#     -n bulwark-gateway --dry-run=client -o yaml | kubectl apply -f -

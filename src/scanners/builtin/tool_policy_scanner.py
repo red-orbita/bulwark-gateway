@@ -47,7 +47,7 @@ class ToolPolicyScanner(OutputScanner):
             version="1.0.0",
             scanner_type=ScannerType.OUTPUT_BLOCKING,
             description="RBAC enforcement on agent tool calls",
-            author="sentinel",
+            author="bulwark",
             priority=5,  # Runs before output redaction
         )
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Notifications — Sentinel Gateway Admin{% endblock %}
+{% block title %}Notifications — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Notification Channels{% endblock %}
 {% block content %}
 <div x-data="notificationManager()" x-init="init()" class="space-y-6">
@@ -66,7 +66,7 @@
                 <!-- Env warning -->
                 <template x-if="ch.source === 'env'">
                     <div class="mt-2 px-3 py-1.5 rounded bg-amber-900/10 text-[10px] text-amber-400/80">
-                        Sourced from SENTINEL_WEBHOOK_ALERT_URLS env var. Edit the env var or create a managed copy to override.
+                        Sourced from BULWARK_WEBHOOK_ALERT_URLS env var. Edit the env var or create a managed copy to override.
                     </div>
                 </template>
                 <!-- Test result -->

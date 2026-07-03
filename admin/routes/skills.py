@@ -62,7 +62,7 @@ class ScannerStatusResponse(BaseModel):
     cache_size: int
     skillspector_installed: bool = False
     skillspector_version: str = "unavailable"
-    sentinel_rules_count: int = 0
+    bulwark_rules_count: int = 0
     mcp_security_patterns: int = 0
     total_patterns: int = 0
 
@@ -119,6 +119,23 @@ async def scan_path(
     normalized = os.path.normpath(req.path)
     if ".." in normalized.split(os.sep):
         raise HTTPException(status_code=400, detail="Path traversal detected")
+
+    # SECURITY FIX (P9-03): Restrict to allowed directories only.
+    # Without this, an authenticated admin can read ANY file on the pod
+    # (e.g., /run/secrets/jwt-secret, /proc/self/environ) via the scanner.
+    _ALLOWED_SCAN_PREFIXES = (
+        "/app/config/",
+        "/app/plugins/",
+        "/app/skills/",
+        "config/",
+        "plugins/",
+        "skills/",
+    )
+    if not any(normalized.startswith(prefix) for prefix in _ALLOWED_SCAN_PREFIXES):
+        raise HTTPException(
+            status_code=403,
+            detail="Path not in allowed scan directory. Only config/, plugins/, and skills/ are permitted.",
+        )
 
     if not os.path.exists(normalized):
         raise HTTPException(status_code=404, detail=f"Path not found: {normalized}")

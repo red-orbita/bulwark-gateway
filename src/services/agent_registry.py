@@ -2,7 +2,7 @@
 Agent Registry — Resolves backend URLs per tenant/agent.
 
 Loads from config/agents.yaml, hot-reloadable via admin endpoint.
-Provides dynamic routing so sentinel-gateway can proxy to multiple backends.
+Provides dynamic routing so bulwark-gateway can proxy to multiple backends.
 Loads per-tenant quota configuration for resource isolation.
 """
 
@@ -77,7 +77,7 @@ class AgentRegistry:
         if config_path:
             self.config_path = config_path
         else:
-            env_path = os.environ.get("SENTINEL_AGENTS_FILE")
+            env_path = os.environ.get("BULWARK_AGENTS_FILE")
             self.config_path = Path(env_path) if env_path else Path("config/agents.yaml")
         self._agents: dict[str, AgentBackend] = {}  # key: "tenant:agent"
         self._defaults = AgentRegistryDefaults()

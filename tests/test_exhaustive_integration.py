@@ -167,7 +167,7 @@ class TestPluginLifecycleExhaustive:
         # Create a plugin manually
         plugin_dir = tmp_path / "plugins" / "lifecycle-test"
         plugin_dir.mkdir(parents=True)
-        (plugin_dir / "sentinel-plugin.yaml").write_text(
+        (plugin_dir / "bulwark-plugin.yaml").write_text(
             "name: lifecycle-test\nversion: 1.0.0\nauthor: test\ntype: input_scanner\n"
         )
         (plugin_dir / "scanner.py").write_text("class Scanner: pass\n")

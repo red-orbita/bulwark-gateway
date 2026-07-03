@@ -74,7 +74,7 @@ class HallucinationScanner(OutputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="NLI-based hallucination detection for LLM outputs",
-            author="sentinel",
+            author="bulwark",
             priority=20,
         )
 

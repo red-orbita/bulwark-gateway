@@ -2,13 +2,13 @@
 # Expone un servicio local a internet usando cloudflared (Cloudflare Tunnel)
 #
 # Uso:
-#   ./scripts/expose.sh                  # Expone https://admin.sentinel-gateway.local/
+#   ./scripts/expose.sh                  # Expone https://admin.bulwark-gateway.local/
 #   ./scripts/expose.sh 8080             # Expone localhost:8080
 #   ./scripts/expose.sh https://mi-url/  # Expone una URL personalizada
 
 set -euo pipefail
 
-DEFAULT_URL="https://admin.sentinel-gateway.local/"
+DEFAULT_URL="https://admin.bulwark-gateway.local/"
 TARGET="${1:-$DEFAULT_URL}"
 
 # Verificar que cloudflared está instalado
