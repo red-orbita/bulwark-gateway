@@ -48,6 +48,14 @@ reports/
 models/*.onnx
 models/*/model.onnx
 models/*/tokenizer.json
+# HuggingFace / sentence-transformers cache (blobs, snapshots, refs)
+models/sentence-transformers/
+models/**/*.safetensors
+models/**/blobs/
+models/**/snapshots/
+
+# --- Internal business/strategy docs (NEVER commit) ---
+MARKET-COMPARISON-*.md
 
 # --- Logs ---
 *.log
