@@ -1,5 +1,9 @@
 """Integration tests for admin portal API flows."""
 
+import os
+import subprocess
+import sys
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -224,3 +228,84 @@ class TestHealthFlow:
         # /users redirects to /rbac
         resp = await client.get("/users", headers=headers, follow_redirects=False)
         assert resp.status_code == 302
+
+
+class TestSecurityHeaders:
+    """Regression tests for the admin security-headers middleware (H-1, H-4)."""
+
+    async def test_baseline_headers_present(self, client):
+        resp = await client.get("/admin/health")
+        assert resp.headers["X-Content-Type-Options"] == "nosniff"
+        assert resp.headers["X-Frame-Options"] == "DENY"
+        assert "Strict-Transport-Security" in resp.headers
+
+    async def test_xss_protection_disabled(self, client):
+        # H-4: deprecated header must be '0', not the legacy '1; mode=block'.
+        resp = await client.get("/admin/health")
+        assert resp.headers["X-XSS-Protection"] == "0"
+
+    async def test_csp_hardening_directives(self, client):
+        # H-1: object-src/base-uri/form-action close base-tag injection,
+        # form hijacking and plugin-injection XSS vectors.
+        resp = await client.get("/admin/health")
+        csp = resp.headers["Content-Security-Policy"]
+        assert "object-src 'none'" in csp
+        assert "base-uri 'self'" in csp
+        assert "form-action 'self'" in csp
+        assert "frame-ancestors 'none'" in csp
+
+    async def test_csp_still_allows_required_ui_sources(self, client):
+        # Alpine.js needs 'unsafe-eval'; inline scripts/styles need 'unsafe-inline';
+        # MFA QR codes load qrcodejs from jsdelivr; fonts load from Google.
+        # These MUST remain until those deps are vendored (documented follow-up).
+        resp = await client.get("/admin/health")
+        csp = resp.headers["Content-Security-Policy"]
+        assert "'unsafe-eval'" in csp
+        assert "https://cdn.jsdelivr.net" in csp
+
+
+class TestAdminJwtSecretValidation:
+    """Regression tests for ADMIN_JWT_SECRET strength validation (H-2).
+
+    The check runs at module import time, so each case is exercised in an
+    isolated subprocess (a plain `python -c`, so the pytest/unittest bypass
+    does not apply and production behaviour is validated).
+    """
+
+    def _import_auth_service(self, secret: str, debug: str = "false") -> subprocess.CompletedProcess:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = {
+            **os.environ,
+            "ADMIN_JWT_SECRET": secret,
+            "ADMIN_DEBUG": debug,
+            "PYTHONPATH": repo_root,
+        }
+        # Drop inherited pytest markers so the module's `_testing` bypass is off
+        env.pop("PYTEST_CURRENT_TEST", None)
+        return subprocess.run(
+            [sys.executable, "-c", "import admin.services.auth_service"],
+            capture_output=True, text=True, env=env, cwd=repo_root, timeout=30,
+        )
+
+    def test_short_nondefault_secret_aborts(self):
+        # A short but non-blocklisted secret must now be rejected.
+        result = self._import_auth_service("abc123")
+        assert result.returncode != 0
+        assert "ADMIN_JWT_SECRET is insecure" in result.stderr
+
+    def test_known_default_secret_aborts(self):
+        result = self._import_auth_service("bulwark-admin-change-me-in-production")
+        assert result.returncode != 0
+        assert "ADMIN_JWT_SECRET is insecure" in result.stderr
+
+    def test_strong_secret_is_accepted(self):
+        # 40-char high-entropy secret must import cleanly.
+        result = self._import_auth_service("s3cure-" + "x" * 40)
+        assert result.returncode == 0, result.stderr
+
+    def test_debug_mode_allows_weak_secret(self):
+        # In debug mode a weak secret only warns, does not abort.
+        result = self._import_auth_service("weak", debug="true")
+        assert result.returncode == 0, result.stderr
+
+

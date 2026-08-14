@@ -41,12 +41,12 @@ JWT_AUDIENCE = "bulwark-admin"
 
 # Validate JWT secret at import time (skip in tests)
 _INSECURE_SECRETS = {"bulwark-admin-change-me-in-production", "", "secret", "test", "dev", "change-me"}
-if JWT_SECRET.lower().strip() in _INSECURE_SECRETS:
+if JWT_SECRET.lower().strip() in _INSECURE_SECRETS or len(JWT_SECRET) < 32:
     _debug = os.getenv("ADMIN_DEBUG", "false").lower() in ("true", "1")
     _testing = "pytest" in sys.modules or "unittest" in sys.modules
     if not _debug and not _testing:
         raise SystemExit(
-            "FATAL: ADMIN_JWT_SECRET is insecure. "
+            "FATAL: ADMIN_JWT_SECRET is insecure (must be 32+ chars and not a known default). "
             "Set a strong secret (32+ chars) via environment variable or Docker secret."
         )
     import logging

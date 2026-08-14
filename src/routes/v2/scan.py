@@ -210,8 +210,15 @@ def _run_scan(
                         verdict=Verdict.BLOCK,
                         events=input_result.events + [ioc_event],
                     )
-        except Exception:
-            pass  # IOC check failure doesn't block scan
+        except Exception as exc:
+            # H-3: Do not silently swallow IOC failures — a degraded IOC check
+            # would make /v2/scan report "clean" without the protection it
+            # promises. Log it so operators can detect the degradation.
+            logger.warning(
+                "v2_scan_ioc_check_failed",
+                error=str(exc)[:120],
+                tenant=tenant_id,
+            )
     else:
         input_result = GuardrailResult(verdict=Verdict.ALLOW)
 

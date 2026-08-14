@@ -98,11 +98,21 @@ async def security_headers(request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
+    # H-4: X-XSS-Protection is deprecated; its legacy auditor introduced
+    # vulnerabilities in older browsers. Disable it and rely on CSP instead.
+    response.headers["X-XSS-Protection"] = "0"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    # H-1: 'unsafe-inline'/'unsafe-eval' and the jsdelivr/Google origins are
+    # currently REQUIRED (Alpine.js evaluates expressions via new Function(),
+    # inline <script>/style attributes are used, MFA QR codes load qrcodejs from
+    # jsdelivr, and fonts load from Google). Removing them breaks the UI.
+    # Follow-up hardening: vendor qrcodejs + fonts locally and switch to the
+    # Alpine CSP build + per-request nonces to drop 'unsafe-*' and the CDNs.
+    # For now we add object-src/base-uri/form-action to close base-tag injection,
+    # form hijacking and plugin-injection XSS vectors without breaking anything.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
@@ -110,6 +120,9 @@ async def security_headers(request, call_next):
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
         "frame-ancestors 'none'"
     )
     return response
