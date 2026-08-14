@@ -43,9 +43,9 @@ jobs:
     name: "SAST: Semgrep"
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep:sha-9084573  # 1.78.0
+      image: semgrep/semgrep:1.173.0  # pinned by version (previous sha- tag was removed upstream)
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Run Semgrep (SARIF output)
         run: |
@@ -76,14 +76,14 @@ jobs:
 
       - name: Upload Semgrep SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
 
       - name: Upload Semgrep results artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: semgrep-results
           path: semgrep-results.sarif
@@ -93,9 +93,9 @@ jobs:
     name: "SAST: Bandit"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -123,14 +123,14 @@ jobs:
 
       - name: Upload Bandit SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
         with:
           sarif_file: bandit-results.sarif
           category: bandit
 
       - name: Upload Bandit results artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: bandit-results
           path: bandit-results.sarif
@@ -143,9 +143,9 @@ jobs:
     name: "SCA: pip-audit"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -204,7 +204,7 @@ jobs:
 
       - name: Upload pip-audit results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: pip-audit-results
           path: |
@@ -218,7 +218,7 @@ jobs:
     name: "SCA: Trivy Container Scan"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Build proxy image (for scanning)
         run: |
@@ -233,7 +233,7 @@ jobs:
             -f docker/Dockerfile.admin .
 
       - name: Install Trivy
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
         with:
           scan-type: image
           image-ref: "${{ env.IMAGE_PROXY }}:scan"
@@ -243,7 +243,7 @@ jobs:
           exit-code: "0"
 
       - name: Trivy proxy image (SARIF)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
         with:
           scan-type: image
           image-ref: "${{ env.IMAGE_PROXY }}:scan"
@@ -252,7 +252,7 @@ jobs:
           severity: "CRITICAL,HIGH,MEDIUM"
 
       - name: Trivy admin image (table)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
         with:
           scan-type: image
           image-ref: "${{ env.IMAGE_ADMIN }}:scan"
@@ -262,7 +262,7 @@ jobs:
           exit-code: "0"
 
       - name: Trivy admin image (SARIF)
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
         with:
           scan-type: image
           image-ref: "${{ env.IMAGE_ADMIN }}:scan"
@@ -272,21 +272,21 @@ jobs:
 
       - name: Upload Trivy SARIF (proxy)
         if: always()
-        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
         with:
           sarif_file: trivy-proxy.sarif
           category: trivy-proxy
 
       - name: Upload Trivy SARIF (admin)
         if: always()
-        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0 # v3.28.9
+        uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
         with:
           sarif_file: trivy-admin.sarif
           category: trivy-admin
 
       - name: Upload Trivy results artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: trivy-results
           path: |
@@ -303,9 +303,9 @@ jobs:
     name: "SBOM Generation"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -333,7 +333,7 @@ jobs:
             -f Dockerfile .
 
       - name: Generate container SBOM with Trivy
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
         with:
           scan-type: image
           image-ref: "${{ env.IMAGE_PROXY }}:sbom"
@@ -341,7 +341,7 @@ jobs:
           output: sbom-container-cyclonedx.json
 
       - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: sbom
           path: |
@@ -357,12 +357,12 @@ jobs:
     name: "Secret Scanning"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0  # Full history for secret scanning
 
       - name: Gitleaks scan
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907e6e0386f1b2 # v2.3.7
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -405,7 +405,7 @@ jobs:
 
       - name: Upload secret scan results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: secret-scan-results
           path: |
@@ -420,9 +420,9 @@ jobs:
     name: "License Compliance"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -468,7 +468,7 @@ jobs:
 
       - name: Upload license report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: license-report
           path: |
@@ -491,10 +491,10 @@ jobs:
       - secret-scanning
       - license-compliance
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: scan-results
 
@@ -584,7 +584,7 @@ jobs:
           echo "> **Policy**: Only HIGH/CRITICAL findings block merge. Informational findings are tracked." >> pr-comment.md
 
       - name: Post PR comment
-        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2.9.1
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2.9.4
         with:
           path: pr-comment.md
           header: security-scan
