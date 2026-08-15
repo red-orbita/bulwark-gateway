@@ -15,10 +15,67 @@ Destination: models/ (configurable via BULWARK_ML_MODEL_DIR)
 """
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
+
+# Integrity manifest consumed by src/scanners/ml/model_manager.py (fail-closed).
+# Keyed by the model's path relative to the model directory, e.g.
+# "injection-classifier/model.onnx" -> "<sha256>".
+_MANIFEST_PATH = Path(__file__).resolve().parent.parent / "config" / "model_manifest.json"
+
+
+def _sha256(path: Path) -> str:
+    """Stream a file through SHA-256 without loading it fully into memory."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def update_manifest(onnx_path: Path, key: str) -> bool:
+    """Verify or record the SHA-256 of a downloaded model in the manifest.
+
+    Security: the manifest is the trust anchor for ONNX models. If an entry
+    already exists for this model, the freshly downloaded file MUST match it —
+    a mismatch means the upstream artifact changed (or was tampered with), so we
+    abort instead of silently trusting new bytes. If no entry exists, we record
+    it (bootstrap) and print the hash so a maintainer can review and commit it.
+    """
+    actual = _sha256(onnx_path)
+
+    manifest: dict = {}
+    if _MANIFEST_PATH.exists():
+        try:
+            manifest = json.loads(_MANIFEST_PATH.read_text())
+        except (ValueError, OSError) as e:
+            print(f"  ERROR: cannot read manifest {_MANIFEST_PATH}: {e}")
+            return False
+
+    expected = manifest.get(key)
+    if expected and expected != actual:
+        print(f"  INTEGRITY MISMATCH for {key}")
+        print(f"    manifest : {expected}")
+        print(f"    download : {actual}")
+        print("    Refusing to overwrite a pinned hash. If this upgrade is")
+        print(f"    intentional, update the value in {_MANIFEST_PATH} manually.")
+        return False
+
+    if expected == actual:
+        print(f"  integrity OK ({key})")
+        return True
+
+    manifest[key] = actual
+    _MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    print(f"  manifest updated: {key} -> {actual}")
+    print(f"    (review and commit {_MANIFEST_PATH})")
+    return True
 
 
 def download_model(repo_id: str, files: list[tuple[str, str]], dest: Path) -> bool:
@@ -32,48 +89,60 @@ def download_model(repo_id: str, files: list[tuple[str, str]], dest: Path) -> bo
     dest.mkdir(parents=True, exist_ok=True)
     print(f"Downloading {repo_id} → {dest}")
 
-    for remote_file, local_name in files:
-        try:
-            local = hf_hub_download(
-                repo_id=repo_id,
-                filename=remote_file,
-                local_dir="/tmp/bulwark-models-dl",
-            )
-            target = dest / local_name
-            shutil.copy2(local, target)
-            size_mb = target.stat().st_size / 1024 / 1024
-            print(f"  {local_name} ({size_mb:.1f} MB)")
-        except Exception as e:
-            print(f"  FAILED: {remote_file} — {e}")
-            return False
+    tmp_dir = tempfile.mkdtemp(prefix="bulwark-models-dl-")
+    try:
+        for remote_file, local_name in files:
+            try:
+                local = hf_hub_download(
+                    repo_id=repo_id,
+                    filename=remote_file,
+                    local_dir=tmp_dir,
+                )
+                target = dest / local_name
+                shutil.copy2(local, target)
+                size_mb = target.stat().st_size / 1024 / 1024
+                print(f"  {local_name} ({size_mb:.1f} MB)")
+            except Exception as e:
+                print(f"  FAILED: {remote_file} — {e}")
+                return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return True
 
 
 def download_injection(model_dir: Path) -> bool:
     """Download prompt injection classifier (DeBERTa-v3, ~700MB)."""
-    return download_model(
+    dest = model_dir / "injection-classifier"
+    ok = download_model(
         repo_id="protectai/deberta-v3-base-prompt-injection-v2",
         files=[
             ("onnx/model.onnx", "model.onnx"),
             ("onnx/tokenizer.json", "tokenizer.json"),
             ("onnx/config.json", "config.json"),
         ],
-        dest=model_dir / "injection-classifier",
+        dest=dest,
     )
+    if ok:
+        ok = update_manifest(dest / "model.onnx", "injection-classifier/model.onnx")
+    return ok
 
 
 def download_toxicity(model_dir: Path) -> bool:
     """Download toxicity classifier (RoBERTa, ~250MB)."""
-    return download_model(
+    dest = model_dir / "toxicity"
+    ok = download_model(
         repo_id="Deepchecks/roberta_toxicity_classifier_onnx",
         files=[
             ("model_optimized.onnx", "model.onnx"),
             ("tokenizer.json", "tokenizer.json"),
             ("config.json", "config.json"),
         ],
-        dest=model_dir / "toxicity",
+        dest=dest,
     )
+    if ok:
+        ok = update_manifest(dest / "model.onnx", "toxicity/model.onnx")
+    return ok
 
 
 def main():
