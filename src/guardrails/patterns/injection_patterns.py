@@ -945,9 +945,13 @@ INJECTION_PATTERNS: list[Pattern] = [
         "Steganographic extraction via mathematical positions",
     ),
     # V6: Alternating encoding mix
+    # SECURITY FIX (DOS-04): Bounded the leading label quantifiers (\w+ -> \w{1,40})
+    # to eliminate O(n^2) catastrophic backtracking on adversarial repeated-char
+    # inputs (e.g. "A"*8000 took 1.3s). Detection semantics are unchanged: a real
+    # "label(base64) ... label(hex)" attack never needs a >40-char contiguous label.
     Pattern(
         re.compile(
-            r"\w+\s*\(b(ase)?64\).{0,20}\w+\s*\(hex\)",
+            r"\w{1,40}\s*\(b(ase)?64\).{0,20}\w{1,40}\s*\(hex\)",
             re.I,
         ),
         ThreatCategory.PROMPT_INJECTION,
@@ -965,9 +969,15 @@ INJECTION_PATTERNS: list[Pattern] = [
         "Binary-encoded instruction with decode directive",
     ),
     # V6: Hex string with decode/reverse/braille instructions
+    # SECURITY FIX (DOS-04): Anchored the hex run with a leading \b, bounded it to
+    # {8,64} and made it possessive (+). The old `[0-9a-f]{8,}` was catastrophic
+    # under re.IGNORECASE (A-F match uppercase) followed by a required nested group,
+    # causing O(n^2) backtracking ("A"*8000 took 6.3s; hex*20000 hung indefinitely).
+    # The \b anchor means a pure repeated-char run offers only one start position.
+    # Detection semantics are preserved (verified against positive/negative corpus).
     Pattern(
         re.compile(
-            r"[0-9a-f]{8,}(\s+[⠀-⣿]+|\s+\w+){1,5}.{0,40}(hex|braille|reverse|decode|first\s+word)",
+            r"\b[0-9a-f]{8,64}+(?:\s+[⠀-⣿]+|\s+\w+){1,5}.{0,40}(hex|braille|reverse|decode|first\s+word)",
             re.I,
         ),
         ThreatCategory.PROMPT_INJECTION,

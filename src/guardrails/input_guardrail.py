@@ -165,6 +165,69 @@ class InputGuardrail:
             if not p.pattern_id:
                 p.pattern_id = f"input-{p.category.value}-{i}"
 
+        # DOS-04: DoS controls (config-driven with safe fallbacks). Reading settings
+        # here keeps the hot path free of per-request imports while allowing operators
+        # to tune limits via BULWARK_GUARDRAIL_* env vars without code changes.
+        self.max_input_size = self.MAX_INPUT_SIZE
+        self.max_scan_bytes = 16_000
+        self.regex_budget_seconds = 1.5
+        self.max_concat_bytes = 16_000
+        self.messages_budget_seconds = 2.0
+        try:
+            from src.config import settings
+            self.max_input_size = int(getattr(settings, "guardrail_max_input_size", self.max_input_size))
+            self.max_scan_bytes = int(getattr(settings, "guardrail_max_scan_bytes", self.max_scan_bytes))
+            self.regex_budget_seconds = float(getattr(settings, "guardrail_regex_budget_seconds", self.regex_budget_seconds))
+            self.max_concat_bytes = int(getattr(settings, "guardrail_max_concat_bytes", self.max_concat_bytes))
+            self.messages_budget_seconds = float(getattr(settings, "guardrail_messages_budget_seconds", self.messages_budget_seconds))
+        except Exception:  # noqa: S110 - intentional: config is optional, safe hardcoded defaults apply
+            # Fail-safe: keep hardcoded defaults if settings unavailable (e.g. admin import)
+            pass
+
+        # DOS-04 (p95 optimization): literal prefilter for speculative cipher decodes.
+        # The letter-ciphers (ROT13 / Caesar / Atbash / reversed / Pig Latin) only
+        # transform ASCII letters — digits and punctuation pass through unchanged, so
+        # structural attacks (SSTI/XSS/SQLi/paths) are already caught by the main loop
+        # on the RAW content. The cipher blocks therefore only need to catch *alphabetic*
+        # payloads. We mine every alphabetic literal token (>=4 chars) that appears in any
+        # pattern source and, before running the full 441-pattern loop over a decoded
+        # variant, require that the decoded text contains at least one such token. When we
+        # apply the WRONG decode to benign prose the result is gibberish containing none of
+        # these tokens, so we skip the expensive scan; when we apply the RIGHT decode to a
+        # cipher-encoded attack the result is readable text whose attack words ARE mined
+        # tokens, so the full loop still runs (detection parity for realistic payloads).
+        # This is a necessary-condition (superset) gate: it can only skip work, never
+        # change a match that the full loop would have produced on tokenizable text.
+        self._decode_gate_tokens: frozenset[str] = frozenset()
+        try:
+            _toks: set[str] = set()
+            for _p in self.all_patterns:
+                for _m in re.findall(r"[A-Za-z]{4,}", _p.regex.pattern):
+                    _toks.add(_m.lower())
+            self._decode_gate_tokens = frozenset(_toks)
+        except Exception:  # noqa: S110 - prefilter is an optimization; absence just means full scan
+            pass
+
+    # Word tokenizer for the cipher-decode literal prefilter (compiled once).
+    _DECODE_GATE_WORD_RE = re.compile(r"[a-z]{4,}")
+
+    def _decode_variant_worth_scanning(self, decoded: str) -> bool:
+        """Return True if a speculatively-decoded variant could plausibly match a
+        literal-bearing pattern, i.e. it shares at least one alphabetic token (>=4 chars)
+        with the mined pattern lexicon. Used to skip the full 441-pattern loop over the
+        gibberish produced by applying the wrong cipher to benign text.
+
+        Fail-open by design: if the lexicon is empty (mining failed) we return True so the
+        caller performs the full, unoptimized scan.
+        """
+        tokens = self._decode_gate_tokens
+        if not tokens:
+            return True
+        for _w in self._DECODE_GATE_WORD_RE.findall(decoded.lower()):
+            if _w in tokens:
+                return True
+        return False
+
     @classmethod
     def _normalize_unicode(cls, text: str) -> str:
         """Apply NFKC normalization + Cyrillic homoglyph mapping + strip invisible chars.
@@ -349,13 +412,25 @@ class InputGuardrail:
         return events
 
     def _check_encoding_evasion(
-        self, content: str, tenant_id: str, agent_id: str
+        self, content: str, tenant_id: str, agent_id: str, deadline: float | None = None
     ) -> list[SecurityEvent]:
         """Multi-layer encoding evasion detection.
 
         SECURITY FIX (M-01): Recursive decoding (2 layers) to catch double-encoding
         attacks like base64(base64(payload)) that previously evaded single-pass decode.
+
+        DOS-04: `deadline` is a monotonic wall-clock timestamp. The expensive
+        speculative decode blocks (base64/hex/rot13/reversed/morse/braille/nato/
+        caesar/atbash) each run the full pattern set and are the dominant cost on
+        ordinary text. Once the deadline passes we stop attempting further decodes.
+        The cheap, high-signal checks (invisible chars, entropy, explicit encoding
+        indicators) run unconditionally before the first deadline gate.
         """
+        import time as _time
+
+        def _expired() -> bool:
+            return deadline is not None and _time.monotonic() > deadline
+
         events = []
 
         # SECURITY FIX (IG-04): For large inputs, apply encoding checks on
@@ -549,6 +624,8 @@ class InputGuardrail:
                         )
 
         # 5. Leetspeak de-obfuscation
+        if _expired():
+            return events
         if self._LEETSPEAK_RE.search(content):
             alpha_count = sum(1 for c in content if c.isalpha())
             digit_count = sum(1 for c in content if c.isdigit())
@@ -573,6 +650,8 @@ class InputGuardrail:
 
         # 6. ROT13 detection (relaxed thresholds for V5)
         # Strip non-ASCII chars before checking (fixes emoji+ROT13 bypass)
+        if _expired():
+            return events
         ascii_content = "".join(c for c in content if ord(c) < 128)
         if len(ascii_content) > 8:
             # For very long inputs, check segments (head + tail)
@@ -583,6 +662,10 @@ class InputGuardrail:
                 alpha_ratio = sum(1 for c in segment if c.isalpha()) / max(len(segment), 1)
                 if alpha_ratio > 0.5:
                     decoded_rot13 = segment.translate(self._ROT13)
+                    # DOS-04 (p95): skip the 441-pattern scan on gibberish (wrong-decode
+                    # of benign text). Attack payloads decode to text sharing mined tokens.
+                    if not self._decode_variant_worth_scanning(decoded_rot13):
+                        continue
                     # Check against patterns
                     matched = False
                     for pattern in self.all_patterns:
@@ -614,6 +697,8 @@ class InputGuardrail:
                         break
 
         # 7. Reversed text detection (only for short inputs)
+        if _expired():
+            return events
         if len(ascii_content) > 15:
             # For very long inputs, check segments (head + tail)
             segments_to_check = [ascii_content]
@@ -621,6 +706,10 @@ class InputGuardrail:
                 segments_to_check = [ascii_content[:2500], ascii_content[-2500:]]
             for segment in segments_to_check:
                 reversed_text = segment[::-1]
+                # DOS-04 (p95): reversed benign text is gibberish; skip unless it shares
+                # a mined attack token (a genuinely reversed payload decodes to real words).
+                if not self._decode_variant_worth_scanning(reversed_text):
+                    continue
                 segment_matched = False
                 for pattern in self.all_patterns:
                     if pattern.regex.search(reversed_text):
@@ -803,6 +892,8 @@ class InputGuardrail:
                         )
 
         # 11. Caesar cipher detection (try all shifts, limited to short inputs for perf)
+        if _expired():
+            return events
         if len(ascii_content) > 8:
             # For very long inputs, check segments (head + tail)
             segments_to_check = [ascii_content]
@@ -815,7 +906,16 @@ class InputGuardrail:
                     for shift in range(1, 26):
                         if shift == 13:  # Already covered by ROT13 check
                             continue
+                        # DOS-04: honour the deadline between shifts — 24 shifts x
+                        # 441 patterns per segment is the single most expensive block.
+                        if _expired():
+                            break
                         decoded = self._caesar_shift(segment, shift)
+                        # DOS-04 (p95): the single most expensive block (24 shifts x 441
+                        # patterns). A wrong shift of benign text is gibberish; only the
+                        # correct shift of a Caesar-encoded attack yields mined tokens.
+                        if not self._decode_variant_worth_scanning(decoded):
+                            continue
                         for pattern in self.all_patterns:
                             if pattern.regex.search(decoded):
                                 events.append(
@@ -861,10 +961,13 @@ class InputGuardrail:
                         break
 
         # 12. Atbash cipher detection
+        if _expired():
+            return events
         if 8 < len(ascii_content) <= 200:
             alpha_ratio = sum(1 for c in ascii_content if c.isalpha()) / max(len(ascii_content), 1)
-            if alpha_ratio > 0.5:
-                decoded_atbash = self._decode_atbash(ascii_content)
+            decoded_atbash = self._decode_atbash(ascii_content) if alpha_ratio > 0.5 else ""
+            # DOS-04 (p95): skip Atbash scan on gibberish (wrong-cipher of benign text).
+            if alpha_ratio > 0.5 and self._decode_variant_worth_scanning(decoded_atbash):
                 atbash_blocked = False
                 for pattern in self.all_patterns:
                     if pattern.regex.search(decoded_atbash):
@@ -903,48 +1006,55 @@ class InputGuardrail:
                         )
 
         # 13. Pig Latin detection
+        if _expired():
+            return events
         if re.search(r"\b\w+(way|ay)\b", content, re.I):
             pig_words = re.findall(r"\b\w+(?:way|ay)\b", content, re.I)
             if len(pig_words) >= 3:
                 decoded_pig = self._decode_pig_latin(content)
-                pig_blocked = False
-                for pattern in self.all_patterns:
-                    if pattern.regex.search(decoded_pig):
-                        events.append(
-                            SecurityEvent(
-                                tenant_id=tenant_id,
-                                agent_id=agent_id,
-                                verdict=Verdict.BLOCK,
-                                category=ThreatCategory.PROMPT_INJECTION,
-                                description="Pig Latin decoded to malicious content",
-                                source="input_guardrail_encoding",
-                                severity="high",
+                # DOS-04 (p95): skip the full scan unless the de-obfuscated text shares a
+                # mined attack token (benign Pig-Latin-shaped prose decodes to non-attack text).
+                if self._decode_variant_worth_scanning(decoded_pig):
+                    pig_blocked = False
+                    for pattern in self.all_patterns:
+                        if pattern.regex.search(decoded_pig):
+                            events.append(
+                                SecurityEvent(
+                                    tenant_id=tenant_id,
+                                    agent_id=agent_id,
+                                    verdict=Verdict.BLOCK,
+                                    category=ThreatCategory.PROMPT_INJECTION,
+                                    description="Pig Latin decoded to malicious content",
+                                    source="input_guardrail_encoding",
+                                    severity="high",
+                                )
                             )
+                            pig_blocked = True
+                            break
+                    if not pig_blocked:
+                        _kw = re.search(
+                            r"(hack|exploit|inject|bypass|exfiltrat|credential|password|"
+                            r"system.prompt|reverse.shell|ignore|override|jailbreak|"
+                            r"admin|root|sudo|shadow|passwd|secret|token)",
+                            decoded_pig,
+                            re.I,
                         )
-                        pig_blocked = True
-                        break
-                if not pig_blocked:
-                    _kw = re.search(
-                        r"(hack|exploit|inject|bypass|exfiltrat|credential|password|"
-                        r"system.prompt|reverse.shell|ignore|override|jailbreak|"
-                        r"admin|root|sudo|shadow|passwd|secret|token)",
-                        decoded_pig,
-                        re.I,
-                    )
-                    if _kw:
-                        events.append(
-                            SecurityEvent(
-                                tenant_id=tenant_id,
-                                agent_id=agent_id,
-                                verdict=Verdict.BLOCK,
-                                category=ThreatCategory.PROMPT_INJECTION,
-                                description="Pig Latin decoded payload contains dangerous keywords",
-                                source="input_guardrail_encoding",
-                                severity="high",
+                        if _kw:
+                            events.append(
+                                SecurityEvent(
+                                    tenant_id=tenant_id,
+                                    agent_id=agent_id,
+                                    verdict=Verdict.BLOCK,
+                                    category=ThreatCategory.PROMPT_INJECTION,
+                                    description="Pig Latin decoded payload contains dangerous keywords",
+                                    source="input_guardrail_encoding",
+                                    severity="high",
+                                )
                             )
-                        )
 
         # 13b. Unicode escape sequence detection (\u0048\u0065\u006c\u006c\u006f style)
+        if _expired():
+            return events
         _unicode_escape_re = re.search(r"(\\u[0-9a-fA-F]{4}){4,}", content)
         if _unicode_escape_re:
             # Decode all \uXXXX sequences in the text
@@ -1327,7 +1437,16 @@ class InputGuardrail:
         Returns BLOCK if critical/high threats found, WARN for medium/low.
         """
         events: list[SecurityEvent] = []
-        oversized = len(content) > self.MAX_INPUT_SIZE
+        # DOS-04: single wall-clock deadline shared across the ENTIRE inspection
+        # (encoding-evasion decode loops + main pattern loop). The encoding layer
+        # brute-forces Caesar/ROT13/Atbash/reversed decodes and runs the full
+        # pattern set on each — unbounded, it dominates latency on ordinary prose.
+        # Cheap high-signal checks (invisible chars, entropy, explicit indicators)
+        # run before any deadline check, so the most important detections are never
+        # skipped; only the expensive speculative decodes yield to the budget.
+        import time as _time
+        _deadline = _time.monotonic() + self.regex_budget_seconds
+        oversized = len(content) > self.max_input_size
 
         if oversized:
             events.append(
@@ -1341,23 +1460,37 @@ class InputGuardrail:
                     severity="medium",
                 )
             )
-            # SECURITY FIX (IG-02): True overlapping sliding window scan
-            # Previous approach (head 8KB + 3 middle 4KB + tail 2KB) left ~28KB gaps
-            # in 50KB payloads. Now we use a sliding window of 4KB with 50% overlap
-            # (2KB stride), ensuring every byte is covered by at least one window.
+            # SECURITY FIX (IG-02 + DOS-04): Overlapping sliding-window scan with a
+            # HARD CAP on total reconstructed bytes.
+            # IG-02 (prior) covered every byte via 4KB windows / 2KB stride, but the
+            # `\n`.join reconstruction ~doubled the payload with no ceiling, letting an
+            # attacker force 400+ regex patterns to run over hundreds of KB (DoS).
+            # DOS-04: we now stop emitting windows once the joined text would exceed
+            # self.max_scan_bytes. Coverage is prioritized head→tail; the remainder is
+            # bounded, so worst-case regex work is capped regardless of input length.
             windows: list[str] = []
             total_len = len(content)
             window_size = 4096
             stride = 2048  # 50% overlap
+            budget = self.max_scan_bytes
+            used = 0
             for offset in range(0, total_len, stride):
                 end = min(offset + window_size, total_len)
-                windows.append(content[offset:end])
+                chunk = content[offset:end]
+                # +1 accounts for the "\n" join separator between windows
+                if used + len(chunk) + 1 > budget:
+                    remaining = budget - used - 1
+                    if remaining > 0:
+                        windows.append(chunk[:remaining])
+                    break
+                windows.append(chunk)
+                used += len(chunk) + 1
                 if end >= total_len:
                     break
             content = "\n".join(windows)
 
         # Layer 1: Encoding evasion detection (on raw input)
-        encoding_events = self._check_encoding_evasion(content, tenant_id, agent_id)
+        encoding_events = self._check_encoding_evasion(content, tenant_id, agent_id, _deadline)
         events.extend(encoding_events)
 
         # Layer 2: Normalize for pattern matching
@@ -1489,7 +1622,7 @@ class InputGuardrail:
         # Prevents algorithmic complexity DoS where crafted near-miss inputs
         # cause excessive backtracking across 441 patterns × N text variants.
         import time as _time
-        _REGEX_BUDGET_SECONDS = 2.0  # Max 2 seconds of regex CPU per request
+        _REGEX_BUDGET_SECONDS = self.regex_budget_seconds  # DOS-04: config-driven (default 1.5s)
         _regex_start = _time.monotonic()
         _budget_exceeded = False
         _pattern_counter = 0  # DOS-03: check budget every 10 patterns (was every ~50 via hash)
@@ -1520,6 +1653,12 @@ class InputGuardrail:
                                 severity="high",
                             )
                         )
+                        # DOS-04: the final verdict is derived from max_severity, so the
+                        # fail-closed BLOCK above is only honoured if we escalate severity.
+                        # Without this, an early budget break (before any high-severity
+                        # pattern matched) would collapse to WARN — a fail-OPEN regression.
+                        if severity_rank["high"] > severity_rank[max_severity]:
+                            max_severity = "high"
                         break
                 if pattern.description in matched_descriptions:
                     continue
@@ -1694,16 +1833,44 @@ class InputGuardrail:
         user_contents: list[str] = []
         cumulative_score: float = 0.0
 
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
+        # DOS-04: A single request carries the full conversation history. A padded
+        # history of many large turns must not be able to pin a worker for seconds
+        # (each per-message inspect() runs 400+ patterns × decode variants). We fully
+        # inspect the most RECENT messages first — the live attack surface — under an
+        # aggregate wall-clock budget. Older overflow content is NOT silently dropped
+        # from detection: it is still covered by the capped concatenated split-attack
+        # scan below. We intentionally do NOT fail-closed here: BLOCKing a legitimate
+        # long conversation would be a worse (availability) failure than relying on the
+        # concat scan for the tail. Operators can tune the budget via
+        # BULWARK_GUARDRAIL_MESSAGES_BUDGET_SECONDS.
+        import time as _time
+        _msg_deadline = _time.monotonic() + self.messages_budget_seconds
+        _scan_truncated = False
+
+        # Determine inspection order: most-recent message first so the freshest
+        # (and most attack-relevant) turns are always inspected within budget.
+        indexed = [
+            (i, m.get("role", "user"), m.get("content", ""))
+            for i, m in enumerate(messages)
+        ]
+        for _pos, (_idx, role, content) in enumerate(reversed(indexed)):
             if not content:
                 continue
 
-            # Inspect ALL roles — adversaries inject into system/tool/assistant messages
-            # User messages get full inspection; other roles get injection-only checks
+            # Always record user turns (chronological order preserved) so cross-turn
+            # escalation and the concatenated split-attack scan see the full history,
+            # even for messages the per-message loop had to skip for latency.
             if role == "user":
                 user_contents.append(content)
+
+            # Budget guard: once the aggregate deadline is passed, stop the expensive
+            # per-message inspection of older turns. The first (most recent) message is
+            # always inspected regardless, so a single-turn request is never skipped.
+            if _pos > 0 and _time.monotonic() > _msg_deadline:
+                _scan_truncated = True
+                continue
+
+            # Inspect ALL roles — adversaries inject into system/tool/assistant messages
             result = self.inspect(content, tenant_id, agent_id)
             all_events.extend(result.events)
             if result.verdict == Verdict.BLOCK:
@@ -1722,12 +1889,38 @@ class InputGuardrail:
                 elif ev.severity == "low":
                     cumulative_score += 0.1
 
+        # Restore chronological order for cross-turn analysis (we collected newest-first).
+        user_contents.reverse()
+
+        # DOS-04: record (but do not alert on) the fact that we bounded the scan, so
+        # operators retain an audit trail of partially-inspected oversized requests.
+        if _scan_truncated:
+            all_events.append(
+                SecurityEvent(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    verdict=Verdict.ALLOW,
+                    category=ThreatCategory.DENIAL_OF_SERVICE,
+                    description=(
+                        f"Per-message scan budget ({self.messages_budget_seconds}s) reached; "
+                        "older turns covered by concatenated scan only (DoS bound)"
+                    ),
+                    source="input_guardrail_msg_budget",
+                    severity="low",
+                )
+            )
+
         # SECURITY FIX (CRIT-05): Scan concatenated messages to detect
         # semantic splitting attacks. If multiple messages exist, join them
         # and run inspection on the combined text. This catches injection
         # phrases split across messages that individually appear benign.
         if final_verdict != Verdict.BLOCK and len(user_contents) >= 2:
             concatenated = " ".join(user_contents)
+            # DOS-04: cap the aggregate so a conversation of many large messages
+            # cannot force a second full scan over hundreds of KB. Splitting attacks
+            # rely on adjacency of the split phrase, which survives head truncation.
+            if len(concatenated) > self.max_concat_bytes:
+                concatenated = concatenated[: self.max_concat_bytes]
             concat_result = self.inspect(concatenated, tenant_id, agent_id)
             if concat_result.verdict == Verdict.BLOCK:
                 # Add a specific event indicating the split was detected

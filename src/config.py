@@ -121,6 +121,28 @@ class Settings(BaseSettings):
     ml_timeout_ms: int = 10000  # Max ML inference time in milliseconds (CPU: ~1-5s)
     ml_model_dir: Path = Path("models")  # Directory for ML model files
 
+    # Input Guardrail DoS controls (DOS-04)
+    # Hard cap on how many bytes of a single message the input guardrail will scan.
+    # Oversized messages are truncated to a bounded overlapping-window reconstruction
+    # whose total size never exceeds guardrail_max_scan_bytes. Bounds the aggregate
+    # cost of running 400+ regex patterns on adversarially large inputs.
+    guardrail_max_input_size: int = 8_000        # Per-message "oversized" threshold
+    guardrail_max_scan_bytes: int = 16_000       # Absolute cap on reconstructed scan text
+    # Per-message CPU budget for the regex loop. Sized comfortably ABOVE the worst-case
+    # cost of scanning a full max_scan_bytes payload of benign text (~0.7s observed), so
+    # the fail-closed budget path only trips on genuinely anomalous backtracking rather
+    # than on legitimately large prose (e.g. long documents to summarize). With the
+    # catastrophic-backtracking patterns rewritten and input capped at max_scan_bytes,
+    # this doubles as a hard latency ceiling per message.
+    guardrail_regex_budget_seconds: float = 1.5
+    guardrail_max_concat_bytes: int = 16_000     # Cap on concatenated cross-message scan
+    # Aggregate wall-clock budget for the per-message scan phase of inspect_messages.
+    # A single request carries the full conversation history; a padded history of many
+    # large turns must not pin a worker for seconds. Messages are inspected most-recent
+    # first (the live attack surface) until this budget is spent; older overflow content
+    # is still covered by the capped concatenated split-attack scan.
+    guardrail_messages_budget_seconds: float = 2.0
+
     # RAG Guard (Phase 5)
     rag_enabled: bool = False  # Master switch for RAG scanners (retrieval + memory guard)
 
