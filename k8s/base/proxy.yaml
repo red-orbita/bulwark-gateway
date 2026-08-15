@@ -117,9 +117,13 @@ spec:
             httpGet:
               path: /health
               port: http
+            # Cold start with --workers 4 (regex engine + scanners + enrichment)
+            # measures ~32-40s. Old budget (5 + 6*5 = 35s) raced the app and caused
+            # CrashLoopBackOff on cold nodes. 5 + 40*5 = 205s gives ample headroom;
+            # liveness/readiness only engage once this succeeds.
             initialDelaySeconds: 5
             periodSeconds: 5
-            failureThreshold: 6
+            failureThreshold: 40
       volumes:
         - name: secrets
           secret:
