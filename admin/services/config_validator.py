@@ -120,7 +120,10 @@ class HotReloader:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         backup_path = BACKUP_DIR / f"{policy_name}.{timestamp}.yaml"
-        shutil.copy2(source, backup_path)
+        # copyfile (data only) — copy2/copy would invoke copystat -> os.listxattr,
+        # which raises PermissionError on hardened containers (read-only rootfs,
+        # dropped capabilities, seccomp). We only need the file contents.
+        shutil.copyfile(source, backup_path)
         return str(backup_path)
 
     @staticmethod
@@ -152,7 +155,9 @@ class HotReloader:
             target_backup = backups[0]  # Latest
 
         target = POLICIES_DIR / f"{policy_name}.yaml"
-        shutil.copy2(target_backup, target)
+        # copyfile (data only) — avoid copystat/os.listxattr which fails under
+        # hardened container security (read-only rootfs + dropped caps + seccomp).
+        shutil.copyfile(target_backup, target)
         return True
 
     @staticmethod

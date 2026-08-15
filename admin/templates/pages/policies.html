@@ -125,17 +125,17 @@
                     </div>
                     <div>
                         <label class="sg-label">Tenant ID</label>
-                        <input type="text" x-model="form.tenant_id" class="sg-input" placeholder="example-corp">
+                        <input type="text" x-model="form.tenant_id" @input="syncYaml()" class="sg-input" placeholder="example-corp">
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="sg-label">Agent ID <span class="text-gray-600">(optional)</span></label>
-                        <input type="text" x-model="form.agent_id" class="sg-input" placeholder="support-bot">
+                        <input type="text" x-model="form.agent_id" @input="syncYaml()" class="sg-input" placeholder="support-bot">
                     </div>
                     <div>
                         <label class="sg-label">Sandbox Level</label>
-                        <select x-model="form.sandbox_level" class="sg-select">
+                        <select x-model="form.sandbox_level" @change="syncYaml()" class="sg-select">
                             <option value="strict">Strict — Block all unknown tools</option>
                             <option value="moderate">Moderate — Allow read tools</option>
                             <option value="permissive">Permissive — Allow most tools</option>
@@ -144,30 +144,61 @@
                 </div>
                 <div>
                     <label class="sg-label">Allowed Tools <span class="text-gray-600">(comma-separated)</span></label>
-                    <input type="text" x-model="form.allowed_tools_str" class="sg-input font-mono text-xs" placeholder="read_file, list_dir, search_code">
+                    <input type="text" x-model="form.allowed_tools_str" @input="syncYaml()" class="sg-input font-mono text-xs" placeholder="read_file, list_dir, search_code">
                 </div>
                 <div>
                     <label class="sg-label">Denied Tools <span class="text-gray-600">(comma-separated)</span></label>
-                    <input type="text" x-model="form.denied_tools_str" class="sg-input font-mono text-xs" placeholder="execute_command, delete_file, write_file">
+                    <input type="text" x-model="form.denied_tools_str" @input="syncYaml()" class="sg-input font-mono text-xs" placeholder="execute_command, delete_file, write_file">
                 </div>
-                <div class="grid grid-cols-3 gap-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="sg-label">Max Tool Calls</label>
-                        <input type="number" x-model="form.max_tool_calls" class="sg-input">
-                    </div>
-                    <div>
-                        <label class="sg-label">Rate Limit (req/min)</label>
-                        <input type="number" x-model="form.rate_limit" class="sg-input">
-                    </div>
-                    <div>
-                        <label class="sg-label">Token Budget</label>
-                        <input type="number" x-model="form.token_budget" class="sg-input">
+                        <input type="number" x-model="form.max_tool_calls" @input="syncYaml()" class="sg-input">
                     </div>
                 </div>
-                <!-- YAML Preview -->
+
+                <!-- Tool Argument Schemas (JSON Schema validation) -->
+                <div class="border border-gray-700/60 rounded-lg p-4 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <label class="sg-label !mb-0 flex items-center gap-1.5">
+                                <i data-lucide="shield-check" class="w-3.5 h-3.5 text-brand-400"></i>
+                                Tool Argument Schemas
+                            </label>
+                            <p class="text-[11px] text-gray-500 mt-0.5">Validate tool-call arguments against a JSON Schema. Unlisted arguments are rejected when <code>additionalProperties:false</code>.</p>
+                        </div>
+                        <button type="button" @click="addToolSchema()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add
+                        </button>
+                    </div>
+                    <template x-for="(ts, idx) in form.tool_schemas" :key="idx">
+                        <div class="space-y-1.5 border-t border-gray-800 pt-3 first:border-t-0 first:pt-0">
+                            <div class="flex items-center gap-2">
+                                <input type="text" x-model="ts.tool" @input="syncYaml()" class="sg-input font-mono text-xs flex-1" placeholder="tool name (e.g. web_search)">
+                                <button type="button" @click="removeToolSchema(idx)" class="sg-btn sg-btn-ghost sg-btn-sm text-red-400 hover:text-red-300" title="Remove">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
+                            <textarea x-model="ts.schema" @input="syncYaml()" rows="4"
+                                      class="sg-input font-mono text-[11px] leading-relaxed"
+                                      placeholder='{"type":"object","properties":{"query":{"type":"string","maxLength":200}},"required":["query"],"additionalProperties":false}'></textarea>
+                            <p x-show="ts.schema && !isValidJson(ts.schema)" class="text-[11px] text-red-400">Invalid JSON — this schema will be skipped.</p>
+                        </div>
+                    </template>
+                    <p x-show="form.tool_schemas.length === 0" class="text-[11px] text-gray-600 italic">No per-tool schemas. Tool arguments are validated only by allow/deny lists.</p>
+                </div>
+
+                <!-- YAML (editable, proxy format) -->
                 <div>
-                    <label class="sg-label">YAML Preview</label>
-                    <pre class="bg-gray-800 border border-gray-700 rounded-lg p-4 text-[11px] font-mono text-gray-300 max-h-36 overflow-auto leading-relaxed" x-text="yamlPreview"></pre>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="sg-label !mb-0">Policy YAML <span class="text-gray-600">(proxy format — source of truth)</span></label>
+                        <button type="button" @click="regenerateYaml()" class="sg-btn sg-btn-ghost sg-btn-sm" title="Rebuild YAML from the fields above (discards manual YAML edits)">
+                            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Regenerate
+                        </button>
+                    </div>
+                    <textarea x-model="form.rawYaml" @input="yamlManual = true" spellcheck="false" rows="10"
+                              class="sg-input font-mono text-[11px] leading-relaxed"></textarea>
+                    <p x-show="yamlManual" class="text-[11px] text-amber-400 mt-1">Manual edits active — field changes won't overwrite the YAML until you click Regenerate.</p>
                 </div>
                 <!-- Validation -->
                 <div x-show="validationResult" x-cloak x-transition class="flex items-center gap-2 px-4 py-3 rounded-lg border"
@@ -200,7 +231,20 @@ function policiesManager() {
         editingPolicy: null,
         validationResult: null,
         loading: true,
-        form: { name: '', tenant_id: 'default', agent_id: '', sandbox_level: 'strict', allowed_tools_str: '', denied_tools_str: '', max_tool_calls: 50, rate_limit: 60, token_budget: 100000 },
+        yamlManual: false,
+        form: {
+            name: '', tenant_id: 'default', agent_id: '', sandbox_level: 'strict',
+            allowed_tools_str: '', denied_tools_str: '', max_tool_calls: 20,
+            tool_schemas: [], rawYaml: '',
+        },
+
+        blankForm() {
+            return {
+                name: '', tenant_id: 'default', agent_id: '', sandbox_level: 'strict',
+                allowed_tools_str: '', denied_tools_str: '', max_tool_calls: 20,
+                tool_schemas: [], rawYaml: '',
+            };
+        },
 
         get filteredPolicies() {
             let result = this.policies;
@@ -214,10 +258,56 @@ function policiesManager() {
             return result;
         },
 
-        get yamlPreview() {
-            const allowed = (this.form.allowed_tools_str||'').split(',').filter(t=>t.trim()).map(t=>'  - '+t.trim()).join('\n');
-            const denied = (this.form.denied_tools_str||'').split(',').filter(t=>t.trim()).map(t=>'  - '+t.trim()).join('\n');
-            return `name: ${this.form.name}\ntenant_id: ${this.form.tenant_id}\nagent_id: ${this.form.agent_id || '*'}\nsandbox_level: ${this.form.sandbox_level}\nallowed_tools:\n${allowed || '  []'}\ndenied_tools:\n${denied || '  []'}\nmax_tool_calls: ${this.form.max_tool_calls}\nrate_limit: ${this.form.rate_limit}\ntoken_budget: ${this.form.token_budget}`;
+        isValidJson(s) {
+            try { JSON.parse(s); return true; } catch(e) { return false; }
+        },
+
+        // Build proxy-format YAML from the structured fields.
+        // JSON Schema is emitted as inline JSON (valid YAML flow syntax) so we
+        // never hand-indent nested structures.
+        buildYaml() {
+            const f = this.form;
+            const allowed = (f.allowed_tools_str||'').split(',').map(t=>t.trim()).filter(Boolean);
+            const denied = (f.denied_tools_str||'').split(',').map(t=>t.trim()).filter(Boolean);
+            const lines = [];
+            lines.push(`tenant: ${f.tenant_id || 'default'}`);
+            lines.push(`agents:`);
+            lines.push(`  - id: ${f.agent_id || '*'}`);
+            lines.push(`    sandbox_level: ${f.sandbox_level}`);
+            lines.push(`    allowed_tools: ${JSON.stringify(allowed)}`);
+            lines.push(`    denied_tools: ${JSON.stringify(denied)}`);
+            lines.push(`    max_tool_calls: ${parseInt(f.max_tool_calls) || 20}`);
+            const validSchemas = (f.tool_schemas||[]).filter(ts => (ts.tool||'').trim() && ts.schema && this.isValidJson(ts.schema));
+            if (validSchemas.length) {
+                lines.push(`    tool_policies:`);
+                for (const ts of validSchemas) {
+                    // Re-serialize to collapse whitespace/newlines into single-line JSON.
+                    const compact = JSON.stringify(JSON.parse(ts.schema));
+                    lines.push(`      - name: ${ts.tool.trim()}`);
+                    lines.push(`        parameter_schema: ${compact}`);
+                }
+            }
+            return lines.join('\n') + '\n';
+        },
+
+        syncYaml() {
+            if (!this.yamlManual) this.form.rawYaml = this.buildYaml();
+        },
+
+        regenerateYaml() {
+            this.form.rawYaml = this.buildYaml();
+            this.yamlManual = false;
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        addToolSchema() {
+            this.form.tool_schemas.push({ tool: '', schema: '' });
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        removeToolSchema(idx) {
+            this.form.tool_schemas.splice(idx, 1);
+            this.syncYaml();
         },
 
         async init() {
@@ -231,8 +321,10 @@ function policiesManager() {
         },
 
         resetForm() {
-            this.form = { name: '', tenant_id: 'default', agent_id: '', sandbox_level: 'strict', allowed_tools_str: '', denied_tools_str: '', max_tool_calls: 50, rate_limit: 60, token_budget: 100000 };
+            this.form = this.blankForm();
+            this.yamlManual = false;
             this.validationResult = null;
+            this.form.rawYaml = this.buildYaml();
         },
 
         async togglePolicy(policy) {
@@ -241,10 +333,26 @@ function policiesManager() {
             this.$nextTick(() => lucide.createIcons());
         },
 
-        editPolicy(policy) {
-            this.editingPolicy = policy;
-            this.form = { ...policy, allowed_tools_str: (policy.allowed_tools||[]).join(', '), denied_tools_str: (policy.denied_tools||[]).join(', ') };
+        // Load the raw YAML of an existing policy for editing (perfect round-trip).
+        async editPolicy(policy) {
             this.validationResult = null;
+            this.form = this.blankForm();
+            this.form.name = policy.name;
+            this.form.tenant_id = policy.tenant || 'default';
+            try {
+                const resp = await fetch(`/admin/policies/${policy.name}`);
+                if (resp.ok) {
+                    const detail = await resp.json();
+                    this.form.rawYaml = detail.content || this.buildYaml();
+                } else {
+                    this.form.rawYaml = this.buildYaml();
+                }
+            } catch(e) {
+                this.form.rawYaml = this.buildYaml();
+            }
+            this.yamlManual = true;  // editing raw YAML directly
+            this.editingPolicy = policy;
+            this.$nextTick(() => lucide.createIcons());
         },
 
         async deletePolicy(policy) {
@@ -262,37 +370,40 @@ function policiesManager() {
 
         async dryRun() {
             this.validationResult = null;
-            const body = this.buildPayload();
             try {
-                const resp = await fetch('/admin/validate/dry-run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ type: 'policy', content: body }) });
+                const resp = await fetch(`/admin/validate/dry-run?content=${encodeURIComponent(this.form.rawYaml)}`, { method: 'POST' });
                 this.validationResult = await resp.json();
             } catch(e) { this.validationResult = { valid: false, errors: [e.message] }; }
             this.$nextTick(() => lucide.createIcons());
         },
 
         async savePolicy() {
-            const body = this.buildPayload();
-            const method = this.editingPolicy ? 'PUT' : 'POST';
-            const url = this.editingPolicy ? `/admin/policies/${this.form.name}` : '/admin/policies/';
-            const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-            if (resp.ok) { this.showCreate = false; this.editingPolicy = null; await this.init(); showToast('Policy saved successfully', 'success'); }
-            else { const err = await resp.json().catch(()=>({})); showToast(err.detail || 'Failed to save', 'error'); }
+            if (!this.form.name || !/^[a-zA-Z0-9_\-]{1,64}$/.test(this.form.name)) {
+                showToast('Invalid policy name (alphanumeric, - and _ only)', 'error'); return;
+            }
+            const content = this.form.rawYaml;
+            let resp;
+            if (this.editingPolicy) {
+                resp = await fetch(`/admin/policies/${this.form.name}`, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ content, comment: 'Edited via admin UI' }),
+                });
+            } else {
+                resp = await fetch('/admin/policies', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ name: this.form.name, tenant: this.form.tenant_id || 'default', content, active: true }),
+                });
+            }
+            if (resp.ok) {
+                this.showCreate = false; this.editingPolicy = null;
+                await this.init(); showToast('Policy saved successfully', 'success');
+            } else {
+                const err = await resp.json().catch(()=>({}));
+                let msg = err.detail;
+                if (msg && typeof msg === 'object') msg = (msg.errors || []).join(', ') || JSON.stringify(msg);
+                showToast(msg || 'Failed to save', 'error');
+            }
         },
-
-        buildPayload() {
-            return {
-                name: this.form.name,
-                tenant_id: this.form.tenant_id,
-                agent_id: this.form.agent_id || '*',
-                sandbox_level: this.form.sandbox_level,
-                allowed_tools: (this.form.allowed_tools_str||'').split(',').map(t=>t.trim()).filter(Boolean),
-                denied_tools: (this.form.denied_tools_str||'').split(',').map(t=>t.trim()).filter(Boolean),
-                max_tool_calls: parseInt(this.form.max_tool_calls) || 50,
-                rate_limit: parseInt(this.form.rate_limit) || 60,
-                token_budget: parseInt(this.form.token_budget) || 100000,
-                enabled: true,
-            };
-        }
     };
 }
 </script>

@@ -40,10 +40,13 @@ LABEL org.opencontainers.image.description="Admin portal for Bulwark Gateway"
 LABEL org.opencontainers.image.version="0.4.3"
 
 # Runtime deps for SQLCipher (runtime library only, not -dev headers)
-# SECURITY FIX (APT-21): Use libsqlcipher0 instead of libsqlcipher-dev
-# to reduce attack surface (no headers, no dev tools in runtime image)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsqlcipher0 && \
+# SECURITY FIX (APT-21): install the runtime shared library only (no headers,
+# no dev tools) to reduce attack surface.
+# Debian bumped the SONAME package name libsqlcipher0 -> libsqlcipher1, so try
+# the newer name first and fall back for older bases (keeps the build portable).
+RUN apt-get update && \
+    (apt-get install -y --no-install-recommends libsqlcipher1 || \
+     apt-get install -y --no-install-recommends libsqlcipher0) && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark
