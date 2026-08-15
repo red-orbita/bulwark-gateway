@@ -34,6 +34,10 @@ env:
   PYTHON_VERSION: "3.11"
   IMAGE_PROXY: bulwark-gateway-proxy
   IMAGE_ADMIN: bulwark-gateway-admin
+  # Pinned Trivy version. Installed by downloading the release binary directly
+  # from GitHub (the trivy-action/setup-trivy path resolves a default version
+  # via the get.trivy.dev redirector, which currently 404s and breaks the job).
+  TRIVY_VERSION: "0.74.0"
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════════════
@@ -233,52 +237,49 @@ jobs:
             -f docker/Dockerfile.admin .
 
       - name: Install Trivy
-        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
-        with:
-          scan-type: image
-          image-ref: "${{ env.IMAGE_PROXY }}:scan"
-          format: table
-          output: trivy-proxy-table.txt
-          severity: "CRITICAL,HIGH,MEDIUM"
-          exit-code: "0"
+        run: |
+          curl -sfL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          sudo tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy
+          trivy --version
+
+      - name: Trivy proxy image (table)
+        run: |
+          trivy image --scanners vuln \
+            --format table --output trivy-proxy-table.txt \
+            --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
+            "${{ env.IMAGE_PROXY }}:scan"
 
       - name: Trivy proxy image (SARIF)
-        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
-        with:
-          scan-type: image
-          image-ref: "${{ env.IMAGE_PROXY }}:scan"
-          format: sarif
-          output: trivy-proxy.sarif
-          severity: "CRITICAL,HIGH,MEDIUM"
+        run: |
+          trivy image --scanners vuln \
+            --format sarif --output trivy-proxy.sarif \
+            --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
+            "${{ env.IMAGE_PROXY }}:scan"
 
       - name: Trivy admin image (table)
-        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
-        with:
-          scan-type: image
-          image-ref: "${{ env.IMAGE_ADMIN }}:scan"
-          format: table
-          output: trivy-admin-table.txt
-          severity: "CRITICAL,HIGH,MEDIUM"
-          exit-code: "0"
+        run: |
+          trivy image --scanners vuln \
+            --format table --output trivy-admin-table.txt \
+            --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
+            "${{ env.IMAGE_ADMIN }}:scan"
 
       - name: Trivy admin image (SARIF)
-        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
-        with:
-          scan-type: image
-          image-ref: "${{ env.IMAGE_ADMIN }}:scan"
-          format: sarif
-          output: trivy-admin.sarif
-          severity: "CRITICAL,HIGH,MEDIUM"
+        run: |
+          trivy image --scanners vuln \
+            --format sarif --output trivy-admin.sarif \
+            --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
+            "${{ env.IMAGE_ADMIN }}:scan"
 
       - name: Upload Trivy SARIF (proxy)
-        if: always()
+        if: always() && hashFiles('trivy-proxy.sarif') != ''
         uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
         with:
           sarif_file: trivy-proxy.sarif
           category: trivy-proxy
 
       - name: Upload Trivy SARIF (admin)
-        if: always()
+        if: always() && hashFiles('trivy-admin.sarif') != ''
         uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
         with:
           sarif_file: trivy-admin.sarif
@@ -314,15 +315,13 @@ jobs:
 
       - name: Generate CycloneDX SBOM from requirements.lock
         run: |
-          cyclonedx-py requirements \
-            --input-file requirements.lock \
+          cyclonedx-py requirements requirements.lock \
             --output-format json \
             --output-file sbom-proxy-cyclonedx.json
 
       - name: Generate CycloneDX SBOM from requirements-admin.lock
         run: |
-          cyclonedx-py requirements \
-            --input-file requirements-admin.lock \
+          cyclonedx-py requirements requirements-admin.lock \
             --output-format json \
             --output-file sbom-admin-cyclonedx.json
 
@@ -332,13 +331,18 @@ jobs:
             -t ${{ env.IMAGE_PROXY }}:sbom \
             -f Dockerfile .
 
+      - name: Install Trivy
+        run: |
+          curl -sfL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          sudo tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy
+          trivy --version
+
       - name: Generate container SBOM with Trivy
-        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
-        with:
-          scan-type: image
-          image-ref: "${{ env.IMAGE_PROXY }}:sbom"
-          format: cyclonedx
-          output: sbom-container-cyclonedx.json
+        run: |
+          trivy image --format cyclonedx \
+            --output sbom-container-cyclonedx.json \
+            "${{ env.IMAGE_PROXY }}:sbom"
 
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
