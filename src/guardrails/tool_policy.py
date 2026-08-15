@@ -15,6 +15,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from src.guardrails import schema_validation
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, ToolCall, Verdict
 
 # Self-protection: paths that tool calls must NEVER modify
@@ -282,6 +283,10 @@ class ToolPolicy:
     denied_arguments: dict[str, list[str]] = field(default_factory=dict)
     required_arguments: list[str] = field(default_factory=list)
     argument_patterns: dict[str, str] = field(default_factory=dict)  # regex allowlist per arg
+    # JSON Schema for the tool's arguments. When set, tool_call.arguments are
+    # validated against it (type checking + additionalProperties:false to block
+    # parameter smuggling). Bounded, dependency-free — see schema_validation.py.
+    parameter_schema: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -629,7 +634,67 @@ class ToolPolicyEngine:
                     verdict=Verdict.BLOCK, events=events, blocked_tools=[tool_call.name]
                 )
 
+        # Check JSON Schema for arguments (type safety + additionalProperties)
+        schema_result = self._validate_argument_schema(
+            tool_call, policy, tenant_id, agent_id
+        )
+        if schema_result is not None:
+            return schema_result
+
         return GuardrailResult(verdict=Verdict.ALLOW, events=events)
+
+    def _validate_argument_schema(
+        self, tool_call: ToolCall, policy: ToolPolicy, tenant_id: str, agent_id: str
+    ) -> GuardrailResult | None:
+        """Validate tool_call.arguments against the tool's declared JSON Schema.
+
+        Blocks type-confusion and parameter-smuggling attacks that slip past the
+        regex allowlists: wrong argument types, out-of-range values, and — when
+        the schema sets ``additionalProperties: false`` — arguments that were
+        never declared by the tool. Returns None when there is no schema or the
+        arguments are valid; a BLOCK GuardrailResult otherwise.
+        """
+        schema = policy.parameter_schema
+        if not schema:
+            return None
+
+        # Arguments must be a JSON object to match a tool parameter schema.
+        if not isinstance(tool_call.arguments, dict):
+            event = SecurityEvent(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                verdict=Verdict.BLOCK,
+                category=ThreatCategory.POLICY_VIOLATION,
+                description=f"Arguments for '{tool_call.name}' are not a JSON object",
+                source="tool_policy_engine.schema",
+                severity="medium",
+                tool_name=tool_call.name,
+            )
+            return GuardrailResult(
+                verdict=Verdict.BLOCK, events=[event], blocked_tools=[tool_call.name]
+            )
+
+        errors = schema_validation.validate(tool_call.arguments, schema)
+        if not errors:
+            return None
+
+        event = SecurityEvent(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            verdict=Verdict.BLOCK,
+            category=ThreatCategory.POLICY_VIOLATION,
+            description=(
+                f"Argument schema violation for '{tool_call.name}': "
+                f"{'; '.join(errors[:3])}"
+            ),
+            source="tool_policy_engine.schema",
+            severity="high",
+            tool_name=tool_call.name,
+            matched_pattern=errors[0],
+        )
+        return GuardrailResult(
+            verdict=Verdict.BLOCK, events=[event], blocked_tools=[tool_call.name]
+        )
 
     def _check_self_protection(
         self, tool_call: ToolCall, tenant_id: str, agent_id: str

@@ -259,7 +259,7 @@ def _extract_message_text(message: Any) -> str | None:
             if parts:
                 return " ".join(parts)
     if hasattr(message, "content"):
-        content = getattr(message, "content")
+        content = message.content
         if isinstance(content, str):
             return content
     return None

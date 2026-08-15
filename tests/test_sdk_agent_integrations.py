@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from src.models import Verdict
 from src.sdk.guard import Guard, SecurityError
 from src.sdk.integrations import AutoGenGuard, CrewAIGuard
 

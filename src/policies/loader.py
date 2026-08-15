@@ -74,6 +74,7 @@ class PolicyLoader:
                 denied_arguments=tp_data.get("denied_arguments", {}),
                 required_arguments=tp_data.get("required_arguments", []),
                 argument_patterns=tp_data.get("argument_patterns", {}),
+                parameter_schema=tp_data.get("parameter_schema", {}),
             )
             tool_policies[tp.name] = tp
 
