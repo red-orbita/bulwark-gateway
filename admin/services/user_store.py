@@ -575,7 +575,7 @@ class PostgreSQLUserStore(UserStore):
             pass
 
     def _sync_seed_defaults(self, db) -> None:
-        """Seed default users if table is empty (sync version)."""
+        """Seed default users if table is empty, else sync rotated secrets (sync version)."""
         row = db.sync_fetch_one("SELECT COUNT(*) as cnt FROM users")
         if row and row.get("cnt", 0) == 0:
             from .secrets import read_secret
@@ -591,6 +591,61 @@ class PostgreSQLUserStore(UserStore):
                     "VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
                     (str(uuid4()), username, _hash_password(password), role.value, now, now),
                 )
+        else:
+            # Table already seeded (e.g. persistent PostgreSQL volume). If a
+            # built-in account's secret was rotated since the last boot, the
+            # stored hash is stale and the operator would be locked out. Mirror
+            # the SQLCipher backend's _sync_passwords so rotation propagates.
+            self._sync_passwords(db)
+
+    def _sync_passwords(self, db) -> None:
+        """Sync built-in user passwords with current secrets (PostgreSQL, sync version).
+
+        Only touches admin/security/auditor, and only when the current secret
+        differs from both the built-in default and the stored hash. On a detected
+        rotation the hash is updated and force_password_change is set so the
+        operator must pick a new password on next login.
+        """
+        import logging
+        log = logging.getLogger(__name__)
+        from .secrets import read_secret
+
+        sync_targets = [
+            ("admin", "ADMIN_PASSWORD", "bulwark-admin"),
+            ("security", "SECURITY_PASSWORD", "bulwark-security"),
+            ("auditor", "AUDITOR_PASSWORD", "bulwark-auditor"),
+        ]
+
+        for username, secret_key, fallback in sync_targets:
+            current_secret = read_secret(secret_key, default=fallback)
+            # Skip if using default (no explicit secret configured)
+            if current_secret == fallback:
+                continue
+
+            row = db.sync_fetch_one(
+                "SELECT password_hash FROM users WHERE username = ?", (username,)
+            )
+            if not row:
+                continue
+
+            stored_hash = row.get("password_hash") if hasattr(row, "get") else row["password_hash"]
+            if not stored_hash:
+                continue
+            # Skip if the current secret already matches the stored hash
+            if _verify_password(current_secret, stored_hash):
+                continue
+
+            # Secret changed — update hash and force password change on next login
+            new_hash = _hash_password(current_secret)
+            now = datetime.now(timezone.utc).isoformat()
+            db.sync_execute(
+                "UPDATE users SET password_hash = ?, force_password_change = 1, updated_at = ? WHERE username = ?",
+                (new_hash, now, username),
+            )
+            log.info(
+                "Password synced for user '%s' (secret rotation detected, force_password_change=1)",
+                username,
+            )
 
     def get_user(self, username: str) -> Optional[dict]:
         """Get user by username (sync-safe, uses direct connection)."""
