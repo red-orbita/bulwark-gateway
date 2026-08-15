@@ -5,18 +5,34 @@ Performance and detection benchmarks for the Bulwark Gateway security guardrail 
 All results are deterministic and reproducible (seeded random generators).
 Only the regex-based input scanner is benchmarked here — ML scanners are additive and async.
 
+> **Read this before quoting any number below.** These are **self-reported
+> results from an internal benchmark harness**, not an independent third-party
+> evaluation. The attack corpus is produced by our own `AttackGenerator`, so
+> detection rates partly measure how well our patterns match payloads built
+> from the same threat assumptions — they are **not** a guarantee of real-world
+> efficacy against a novel adversary. The benign corpus is small (90 samples),
+> so the measured false-positive rate has a wide confidence interval (0/90
+> observed ⇒ roughly **0–4%** at 95% confidence, *not* a literal "zero"). Treat
+> these figures as a **regression signal** for our own patterns over time, not
+> as a competitive benchmark or a security guarantee.
+
 ---
 
 ## Quick Summary
 
 | Metric | Standard (220) | Exhaustive (1020) |
 |--------|---------------|-------------------|
-| Detection Rate | **98.2%** | **97.2%** |
-| False Positive Rate | **0.0%** | **0.0%** |
+| Detection Rate (self-generated corpus) | 98.2% | 97.2% |
+| False Positives (benign corpus) | 0 / 90 | 0 / 90 |
 | Bypass Rate | 1.8% | 2.8% |
 | Latency P50 | 51 ms | 51 ms |
 | Latency P95 | 129 ms | 129 ms |
 | Latency P99 | 203 ms | 193 ms |
+
+Detection/bypass rates are measured against our own generated attack corpus
+(see disclaimer above). "0 / 90" means zero false positives were observed on
+the 90-sample benign set — this is a small-sample result, not a "0.0% FPR"
+guarantee.
 
 ---
 
@@ -207,17 +223,26 @@ Key test files:
 
 ## Version History
 
-| Date | Version | Detection | FPR | Notes |
-|------|---------|-----------|-----|-------|
-| 2026-06-12 | 0.4.3 | 97.2% (1020) | 0.0% | Exhaustive benchmark baseline |
-| 2026-06-12 | 0.4.3 | 98.2% (220) | 0.0% | Standard benchmark baseline |
+| Date | Version | Detection | False Positives | Notes |
+|------|---------|-----------|-----------------|-------|
+| 2026-06-12 | 0.4.3 | 97.2% (1020) | 0/90 | Exhaustive benchmark baseline |
+| 2026-06-12 | 0.4.3 | 98.2% (220) | 0/90 | Standard benchmark baseline |
 
 ---
 
 ## Limitations
 
-1. **Regex only**: These benchmarks test the deterministic regex engine. ML scanners provide additional async detection for novel/semantic attacks.
-2. **Generated attacks**: While attacks include external-style (BIPIA/PromptBench-inspired) payloads, real-world adversaries may use techniques not in the corpus.
-3. **English-focused**: Primary patterns target English payloads. Multilingual scanner (10 languages) is available but not included in this benchmark.
-4. **Single-turn**: Benchmarks test individual messages. Multi-turn dialog evasion is tested separately via the dialog engine.
-5. **No network dependencies**: Benchmarks run offline. IOC/threat intel enrichment adds detection of known-bad indicators in production.
+1. **Self-generated, potentially circular corpus**: Attacks are produced by our
+   own `AttackGenerator`. Detection rate therefore partly measures agreement
+   between our patterns and payloads derived from the same threat model — it is
+   not an independent measure of efficacy. A motivated adversary using novel
+   techniques will not be represented.
+2. **Small benign set ⇒ wide FPR interval**: "0 / 90" false positives is a
+   small-sample observation. The true false-positive rate could plausibly sit
+   anywhere in roughly 0–4% (95% CI). Do not cite this as "0.0% FPR" or as
+   evidence the system never false-positives on legitimate traffic.
+3. **Regex only**: These benchmarks test the deterministic regex engine. ML scanners provide additional async detection for novel/semantic attacks.
+4. **External-style is still hand-crafted**: The 20 BIPIA/PromptBench-inspired payloads are hand-written approximations, not the original published datasets.
+5. **English-focused**: Primary patterns target English payloads. Multilingual scanner (10 languages) is available but not included in this benchmark.
+6. **Single-turn**: Benchmarks test individual messages. Multi-turn dialog evasion is tested separately via the dialog engine.
+7. **No network dependencies**: Benchmarks run offline. IOC/threat intel enrichment adds detection of known-bad indicators in production.
