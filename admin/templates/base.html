@@ -26,6 +26,63 @@
     <!-- Lucide Icons (vendored) -->
     <script src="/static/js/vendor/lucide.min.js" integrity="sha384-O/J9XimWDzX+sA0CHYO5BQAzH+kjn+SSQNgTR9s6Ho+Dx7B1H/V69lFbt8jXff0j" crossorigin="anonymous"></script>
 
+    <!--
+      CSRF double-submit shim.
+      The backend (admin/main.py) enforces CSRF on POST/PUT/DELETE/PATCH by
+      requiring the `x-csrf-token` header to match the non-HttpOnly
+      `_csrf_token` cookie. Page code across the app calls fetch() directly
+      without setting that header, so every mutating request would be rejected
+      with "CSRF validation failed". Patch window.fetch (and htmx) once, here,
+      so the token is attached automatically for same-origin mutations.
+      Loaded synchronously (no defer) so it runs before Alpine/page scripts.
+    -->
+    <script>
+    (function () {
+        function getCsrfToken() {
+            var m = document.cookie.match(/(?:^|;)\s*_csrf_token\s*=\s*([^;]+)/);
+            return m ? decodeURIComponent(m[1]) : '';
+        }
+        window.getCsrfToken = getCsrfToken;
+
+        var MUTATING = { POST: 1, PUT: 1, DELETE: 1, PATCH: 1 };
+        var origFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+            init = init || {};
+            var method = (init.method
+                || (input && typeof input !== 'string' && input.method)
+                || 'GET').toUpperCase();
+            var sameOrigin = true;
+            try {
+                var raw = (typeof input === 'string') ? input : (input && input.url) || '';
+                sameOrigin = new URL(raw, window.location.href).origin === window.location.origin;
+            } catch (e) { sameOrigin = true; }
+
+            if (MUTATING[method] && sameOrigin) {
+                var token = getCsrfToken();
+                if (token) {
+                    var headers = new Headers(
+                        init.headers
+                        || (input && typeof input !== 'string' && input.headers)
+                        || {}
+                    );
+                    if (!headers.has('x-csrf-token')) headers.set('x-csrf-token', token);
+                    init = Object.assign({}, init, { headers: headers });
+                }
+            }
+            return origFetch(input, init);
+        };
+
+        // Future-proofing: if any htmx mutation is added later, attach the token too.
+        document.addEventListener('htmx:configRequest', function (evt) {
+            var verb = (evt.detail.verb || 'get').toUpperCase();
+            if (MUTATING[verb]) {
+                var token = getCsrfToken();
+                if (token) evt.detail.headers['x-csrf-token'] = token;
+            }
+        });
+    })();
+    </script>
+
     <style>
         [x-cloak] { display: none !important; }
         .pulse-live { animation: pulse-live 2s ease-in-out infinite; }

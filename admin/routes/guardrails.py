@@ -329,6 +329,74 @@ async def toggle_module(
     return {"module": module, "enabled": _module_state[module]}
 
 
+@router.post("/bulk-toggle")
+async def bulk_toggle_modules(
+    payload: dict = Body(...),
+    user: TokenPayload = Depends(require_permission("guardrails:write")),
+):
+    """Enable/disable multiple guardrail modules in a single request.
+
+    Body: ``{"disable": ["<module_id>", ...], "enable": ["<module_id>", ...]}``
+
+    Used by the onboarding wizard to apply an initial guardrail selection in one
+    call. Accepts both the coarse engine module keys (``input``, ``tool_policy``,
+    ``output``) — which take immediate enforcement effect — and the higher-level
+    logical module ids surfaced in the UI (e.g. ``prompt_injection``,
+    ``output_filter``). Logical ids are persisted and audited as configuration
+    intent but are **not** collapsed onto engine phases, so a broad "disable"
+    can never silently switch off an entire scanning phase (fail-closed).
+    """
+    disable = payload.get("disable") or []
+    enable = payload.get("enable") or []
+    if not isinstance(disable, list) or not isinstance(enable, list):
+        raise HTTPException(
+            status_code=400,
+            detail="'disable' and 'enable' must be arrays of module ids",
+        )
+
+    audit = get_audit_logger()
+    applied: dict[str, list[str]] = {"enabled": [], "disabled": []}
+    seen: set[str] = set()
+
+    async def _set(module_id: str, value: bool) -> None:
+        module_id = module_id.strip()
+        if not module_id or module_id in seen:
+            return
+        seen.add(module_id)
+        _module_state[module_id] = value
+        await audit.log(
+            actor=user.sub,
+            action="module_bulk_toggle",
+            resource_type="guardrail_module",
+            resource_id=module_id,
+            details=json.dumps({"enabled": value}),
+        )
+        applied["enabled" if value else "disabled"].append(module_id)
+
+    # Enable first, then disable, so an id present in both ends up disabled
+    # (fail-closed: the more restrictive intent wins).
+    for mid in enable:
+        if isinstance(mid, str):
+            await _set(mid, True)
+    for mid in disable:
+        if isinstance(mid, str):
+            # allow disable to override a prior enable of the same id, and make
+            # sure the reported lists reflect the final (disabled) state.
+            cleaned = mid.strip()
+            seen.discard(cleaned)
+            if cleaned in applied["enabled"]:
+                applied["enabled"].remove(cleaned)
+            await _set(mid, False)
+
+    _save_persisted_state()
+    get_guardrails_store().save_state()
+    return {
+        "module_state": dict(_module_state),
+        "enabled": applied["enabled"],
+        "disabled": applied["disabled"],
+    }
+
+
 @router.get("/params")
 async def get_params(user: TokenPayload = Depends(require_permission("guardrails:read"))):
     """Get current detection parameters."""
