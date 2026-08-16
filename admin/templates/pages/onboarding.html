@@ -354,17 +354,42 @@ function onboardingWizard() {
 
                 // 4. SIEM config (if not none)
                 if (this.config.siem_transport !== 'none') {
-                    await fetch('/admin/siem/config', {
-                        method: 'PUT',
+                    // Map the wizard's simplified choice to the transport schema
+                    // expected by POST /admin/siem/transport (there is no
+                    // /admin/siem/config write endpoint).
+                    let transportPayload;
+                    if (this.config.siem_transport === 'syslog') {
+                        transportPayload = {
+                            platform: 'custom_syslog',
+                            transport_type: 'syslog_tcp',
+                            endpoint: this.config.siem_host,
+                            port: this.config.siem_port || 514,
+                        };
+                    } else if (this.config.siem_transport === 'webhook') {
+                        transportPayload = {
+                            platform: 'custom',
+                            transport_type: 'http_rest',
+                            endpoint: this.config.siem_webhook_url,
+                            port: 443,
+                        };
+                    } else { // 'file'
+                        transportPayload = {
+                            platform: 'custom',
+                            transport_type: 'file',
+                            endpoint: this.config.siem_file_path,
+                            port: 0,
+                        };
+                    }
+                    transportPayload.format = 'ecs_json';
+                    const siemResp = await fetch('/admin/siem/transport', {
+                        method: 'POST',
                         headers,
-                        body: JSON.stringify({
-                            transport: this.config.siem_transport,
-                            host: this.config.siem_host,
-                            port: this.config.siem_port,
-                            webhook_url: this.config.siem_webhook_url,
-                            file_path: this.config.siem_file_path
-                        })
+                        body: JSON.stringify(transportPayload)
                     });
+                    if (!siemResp.ok) {
+                        const detail = await siemResp.text();
+                        throw new Error(`SIEM setup failed (HTTP ${siemResp.status}): ${detail}`);
+                    }
                 }
 
                 // 5. Mark onboarding complete
