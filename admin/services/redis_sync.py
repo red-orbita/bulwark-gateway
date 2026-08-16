@@ -55,15 +55,17 @@ def _get_pool() -> Optional[redis.ConnectionPool]:
         if _redis_pool and (now - _pool_created_at) < _POOL_TTL:
             return _redis_pool
 
-        # Inject password from secret file
+        # Load password from secret file and pass it as a connection kwarg —
+        # NEVER interpolate it into the URL string. A raw password containing
+        # URL-special characters (e.g. '/', '@', ':' — common in base64 secrets)
+        # corrupts netloc parsing ("Port could not be cast to integer") and, in
+        # the '@' case, could redirect the connection to an attacker-controlled
+        # host (VULN 1.7). redis-py applies the password kwarg safely.
         pw_file = os.getenv("BULWARK_REDIS_PASSWORD_FILE", "")
         password = None
-        if pw_file and os.path.isfile(pw_file):
+        if pw_file and os.path.isfile(pw_file) and "@" not in url:
             with open(pw_file) as f:
-                password = f.read().strip()
-            if password and "@" not in url:
-                url = url.replace("://", f"://:{password}@")
-                password = None
+                password = f.read().strip() or None
 
         try:
             kwargs: dict = {
