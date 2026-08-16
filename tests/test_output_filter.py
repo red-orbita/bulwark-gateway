@@ -149,3 +149,31 @@ class TestEmailPhoneOptInRedaction:
         result = f.inspect_and_redact(content)
         assert "[REDACTED:EMAIL]" in result.modified_content
         assert "+12025550143" in result.modified_content  # phone still present
+
+
+class TestOutputRedactionScannerWiring:
+    """Regression: the *active* output redaction path is the scanner pipeline
+    (OutputRedactionScanner), not the module-global OutputFilter. Both must
+    honor the opt-in email/phone flags, otherwise enabling BULWARK_REDACT_EMAIL
+    has no effect on real traffic (the bug this guards against).
+    """
+
+    @pytest.mark.asyncio
+    async def test_scanner_honors_redact_email_setting(self, monkeypatch):
+        import src.config as cfg
+        from src.scanners.builtin.output_redaction_scanner import OutputRedactionScanner
+        from src.scanners.protocol import ScanContext
+
+        # Flag ON → scanner must redact email.
+        monkeypatch.setattr(cfg.settings, "redact_email", True, raising=False)
+        scanner_on = OutputRedactionScanner()
+        ctx = ScanContext(tenant_id="t", agent_id="a", request_id="r")
+        res_on = await scanner_on.scan("Ping agent-oncall@example.com", ctx)
+        assert res_on.modified_content is not None
+        assert "[REDACTED:EMAIL]" in res_on.modified_content
+
+        # Flag OFF → scanner must leave email untouched.
+        monkeypatch.setattr(cfg.settings, "redact_email", False, raising=False)
+        scanner_off = OutputRedactionScanner()
+        res_off = await scanner_off.scan("Ping agent-oncall@example.com", ctx)
+        assert not any(e.matched_pattern == "EMAIL" for e in res_off.events)

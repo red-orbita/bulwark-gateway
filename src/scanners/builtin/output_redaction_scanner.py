@@ -9,6 +9,7 @@ Priority: 10 (runs first in output pipeline)
 
 from __future__ import annotations
 
+from src.config import settings
 from src.guardrails.output_filter import OutputFilter
 from src.models import GuardrailResult
 from src.scanners.protocol import OutputScanner, ScanContext, ScannerInfo, ScannerType
@@ -31,7 +32,13 @@ class OutputRedactionScanner(OutputScanner):
     """
 
     def __init__(self) -> None:
-        self._engine = OutputFilter()
+        # Honor opt-in PII redaction flags (email/phone). Secrets/PII default
+        # coverage is unchanged; emails/phones are only redacted when the
+        # operator enables BULWARK_REDACT_EMAIL / BULWARK_REDACT_PHONE.
+        self._engine = OutputFilter(
+            redact_email=settings.redact_email,
+            redact_phone=settings.redact_phone,
+        )
 
     @property
     def info(self) -> ScannerInfo:

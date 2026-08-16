@@ -52,6 +52,14 @@ proxy:
   failMode: "closed"
   # -- Rate limit (requests per minute)
   rateLimit: 60
+  # -- Output filter: opt-in PII redaction. Secrets/SSN/cards/IBAN are always
+  #    redacted. Emails/phones are often legitimate agent output, so redaction
+  #    is opt-in (enable for stricter tenants, e.g. healthcare).
+  outputFilter:
+    # -- Redact email addresses in LLM output ([REDACTED:EMAIL])
+    redactEmail: false
+    # -- Redact phone numbers in LLM output ([REDACTED:PHONE])
+    redactPhone: false
   # -- Log level: DEBUG, INFO, WARNING, ERROR
   logLevel: "INFO"
   # -- Number of uvicorn workers

@@ -22,6 +22,7 @@ import structlog
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
+from src.config import settings
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
 from src.models import GuardrailResult, SecurityEvent, Verdict
@@ -35,7 +36,10 @@ logger = structlog.get_logger()
 
 # Reuse the same guardrail instances (patterns are pre-compiled at import time)
 _input_guardrail = InputGuardrail()
-_output_filter = OutputFilter()
+_output_filter = OutputFilter(
+    redact_email=settings.redact_email,
+    redact_phone=settings.redact_phone,
+)
 
 # Severity ranking for threshold filtering
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}

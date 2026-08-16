@@ -65,6 +65,10 @@ services:
       # Non-secret configuration only
       BULWARK_BACKEND_URL: ${BULWARK_BACKEND_URL:-http://host.docker.internal:8000}
       BULWARK_FAIL_MODE: ${BULWARK_FAIL_MODE:-closed}
+      # Output filter: opt-in PII redaction (secrets/SSN/cards always redacted;
+      # emails/phones are often legitimate agent output, so redaction is opt-in).
+      BULWARK_REDACT_EMAIL: ${BULWARK_REDACT_EMAIL:-false}
+      BULWARK_REDACT_PHONE: ${BULWARK_REDACT_PHONE:-false}
       # Admin-managed state read from the shared admin_data volume (see volumes).
       # Matches Helm: admin writes /app/data/{agents.yaml,iocs.json}; proxy reads
       # them here so UI-driven tenant/agent + IOC changes reach the hot path.

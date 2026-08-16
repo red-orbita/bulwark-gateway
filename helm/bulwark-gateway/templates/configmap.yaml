@@ -17,6 +17,8 @@ data:
   # would never reach the hot path.
   BULWARK_IOC_PATH: "/app/shared/admin/iocs.json"
   BULWARK_FAIL_MODE: {{ .Values.proxy.failMode | quote }}
+  BULWARK_REDACT_EMAIL: {{ .Values.proxy.outputFilter.redactEmail | quote }}
+  BULWARK_REDACT_PHONE: {{ .Values.proxy.outputFilter.redactPhone | quote }}
   BULWARK_LOG_FORMAT: "json"
   BULWARK_LOG_LEVEL: {{ .Values.proxy.logLevel | quote }}
   BULWARK_RATE_LIMIT_RPM: {{ .Values.proxy.rateLimit | quote }}
