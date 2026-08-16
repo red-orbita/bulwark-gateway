@@ -20,6 +20,7 @@ declare -A EXPECTED_HASHES=(
     ["htmx.min.js"]="sha384-"
     ["htmx-sse.js"]="sha384-"
     ["lucide.min.js"]="sha384-"
+    ["qrcode.min.js"]="sha384-"
 )
 
 verify_hash() {
@@ -62,6 +63,31 @@ verify_hash "$VENDOR_JS/htmx-sse.js"
 # Lucide Icons
 curl -sL "https://unpkg.com/lucide@0.394.0/dist/umd/lucide.min.js" -o "$VENDOR_JS/lucide.min.js"
 verify_hash "$VENDOR_JS/lucide.min.js"
+
+# qrcodejs (MFA QR code rendering) — vendored for air-gap (was jsdelivr CDN)
+curl -sL "https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js" -o "$VENDOR_JS/qrcode.min.js"
+verify_hash "$VENDOR_JS/qrcode.min.js"
+
+echo "==> Vendoring self-hosted fonts (Inter + JetBrains Mono)..."
+# Air-gap: download the Google Fonts CSS with a modern UA (yields woff2),
+# fetch every referenced woff2 into static/fonts/, and rewrite the CSS to
+# local /static/fonts paths. Removes the runtime dependency on Google Fonts.
+FONTS_DIR="$STATIC_DIR/fonts"
+mkdir -p "$FONTS_DIR"
+GF_URL="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+GF_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+if curl -sL -A "$GF_UA" "$GF_URL" -o "$VENDOR_CSS/fonts.css"; then
+    # Download each woff2 and rewrite its URL to a local path.
+    grep -oE 'https://[^)]+\.woff2' "$VENDOR_CSS/fonts.css" | sort -u | while read -r url; do
+        fname=$(basename "$url")
+        curl -sL "$url" -o "$FONTS_DIR/$fname"
+        # Escape slashes for sed replacement.
+        sed -i "s|$url|/static/fonts/$fname|g" "$VENDOR_CSS/fonts.css"
+    done
+    echo "  [OK] fonts.css + $(ls "$FONTS_DIR" | wc -l) woff2 files vendored"
+else
+    echo "  [WARN] Could not fetch Google Fonts CSS; keeping existing fonts.css"
+fi
 
 echo "==> Generating SRI hashes..."
 
