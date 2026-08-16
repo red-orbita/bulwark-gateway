@@ -187,8 +187,9 @@ class InputGuardrail:
         # DOS-04 (p95 optimization): literal prefilter for speculative cipher decodes.
         # The letter-ciphers (ROT13 / Caesar / Atbash / reversed / Pig Latin) only
         # transform ASCII letters — digits and punctuation pass through unchanged, so
-        # structural attacks (SSTI/XSS/SQLi/paths) are already caught by the main loop
-        # on the RAW content. The cipher blocks therefore only need to catch *alphabetic*
+        # punctuation-heavy structural payloads (SSTI/XXE/command-injection) look the
+        # same decoded as raw and are already visible to the main loop on the RAW
+        # content. The cipher blocks therefore only need to catch *alphabetic*
         # payloads. We mine every alphabetic literal token (>=4 chars) that appears in any
         # pattern source and, before running the full 441-pattern loop over a decoded
         # variant, require that the decoded text contains at least one such token. When we

@@ -397,7 +397,9 @@ class Pattern:
     pattern_id: str
 ```
 
-**Detection categories**: prompt injection, jailbreak, SSTI, XXE, command injection, reverse shell, path traversal, SQL injection, encoded payloads, exfiltration attempts.
+**Detection categories** (input layer): prompt injection, jailbreak, SSTI, XXE, command injection, reverse shell, encoded payloads, exfiltration attempts.
+
+> **Scope honesty**: classic SQL injection (`'; DROP TABLE …`, `admin' OR 1=1 --`), XSS, and bare path traversal (`../../../etc/passwd`) are **not** reliably matched on free-form chat input, and by design. Those threats are enforced where the payload actually reaches a database / filesystem: the **tool-argument layer** (`tool_policy.py` — path-traversal detection, `denied_arguments`, argument allow/deny) and the **output filter**. Some `UNION SELECT`-style SQLi is caught incidentally by exfiltration / tool-abuse patterns. Do not rely on the input guardrail as a SQLi/XSS WAF.
 
 ### Tool Policy Engine (src/guardrails/tool_policy.py)
 
