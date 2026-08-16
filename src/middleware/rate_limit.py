@@ -21,32 +21,71 @@ from src.config import settings
 
 
 class RedisRateLimiter:
-    """Distributed sliding window rate limiter using Redis."""
+    """Distributed sliding window rate limiter using Redis.
+
+    RESILIENCE (H-08 fix): The Redis client is established lazily and
+    self-heals. A transient failure at construction time (e.g. Redis not yet
+    reachable during a rolling deploy, cold DNS, or a 0.5s socket timeout) must
+    NOT permanently demote the whole fleet to the per-process in-memory
+    fallback. Reconnection is attempted on a throttled interval so the hot path
+    is never blocked by repeated connect attempts.
+    """
+
+    # Minimum seconds between (re)connection attempts. Prevents hammering a
+    # down Redis on every request while still healing within a few seconds.
+    _RECONNECT_INTERVAL = 5.0
 
     def __init__(self, rate_rpm: int, redis_url: Optional[str] = None):
         self.rate_rpm = rate_rpm
         self._redis: Optional[redis.Redis] = None
+        self._redis_url = redis_url
+        self._last_connect_attempt: float = 0.0
         if redis_url:
-            try:
-                kwargs = {"decode_responses": True, "socket_timeout": 0.5}
-                # Support TLS connections (rediss:// scheme) with optional cert skip
-                if redis_url.startswith("rediss://") and settings.redis_tls_insecure:
-                    import ssl
-                    kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
-                self._redis = redis.from_url(redis_url, **kwargs)
-                self._redis.ping()
-            except Exception:
-                self._redis = None
+            self._try_connect()
+
+    def _build_client(self) -> "redis.Redis":
+        kwargs = {"decode_responses": True, "socket_timeout": 0.5}
+        # Support TLS connections (rediss:// scheme) with optional cert skip
+        if self._redis_url and self._redis_url.startswith("rediss://") and settings.redis_tls_insecure:
+            import ssl
+            kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+        return redis.from_url(self._redis_url, **kwargs)
+
+    def _try_connect(self) -> None:
+        """Attempt a single throttled (re)connection. Never raises."""
+        self._last_connect_attempt = time.time()
+        try:
+            client = self._build_client()
+            client.ping()
+            self._redis = client
+        except Exception:
+            self._redis = None
+
+    def _ensure_connection(self) -> None:
+        """Lazily (re)connect if the client is down, throttled to avoid
+        blocking the hot path on every request while Redis is unreachable."""
+        if self._redis is not None or not self._redis_url:
+            return
+        if time.time() - self._last_connect_attempt >= self._RECONNECT_INTERVAL:
+            self._try_connect()
 
     @property
     def available(self) -> bool:
+        self._ensure_connection()
         return self._redis is not None
 
     def consume(self, key: str, limit: int | None = None) -> bool:
         """Check rate limit using Redis sliding window. Returns True if allowed.
 
-        SECURITY (H-04 fix): Uses Lua script for atomic check-and-add.
-        Unique member IDs prevent same-microsecond overwrites.
+        SECURITY (H-04 fix): unique member IDs prevent same-microsecond
+        overwrites within the sorted-set window.
+
+        RESILIENCE (H-09 fix): implemented with a MULTI/EXEC transaction over
+        plain sorted-set commands instead of a server-side Lua EVAL. Hardened
+        Redis deployments commonly disable scripting (``rename-command EVAL ""``),
+        which previously made every check fail-closed and silently demoted the
+        fleet to the in-memory fallback. MULTI/EXEC keeps the check atomic while
+        depending only on core commands available on hardened instances.
 
         Args:
             key: Rate limit key (e.g., "ip:1.2.3.4" or "tenant:acme-corp")
@@ -60,30 +99,33 @@ class RedisRateLimiter:
         now = time.time()
         window_start = now - 60.0  # 1-minute sliding window
 
-        # Lua script: atomic ZREMRANGEBYSCORE + ZCARD + conditional ZADD + EXPIRE
-        # Uses unique member (timestamp:counter) to prevent same-microsecond overwrites
-        lua_script = """
-        redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1])
-        local count = redis.call('ZCARD', KEYS[1])
-        if count < tonumber(ARGV[2]) then
-            redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])
-            redis.call('EXPIRE', KEYS[1], 120)
-            return 1
-        else
-            redis.call('EXPIRE', KEYS[1], 120)
-            return 0
-        end
-        """
-
         try:
             import uuid
             member = f"{now}:{uuid.uuid4().hex[:8]}"
-            result = self._redis.eval(lua_script, 1, redis_key,
-                                      str(window_start), str(effective_limit),
-                                      str(now), member)
-            return result == 1
+            # Optimistically record this request, then read the window size —
+            # all atomically inside MULTI/EXEC. Unique member avoids collisions.
+            pipe = self._redis.pipeline(transaction=True)
+            pipe.zremrangebyscore(redis_key, 0, window_start)
+            pipe.zadd(redis_key, {member: now})
+            pipe.zcard(redis_key)
+            pipe.expire(redis_key, 120)
+            results = pipe.execute()
+            count = results[2]  # ZCARD result (post-add window size)
+
+            if count > effective_limit:
+                # Over the limit: roll back our own entry so it doesn't inflate
+                # the window for subsequent callers, then reject.
+                self._redis.zrem(redis_key, member)
+                return False
+            return True
+        except redis.exceptions.RedisError:
+            # Connection/protocol error: drop the client so _ensure_connection
+            # re-establishes it on the next throttled window instead of staying
+            # demoted forever. Still fail-CLOSED for THIS request (C-05).
+            self._redis = None
+            return False
         except Exception:
-            return False  # Fail-CLOSED on Redis error (C-05)
+            return False  # Fail-CLOSED on any other error (C-05)
 
 
 class InMemoryTokenBucket:
