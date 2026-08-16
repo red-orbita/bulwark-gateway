@@ -34,6 +34,8 @@ scripts/
 docker-compose.*
 Dockerfile
 docker/
+# Exception: the proxy entrypoint is baked into the image (GAP-A worker derivation)
+!docker/entrypoint-proxy.sh
 
 # --- Secrets (injected at runtime via mounts) ---
 secrets/
