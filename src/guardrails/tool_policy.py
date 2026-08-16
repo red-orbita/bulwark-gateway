@@ -35,6 +35,10 @@ _SENSITIVE_READ_PATTERNS: list[re.Pattern] = [
     re.compile(r"(^|/)\.env(\.|$|/)", re.IGNORECASE),
     re.compile(r"(^|/)\.aws/credentials", re.IGNORECASE),
     re.compile(r"(^|/)\.ssh/(id_rsa|id_ed25519|id_dsa|authorized_keys|config)", re.IGNORECASE),
+    # SSH private keys / trust files by FILENAME regardless of directory
+    # (e.g. secrets/id_rsa, ./keys/id_ed25519) — GAP-04 remediation.
+    re.compile(r"(^|/)(id_rsa|id_ed25519|id_dsa|id_ecdsa)(\.pub)?$", re.IGNORECASE),
+    re.compile(r"(^|/)authorized_keys$", re.IGNORECASE),
     re.compile(r"/etc/(passwd|shadow|sudoers|hosts)", re.IGNORECASE),
     re.compile(r"\.(pem|key|p12|pfx|jks)$", re.IGNORECASE),
     re.compile(r"(^|/)credentials\.(json|yaml|yml|toml|xml)$", re.IGNORECASE),

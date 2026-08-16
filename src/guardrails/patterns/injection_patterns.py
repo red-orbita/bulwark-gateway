@@ -1039,7 +1039,7 @@ TOOL_ABUSE_PATTERNS: list[Pattern] = [
         "Encoded payload execution",
     ),
     Pattern(
-        re.compile(r"curl\s+.*\|\s*(bash|sh|python|perl)", re.I),
+        re.compile(r"(curl|wget)\s+.*\|\s*(?:sudo\s+)?(bash|sh|python|perl)", re.I),
         ThreatCategory.TOOL_ABUSE,
         "critical",
         "Pipe-to-shell pattern",
@@ -1097,6 +1097,82 @@ TOOL_ABUSE_PATTERNS: list[Pattern] = [
         ThreatCategory.TOOL_ABUSE,
         "critical",
         "Deserialization attack payload",
+    ),
+    # GAP-01: Backdoor-in-code injection — instructing the agent to embed code
+    # into every artifact it writes (e.g. "always prepend <code> to every file
+    # you write"). Covers both verb-first and noun-first phrasings. Works even
+    # when hidden inside an HTML comment because the directive text stays visible.
+    Pattern(
+        re.compile(
+            r"(always\s+)?(prepend|append|insert|inject|add)\b.{0,60}"
+            r"(to|into|in|at\s+the\s+(top|start|beginning|end)\s+of)\s+"
+            r"(every|any|each|all|the)\s+"
+            r"(python\s+|\.py\s+|source\s+|code\s+|generated\s+)?files?\b"
+            r".{0,40}(you\s+)?(write|create|generat\w*|produce|output|sav\w*)",
+            re.I | re.S,
+        ),
+        ThreatCategory.PROMPT_INJECTION,
+        "high",
+        "Backdoor-in-code injection (prepend/append code to written files)",
+    ),
+    Pattern(
+        re.compile(
+            r"(when|whenever|each\s+time|every\s+time)\s+(you\s+)?(writ\w*|creat\w*|generat\w*|sav\w*)\b"
+            r".{0,50}files?\b.{0,60}"
+            r"(always\s+)?(prepend|append|insert|inject)\b.{0,60}"
+            r"(import\s|from\s+\w+\s+import|exec\s*\(|eval\s*\(|os\.|sys\.|subprocess|urllib|requests\.|"
+            r"https?://|socket|__\w+__|require\s*\(|<script|the\s+following|this\s+(code|snippet|line|import|payload))",
+            re.I | re.S,
+        ),
+        ThreatCategory.PROMPT_INJECTION,
+        "high",
+        "Backdoor-in-code injection (write-file triggered code insertion)",
+    ),
+    # GAP-03: Indirect "pre-task command" injection — a document instructs the
+    # agent to run a shell command before some benign task (e.g. "before running
+    # tests, first run: sh -c '...'"). Requires an explicit shell/command sink to
+    # keep false positives low.
+    Pattern(
+        re.compile(
+            r"(before|prior\s+to|first|to\s+set\s*up|to\s+bootstrap|to\s+initial\w*)\b"
+            r".{0,40}(run|execute|exec|invoke)\b.{0,30}"
+            r"(sh\s+-c|bash\s+-c|curl\b|wget\b|nc\b|ncat\b|/dev/tcp|--data-binary|\|\s*(?:sudo\s+)?(?:ba)?sh\b)",
+            re.I | re.S,
+        ),
+        ThreatCategory.TOOL_ABUSE,
+        "high",
+        "Pre-task shell command injection (run <shell> before task)",
+    ),
+    # GAP-05: Indirect "automation directive" injection (EN + ES) — a retrieved
+    # document orders the agent to call a tool / fetch a URL before answering,
+    # optionally paired with a secrecy instruction. Added to the always-on core
+    # so it does not depend on the multilingual scanner toggle.
+    Pattern(
+        re.compile(
+            r"(antes\s+de\s+(responder|contestar|atender)|"
+            r"before\s+(answer\w*|respond\w*|repl\w*|proceed\w*))\b"
+            r".{0,70}"
+            r"(ejecut\w*|llama\s+a|invoca|corre\b|realiza|run\b|execute\b|call\b|invoke\b|fetch\b|perform\b)\b"
+            r".{0,45}"
+            r"(http_get|http_post|https?://|curl\b|wget\b|tool\b|herramienta|endpoint|webhook)",
+            re.I | re.S,
+        ),
+        ThreatCategory.PROMPT_INJECTION,
+        "high",
+        "Automation directive injection (call tool/URL before answering)",
+    ),
+    Pattern(
+        re.compile(
+            r"(h[aá]zlo\s+en\s+silencio|sin\s+avisar|sin\s+notificar|"
+            r"no\s+(lo\s+)?menciones(\s+(esta|este|esto|la|el|nada))?|"
+            r"no\s+informes\s+al\s+usuario|"
+            r"do\s+(it|this)\s+silently|silently\s+(run|execute|call|forward|send|perform|do)\b|"
+            r"without\s+(telling|informing|notifying|alerting)\s+the\s+user)",
+            re.I,
+        ),
+        ThreatCategory.PROMPT_INJECTION,
+        "high",
+        "Covert-action / secrecy directive (silently / en silencio)",
     ),
 ]
 

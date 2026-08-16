@@ -212,7 +212,7 @@ INDIRECT_INJECTION_HIGH: list[tuple[re.Pattern, str]] = [
         re.compile(r"execute\s+the\s+following\s+command", re.IGNORECASE),
         "execute_command_instruction",
     ),
-    (re.compile(r"curl\s+.*\|\s*(?:ba)?sh", re.IGNORECASE), "curl_pipe_shell"),
+    (re.compile(r"(?:curl|wget)\s+.*\|\s*(?:sudo\s+)?(?:ba)?sh\b", re.IGNORECASE), "curl_pipe_shell"),
     (
         re.compile(r"include\s+your\s+(api[_\s]?key|password|token|secret)", re.IGNORECASE),
         "credential_request",
@@ -294,7 +294,7 @@ DANGEROUS_OUTPUT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "high",
     ),
     (
-        re.compile(r"(?:^|\n)\s*(?:curl|wget)\s+\S+\s*\|\s*(?:ba)?sh", re.MULTILINE),
+        re.compile(r"\b(?:curl|wget)\b.*\|\s*(?:sudo\s+)?(?:ba)?sh\b", re.IGNORECASE),
         "shell_curl_pipe_exec",
         "critical",
     ),
@@ -395,6 +395,30 @@ DANGEROUS_OUTPUT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         re.compile(r"(?:pickle\.loads|__reduce__|os\.system\(|subprocess\.)", re.IGNORECASE),
         "python_deserialization",
         "high",
+    ),
+    # Code that phones home: network egress to a hardcoded host PLUS host/identity
+    # harvesting on the same statement/line — a classic exfil beacon embedded in
+    # generated source. High precision (both signals required) to avoid flagging
+    # benign HTTP client code. GAP-02 remediation.
+    (
+        re.compile(
+            r"(?:urlopen|requests\.(?:get|post)|urllib\.request|http\.client|socket\.)"
+            r".{0,120}"
+            r"(?:os\.uname\(\)|socket\.gethostname\(\)|getpass\.getuser\(\)|platform\.node\(\)|os\.getlogin\(\))",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "code_exfil_beacon",
+        "critical",
+    ),
+    (
+        re.compile(
+            r"(?:os\.uname\(\)|socket\.gethostname\(\)|getpass\.getuser\(\)|platform\.node\(\)|os\.getlogin\(\))"
+            r".{0,120}"
+            r"(?:urlopen|requests\.(?:get|post)|urllib\.request|http\.client|socket\.)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "code_exfil_beacon_rev",
+        "critical",
     ),
 ]
 
