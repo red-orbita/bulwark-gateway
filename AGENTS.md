@@ -1089,5 +1089,6 @@ Full troubleshooting: `docs/TROUBLESHOOTING.md`
 | Fix issues | `docs/TROUBLESHOOTING.md` |
 | Configure alerts | `docs/NOTIFICATIONS.md` |
 | API details | `docs/API-REFERENCE.md` |
+| Validate pipeline e2e (K8s) | `docs/E2E-VALIDATION.md` |
 | Security posture | `docs/SECURITY-HARDENING.md` |
 | All docs (index) | `docs/INDEX.md` |
