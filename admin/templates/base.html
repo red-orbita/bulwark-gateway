@@ -83,6 +83,23 @@
 
     <style>
         [x-cloak] { display: none !important; }
+        /* Skip link (WCAG 2.4.1): visually hidden until focused, no dependency
+           on purged Tailwind sr-only utilities. */
+        .skip-link {
+            position: fixed;
+            top: -100px;
+            left: 0.75rem;
+            z-index: 200;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            background: #0891b2;
+            color: #ffffff;
+            font-size: 0.875rem;
+            font-weight: 500;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+            transition: top 150ms ease-in-out;
+        }
+        .skip-link:focus { top: 0.75rem; outline: 2px solid #ffffff; outline-offset: 2px; }
         .pulse-live { animation: pulse-live 2s ease-in-out infinite; }
         @keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         .sidebar-transition { transition: width 200ms cubic-bezier(0.4, 0, 0.2, 1), transform 200ms cubic-bezier(0.4, 0, 0.2, 1); }
@@ -103,6 +120,9 @@
 </head>
 <body class="font-sans min-h-screen antialiased relative"
       x-data="appShell()" x-cloak>
+
+    <!-- Skip to main content (WCAG 2.4.1 Bypass Blocks) -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
 
     <!-- Mobile overlay -->
     <div x-show="sidebarOpen && isMobile" @click="sidebarOpen = false"
@@ -128,37 +148,37 @@
         </div>
 
         <!-- Navigation -->
-        <nav class="flex-1 py-3 overflow-y-auto" id="main-nav">
+        <nav class="flex-1 py-3 overflow-y-auto" id="main-nav" aria-label="Primary">
             <!-- Operations -->
             <div class="px-3 mb-1" x-show="sidebarOpen">
                 <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Operations</span>
             </div>
-            <a href="/" class="nav-item" data-page="dashboard">
-                <i data-lucide="layout-dashboard" class="nav-icon"></i>
+            <a href="/" class="nav-item" data-page="dashboard" aria-label="Dashboard">
+                <i data-lucide="layout-dashboard" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Dashboard</span>
             </a>
-            <a href="/policies" class="nav-item" data-page="policies">
-                <i data-lucide="file-lock" class="nav-icon"></i>
+            <a href="/policies" class="nav-item" data-page="policies" aria-label="Policies">
+                <i data-lucide="file-lock" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Policies</span>
             </a>
-            <a href="/guardrails" class="nav-item" data-page="guardrails">
-                <i data-lucide="shield-alert" class="nav-icon"></i>
+            <a href="/guardrails" class="nav-item" data-page="guardrails" aria-label="Guardrails">
+                <i data-lucide="shield-alert" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Guardrails</span>
             </a>
-            <a href="/siem" class="nav-item" data-page="siem">
-                <i data-lucide="radio-tower" class="nav-icon"></i>
+            <a href="/siem" class="nav-item" data-page="siem" aria-label="SIEM Export">
+                <i data-lucide="radio-tower" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">SIEM Export</span>
             </a>
-            <a href="/notifications" class="nav-item" data-page="notifications">
-                <i data-lucide="bell-ring" class="nav-icon"></i>
+            <a href="/notifications" class="nav-item" data-page="notifications" aria-label="Notifications">
+                <i data-lucide="bell-ring" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Notifications</span>
             </a>
-            <a href="/audit" class="nav-item" data-page="audit">
-                <i data-lucide="scroll-text" class="nav-icon"></i>
+            <a href="/audit" class="nav-item" data-page="audit" aria-label="Audit Log">
+                <i data-lucide="scroll-text" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Audit Log</span>
             </a>
-            <a href="/events" class="nav-item" data-page="events">
-                <i data-lucide="shield-x" class="nav-icon"></i>
+            <a href="/events" class="nav-item" data-page="events" aria-label="Security Events">
+                <i data-lucide="shield-x" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Security Events</span>
             </a>
 
@@ -166,36 +186,36 @@
             <div class="px-3 mt-4 mb-1" x-show="sidebarOpen">
                 <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Intelligence</span>
             </div>
-            <a href="/coverage" class="nav-item" data-page="coverage">
-                <i data-lucide="grid-3x3" class="nav-icon"></i>
+            <a href="/coverage" class="nav-item" data-page="coverage" aria-label="Coverage Matrix">
+                <i data-lucide="grid-3x3" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Coverage Matrix</span>
             </a>
-            <a href="/iocs" class="nav-item" data-page="iocs">
-                <i data-lucide="bug" class="nav-icon"></i>
+            <a href="/iocs" class="nav-item" data-page="iocs" aria-label="IOCs">
+                <i data-lucide="bug" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">IOCs</span>
             </a>
-            <a href="/skills" class="nav-item" data-page="skills">
-                <i data-lucide="scan-search" class="nav-icon"></i>
+            <a href="/skills" class="nav-item" data-page="skills" aria-label="SkillSpector">
+                <i data-lucide="scan-search" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">SkillSpector</span>
             </a>
-            <a href="/ml-scanners" class="nav-item" data-page="ml-scanners">
-                <i data-lucide="brain" class="nav-icon"></i>
+            <a href="/ml-scanners" class="nav-item" data-page="ml-scanners" aria-label="Advanced Scanners">
+                <i data-lucide="brain" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Advanced Scanners</span>
             </a>
-            <a href="/enrichment" class="nav-item" data-page="enrichment">
-                <i data-lucide="layers" class="nav-icon"></i>
+            <a href="/enrichment" class="nav-item" data-page="enrichment" aria-label="Enrichment">
+                <i data-lucide="layers" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Enrichment</span>
             </a>
-            <a href="/plugins" class="nav-item" data-page="plugins">
-                <i data-lucide="puzzle" class="nav-icon"></i>
+            <a href="/plugins" class="nav-item" data-page="plugins" aria-label="Plugins">
+                <i data-lucide="puzzle" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Plugins</span>
             </a>
-            <a href="/evaluation" class="nav-item" data-page="evaluation">
-                <i data-lucide="swords" class="nav-icon"></i>
+            <a href="/evaluation" class="nav-item" data-page="evaluation" aria-label="Red Teaming">
+                <i data-lucide="swords" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Red Teaming</span>
             </a>
-            <a href="/discovery" class="nav-item" data-page="discovery">
-                <i data-lucide="radar" class="nav-icon"></i>
+            <a href="/discovery" class="nav-item" data-page="discovery" aria-label="Discovery">
+                <i data-lucide="radar" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Discovery</span>
             </a>
 
@@ -203,56 +223,56 @@
             <div class="px-3 mt-4 mb-1" x-show="sidebarOpen">
                 <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Management</span>
             </div>
-            <a href="/tenants" class="nav-item" data-page="tenants">
-                <i data-lucide="building-2" class="nav-icon"></i>
+            <a href="/tenants" class="nav-item" data-page="tenants" aria-label="Tenants">
+                <i data-lucide="building-2" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Tenants</span>
             </a>
-            <a href="/tenant-analytics" class="nav-item" data-page="tenant-analytics">
-                <i data-lucide="bar-chart-3" class="nav-icon"></i>
+            <a href="/tenant-analytics" class="nav-item" data-page="tenant-analytics" aria-label="Tenant Analytics">
+                <i data-lucide="bar-chart-3" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Tenant Analytics</span>
             </a>
-            <a href="/agents" class="nav-item" data-page="agents">
-                <i data-lucide="bot" class="nav-icon"></i>
+            <a href="/agents" class="nav-item" data-page="agents" aria-label="Agents">
+                <i data-lucide="bot" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Agents</span>
             </a>
-            <a href="/rbac" class="nav-item" data-page="rbac">
-                <i data-lucide="users" class="nav-icon"></i>
+            <a href="/rbac" class="nav-item" data-page="rbac" aria-label="Access Control">
+                <i data-lucide="users" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Access Control</span>
             </a>
-            <a href="/virtual-keys" class="nav-item" data-page="virtual-keys">
-                <i data-lucide="key-round" class="nav-icon"></i>
+            <a href="/virtual-keys" class="nav-item" data-page="virtual-keys" aria-label="Virtual Keys">
+                <i data-lucide="key-round" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Virtual Keys</span>
             </a>
-            <a href="/gdpr" class="nav-item" data-page="gdpr">
-                <i data-lucide="scale" class="nav-icon"></i>
+            <a href="/gdpr" class="nav-item" data-page="gdpr" aria-label="GDPR and Privacy">
+                <i data-lucide="scale" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">GDPR / Privacy</span>
             </a>
-            <a href="/rate-limits" class="nav-item" data-page="rate-limits">
-                <i data-lucide="gauge" class="nav-icon"></i>
+            <a href="/rate-limits" class="nav-item" data-page="rate-limits" aria-label="Rate Limits">
+                <i data-lucide="gauge" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Rate Limits</span>
             </a>
-            <a href="/quotas" class="nav-item" data-page="quotas">
-                <i data-lucide="sliders-horizontal" class="nav-icon"></i>
+            <a href="/quotas" class="nav-item" data-page="quotas" aria-label="Quotas">
+                <i data-lucide="sliders-horizontal" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Quotas</span>
             </a>
-            <a href="/cost" class="nav-item" data-page="cost">
-                <i data-lucide="coins" class="nav-icon"></i>
+            <a href="/cost" class="nav-item" data-page="cost" aria-label="Cost and Usage">
+                <i data-lucide="coins" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Cost &amp; Usage</span>
             </a>
-            <a href="/cache" class="nav-item" data-page="cache">
-                <i data-lucide="database-zap" class="nav-icon"></i>
+            <a href="/cache" class="nav-item" data-page="cache" aria-label="Response Cache">
+                <i data-lucide="database-zap" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Response Cache</span>
             </a>
-            <a href="/sessions" class="nav-item" data-page="sessions">
-                <i data-lucide="list-tree" class="nav-icon"></i>
+            <a href="/sessions" class="nav-item" data-page="sessions" aria-label="Session Tracker">
+                <i data-lucide="list-tree" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Session Tracker</span>
             </a>
-            <a href="/settings" class="nav-item" data-page="settings">
-                <i data-lucide="settings" class="nav-icon"></i>
+            <a href="/settings" class="nav-item" data-page="settings" aria-label="Settings">
+                <i data-lucide="settings" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Settings</span>
             </a>
-            <a href="/status" class="nav-item" data-page="status">
-                <i data-lucide="heart-pulse" class="nav-icon"></i>
+            <a href="/status" class="nav-item" data-page="status" aria-label="Status">
+                <i data-lucide="heart-pulse" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Status</span>
             </a>
         </nav>
@@ -290,11 +310,11 @@
             <div class="flex items-center justify-between h-14 px-4 lg:px-6">
                 <div class="flex items-center gap-3">
                     <!-- Sidebar toggle -->
-                    <button @click="sidebarOpen = !sidebarOpen" class="p-2 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors">
-                        <i data-lucide="panel-left" class="w-5 h-5"></i>
+                    <button @click="sidebarOpen = !sidebarOpen" class="p-2 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors" aria-label="Toggle sidebar" :aria-expanded="sidebarOpen ? 'true' : 'false'" aria-controls="main-nav">
+                        <i data-lucide="panel-left" class="w-5 h-5" aria-hidden="true"></i>
                     </button>
                     <!-- Breadcrumb -->
-                    <nav class="hidden sm:flex items-center gap-1.5 text-sm">
+                    <nav class="hidden sm:flex items-center gap-1.5 text-sm" aria-label="Breadcrumb">
                         <span class="text-gray-600">/</span>
                         <span class="text-gray-100 font-medium">{% block breadcrumb %}Dashboard{% endblock %}</span>
                     </nav>
@@ -302,14 +322,14 @@
                 <div class="flex items-center gap-1">
                     <!-- Command palette trigger -->
                     <button @click="$dispatch('open-command-palette')"
-                            class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors" style="border: 1px solid rgba(255,255,255,0.06);">
-                        <i data-lucide="search" class="w-3.5 h-3.5"></i>
+                            class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors" style="border: 1px solid rgba(255,255,255,0.06);" aria-label="Open search command palette">
+                        <i data-lucide="search" class="w-3.5 h-3.5" aria-hidden="true"></i>
                         <span>Search...</span>
                         <kbd class="px-1.5 py-0.5 rounded text-[10px] font-mono text-gray-600 ml-2" style="background: rgba(255,255,255,0.04);">⌘K</kbd>
                     </button>
                     <!-- Notifications -->
-                    <button class="relative p-2 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors" id="notification-btn">
-                        <i data-lucide="bell" class="w-[18px] h-[18px]"></i>
+                    <button class="relative p-2 rounded-lg hover:bg-white/5 text-gray-500 hover:text-gray-200 transition-colors" id="notification-btn" aria-label="Notifications">
+                        <i data-lucide="bell" class="w-[18px] h-[18px]" aria-hidden="true"></i>
                         <span id="notification-badge" class="hidden absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" style="box-shadow: 0 0 6px rgba(239,68,68,0.5);"></span>
                     </button>
                     <!-- SSE Status -->
@@ -322,7 +342,7 @@
         </header>
 
         <!-- Page content -->
-        <main class="p-4 lg:p-6 max-w-[1600px] relative">
+        <main id="main-content" tabindex="-1" class="p-4 lg:p-6 max-w-[1600px] relative">
             {% block content %}{% endblock %}
         </main>
     </div>
