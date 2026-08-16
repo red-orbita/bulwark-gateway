@@ -56,6 +56,62 @@ logger = structlog.get_logger()
 input_guardrail = InputGuardrail()
 output_filter = OutputFilter()
 
+
+def _resolve_vault_key(tenant_id: str, provider: str) -> str | None:
+    """Resolve the active backend key for (tenant, provider) from the vault.
+
+    Defensive by design: the virtual-key manager raises ``SystemExit`` when
+    ``BULWARK_KEY_ENCRYPTION_KEY`` is unset and may raise on Redis/crypto
+    errors — none of that may ever crash a request on the hot path. Returns
+    ``None`` when the vault is unavailable or holds no active key.
+    """
+    if not os.environ.get("BULWARK_KEY_ENCRYPTION_KEY"):
+        return None
+    try:
+        from src.services.virtual_keys import get_virtual_key_manager
+
+        mgr = get_virtual_key_manager()
+        return mgr.get_backend_key(tenant_id, provider)
+    except (Exception, SystemExit):  # noqa: BLE001 - vault must never break the hot path
+        return None
+
+
+def _resolve_backend_auth(backend, tenant_id: str) -> tuple[dict[str, str], str | None]:
+    """Build the auth header(s) to send to ``backend`` for ``tenant_id``.
+
+    Virtual Keys integration (data-path enforcement): when the backend declares
+    a ``provider``, the credential is sourced from the encrypted per-tenant
+    virtual-key vault at request time, taking precedence over any static
+    ``auth_token`` in agents.yaml. This is what actually places the Virtual Keys
+    subsystem on the request path — rotating/revoking a key in the vault changes
+    (or cuts) backend access on the very next request.
+
+    Returns ``(headers, error)``. When ``error`` is non-None the caller MUST
+    fail closed: a provider was declared but no credential could be resolved,
+    and we refuse to forward an unauthenticated request to the backend.
+    """
+    headers: dict[str, str] = {}
+    provider = getattr(backend, "provider", None)
+    if provider:
+        vault_key = _resolve_vault_key(tenant_id, provider)
+        if vault_key:
+            header_name = backend.auth_header or "Authorization"
+            scheme = getattr(backend, "auth_scheme", "Bearer ")
+            headers[header_name] = f"{scheme}{vault_key}"
+            return headers, None
+        # Migration fallback: a static token in config is still honored so
+        # operators can adopt virtual keys incrementally.
+        if backend.auth_header and backend.auth_token:
+            headers[backend.auth_header] = backend.auth_token
+            return headers, None
+        # Fail closed: provider declared but neither a vault key nor a static
+        # token is available. Do not forward unauthenticated.
+        return headers, f"no virtual key configured for provider '{provider}'"
+    # No provider declared: legacy static auth from config (H-04).
+    if backend.auth_header and backend.auth_token:
+        headers[backend.auth_header] = backend.auth_token
+    return headers, None
+
 # C-01/H-01: SSRF prevention — Two-tier approach:
 # 1. _ALWAYS_BLOCKED: Cloud metadata, link-local, loopback — blocked for ALL requests
 # 2. _USER_CONTENT_BLOCKED: Private ranges (10/172/192) — blocked only for user-supplied URLs
@@ -557,10 +613,27 @@ async def chat_completions(request: Request):
             backend_headers = {
                 "Content-Type": "application/json",
             }
-            # Use agent-specific auth if configured
-            # H-04: Only forward auth from pre-configured backend auth, NOT from client headers
-            if current_backend.auth_header and current_backend.auth_token:
-                backend_headers[current_backend.auth_header] = current_backend.auth_token
+            # Use agent-specific auth if configured.
+            # H-04: Only forward auth from pre-configured backend auth, NOT from client headers.
+            # Virtual Keys (data-path enforcement): when the backend declares a
+            # provider, the credential is resolved from the encrypted per-tenant
+            # vault at request time. Fail closed if a provider is declared but no
+            # credential (vault or static) can be resolved — never forward an
+            # unauthenticated request to a paid/privileged backend.
+            auth_headers, auth_error = _resolve_backend_auth(current_backend, tenant_id)
+            if auth_error is not None:
+                logger.error(
+                    "backend_credential_unavailable",
+                    tenant=tenant_id,
+                    agent=agent_id,
+                    provider=getattr(current_backend, "provider", None),
+                    reason=auth_error,
+                )
+                return JSONResponse(
+                    status_code=502,
+                    content={"error": {"message": "Backend credential unavailable", "type": "configuration_error", "code": "backend_credential_unavailable"}},
+                )
+            backend_headers.update(auth_headers)
 
             backend_url = f"{current_backend.backend_url.rstrip('/')}{current_backend.path_prefix}/chat/completions"
 

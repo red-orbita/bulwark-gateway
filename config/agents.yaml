@@ -3,6 +3,40 @@ defaults:
   timeout: 120.0
   auth_header: null
   health_endpoint: /health
+#
+# ─── Backend authentication ──────────────────────────────────────────────────
+# Two ways to authenticate to an upstream LLM backend:
+#
+#  1. Static token (legacy): set ``auth_header`` + ``auth_token`` on the agent.
+#     The token is read verbatim from this file at request time.
+#
+#  2. Virtual Keys (recommended): set ``provider`` on the agent. The credential
+#     is then sourced from the encrypted, per-tenant virtual-key vault at
+#     request time — NOT from this file. Rotating or revoking the key in the
+#     vault (admin UI / API) changes or cuts backend access on the very next
+#     request. ``auth_scheme`` (default "Bearer ") is prepended to the resolved
+#     key; use "" for providers that expect a bare key header (e.g. Azure's
+#     ``api-key``). When ``provider`` is set but no vault key exists, a static
+#     ``auth_token`` (if present) is honored as a migration fallback; if neither
+#     is available the request FAILS CLOSED (502) — an unauthenticated call is
+#     never forwarded to a paid/privileged backend.
+#
+#   Example (OpenAI via virtual keys):
+#     openai-agent:
+#       path_prefix: /v1
+#       backend_url: https://api.openai.com
+#       provider: openai          # → vault lookup for (tenant, "openai")
+#       auth_header: Authorization
+#       auth_scheme: "Bearer "
+#
+#   Example (Azure OpenAI, bare api-key header):
+#     azure-agent:
+#       path_prefix: /openai/deployments/gpt-4
+#       backend_url: https://my-resource.openai.azure.com
+#       provider: azure
+#       auth_header: api-key
+#       auth_scheme: ""
+#
 tenants:
   default-corp:
     quotas:

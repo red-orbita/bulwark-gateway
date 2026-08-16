@@ -51,6 +51,13 @@ class AgentBackend:
     trusted: bool = True  # Backends from config are operator-trusted (skip SSRF check)
     fallback_backends: list["AgentBackend"] = field(default_factory=list)
     max_retries: int = 1  # 0 = no retry, 1 = try fallback once
+    # Virtual Keys integration: when ``provider`` is set, the backend credential
+    # is sourced from the encrypted virtual-key vault (per-tenant) at request
+    # time instead of a static ``auth_token``. ``auth_scheme`` is prepended to
+    # the resolved key when building the auth header (e.g. "Bearer " for OpenAI,
+    # "" for Azure's ``api-key`` header).
+    provider: str | None = None
+    auth_scheme: str = "Bearer "
 
 
 @dataclass
@@ -160,6 +167,8 @@ class AgentRegistry:
                                 auth_token=fb_cfg.get("auth_token"),
                                 health_endpoint=fb_cfg.get("health_endpoint", "/health"),
                                 path_prefix=fb_cfg.get("path_prefix", "/v1"),
+                                provider=fb_cfg.get("provider"),
+                                auth_scheme=fb_cfg.get("auth_scheme", "Bearer "),
                             ))
 
                     new_agents[key] = AgentBackend(
@@ -174,6 +183,8 @@ class AgentRegistry:
                         path_prefix=agent_cfg.get("path_prefix", "/v1"),
                         fallback_backends=fallbacks,
                         max_retries=agent_cfg.get("max_retries", 1 if fallbacks else 0),
+                        provider=agent_cfg.get("provider"),
+                        auth_scheme=agent_cfg.get("auth_scheme", "Bearer "),
                     )
 
             # Atomic swap
