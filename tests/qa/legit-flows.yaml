@@ -3,7 +3,7 @@
 # If any of these trigger a BLOCK verdict, it's a false positive.
 
 tenants:
-  example-corp:
+  default-corp:
     agents:
       - id: support-bot
         allowed_tools: [web_search, read_knowledge_base, get_ticket_info, create_ticket]

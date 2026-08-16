@@ -54,10 +54,22 @@ async def proxy_stats(request: Request):
     # C-05: Explicit auth verification (defense-in-depth)
     if not getattr(request.state, "tenant_id", None):
         raise HTTPException(status_code=401, detail="Authentication required")
-    from src.telemetry.counters import get_counters
+    from src.telemetry.counters import get_counters, merge_global_counters
 
     counters = get_counters()
-    return JSONResponse(content=counters.snapshot())
+    snapshot = counters.snapshot()
+
+    # In-process counters are per-worker (uvicorn --workers N). Overlay the
+    # authoritative cross-worker/replica totals from Redis global counters so
+    # /health/stats reports true cluster-wide numbers, not one worker's slice.
+    try:
+        from src.guardrails.dynamic_registry import get_pattern_registry
+        redis_client = get_pattern_registry()._redis
+    except Exception:
+        redis_client = None
+    snapshot = merge_global_counters(snapshot, redis_client)
+
+    return JSONResponse(content=snapshot)
 
 
 @router.get("/health/cost")

@@ -58,6 +58,53 @@ class ProxyCounters:
         }
 
 
+def merge_global_counters(snapshot: dict, redis_client) -> dict:
+    """Overlay authoritative cross-worker verdict totals from Redis.
+
+    In-process ``ProxyCounters`` are per-worker: the proxy runs with multiple
+    uvicorn workers (``--workers N``), so ``/health/stats`` served by any single
+    worker only sees that worker's slice of traffic. The proxy hot path also
+    increments distributed ``bulwark:global:*`` counters in Redis, which hold the
+    true aggregate across every worker and replica (and survive restarts).
+
+    This overlays those authoritative totals onto a local snapshot when Redis is
+    reachable, and tags the result with ``scope`` so operators know whether the
+    numbers are cluster-wide (``"global"``) or a single worker (``"worker"``).
+
+    Latency percentiles, ``errors`` and ``uptime_seconds`` remain per-worker
+    best-effort (Redis does not track them); ``requests_per_second`` is therefore
+    derived from the serving worker's uptime. ``redis_client`` is duck-typed
+    (only ``.mget`` is used) to keep this module dependency-free.
+    """
+    if redis_client is None:
+        snapshot["scope"] = "worker"
+        return snapshot
+    try:
+        raw = redis_client.mget(
+            "bulwark:global:requests_total",
+            "bulwark:global:block",
+            "bulwark:global:allow",
+            "bulwark:global:warn",
+            "bulwark:global:redact",
+        )
+    except Exception:
+        snapshot["scope"] = "worker"
+        return snapshot
+    # requests_total missing → counters not yet populated; keep worker-local view.
+    if not raw or raw[0] is None:
+        snapshot["scope"] = "worker"
+        return snapshot
+    snapshot["requests_total"] = int(raw[0])
+    snapshot["blocked"] = int(raw[1] or 0)
+    snapshot["allowed"] = int(raw[2] or 0)
+    snapshot["warned"] = int(raw[3] or 0)
+    snapshot["redacted"] = int(raw[4] or 0)
+    uptime = snapshot.get("uptime_seconds") or 0
+    snapshot["requests_per_second"] = round(snapshot["requests_total"] / max(uptime, 1), 2)
+    snapshot["scope"] = "global"
+    return snapshot
+
+
 # Singleton
 _counters: ProxyCounters | None = None
 

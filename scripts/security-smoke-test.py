@@ -43,13 +43,13 @@ if not API_KEY:
 
 HEADERS_SUPPORT = {
     "Content-Type": "application/json",
-    "X-Tenant-ID": "example-corp",
+    "X-Tenant-ID": "default-corp",
     "X-Agent-ID": "support-bot",
 }
 
 HEADERS_CODE = {
     "Content-Type": "application/json",
-    "X-Tenant-ID": "example-corp",
+    "X-Tenant-ID": "default-corp",
     "X-Agent-ID": "code-assistant",
 }
 
@@ -200,7 +200,7 @@ def run_chat_test(
         resp = client.post(
             f"{host}/v1/chat/completions",
             headers={**headers, "Authorization": f"Bearer {API_KEY}"},
-            json={"model": "test", "messages": [{"role": "user", "content": message}]},
+            json={"model": "tinyllama", "messages": [{"role": "user", "content": message}]},
             timeout=10,
         )
     except Exception as e:
@@ -320,7 +320,11 @@ def main():
 
     # Pre-flight check
     try:
-        r = httpx.get(f"{args.host}/health/stats", timeout=5)
+        r = httpx.get(
+            f"{args.host}/health/stats",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            timeout=5,
+        )
         stats_before = r.json()
         print(f"Proxy uptime: {stats_before['uptime_seconds']:.0f}s | Current stats: {stats_before['requests_total']} requests")
     except Exception as e:
@@ -387,7 +391,11 @@ def main():
     # Final stats
     print(f"\n[*] Checking final proxy stats...")
     try:
-        r = httpx.get(f"{args.host}/health/stats", timeout=5)
+        r = httpx.get(
+            f"{args.host}/health/stats",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            timeout=5,
+        )
         stats_after = r.json()
         print(f"  Requests total: {stats_after['requests_total']}")
         print(f"  Blocked: {stats_after['blocked']}")
