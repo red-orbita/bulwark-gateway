@@ -39,10 +39,11 @@ generate_if_missing "redis_password.txt"       "openssl rand -base64 24"
 generate_if_missing "db_encryption_key.txt"    "openssl rand -base64 32"
 generate_if_missing "grafana_password.txt"     "openssl rand -base64 24"
 
-# User passwords (readable random, 20 chars)
-generate_if_missing "admin_password.txt"       "openssl rand -base64 15 | tr -d '=/+' | head -c 20"
-generate_if_missing "security_password.txt"    "openssl rand -base64 15 | tr -d '=/+' | head -c 20"
-generate_if_missing "auditor_password.txt"     "openssl rand -base64 15 | tr -d '=/+' | head -c 20"
+# User passwords (readable random, 20 chars with guaranteed complexity)
+# Generate base alphanumeric + append mandatory special/digit/upper/lower chars
+generate_if_missing "admin_password.txt"       "printf '%s%s' \$(openssl rand -base64 15 | tr -d '=/+' | head -c 16) '!A1a' | fold -w1 | shuf | tr -d '\n' | head -c 20"
+generate_if_missing "security_password.txt"    "printf '%s%s' \$(openssl rand -base64 15 | tr -d '=/+' | head -c 16) '@B2b' | fold -w1 | shuf | tr -d '\n' | head -c 20"
+generate_if_missing "auditor_password.txt"     "printf '%s%s' \$(openssl rand -base64 15 | tr -d '=/+' | head -c 16) '#C3c' | fold -w1 | shuf | tr -d '\n' | head -c 20"
 
 # API keys (hex, 48 chars)
 generate_if_missing "api_keys.txt"             "openssl rand -hex 24"
