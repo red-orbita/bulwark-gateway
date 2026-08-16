@@ -15,6 +15,7 @@ Features:
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -37,6 +38,8 @@ from .routes import (
     events, gdpr, virtual_keys, quotas, cost, cache, sessions,
 )
 
+logger = logging.getLogger("bulwark.admin")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
@@ -56,6 +59,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.user_store import get_user_store
     user_store = get_user_store()
     user_store.initialize()
+    # Eagerly seed admin-managed shared state at startup so the agents registry
+    # and IOC DB exist in the shared admin_data volume / admin-data PVC BEFORE
+    # the proxy reads them read-only. Both are lazy singletons whose __init__
+    # seeds from the image's config/ files (_ensure_writable_copy / _migrate_legacy);
+    # without this, agents.yaml is only written when the tenants UI is first opened,
+    # leaving the proxy with an empty registry on boot. Baked into the image so it
+    # applies identically to Docker Compose (depends_on: admin) and Helm (shared PVC).
+    # Best-effort: a not-yet-writable volume must not crash the admin (the lazy
+    # singletons will retry on first request), so failures are logged, not fatal.
+    try:
+        from .services.tenant_manager import get_tenant_manager
+        get_tenant_manager()
+        from .services.ioc_store import get_ioc_store
+        get_ioc_store()
+    except Exception as exc:  # noqa: BLE001 — startup seeding is best-effort
+        logger.warning("shared_state_seed_deferred error=%s", exc)
     # Start background feed scheduler
     from .services.feed_scheduler import get_feed_scheduler
     scheduler = get_feed_scheduler()

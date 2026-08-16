@@ -162,10 +162,11 @@ proxy:
     ttl: 3600
     # -- Max entries in LRU fallback
     maxSize: 10000
-  # -- Cost Tracking (token usage accounting per tenant)
-  costTracking:
-    # -- Enable cost tracking
-    enabled: true
+  # NOTE: Cost / token-usage accounting (per tenant) is ALWAYS ON in the proxy
+  # (src/services/cost_tracker.py, wired unconditionally in src/routes/proxy.py).
+  # There is intentionally no enable/disable toggle — a flag here would be a
+  # deceptive no-op control. Usage is exposed at GET /health/cost and the admin
+  # "Cost & Token Usage" page; cross-pod totals persist in Redis when available.
 
 # -- Admin dashboard configuration
 admin:
@@ -195,6 +196,11 @@ admin:
   jwtExpiryHours: 8
   # -- CORS allowed origins (comma-separated, empty = all)
   corsOrigins: ""
+  # -- Force the Secure flag on admin session cookies (BULWARK_HTTPS).
+  # "" (default) = auto: forced true when ingress.tls.enabled, otherwise
+  # auto-detected from X-Forwarded-Proto / request scheme. "true"/"false"
+  # explicitly override. Keep "false" only for plain-HTTP local access.
+  https: ""
   # -- GDPR Art.30 RoPA (Records of Processing Activities) identity.
   # Populate to name the data controller / DPO in the data-inventory report.
   # Leave blank and the endpoint honestly reports "NOT CONFIGURED" instead of
@@ -512,6 +518,9 @@ secrets:
   apiKey: ""
   # -- Database encryption key
   dbEncryptionKey: ""
+  # -- Virtual-key vault encryption key (encrypts backend API keys at rest).
+  # Shared by proxy + admin, must differ from jwtSecret. Auto-generated if empty.
+  keyEncryptionKey: ""
 
 # -- Persistent volume configuration
 persistence:

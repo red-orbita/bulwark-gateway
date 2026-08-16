@@ -37,6 +37,7 @@ generate_if_missing "jwt_secret.txt"           "openssl rand -base64 32"
 generate_if_missing "admin_jwt_secret.txt"     "openssl rand -base64 32"
 generate_if_missing "redis_password.txt"       "openssl rand -base64 24"
 generate_if_missing "db_encryption_key.txt"    "openssl rand -base64 32"
+generate_if_missing "key_encryption_key.txt"   "openssl rand -base64 32"
 generate_if_missing "grafana_password.txt"     "openssl rand -base64 24"
 
 # User passwords (readable random, 20 chars with guaranteed complexity)

@@ -36,6 +36,8 @@ secrets:
     file: ./secrets/grafana_password.txt
   db_encryption_key:
     file: ./secrets/db_encryption_key.txt
+  key_encryption_key:
+    file: ./secrets/key_encryption_key.txt
   api_keys:
     file: ./secrets/api_keys.txt
   urlhaus_key:
@@ -63,6 +65,11 @@ services:
       # Non-secret configuration only
       BULWARK_BACKEND_URL: ${BULWARK_BACKEND_URL:-http://host.docker.internal:8000}
       BULWARK_FAIL_MODE: ${BULWARK_FAIL_MODE:-closed}
+      # Admin-managed state read from the shared admin_data volume (see volumes).
+      # Matches Helm: admin writes /app/data/{agents.yaml,iocs.json}; proxy reads
+      # them here so UI-driven tenant/agent + IOC changes reach the hot path.
+      BULWARK_AGENTS_FILE: /app/shared/admin/agents.yaml
+      BULWARK_IOC_PATH: /app/shared/admin/iocs.json
       BULWARK_LOG_FORMAT: json
       BULWARK_LOG_LEVEL: ${BULWARK_LOG_LEVEL:-INFO}
       BULWARK_RATE_LIMIT_RPM: ${BULWARK_RATE_LIMIT_RPM:-60}
@@ -70,6 +77,9 @@ services:
       BULWARK_TELEMETRY_ENABLED: ${BULWARK_TELEMETRY_ENABLED:-true}
       BULWARK_TELEMETRY_BATCH_SIZE: ${BULWARK_TELEMETRY_BATCH_SIZE:-100}
       BULWARK_TELEMETRY_FLUSH_INTERVAL: ${BULWARK_TELEMETRY_FLUSH_INTERVAL:-1.0}
+      # SIEM stats/transports persistence (explicit; matches Helm + the siem_stats mount)
+      BULWARK_SIEM_STATS_FILE: /app/shared/siem/siem_stats.json
+      BULWARK_SIEM_TRANSPORTS_FILE: /app/shared/siem/siem_transports.json
       # ML Scanner configuration
       BULWARK_ML_ENABLED: ${BULWARK_ML_ENABLED:-false}
       BULWARK_ML_MODEL_DIR: /app/models
@@ -77,9 +87,19 @@ services:
       # Enrichment pipeline
       BULWARK_ENRICHMENT_ENABLED: ${BULWARK_ENRICHMENT_ENABLED:-true}
       BULWARK_REPLAY_DB_PATH: /app/shared/enrichment/attack_replay.db
+      # Embedding scanner tunables (defaults mirror code + Helm values.yaml).
+      # Kept identical to the admin service so its enrichment status report matches.
+      BULWARK_EMBED_MODEL: ${BULWARK_EMBED_MODEL:-all-MiniLM-L6-v2}
+      BULWARK_EMBED_THRESH_SUSPICIOUS: ${BULWARK_EMBED_THRESH_SUSPICIOUS:-0.78}
+      BULWARK_EMBED_THRESH_THREAT: ${BULWARK_EMBED_THRESH_THREAT:-0.88}
+      # Notification channels — admin writes, proxy reads (shared volume).
+      # Without this the proxy uses its own ephemeral default and admin-configured
+      # channels never fire alerts from the hot path.
+      BULWARK_NOTIFICATIONS_FILE: /app/shared/notifications/channels.json
       # Response cache
       BULWARK_CACHE_ENABLED: ${BULWARK_CACHE_ENABLED:-true}
       BULWARK_CACHE_TTL: ${BULWARK_CACHE_TTL:-3600}
+      BULWARK_CACHE_MAX_SIZE: ${BULWARK_CACHE_MAX_SIZE:-10000}
       # HuggingFace model cache (for sentence-transformers in enrichment)
       HF_HOME: /tmp/hf_cache
       SENTENCE_TRANSFORMERS_HOME: /app/models/sentence-transformers
@@ -87,6 +107,7 @@ services:
       BULWARK_JWT_SECRET_FILE: /run/secrets/jwt_secret
       BULWARK_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       BULWARK_API_KEYS_FILE: /run/secrets/api_keys
+      BULWARK_KEY_ENCRYPTION_KEY_FILE: /run/secrets/key_encryption_key
       BULWARK_URLHAUS_KEY_FILE: /run/secrets/urlhaus_key
       BULWARK_THREATFOX_KEY_FILE: /run/secrets/threatfox_key
       BULWARK_OTX_KEY_FILE: /run/secrets/otx_key
@@ -97,20 +118,30 @@ services:
       - jwt_secret
       - redis_password
       - api_keys
+      - key_encryption_key
       - urlhaus_key
       - threatfox_key
       - otx_key
       - abuseipdb_key
     volumes:
       - policies:/app/config/policies:ro
-      - ./config/iocs.json:/app/config/iocs.json:ro
-      - ./config/agents.yaml:/app/config/agents.yaml:ro
       - ./models:/app/models:ro
       - telemetry_data:/app/data
       - siem_stats:/app/shared/siem
       - enrichment_data:/app/shared/enrichment
+      # Notification channels: admin writes here, proxy only reads.
+      - notifications_data:/app/shared/notifications:ro
+      # Admin-managed state (agents registry + IOC DB): admin writes to its
+      # /app/data (admin_data volume); proxy reads the SAME volume read-only at
+      # /app/shared/admin. Mirrors the Helm shared admin-data PVC so tenant/agent
+      # and IOC changes made in the admin UI actually reach the proxy hot path.
+      - admin_data:/app/shared/admin:ro
     depends_on:
       redis:
+        condition: service_healthy
+      # Wait for admin to be healthy so it has seeded agents.yaml / iocs.json
+      # into admin_data before the proxy loads them (avoids empty-registry race).
+      admin:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
@@ -156,7 +187,10 @@ services:
       BULWARK_TELEMETRY_ENABLED: ${BULWARK_TELEMETRY_ENABLED:-true}
       BULWARK_REDIS_URL: redis://redis:6379/0
       BULWARK_REDIS_PASSWORD_FILE: /run/secrets/redis_password
-      BULWARK_IOC_PATH: /app/config/iocs.json
+      # IOC DB: admin persists to its writable admin_data volume (/app/data).
+      # The proxy reads the same volume read-only at /app/shared/admin/iocs.json.
+      # (Previously pointed at the read-only ./config bind, so admin writes failed.)
+      BULWARK_IOC_PATH: /app/data/iocs.json
       # GDPR Art.30 controller / DPO identity (RoPA mandatory fields).
       # Leave unset to have the data-inventory endpoint honestly report
       # "NOT CONFIGURED" instead of a fabricated placeholder.
@@ -167,12 +201,28 @@ services:
       BULWARK_HTTPS: "${BULWARK_HTTPS:-false}"
       # Enrichment DB (read-only access to proxy's replay DB)
       BULWARK_REPLAY_DB_PATH: /app/shared/enrichment/attack_replay.db
+      # Enrichment status reporting — must mirror the proxy so /admin enrichment
+      # status reflects the values the proxy hot path actually uses.
+      BULWARK_ENRICHMENT_ENABLED: ${BULWARK_ENRICHMENT_ENABLED:-true}
+      BULWARK_EMBED_MODEL: ${BULWARK_EMBED_MODEL:-all-MiniLM-L6-v2}
+      BULWARK_EMBED_THRESH_SUSPICIOUS: ${BULWARK_EMBED_THRESH_SUSPICIOUS:-0.78}
+      BULWARK_EMBED_THRESH_THREAT: ${BULWARK_EMBED_THRESH_THREAT:-0.88}
+      # SkillSpector pre-deployment scanner tunables (defaults = code + Helm).
+      BULWARK_SKILLSPECTOR_ENABLED: ${BULWARK_SKILLSPECTOR_ENABLED:-true}
+      BULWARK_SKILLSPECTOR_BLOCK_THRESHOLD: ${BULWARK_SKILLSPECTOR_BLOCK_THRESHOLD:-7.0}
+      BULWARK_SKILLSPECTOR_WARN_THRESHOLD: ${BULWARK_SKILLSPECTOR_WARN_THRESHOLD:-4.0}
+      BULWARK_SKILLSPECTOR_TIMEOUT: ${BULWARK_SKILLSPECTOR_TIMEOUT:-60}
+      BULWARK_SKILLSPECTOR_CACHE_TTL: ${BULWARK_SKILLSPECTOR_CACHE_TTL:-300}
+      # Notification channels — admin writes, proxy reads (shared volume).
+      # Same path in both services so admin-configured channels reach the hot path.
+      BULWARK_NOTIFICATIONS_FILE: /app/shared/notifications/channels.json
       # Secrets via _FILE env vars
       ADMIN_JWT_SECRET_FILE: /run/secrets/admin_jwt_secret
       ADMIN_PASSWORD_FILE: /run/secrets/admin_password
       SECURITY_PASSWORD_FILE: /run/secrets/security_password
       AUDITOR_PASSWORD_FILE: /run/secrets/auditor_password
       DB_ENCRYPTION_KEY_FILE: /run/secrets/db_encryption_key
+      BULWARK_KEY_ENCRYPTION_KEY_FILE: /run/secrets/key_encryption_key
       BULWARK_PROXY_API_KEY_FILE: /run/secrets/api_keys
     secrets:
       - admin_jwt_secret
@@ -180,6 +230,7 @@ services:
       - security_password
       - auditor_password
       - db_encryption_key
+      - key_encryption_key
       - api_keys
       - redis_password
     volumes:
@@ -193,6 +244,8 @@ services:
       - siem_stats:/app/shared/siem
       - reports:/app/reports
       - enrichment_data:/app/shared/enrichment
+      # Notification channels: admin owns this file (read-write).
+      - notifications_data:/app/shared/notifications
       - ./admin/main.py:/app/admin/main.py:ro
       - ./admin/templates:/app/admin/templates:ro
       - ./admin/routes:/app/admin/routes:ro
@@ -359,6 +412,8 @@ volumes:
   siem_stats:
     driver: local
   enrichment_data:
+    driver: local
+  notifications_data:
     driver: local
   prometheus_data:
     driver: local

@@ -11,6 +11,11 @@ metadata:
     {{- include "bulwark-gateway.proxy.labels" . | nindent 4 }}
 data:
   BULWARK_AGENTS_FILE: "/app/shared/admin/agents.yaml"
+  # IOC database — admin writes to its admin-data volume (/app/data/iocs.json);
+  # the proxy reads the same PVC mounted read-only at /app/shared/admin. Without
+  # this the proxy would read the baked-in image copy and admin-managed IOCs
+  # would never reach the hot path.
+  BULWARK_IOC_PATH: "/app/shared/admin/iocs.json"
   BULWARK_FAIL_MODE: {{ .Values.proxy.failMode | quote }}
   BULWARK_LOG_FORMAT: "json"
   BULWARK_LOG_LEVEL: {{ .Values.proxy.logLevel | quote }}
@@ -29,6 +34,7 @@ data:
   BULWARK_JWT_SECRET_FILE: "/run/secrets/jwt-secret"
   BULWARK_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
   BULWARK_API_KEYS_FILE: "/run/secrets/api-keys"
+  BULWARK_KEY_ENCRYPTION_KEY_FILE: "/run/secrets/key-encryption-key"
   BULWARK_URLHAUS_KEY_FILE: "/run/secrets/urlhaus-key"
   BULWARK_THREATFOX_KEY_FILE: "/run/secrets/threatfox-key"
   BULWARK_OTX_KEY_FILE: "/run/secrets/otx-key"
@@ -75,11 +81,23 @@ metadata:
 data:
   ADMIN_JWT_EXPIRY_HOURS: {{ .Values.admin.jwtExpiryHours | quote }}
   ADMIN_CORS_ORIGINS: {{ .Values.admin.corsOrigins | quote }}
+  # Secure-cookie policy (BULWARK_HTTPS). Explicit value wins; otherwise force
+  # "true" when ingress TLS is enabled so the session cookie always carries the
+  # Secure flag behind HTTPS even if X-Forwarded-Proto is stripped. When neither
+  # applies, the flag is left unset for runtime auto-detection.
+  {{- if ne (.Values.admin.https | toString) "" }}
+  BULWARK_HTTPS: {{ .Values.admin.https | quote }}
+  {{- else if and .Values.ingress.enabled .Values.ingress.tls.enabled }}
+  BULWARK_HTTPS: "true"
+  {{- end }}
   BULWARK_TELEMETRY_ENABLED: {{ .Values.telemetry.enabled | quote }}
   BULWARK_REDIS_URL: {{ include "bulwark-gateway.redis.url" . | quote }}
   {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls .Values.externalRedis.tlsInsecure }}
   BULWARK_REDIS_TLS_INSECURE: "true"
   {{- end }}
+  # IOC database — admin persists to its writable /app/data mount; the proxy
+  # reads the same admin-data PVC at /app/shared/admin/iocs.json (see proxy-config).
+  BULWARK_IOC_PATH: "/app/data/iocs.json"
   # File paths for secrets mounted as volumes
   BULWARK_REDIS_PASSWORD_FILE: "/run/secrets/redis-password"
   ADMIN_JWT_SECRET_FILE: "/run/secrets/admin-jwt-secret"
@@ -87,6 +105,7 @@ data:
   SECURITY_PASSWORD_FILE: "/run/secrets/security-password"
   AUDITOR_PASSWORD_FILE: "/run/secrets/auditor-password"
   DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
+  BULWARK_KEY_ENCRYPTION_KEY_FILE: "/run/secrets/key-encryption-key"
   BULWARK_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
   BULWARK_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
   {{- if .Values.admin.gdpr }}

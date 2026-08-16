@@ -65,7 +65,11 @@ def _resolve_vault_key(tenant_id: str, provider: str) -> str | None:
     errors — none of that may ever crash a request on the hot path. Returns
     ``None`` when the vault is unavailable or holds no active key.
     """
-    if not os.environ.get("BULWARK_KEY_ENCRYPTION_KEY"):
+    if not (
+        os.environ.get("BULWARK_KEY_ENCRYPTION_KEY")
+        or os.environ.get("BULWARK_KEY_ENCRYPTION_KEY_FILE")
+        or os.environ.get("KEY_ENCRYPTION_KEY_FILE")
+    ):
         return None
     try:
         from src.services.virtual_keys import get_virtual_key_manager

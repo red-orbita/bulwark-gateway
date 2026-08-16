@@ -28,6 +28,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -93,9 +94,24 @@ class VirtualKeyManager:
         """
         key_source = os.environ.get("BULWARK_KEY_ENCRYPTION_KEY", "")
         if not key_source:
+            # Docker/K8s secrets pattern: fall back to *_FILE contents so the
+            # key can be mounted at /run/secrets/* like every other secret
+            # (BULWARK_KEY_ENCRYPTION_KEY_FILE=/run/secrets/key_encryption_key).
+            file_path = os.environ.get("BULWARK_KEY_ENCRYPTION_KEY_FILE") or os.environ.get(
+                "KEY_ENCRYPTION_KEY_FILE"
+            )
+            if file_path:
+                try:
+                    contents = Path(file_path).read_text().strip()
+                except OSError:
+                    contents = ""
+                if contents:
+                    key_source = contents
+        if not key_source:
             raise SystemExit(
                 "FATAL: BULWARK_KEY_ENCRYPTION_KEY environment variable is REQUIRED.\n"
                 "This key encrypts all backend API keys at rest.\n"
+                "Provide it directly or via BULWARK_KEY_ENCRYPTION_KEY_FILE (Docker/K8s secret).\n"
                 "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\"\n"
                 "NEVER reuse JWT_SECRET as the encryption key."
             )

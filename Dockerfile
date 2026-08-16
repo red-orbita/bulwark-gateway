@@ -45,9 +45,11 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY src/ src/
 COPY config/ config/
+COPY docker/entrypoint-proxy.sh /app/docker/entrypoint-proxy.sh
 
 # Create data directories (models dir for ML, writable for download)
 RUN mkdir -p data reports models shared/enrichment shared/siem && \
+    chmod 0555 /app/docker/entrypoint-proxy.sh && \
     chown -R bulwark:bulwark /app && \
     rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
 
@@ -65,5 +67,8 @@ except: sys.exit(1)"
 # SECURITY FIX (APT-13): Use exec-form entrypoint for proper signal handling.
 # Shell form invokes /bin/sh as PID 1 which doesn't forward SIGTERM properly,
 # delaying graceful shutdown and leaving zombie processes.
-ENTRYPOINT ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080", "--access-log", "--log-level", "warning", "--no-server-header"]
-CMD ["--workers", "4"]
+# GAP-A: the entrypoint script derives uvicorn --workers from BULWARK_WORKERS so
+# the real worker count matches the rate limiter's per-worker divisor. The
+# script uses `exec`, preserving the APT-13 signal-handling guarantee (uvicorn
+# becomes PID 1).
+ENTRYPOINT ["/app/docker/entrypoint-proxy.sh"]
