@@ -187,6 +187,49 @@ class VirtualKeyManager:
 
         return vkey
 
+    def hydrate_tenant(self, tenant_id: str) -> None:
+        """Load a tenant's virtual keys from Redis into memory.
+
+        Required for multi-process correctness. The manager keeps in-memory
+        state per process (``self._keys`` / ``self._backend_keys``), but
+        list_keys(), rotate_key() and revoke_key() operate on that memory.
+        Any process that did not itself create the keys (e.g. the admin
+        service, or a different proxy replica) must hydrate first so those
+        operations observe the authoritative Redis state.
+
+        Idempotent and best-effort: if Redis is unavailable this is a no-op,
+        preserving the pure in-memory behaviour used by unit tests.
+        """
+        if not self._redis:
+            return
+        try:
+            raw = self._redis.hgetall(f"bulwark:vkeys:{tenant_id}") or {}
+        except Exception as e:  # noqa: BLE001 - hydration must never raise
+            logger.warning("vkey_hydrate_error", extra={"error": str(e)[:100]})
+            return
+        tenant_map: dict[str, VirtualKey] = {}
+        for kid, data_raw in raw.items():
+            if isinstance(kid, bytes):
+                kid = kid.decode()
+            try:
+                data = json.loads(data_raw)
+            except (ValueError, TypeError):
+                continue
+            vkey = VirtualKey(
+                key_id=data.get("key_id", kid),
+                tenant_id=tenant_id,
+                provider=data.get("provider", ""),
+                created_at=data.get("created_at", 0.0) or 0.0,
+                expires_at=data.get("expires_at"),
+                is_active=bool(data.get("is_active", True)),
+                description=data.get("description", "") or "",
+            )
+            tenant_map[kid] = vkey
+            encrypted = data.get("encrypted_key")
+            if encrypted:
+                self._backend_keys[kid] = encrypted
+        self._keys[tenant_id] = tenant_map
+
     def get_backend_key(self, tenant_id: str, provider: str) -> str | None:
         """Retrieve the active backend API key for a tenant/provider.
 
@@ -267,6 +310,20 @@ class VirtualKeyManager:
                 vk.is_active = False
                 vk.rotated_at = time.time()
                 self._audit("rotate_old", tenant_id, vk.key_id, provider)
+                # Persist deactivation so other processes observe it.
+                if self._redis:
+                    try:
+                        raw = self._redis.hget(f"bulwark:vkeys:{tenant_id}", vk.key_id)
+                        if raw:
+                            data = json.loads(raw)
+                            data["is_active"] = False
+                            self._redis.hset(
+                                f"bulwark:vkeys:{tenant_id}",
+                                vk.key_id,
+                                json.dumps(data),
+                            )
+                    except Exception:  # noqa: S110 - best-effort Redis persistence
+                        pass
 
         # Create new key
         new_vkey = self.create_key(
@@ -300,11 +357,20 @@ class VirtualKeyManager:
         """Revoke (deactivate) a virtual key."""
         tenant_keys = self._keys.get(tenant_id, {})
         if key_id in tenant_keys:
+            provider = tenant_keys[key_id].provider
             tenant_keys[key_id].is_active = False
-            self._audit("revoke", tenant_id, key_id, tenant_keys[key_id].provider)
+            self._audit("revoke", tenant_id, key_id, provider)
             if self._redis:
                 try:
                     self._redis.hdel(f"bulwark:vkeys:{tenant_id}", key_id)
+                    # Clear the active pointer if it referenced this key.
+                    active = self._redis.hget(
+                        f"bulwark:vkeys:{tenant_id}:active", provider
+                    )
+                    if isinstance(active, bytes):
+                        active = active.decode()
+                    if active == key_id:
+                        self._redis.hdel(f"bulwark:vkeys:{tenant_id}:active", provider)
                 except Exception:
                     pass
             return True

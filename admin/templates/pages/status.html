@@ -61,6 +61,124 @@
         </template>
     </div>
 
+    <!-- Infrastructure (read-only) -->
+    <div class="sg-card !p-0">
+        <div class="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <i data-lucide="server" class="w-4 h-4 text-gray-400"></i>
+                <h3 class="text-sm font-medium text-white">Infrastructure</h3>
+            </div>
+            <span class="sg-badge sg-badge-neutral">Read-only</span>
+        </div>
+        <div class="p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Scanner Pipeline -->
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">Scanner Pipeline</span>
+                    <span class="sg-badge" :class="infra.scanners.available ? 'sg-badge-success' : 'sg-badge-neutral'"
+                          x-text="infra.scanners.available ? 'Live' : 'Unavailable'"></span>
+                </div>
+                <div x-show="!infra.scanners.available" class="text-xs text-gray-500">
+                    Proxy internal scanner endpoint unreachable.
+                </div>
+                <div x-show="infra.scanners.available" class="space-y-2">
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                            <span class="text-gray-400">Scanners healthy</span>
+                            <span class="text-white font-mono"
+                                  x-text="infra.scanners.scanner_healthy + ' / ' + infra.scanners.scanner_total"></span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                            <span class="text-gray-400">Total lanes</span>
+                            <span class="text-white font-mono" x-text="infra.scanners.lanes.total"></span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                            <span class="text-gray-400">ML detection</span>
+                            <span :class="infra.scanners.ml_enabled ? 'text-green-400' : 'text-gray-500'"
+                                  x-text="infra.scanners.ml_enabled ? (infra.scanners.ml_blocking ? 'Blocking' : 'Enabled (async)') : 'Disabled'"></span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                            <span class="text-gray-400">Multilingual / RAG</span>
+                            <span class="text-gray-300 font-mono"
+                                  x-text="(infra.scanners.multilingual_enabled ? 'ML' : '—') + ' / ' + (infra.scanners.rag_enabled ? 'RAG' : '—')"></span>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 pt-1">
+                        <span class="text-[10px] text-gray-500">Lanes:</span>
+                        <span class="sg-badge sg-badge-neutral text-[10px]" x-text="'in-block ' + infra.scanners.lanes.input_blocking"></span>
+                        <span class="sg-badge sg-badge-neutral text-[10px]" x-text="'in-async ' + infra.scanners.lanes.input_async"></span>
+                        <span class="sg-badge sg-badge-neutral text-[10px]" x-text="'out-block ' + infra.scanners.lanes.output_blocking"></span>
+                        <span class="sg-badge sg-badge-neutral text-[10px]" x-text="'out-async ' + infra.scanners.lanes.output_async"></span>
+                    </div>
+                    <div class="mt-2 max-h-48 overflow-y-auto divide-y divide-gray-700/40 border-t border-gray-700/40">
+                        <template x-for="s in infra.scanners.scanners" :key="s.name">
+                            <div class="flex items-center justify-between py-1.5 text-xs">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <span class="sg-dot" :class="!s.enabled ? 'sg-dot-neutral' : s.healthy ? 'sg-dot-success' : 'sg-dot-warning'"></span>
+                                    <span class="text-gray-300 truncate font-mono" x-text="s.name"></span>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                    <span class="text-gray-500" x-text="s.type || ''"></span>
+                                    <span :class="!s.enabled ? 'text-gray-500' : s.healthy ? 'text-green-400' : 'text-yellow-400'"
+                                          x-text="!s.enabled ? 'disabled' : s.healthy ? 'ready' : 'not ready'"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Runtime / Proxy telemetry -->
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">Proxy Telemetry</span>
+                    <span class="sg-badge" :class="infra.proxy.reachable ? 'sg-badge-success' : 'sg-badge-warning'"
+                          x-text="infra.proxy.reachable ? 'Reachable' : 'Unreachable'"></span>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                        <span class="text-gray-400">Requests total</span>
+                        <span class="text-white font-mono" x-text="fmtNum(infra.proxy.requests_total)"></span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                        <span class="text-gray-400">Req / sec</span>
+                        <span class="text-white font-mono" x-text="infra.proxy.requests_per_second"></span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                        <span class="text-gray-400">Blocked</span>
+                        <span class="text-red-400 font-mono" x-text="fmtNum(infra.proxy.verdicts.blocked)"></span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                        <span class="text-gray-400">Warned</span>
+                        <span class="text-yellow-400 font-mono" x-text="fmtNum(infra.proxy.verdicts.warned)"></span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                        <span class="text-gray-400">Latency p95</span>
+                        <span class="text-white font-mono" x-text="(infra.proxy.latency.p95_ms ?? '—') + ' ms'"></span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs bg-gray-800/40 rounded-md px-2.5 py-1.5">
+                        <span class="text-gray-400">Latency p99</span>
+                        <span class="text-white font-mono" x-text="(infra.proxy.latency.p99_ms ?? '—') + ' ms'"></span>
+                    </div>
+                </div>
+                <div class="mt-3 pt-3 border-t border-gray-700/40 space-y-1.5 text-xs">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Admin version</span>
+                        <span class="text-gray-300 font-mono" x-text="infra.admin.version"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Proxy endpoint</span>
+                        <span class="text-gray-500 font-mono truncate ml-2" x-text="infra.runtime.proxy_url"></span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Snapshot age</span>
+                        <span class="text-gray-500 font-mono" x-text="infra.generated_at ? new Date(infra.generated_at).toLocaleTimeString() : '—'"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Recent Incidents -->
     <div class="sg-card !p-0">
         <div class="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
@@ -94,10 +212,27 @@ function statusPage() {
         lastChecked: '',
         components: [],
         incidents: [],
+        infra: {
+            generated_at: null,
+            admin: { version: '—', uptime_seconds: null },
+            redis: { status: 'unknown', version: null, memory: null, latency_ms: null },
+            proxy: {
+                reachable: false, uptime_seconds: null, requests_total: 0, requests_per_second: 0,
+                verdicts: { blocked: 0, warned: 0, allowed: 0, redacted: 0, errors: 0 },
+                latency: { p50_ms: null, p95_ms: null, p99_ms: null },
+            },
+            scanners: {
+                available: false, ml_enabled: false, ml_blocking: false, rag_enabled: false,
+                multilingual_enabled: false, scanner_total: 0, scanner_healthy: 0,
+                lanes: { input_blocking: 0, input_async: 0, output_blocking: 0, output_async: 0, total: 0 },
+                scanners: [],
+            },
+            runtime: { proxy_url: '—', sse_interval_seconds: null },
+        },
         _interval: null,
 
         get overallHealthy() {
-            return this.components.every(c => c.status === 'healthy');
+            return this.components.length > 0 && this.components.every(c => c.status === 'healthy');
         },
 
         init() {
@@ -105,101 +240,107 @@ function statusPage() {
             this._interval = setInterval(() => this.refresh(), 30000);
         },
 
+        fmtNum(n) {
+            if (n === null || n === undefined) return '—';
+            return Number(n).toLocaleString();
+        },
+
+        fmtUptime(seconds) {
+            if (seconds === null || seconds === undefined) return null;
+            const s = Math.floor(seconds);
+            const d = Math.floor(s / 86400);
+            const h = Math.floor((s % 86400) / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            if (d > 0) return `${d}d ${h}h`;
+            if (h > 0) return `${h}h ${m}m`;
+            if (m > 0) return `${m}m`;
+            return `${s}s`;
+        },
+
         async refresh() {
             this.loading = true;
 
             try {
-                // Fetch health from multiple endpoints
-                const [proxyHealth, adminHealth, redisCheck] = await Promise.allSettled([
-                    fetch('/admin/health').then(r => r.json()),
-                    fetch('/admin/health/detailed').then(r => r.json()).catch(() => null),
-                    fetch('/admin/health') // just for latency measurement
-                ]);
+                const resp = await fetch('/admin/health/infra');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                this.infra = data;
 
-                const health = proxyHealth.status === 'fulfilled' ? proxyHealth.value : {};
-                const detailed = adminHealth.status === 'fulfilled' ? adminHealth.value : {};
+                const redisConnected = data.redis.status === 'connected';
 
+                // Components built ONLY from real, source-attributed data.
+                // No fabricated latencies, versions, or hardcoded "healthy".
                 this.components = [
                     {
                         id: 'proxy',
                         name: 'Proxy Engine',
                         icon: 'shield',
-                        status: health.status === 'ok' || health.status === 'healthy' ? 'healthy' : 'unhealthy',
-                        latency: detailed?.proxy_latency_ms || null,
-                        uptime: detailed?.uptime || null,
-                        version: detailed?.version || health.version || '0.1.0',
-                        detail: null
+                        status: data.proxy.reachable ? 'healthy' : 'unhealthy',
+                        latency: data.proxy.latency.p95_ms ?? null,
+                        uptime: this.fmtUptime(data.proxy.uptime_seconds),
+                        version: null,
+                        detail: data.proxy.reachable
+                            ? `${this.fmtNum(data.proxy.requests_total)} requests served`
+                            : 'Proxy /health/stats unreachable',
                     },
                     {
                         id: 'admin',
                         name: 'Admin Portal',
                         icon: 'layout-dashboard',
-                        status: 'healthy',
-                        latency: Math.round(performance.now() % 20 + 5),
-                        uptime: detailed?.uptime || null,
-                        version: detailed?.admin_version || '0.1.0',
-                        detail: null
+                        status: 'healthy',   // responding to this very request
+                        latency: null,       // not measured server-side; no fake value
+                        uptime: this.fmtUptime(data.admin.uptime_seconds),
+                        version: data.admin.version,
+                        detail: null,
                     },
                     {
                         id: 'redis',
                         name: 'Redis',
                         icon: 'database',
-                        status: (detailed?.redis || health.redis) === 'connected' || (detailed?.redis || health.redis) === true ? 'healthy' : 'unhealthy',
-                        latency: detailed?.redis_latency_ms || null,
+                        status: redisConnected ? 'healthy'
+                            : data.redis.status === 'not_configured' ? 'degraded' : 'unhealthy',
+                        latency: data.redis.latency_ms ?? null,
                         uptime: null,
-                        version: detailed?.redis_version || '7.x',
-                        detail: detailed?.redis_memory || null
+                        version: data.redis.version || null,
+                        detail: redisConnected ? (data.redis.memory || null)
+                            : data.redis.status === 'not_configured' ? 'Not configured (in-memory fallback)' : 'Disconnected',
                     },
                     {
-                        id: 'guardrails',
-                        name: 'Guardrail Engine',
+                        id: 'scanners',
+                        name: 'Scanner Pipeline',
                         icon: 'scan',
-                        status: (health.guardrails || detailed?.guardrails) ? 'healthy' : 'healthy',
-                        latency: detailed?.guardrail_latency_ms || null,
-                        uptime: null,
-                        version: null,
-                        detail: detailed?.patterns_loaded ? `${detailed.patterns_loaded} patterns loaded` : null
-                    },
-                    {
-                        id: 'telemetry',
-                        name: 'Telemetry',
-                        icon: 'activity',
-                        status: (detailed?.telemetry || true) ? 'healthy' : 'degraded',
+                        status: !data.scanners.available ? 'degraded'
+                            : (data.scanners.scanner_healthy === data.scanners.scanner_total ? 'healthy' : 'degraded'),
                         latency: null,
                         uptime: null,
                         version: null,
-                        detail: detailed?.events_today ? `${detailed.events_today} events today` : null
+                        detail: data.scanners.available
+                            ? `${data.scanners.scanner_healthy}/${data.scanners.scanner_total} scanners ready`
+                            : 'Scanner status unavailable',
                     },
-                    {
-                        id: 'ioc_feeds',
-                        name: 'IOC Feeds',
-                        icon: 'radar',
-                        status: (detailed?.ioc_feeds_ok !== false) ? 'healthy' : 'degraded',
-                        latency: null,
-                        uptime: null,
-                        version: null,
-                        detail: detailed?.ioc_count ? `${detailed.ioc_count} indicators` : null
-                    }
                 ];
 
-                // Build incidents from any unhealthy component
+                // Incidents derived from real component state only.
                 this.incidents = this.components
                     .filter(c => c.status !== 'healthy')
                     .map(c => ({
                         id: c.id,
-                        message: `${c.name} is ${c.status}`,
+                        message: `${c.name} is ${c.status}` + (c.detail ? ` — ${c.detail}` : ''),
                         component: c.name,
                         severity: c.status === 'unhealthy' ? 'critical' : 'warning',
                         time: 'Just now',
-                        resolved: false
+                        resolved: false,
                     }));
 
             } catch (e) {
-                // If health endpoint is down, mark admin as unhealthy
                 this.components = [{
                     id: 'admin', name: 'Admin Portal', icon: 'layout-dashboard',
                     status: 'unhealthy', latency: null, uptime: null, version: null,
-                    detail: 'Connection failed: ' + e.message
+                    detail: 'Connection failed: ' + e.message,
+                }];
+                this.incidents = [{
+                    id: 'admin', message: 'Admin infrastructure endpoint unreachable',
+                    component: 'Admin Portal', severity: 'critical', time: 'Just now', resolved: false,
                 }];
             }
 

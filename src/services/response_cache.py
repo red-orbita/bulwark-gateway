@@ -17,6 +17,7 @@ Configuration:
 Redis keys:
   bulwark:cache:{hash}               — JSON-serialized response
   bulwark:cache:stats                 — HASH {hits, misses, evictions, savings_tokens}
+  bulwark:cache:config                — HASH {enabled, ttl} (admin runtime override)
 """
 
 from __future__ import annotations
@@ -31,6 +32,25 @@ from typing import Any
 from cachetools import LRUCache
 
 logger = logging.getLogger(__name__)
+
+# Admin-managed runtime override (see admin/routes/cache.py). The proxy honors
+# these values without a restart, re-reading at most once per interval to keep
+# the hot path cheap.
+RUNTIME_CONFIG_KEY = "bulwark:cache:config"
+_RUNTIME_REFRESH_INTERVAL = 5.0  # seconds
+
+
+def _decode_hash(raw: dict) -> dict[str, str]:
+    """Normalize a Redis HGETALL result to {str: str} regardless of decode mode."""
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if isinstance(k, bytes):
+            k = k.decode("utf-8", "replace")
+        if isinstance(v, bytes):
+            v = v.decode("utf-8", "replace")
+        out[k] = v
+    return out
+
 
 
 @dataclass
@@ -94,6 +114,7 @@ class ResponseCache:
         self._redis = None
         self._lru: LRUCache = LRUCache(maxsize=max_size)
         self._stats = CacheStats()
+        self._runtime_checked_at = 0.0  # last runtime-config refresh (monotonic-ish)
         self._init_redis()
 
     def _init_redis(self):
@@ -105,8 +126,35 @@ class ResponseCache:
         except Exception:
             self._redis = None
 
+    def _refresh_runtime_config(self) -> None:
+        """Honor admin runtime overrides (enabled / ttl) from Redis.
+
+        Throttled to at most one lookup per ``_RUNTIME_REFRESH_INTERVAL`` so the
+        request hot path stays cheap. No-op without Redis (env config wins).
+        """
+        if not self._redis:
+            return
+        now = time.time()
+        if (now - self._runtime_checked_at) < _RUNTIME_REFRESH_INTERVAL:
+            return
+        self._runtime_checked_at = now
+        try:
+            cfg = _decode_hash(self._redis.hgetall(RUNTIME_CONFIG_KEY) or {})
+        except Exception:
+            return
+        if not cfg:
+            return
+        if "enabled" in cfg:
+            self._enabled = cfg["enabled"].strip().lower() in ("1", "true", "yes", "on")
+        if "ttl" in cfg:
+            try:
+                self._ttl = max(1, int(cfg["ttl"]))
+            except (TypeError, ValueError):
+                pass
+
     @property
     def enabled(self) -> bool:
+        self._refresh_runtime_config()
         return self._enabled
 
     @property
@@ -125,7 +173,7 @@ class ResponseCache:
         Returns:
             Cached response dict if hit, None if miss.
         """
-        if not self._enabled:
+        if not self.enabled:
             return None
 
         cache_key = self._compute_key(request_body, tenant_id, agent_id)
@@ -183,7 +231,7 @@ class ResponseCache:
             tenant_id: Tenant identifier for cache isolation.
             agent_id: Agent identifier for cache isolation.
         """
-        if not self._enabled:
+        if not self.enabled:
             return
 
         # Don't cache error responses

@@ -28,10 +28,14 @@ from fastapi.templating import Jinja2Templates
 
 from .services.audit_logger import get_audit_logger
 from .services.prometheus_client import get_metrics
+from .routes.auth import _should_set_secure_cookie
 
 # Routes
 from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
-from .routes import plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment, events, gdpr
+from .routes import (
+    plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment,
+    events, gdpr, virtual_keys, quotas, cost, cache, sessions,
+)
 
 
 @asynccontextmanager
@@ -134,7 +138,14 @@ _PUBLIC_PATHS = {"/login", "/static", "/admin/auth", "/admin/health", "/favicon.
 
 @app.middleware("http")
 async def auth_guard_pages(request: Request, call_next):
-    """Protect HTML page routes. API routes are protected by their own dependencies."""
+    """Protect HTML page routes. API routes are protected by their own dependencies.
+
+    Strategy:
+    - If valid token found (cookie or header) → serve page normally
+    - If no token and no localStorage fallback possible → redirect to /login
+    - Pages are HTML shells; actual data is fetched via authenticated API calls.
+      The base.html template handles client-side auth (redirects to /login on 401).
+    """
     path = request.url.path
 
     # Allow public paths, static assets, and API routes (they have their own auth)
@@ -148,7 +159,8 @@ async def auth_guard_pages(request: Request, call_next):
                  "/rbac", "/setup", "/status", "/notifications", "/skills",
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
                  "/rate-limits", "/enrichment", "/events", "/tenant-analytics",
-                 "/gdpr")
+                 "/gdpr", "/virtual-keys", "/quotas", "/cost", "/cache",
+                 "/sessions")
     )
 
     if is_page_route:
@@ -159,16 +171,20 @@ async def auth_guard_pages(request: Request, call_next):
             if auth_header.startswith("Bearer "):
                 token = auth_header[7:]
 
-        if not token:
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url="/login", status_code=302)
-
-        # Validate token
-        from .services.auth_service import AuthService
-        payload = AuthService.verify_token(token)
-        if payload is None:
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url="/login", status_code=302)
+        if token:
+            # Validate token
+            from .services.auth_service import AuthService
+            payload = AuthService.verify_token(token)
+            if payload is None:
+                # Invalid/expired token — clear cookie and redirect
+                from fastapi.responses import RedirectResponse
+                resp = RedirectResponse(url="/login", status_code=302)
+                resp.delete_cookie("admin_token", path="/")
+                return resp
+        # No server-side token: serve the page anyway.
+        # base.html JavaScript will check localStorage and redirect to /login
+        # if no valid session exists. This prevents redirect loops when
+        # HttpOnly cookies fail (e.g., Secure flag on HTTP).
 
     return await call_next(request)
 
@@ -215,7 +231,7 @@ async def csrf_protection(request: Request, call_next):
             csrf_header = request.headers.get("x-csrf-token")
             if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
                 return Response(
-                    content='{"error":"CSRF validation failed"}',
+                    content='{"detail":"CSRF validation failed"}',
                     status_code=403,
                     media_type="application/json",
                 )
@@ -226,7 +242,8 @@ async def csrf_protection(request: Request, call_next):
     if "_csrf_token" not in request.cookies:
         csrf_token = secrets.token_hex(32)
         response.set_cookie(
-            "_csrf_token", csrf_token, httponly=False, samesite="strict", secure=True
+            "_csrf_token", csrf_token, httponly=False, samesite="strict",
+            secure=_should_set_secure_cookie(request)
         )
     return response
 
@@ -259,6 +276,11 @@ app.include_router(rate_limits.router, prefix="/admin/rate-limits", tags=["rate-
 app.include_router(enrichment.router, prefix="/admin/enrichment", tags=["enrichment"])
 app.include_router(events.router, prefix="/admin/events", tags=["events"])
 app.include_router(gdpr.router, prefix="/admin/gdpr", tags=["gdpr"])
+app.include_router(virtual_keys.router, prefix="/admin/virtual-keys", tags=["virtual-keys"])
+app.include_router(quotas.router, prefix="/admin/quotas", tags=["quotas"])
+app.include_router(cost.router, prefix="/admin/cost", tags=["cost"])
+app.include_router(cache.router, prefix="/admin/cache", tags=["cache"])
+app.include_router(sessions.router, prefix="/admin/sessions", tags=["sessions"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -410,3 +432,39 @@ async def events_page(request: Request):
 async def tenant_analytics_page(request: Request):
     """Per-tenant usage analytics dashboard."""
     return templates.TemplateResponse(request, "pages/tenant_analytics.html")
+
+
+@app.get("/gdpr", response_class=HTMLResponse)
+async def gdpr_page(request: Request):
+    """GDPR compliance console — erasure, access export, retention, inventory."""
+    return templates.TemplateResponse(request, "pages/gdpr.html")
+
+
+@app.get("/virtual-keys", response_class=HTMLResponse)
+async def virtual_keys_page(request: Request):
+    """Virtual Keys vault — centralized backend API key management."""
+    return templates.TemplateResponse(request, "pages/virtual_keys.html")
+
+
+@app.get("/quotas", response_class=HTMLResponse)
+async def quotas_page(request: Request):
+    """Per-tenant resource quotas — concurrency, token budgets, model access."""
+    return templates.TemplateResponse(request, "pages/quotas.html")
+
+
+@app.get("/cost", response_class=HTMLResponse)
+async def cost_page(request: Request):
+    """Cost & token usage analytics — per-tenant spend, pricing, resets."""
+    return templates.TemplateResponse(request, "pages/cost.html")
+
+
+@app.get("/cache", response_class=HTMLResponse)
+async def cache_page(request: Request):
+    """Response cache console — stats, runtime kill-switch, flush."""
+    return templates.TemplateResponse(request, "pages/cache.html")
+
+
+@app.get("/sessions", response_class=HTMLResponse)
+async def sessions_page(request: Request):
+    """Session decomposition tracker — thresholds, active sessions, reset."""
+    return templates.TemplateResponse(request, "pages/sessions.html")

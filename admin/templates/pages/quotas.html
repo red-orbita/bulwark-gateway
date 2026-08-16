@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block title %}Quotas — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Quotas{% endblock %}
+{% block content %}
+<div x-data="quotasPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Per-Tenant Resource Quotas</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Prevent "noisy neighbour" abuse in multi-tenancy. Limits are enforced by the proxy quota middleware and persisted in <span class="font-mono text-gray-300">agents.yaml</span> — changes take effect without a restart. A value of <span class="font-mono">0</span> means unlimited. All edits are audit-logged.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Enforcement</p>
+            <p class="text-sm font-semibold mt-1" :class="status.enabled ? 'text-emerald-400' : 'text-amber-400'"
+               x-text="status.enabled ? 'Enabled' : 'Disabled'"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Token Tracking</p>
+            <p class="text-sm font-semibold mt-1" :class="status.redis_connected ? 'text-emerald-400' : 'text-amber-400'"
+               x-text="status.redis_connected ? 'Redis active' : 'In-memory only'"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Tenants</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="status.total_tenants"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">With Quotas</p>
+            <p class="text-sm font-semibold text-cyan-300 mt-1" x-text="status.tenants_with_quotas"></p>
+        </div>
+    </div>
+
+    <!-- Disabled banner -->
+    <div x-show="!status.enabled" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="text-sm font-medium text-amber-200">Quota enforcement is disabled</p>
+                <p class="text-xs text-amber-200/80">You can still configure quotas here, but the proxy will not enforce them until <span class="font-mono text-amber-300">BULWARK_QUOTAS_ENABLED</span> is set to <span class="font-mono">true</span> and the <span class="font-mono">QuotaMiddleware</span> is active.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tenants quota table -->
+    <div class="sg-card">
+        <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="sliders-horizontal" class="w-4 h-4 text-cyan-400"></i>
+            <h2 class="text-sm font-medium text-white">Tenant Quotas</h2>
+        </div>
+
+        <div x-show="loading" class="py-8 text-center text-sm text-gray-500">Loading…</div>
+
+        <div x-show="!loading && rows.length === 0" x-cloak class="py-8 text-center">
+            <i data-lucide="sliders-horizontal" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
+            <p class="text-sm text-gray-400">No tenants defined. Create tenants on the Tenants page first.</p>
+        </div>
+
+        <div x-show="!loading && rows.length > 0" class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                        <th class="text-left py-2 px-3">Tenant</th>
+                        <th class="text-center py-2 px-3" title="Max concurrent requests">Concurrency</th>
+                        <th class="text-right py-2 px-3" title="Max tokens per day">Tokens/day</th>
+                        <th class="text-right py-2 px-3" title="Tokens consumed today">Used today</th>
+                        <th class="text-right py-2 px-3" title="Max request size">Req size</th>
+                        <th class="text-center py-2 px-3" title="Allowed models">Models</th>
+                        <th class="text-right py-2 px-3" title="Fair-queue priority weight">Priority</th>
+                        <th class="text-right py-2 px-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="r in rows" :key="r.tenant_id">
+                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
+                            <td class="py-2.5 px-3">
+                                <p class="font-mono text-[12px] text-cyan-300" x-text="r.tenant_id"></p>
+                                <p class="text-[10px] mt-0.5" :class="r.configured ? 'text-emerald-400' : 'text-gray-600'"
+                                   x-text="r.configured ? 'quota set' : 'unlimited (default)'"></p>
+                            </td>
+                            <td class="py-2.5 px-3 text-center text-xs" x-text="fmtNum(r.max_concurrent_requests)"></td>
+                            <td class="py-2.5 px-3 text-right text-xs" x-text="fmtNum(r.max_tokens_per_day)"></td>
+                            <td class="py-2.5 px-3 text-right text-xs font-semibold"
+                                :class="usageClass(r)" x-text="r.tokens_used_today.toLocaleString()"></td>
+                            <td class="py-2.5 px-3 text-right text-xs" x-text="fmtBytes(r.max_request_size_bytes)"></td>
+                            <td class="py-2.5 px-3 text-center text-xs">
+                                <span x-show="!r.allowed_models || r.allowed_models.length === 0" class="text-gray-500">all</span>
+                                <span x-show="r.allowed_models && r.allowed_models.length > 0"
+                                      class="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300"
+                                      x-text="(r.allowed_models || []).length + ' model' + ((r.allowed_models||[]).length === 1 ? '' : 's')"
+                                      :title="(r.allowed_models || []).join(', ')"></span>
+                            </td>
+                            <td class="py-2.5 px-3 text-right text-xs" x-text="(r.priority_weight ?? 1).toFixed(1)"></td>
+                            <td class="py-2.5 px-3">
+                                <div class="flex items-center justify-end gap-1.5">
+                                    <button @click="openEdit(r)" class="sg-btn sg-btn-ghost sg-btn-xs" title="Edit quotas">
+                                        <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <button @click="clearQuota(r)" class="sg-btn sg-btn-xs" style="color:#fca5a5;"
+                                            title="Remove overrides" :disabled="!r.configured">
+                                        <i data-lucide="eraser" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Edit modal -->
+    <div x-show="edit.modal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" @keydown.escape.window="edit.modal = false">
+        <div class="sg-card w-full max-w-lg" @click.away="edit.modal = false">
+            <div class="flex items-center gap-2 pb-3" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+                <i data-lucide="sliders-horizontal" class="w-5 h-5 text-cyan-400"></i>
+                <h3 class="text-base font-semibold text-white">Edit Quotas — <span class="font-mono text-cyan-300" x-text="edit.tenant_id"></span></h3>
+            </div>
+            <div class="py-4 space-y-4">
+                <p class="text-xs text-gray-500">Set <span class="font-mono">0</span> for unlimited. Leave models empty to allow all.</p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Max concurrent requests</label>
+                        <input type="number" min="0" max="100000" x-model.number="edit.max_concurrent_requests" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Max tokens / day</label>
+                        <input type="number" min="0" max="1000000000" x-model.number="edit.max_tokens_per_day" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Max request size (bytes)</label>
+                        <input type="number" min="0" max="1073741824" x-model.number="edit.max_request_size_bytes" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Priority weight</label>
+                        <input type="number" min="0" max="1000" step="0.1" x-model.number="edit.priority_weight" class="sg-input w-full">
+                    </div>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">Allowed models <span class="text-gray-600">(comma-separated, empty = all)</span></label>
+                    <input type="text" x-model.trim="edit.allowed_models_str" class="sg-input w-full font-mono" placeholder="gpt-4o, tinyllama">
+                </div>
+                <div class="text-[11px] text-gray-500 bg-white/[0.02] rounded px-3 py-2">
+                    <i data-lucide="info" class="w-3 h-3 inline"></i>
+                    Effective RPM rate limits are managed on the <a href="/rate-limits" class="text-cyan-400 hover:underline">Rate Limits</a> page.
+                </div>
+            </div>
+            <div class="pt-3 flex justify-end gap-2" style="border-top: 1px solid rgba(255,255,255,0.08);">
+                <button @click="edit.modal = false" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                <button @click="saveEdit()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="edit.saving">
+                    <span x-text="edit.saving ? 'Saving…' : 'Save Quotas'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function quotasPage() {
+    return {
+        loading: true,
+        status: { enabled: true, redis_connected: false, total_tenants: 0, tenants_with_quotas: 0 },
+        rows: [],
+        edit: {
+            modal: false, tenant_id: '', saving: false,
+            max_concurrent_requests: 0, max_tokens_per_day: 0,
+            max_request_size_bytes: 0, priority_weight: 1.0, allowed_models_str: '',
+        },
+
+        async init() {
+            await this.reloadAll();
+        },
+
+        async reloadAll() {
+            await Promise.all([this.loadStatus(), this.loadRows()]);
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/quotas/status');
+                if (res.ok) this.status = await res.json();
+            } catch (e) { console.error('status load failed', e); }
+        },
+
+        async loadRows() {
+            this.loading = true;
+            try {
+                const res = await fetch('/admin/quotas/');
+                if (res.ok) {
+                    this.rows = await res.json();
+                } else {
+                    showToast('Failed to load quotas', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading quotas', 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        openEdit(r) {
+            this.edit = {
+                modal: true,
+                tenant_id: r.tenant_id,
+                saving: false,
+                max_concurrent_requests: r.max_concurrent_requests || 0,
+                max_tokens_per_day: r.max_tokens_per_day || 0,
+                max_request_size_bytes: r.max_request_size_bytes || 0,
+                priority_weight: (r.priority_weight ?? 1.0),
+                allowed_models_str: (r.allowed_models || []).join(', '),
+            };
+        },
+
+        async saveEdit() {
+            const models = this.edit.allowed_models_str
+                ? this.edit.allowed_models_str.split(',').map(s => s.trim()).filter(Boolean)
+                : [];
+            const body = {
+                max_concurrent_requests: Math.max(0, parseInt(this.edit.max_concurrent_requests) || 0),
+                max_tokens_per_day: Math.max(0, parseInt(this.edit.max_tokens_per_day) || 0),
+                max_request_size_bytes: Math.max(0, parseInt(this.edit.max_request_size_bytes) || 0),
+                priority_weight: Math.max(0, parseFloat(this.edit.priority_weight) || 1.0),
+                allowed_models: models,
+            };
+            this.edit.saving = true;
+            try {
+                const res = await fetch('/admin/quotas/' + encodeURIComponent(this.edit.tenant_id), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Save failed', 'error');
+                    return;
+                }
+                this.edit.modal = false;
+                showToast('Quotas updated', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during save', 'error');
+            } finally {
+                this.edit.saving = false;
+            }
+        },
+
+        async clearQuota(r) {
+            const ok = await showConfirm('Remove Quota Overrides', `Remove all quota limits for '${r.tenant_id}'? The tenant reverts to unlimited access.`, 'Remove');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/quotas/' + encodeURIComponent(r.tenant_id), { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Remove failed', 'error');
+                    return;
+                }
+                showToast('Quota overrides removed', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during remove', 'error');
+            }
+        },
+
+        fmtNum(n) {
+            n = Number(n) || 0;
+            return n === 0 ? '∞' : n.toLocaleString();
+        },
+        fmtBytes(n) {
+            n = Number(n) || 0;
+            if (n === 0) return '∞';
+            if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+            if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+            return n + ' B';
+        },
+        usageClass(r) {
+            const budget = Number(r.max_tokens_per_day) || 0;
+            const used = Number(r.tokens_used_today) || 0;
+            if (budget === 0) return 'text-gray-300';
+            const pct = used / budget;
+            if (pct >= 0.9) return 'text-red-400';
+            if (pct >= 0.7) return 'text-amber-400';
+            return 'text-emerald-400';
+        },
+    };
+}
+</script>
+{% endblock %}

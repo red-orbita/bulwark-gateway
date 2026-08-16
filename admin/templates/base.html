@@ -221,9 +221,33 @@
                 <i data-lucide="users" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">Access Control</span>
             </a>
+            <a href="/virtual-keys" class="nav-item" data-page="virtual-keys">
+                <i data-lucide="key-round" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Virtual Keys</span>
+            </a>
+            <a href="/gdpr" class="nav-item" data-page="gdpr">
+                <i data-lucide="scale" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">GDPR / Privacy</span>
+            </a>
             <a href="/rate-limits" class="nav-item" data-page="rate-limits">
                 <i data-lucide="gauge" class="nav-icon"></i>
                 <span x-show="sidebarOpen" class="nav-label">Rate Limits</span>
+            </a>
+            <a href="/quotas" class="nav-item" data-page="quotas">
+                <i data-lucide="sliders-horizontal" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Quotas</span>
+            </a>
+            <a href="/cost" class="nav-item" data-page="cost">
+                <i data-lucide="coins" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Cost &amp; Usage</span>
+            </a>
+            <a href="/cache" class="nav-item" data-page="cache">
+                <i data-lucide="database-zap" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Response Cache</span>
+            </a>
+            <a href="/sessions" class="nav-item" data-page="sessions">
+                <i data-lucide="list-tree" class="nav-icon"></i>
+                <span x-show="sidebarOpen" class="nav-label">Session Tracker</span>
             </a>
             <a href="/settings" class="nav-item" data-page="settings">
                 <i data-lucide="settings" class="nav-icon"></i>
@@ -539,6 +563,12 @@
                     { id: 17, label: 'Advanced Scanners', href: '/ml-scanners', icon: 'brain', section: 'Navigation' },
                     { id: 18, label: 'Rate Limits', href: '/rate-limits', icon: 'gauge', section: 'Navigation' },
                     { id: 19, label: 'Enrichment', href: '/enrichment', icon: 'layers', section: 'Navigation' },
+                    { id: 20, label: 'GDPR / Privacy', href: '/gdpr', icon: 'scale', section: 'Navigation' },
+                    { id: 21, label: 'Virtual Keys', href: '/virtual-keys', icon: 'key-round', section: 'Navigation' },
+                    { id: 22, label: 'Quotas', href: '/quotas', icon: 'sliders-horizontal', section: 'Navigation' },
+                    { id: 23, label: 'Cost & Usage', href: '/cost', icon: 'coins', section: 'Navigation' },
+                    { id: 24, label: 'Response Cache', href: '/cache', icon: 'database-zap', section: 'Navigation' },
+                    { id: 25, label: 'Session Tracker', href: '/sessions', icon: 'list-tree', section: 'Navigation' },
                 ],
                 get filtered() {
                     if (!this.query) return this.items;

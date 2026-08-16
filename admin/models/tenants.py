@@ -96,6 +96,40 @@ class HealthCheckResponse(BaseModel):
     last_checked: datetime
 
 
+# --- Quota models ---
+#
+# Per-tenant resource quotas enforced by src/middleware/quotas.py. Stored in
+# agents.yaml under `tenants.<id>.quotas` (sibling of `agents`/`_meta`).
+#
+# NOTE: `rate_limit_rpm` is deliberately excluded from this admin surface. It is
+# parsed by the proxy but NOT enforced by QuotaMiddleware — effective RPM limits
+# are managed by the dedicated Rate Limits page (Redis `bulwark:rate_limits:config`).
+# Exposing it here would create two conflicting sources of truth.
+
+
+class TenantQuotaInfo(BaseModel):
+    """Effective per-tenant quota configuration (0 = unlimited)."""
+
+    tenant_id: str
+    configured: bool = False  # False if tenant has no `quotas:` block yet
+    max_concurrent_requests: int = 0
+    max_tokens_per_day: int = 0
+    max_request_size_bytes: int = 0
+    allowed_models: Optional[list[str]] = None  # None = all models allowed
+    priority_weight: float = 1.0
+    tokens_used_today: int = 0  # Live counter from Redis (0 if unavailable)
+
+
+class TenantQuotaUpdate(BaseModel):
+    """Partial update for a tenant's quota block. Omitted fields are unchanged."""
+
+    max_concurrent_requests: Optional[int] = Field(None, ge=0, le=100_000)
+    max_tokens_per_day: Optional[int] = Field(None, ge=0, le=1_000_000_000)
+    max_request_size_bytes: Optional[int] = Field(None, ge=0, le=1_073_741_824)
+    allowed_models: Optional[list[str]] = None
+    priority_weight: Optional[float] = Field(None, ge=0.0, le=1000.0)
+
+
 # --- Defaults models ---
 
 

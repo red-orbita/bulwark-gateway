@@ -1,0 +1,412 @@
+{% extends "base.html" %}
+{% block title %}Virtual Keys — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Virtual Keys{% endblock %}
+{% block content %}
+<div x-data="virtualKeysPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Virtual Keys Vault</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Centralized backend API key management. Keys are encrypted at rest (Fernet) and referenced by an opaque id — tenants never see the raw provider secret. All operations are audit-logged.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Unavailable banner -->
+    <div x-show="!available" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="text-sm font-medium text-amber-200">Virtual key subsystem unavailable</p>
+                <p class="text-xs text-amber-200/80" x-text="unavailableReason || 'BULWARK_KEY_ENCRYPTION_KEY is not configured on the admin service.'"></p>
+                <p class="text-[11px] text-gray-400 mt-1">Set <span class="font-mono text-amber-300">BULWARK_KEY_ENCRYPTION_KEY</span> (32+ char secret, distinct from JWT secret) on the admin deployment and restart. Generate one with: <span class="font-mono">python -c "import secrets; print(secrets.token_urlsafe(32))"</span></p>
+            </div>
+        </div>
+    </div>
+
+    <div x-show="available">
+        <!-- Persistence status -->
+        <div class="flex items-center gap-2 mb-4 text-xs">
+            <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full"
+                  :class="redisConnected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'">
+                <span class="w-1.5 h-1.5 rounded-full" :class="redisConnected ? 'bg-emerald-400' : 'bg-amber-400'"></span>
+                <span x-text="redisConnected ? 'Redis persistence active' : 'In-memory only (no Redis) — keys will not survive restart'"></span>
+            </span>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Create key -->
+            <div class="sg-card lg:col-span-1 self-start">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="key-round" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Create Virtual Key</h2>
+                </div>
+                <div class="space-y-3">
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Tenant ID</label>
+                        <input type="text" x-model.trim="form.tenant_id" class="sg-input w-full" placeholder="acme-corp">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Provider</label>
+                        <select x-model="form.provider" class="sg-input w-full">
+                            <template x-for="p in providers" :key="p">
+                                <option :value="p" x-text="p"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div x-show="form.provider === 'custom'">
+                        <label class="text-xs text-gray-400 block mb-1.5">Custom Provider Name</label>
+                        <input type="text" x-model.trim="form.customProvider" class="sg-input w-full" placeholder="my-llm">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Backend API Key</label>
+                        <input :type="form.reveal ? 'text' : 'password'" x-model="form.backend_api_key" class="sg-input w-full font-mono" placeholder="sk-...">
+                        <label class="flex items-center gap-1.5 text-[10px] text-gray-500 mt-1 cursor-pointer">
+                            <input type="checkbox" x-model="form.reveal" class="accent-cyan-500"> Reveal
+                        </label>
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Description <span class="text-gray-600">(optional)</span></label>
+                        <input type="text" x-model.trim="form.description" class="sg-input w-full" placeholder="Production OpenAI key">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5">Expires in days <span class="text-gray-600">(optional)</span></label>
+                        <input type="number" min="1" max="3650" x-model.number="form.expires_in_days" class="sg-input w-full" placeholder="never">
+                    </div>
+                    <button @click="createKey()" class="sg-btn sg-btn-primary sg-btn-sm w-full" :disabled="creating">
+                        <i data-lucide="plus" class="w-4 h-4"></i>
+                        <span x-text="creating ? 'Creating…' : 'Create Key'"></span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Keys list -->
+            <div class="sg-card lg:col-span-2">
+                <div class="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="list" class="w-4 h-4 text-cyan-400"></i>
+                        <h2 class="text-sm font-medium text-white">Keys for Tenant</h2>
+                    </div>
+                    <div class="flex items-center gap-2 sm:ml-auto">
+                        <input type="text" x-model.trim="listTenant" @keydown.enter="loadKeys()" class="sg-input sg-input-sm" placeholder="tenant id…">
+                        <button @click="loadKeys()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!listTenant || loadingKeys">
+                            <i data-lucide="search" class="w-3.5 h-3.5"></i>
+                            <span x-text="loadingKeys ? 'Loading…' : 'List'"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <div x-show="loadedTenant && keys.length === 0" x-cloak class="py-8 text-center">
+                    <i data-lucide="key-round" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
+                    <p class="text-sm text-gray-400">No virtual keys for <span class="font-mono text-gray-300" x-text="loadedTenant"></span></p>
+                </div>
+                <div x-show="!loadedTenant" class="py-8 text-center">
+                    <p class="text-sm text-gray-500">Enter a tenant id and click List to view its keys.</p>
+                </div>
+
+                <div x-show="keys.length > 0" class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                                <th class="text-left py-2 px-3">Key ID</th>
+                                <th class="text-left py-2 px-3">Provider</th>
+                                <th class="text-center py-2 px-3">Status</th>
+                                <th class="text-right py-2 px-3">Uses</th>
+                                <th class="text-left py-2 px-3">Expires</th>
+                                <th class="text-right py-2 px-3">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="k in keys" :key="k.key_id">
+                                <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
+                                    <td class="py-2.5 px-3">
+                                        <p class="font-mono text-[11px] text-cyan-300" x-text="k.key_id"></p>
+                                        <p class="text-[10px] text-gray-500 mt-0.5" x-text="k.description || '—'"></p>
+                                    </td>
+                                    <td class="py-2.5 px-3 text-xs text-gray-300" x-text="k.provider"></td>
+                                    <td class="py-2.5 px-3 text-center">
+                                        <span class="text-xs px-2 py-0.5 rounded-full"
+                                              :class="statusClass(k)"
+                                              x-text="statusLabel(k)"></span>
+                                    </td>
+                                    <td class="py-2.5 px-3 text-right text-xs font-bold text-gray-200" x-text="k.usage_count"></td>
+                                    <td class="py-2.5 px-3 text-xs text-gray-400 font-mono" x-text="fmtDate(k.expires_at)"></td>
+                                    <td class="py-2.5 px-3">
+                                        <div class="flex items-center justify-end gap-1.5">
+                                            <button @click="openRotate(k)" class="sg-btn sg-btn-ghost sg-btn-xs" title="Rotate">
+                                                <i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i>
+                                            </button>
+                                            <button @click="revokeKey(k)" class="sg-btn sg-btn-xs" style="color:#fca5a5;" title="Revoke" :disabled="!k.is_active">
+                                                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audit trail -->
+        <div class="sg-card mt-6">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="scroll-text" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Key Operations Audit Trail</h2>
+                </div>
+                <button @click="loadAudit()" class="sg-btn sg-btn-ghost sg-btn-xs">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            <div x-show="audit.length === 0" class="py-8 text-center">
+                <i data-lucide="scroll-text" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
+                <p class="text-sm text-gray-400">No key operations recorded yet</p>
+            </div>
+            <div x-show="audit.length > 0" class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                            <th class="text-left py-2 px-3">When</th>
+                            <th class="text-left py-2 px-3">Action</th>
+                            <th class="text-left py-2 px-3">Tenant</th>
+                            <th class="text-left py-2 px-3">Provider</th>
+                            <th class="text-left py-2 px-3">Key ID</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(a, idx) in audit" :key="idx">
+                            <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
+                                <td class="py-2.5 px-3 text-xs text-gray-400 font-mono" x-text="fmtDate(a.timestamp)"></td>
+                                <td class="py-2.5 px-3">
+                                    <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300" x-text="a.action"></span>
+                                </td>
+                                <td class="py-2.5 px-3 text-xs font-mono text-gray-300" x-text="a.tenant_id"></td>
+                                <td class="py-2.5 px-3 text-xs text-gray-300" x-text="a.provider"></td>
+                                <td class="py-2.5 px-3 text-xs font-mono text-gray-500" x-text="a.key_id"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rotate modal -->
+    <div x-show="rotate.modal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" @keydown.escape.window="rotate.modal = false">
+        <div class="sg-card w-full max-w-md" @click.away="rotate.modal = false">
+            <div class="flex items-center gap-2 pb-3" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+                <i data-lucide="rotate-cw" class="w-5 h-5 text-cyan-400"></i>
+                <h3 class="text-base font-semibold text-white">Rotate Key</h3>
+            </div>
+            <div class="py-4 space-y-4">
+                <p class="text-sm text-gray-300">Provide a new backend key for provider <span class="font-mono text-cyan-300" x-text="rotate.provider"></span> (tenant <span class="font-mono text-cyan-300" x-text="rotate.tenant"></span>). The current key is deactivated.</p>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">New Backend API Key</label>
+                    <input :type="rotate.reveal ? 'text' : 'password'" x-model="rotate.new_backend_key" class="sg-input w-full font-mono" placeholder="sk-...">
+                    <label class="flex items-center gap-1.5 text-[10px] text-gray-500 mt-1 cursor-pointer">
+                        <input type="checkbox" x-model="rotate.reveal" class="accent-cyan-500"> Reveal
+                    </label>
+                </div>
+            </div>
+            <div class="pt-3 flex justify-end gap-2" style="border-top: 1px solid rgba(255,255,255,0.08);">
+                <button @click="rotate.modal = false" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                <button @click="confirmRotate()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!rotate.new_backend_key || rotate.new_backend_key.length < 8 || rotate.running">
+                    <span x-text="rotate.running ? 'Rotating…' : 'Rotate Key'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function virtualKeysPage() {
+    return {
+        available: true,
+        unavailableReason: '',
+        redisConnected: false,
+        providers: ['openai', 'anthropic', 'azure', 'google', 'mistral', 'cohere', 'ollama', 'custom'],
+        form: { tenant_id: '', provider: 'openai', customProvider: '', backend_api_key: '', description: '', expires_in_days: null, reveal: false },
+        creating: false,
+        listTenant: '',
+        loadedTenant: '',
+        keys: [],
+        loadingKeys: false,
+        audit: [],
+        rotate: { modal: false, tenant: '', provider: '', new_backend_key: '', reveal: false, running: false },
+
+        async init() {
+            await this.loadStatus();
+            if (this.available) await this.loadAudit();
+        },
+
+        async reloadAll() {
+            await this.loadStatus();
+            if (this.available) {
+                if (this.loadedTenant) await this.loadKeys(this.loadedTenant);
+                await this.loadAudit();
+            }
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/virtual-keys/status');
+                if (res.ok) {
+                    const d = await res.json();
+                    this.available = d.available;
+                    this.unavailableReason = d.reason || '';
+                    this.redisConnected = d.redis_connected;
+                    if (Array.isArray(d.known_providers) && d.known_providers.length) {
+                        this.providers = d.known_providers;
+                    }
+                }
+            } catch (e) { console.error('status load failed', e); }
+        },
+
+        resolvedProvider() {
+            return this.form.provider === 'custom' ? (this.form.customProvider || '').trim().toLowerCase() : this.form.provider;
+        },
+
+        async createKey() {
+            const provider = this.resolvedProvider();
+            if (!this.form.tenant_id) { showToast('Tenant ID is required', 'error'); return; }
+            if (!provider) { showToast('Provider is required', 'error'); return; }
+            if (!this.form.backend_api_key || this.form.backend_api_key.length < 8) { showToast('Backend API key must be at least 8 characters', 'error'); return; }
+            this.creating = true;
+            try {
+                const body = {
+                    tenant_id: this.form.tenant_id,
+                    provider: provider,
+                    backend_api_key: this.form.backend_api_key,
+                    description: this.form.description,
+                };
+                if (this.form.expires_in_days) body.expires_in_days = this.form.expires_in_days;
+                const res = await fetch('/admin/virtual-keys/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Create failed', 'error');
+                    return;
+                }
+                showToast('Virtual key created', 'success');
+                const createdTenant = this.form.tenant_id;
+                this.form.backend_api_key = '';
+                this.form.description = '';
+                this.form.expires_in_days = null;
+                this.listTenant = createdTenant;
+                await this.loadKeys(createdTenant);
+                await this.loadAudit();
+            } catch (e) {
+                showToast('Network error during create', 'error');
+            } finally {
+                this.creating = false;
+            }
+        },
+
+        async loadKeys(tenant) {
+            const t = (tenant || this.listTenant || '').trim();
+            if (!t) return;
+            this.loadingKeys = true;
+            try {
+                const res = await fetch('/admin/virtual-keys/' + encodeURIComponent(t));
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Load failed', 'error');
+                    return;
+                }
+                const d = await res.json();
+                this.keys = d.keys || [];
+                this.loadedTenant = d.tenant_id;
+            } catch (e) {
+                showToast('Network error loading keys', 'error');
+            } finally {
+                this.loadingKeys = false;
+            }
+        },
+
+        openRotate(k) {
+            this.rotate = { modal: true, tenant: this.loadedTenant, provider: k.provider, new_backend_key: '', reveal: false, running: false };
+        },
+
+        async confirmRotate() {
+            if (!this.rotate.new_backend_key || this.rotate.new_backend_key.length < 8) return;
+            this.rotate.running = true;
+            try {
+                const res = await fetch('/admin/virtual-keys/' + encodeURIComponent(this.rotate.tenant) + '/rotate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: this.rotate.provider, new_backend_key: this.rotate.new_backend_key }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Rotation failed', 'error');
+                    return;
+                }
+                this.rotate.modal = false;
+                showToast('Key rotated', 'success');
+                await this.loadKeys(this.rotate.tenant);
+                await this.loadAudit();
+            } catch (e) {
+                showToast('Network error during rotation', 'error');
+            } finally {
+                this.rotate.running = false;
+            }
+        },
+
+        async revokeKey(k) {
+            const ok = await showConfirm('Revoke Virtual Key', `Revoke key ${k.key_id} (${k.provider})? This deactivates and removes it. This cannot be undone.`, 'Revoke');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/virtual-keys/' + encodeURIComponent(this.loadedTenant) + '/' + encodeURIComponent(k.key_id), { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Revoke failed', 'error');
+                    return;
+                }
+                showToast('Key revoked', 'success');
+                await this.loadKeys(this.loadedTenant);
+                await this.loadAudit();
+            } catch (e) {
+                showToast('Network error during revoke', 'error');
+            }
+        },
+
+        async loadAudit() {
+            try {
+                const res = await fetch('/admin/virtual-keys/audit/trail?limit=100');
+                if (res.ok) {
+                    const d = await res.json();
+                    this.audit = d.entries || [];
+                }
+            } catch (e) { console.error('audit load failed', e); }
+        },
+
+        statusLabel(k) {
+            if (k.expired) return 'expired';
+            return k.is_active ? 'active' : 'inactive';
+        },
+        statusClass(k) {
+            if (k.expired) return 'bg-red-500/10 text-red-400';
+            return k.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-gray-700 text-gray-400';
+        },
+        fmtDate(ts) {
+            if (!ts) return 'never';
+            try {
+                const d = new Date(ts * 1000);
+                if (isNaN(d.getTime())) return '—';
+                return d.toISOString().replace('T', ' ').slice(0, 19);
+            } catch (e) { return '—'; }
+        },
+    };
+}
+</script>
+{% endblock %}

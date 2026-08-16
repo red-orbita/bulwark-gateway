@@ -186,9 +186,18 @@
                             <h2 class="text-lg font-semibold text-white">Change Password</h2>
                             <p class="text-sm text-gray-400 mt-1">You must set a new password before first access</p>
                         </div>
-                        <div class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                            <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 flex-shrink-0"></i>
-                            <span class="text-xs text-amber-300">Minimum 12 characters required</span>
+                        <div class="px-3 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                            <div class="flex items-center gap-2 mb-1.5">
+                                <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 flex-shrink-0"></i>
+                                <span class="text-xs font-medium text-amber-300">Password requirements:</span>
+                            </div>
+                            <ul class="text-xs text-amber-300/80 ml-6 space-y-0.5 list-disc">
+                                <li :class="newPassword.length >= 12 ? 'text-emerald-400' : ''">Minimum 12 characters</li>
+                                <li :class="/[A-Z]/.test(newPassword) ? 'text-emerald-400' : ''">At least one uppercase letter</li>
+                                <li :class="/[a-z]/.test(newPassword) ? 'text-emerald-400' : ''">At least one lowercase letter</li>
+                                <li :class="/[0-9]/.test(newPassword) ? 'text-emerald-400' : ''">At least one digit</li>
+                                <li :class="/[^A-Za-z0-9]/.test(newPassword) ? 'text-emerald-400' : ''">At least one special character</li>
+                            </ul>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-400 mb-1.5">New Password</label>
@@ -202,12 +211,12 @@
                                    class="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
                                    required minlength="12">
                         </div>
-                        <!-- Password strength indicator -->
+                        <!-- Password strength indicator (reflects actual complexity) -->
                         <div class="flex gap-1">
-                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 4 ? 'bg-red-500' : 'bg-gray-700'"></div>
-                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 8 ? 'bg-amber-500' : 'bg-gray-700'"></div>
-                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 12 ? 'bg-emerald-500' : 'bg-gray-700'"></div>
-                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 16 && /[A-Z]/.test(newPassword) && /[0-9]/.test(newPassword) ? 'bg-cyan-500' : 'bg-gray-700'"></div>
+                            <div class="h-1 flex-1 rounded-full" :class="newPassword.length >= 12 ? 'bg-emerald-500' : newPassword.length >= 8 ? 'bg-amber-500' : newPassword.length >= 4 ? 'bg-red-500' : 'bg-gray-700'"></div>
+                            <div class="h-1 flex-1 rounded-full" :class="/[A-Z]/.test(newPassword) && /[a-z]/.test(newPassword) ? 'bg-emerald-500' : 'bg-gray-700'"></div>
+                            <div class="h-1 flex-1 rounded-full" :class="/[0-9]/.test(newPassword) ? 'bg-emerald-500' : 'bg-gray-700'"></div>
+                            <div class="h-1 flex-1 rounded-full" :class="/[^A-Za-z0-9]/.test(newPassword) ? 'bg-emerald-500' : 'bg-gray-700'"></div>
                         </div>
                         <div x-show="error" x-cloak x-transition class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
                             <i data-lucide="alert-circle" class="w-4 h-4 text-red-400 flex-shrink-0"></i>
@@ -229,6 +238,16 @@
     </div>
 
     <script>
+    // Auto-redirect if user already has a valid session
+    (function() {
+        const token = localStorage.getItem('bulwark_token');
+        if (token) {
+            fetch('/admin/auth/me', { headers: { 'Authorization': 'Bearer ' + token } })
+                .then(r => { if (r.ok) window.location.href = '/'; })
+                .catch(() => {});
+        }
+    })();
+
     function loginForm() {
         return {
             username: '', password: '', mfaCode: '', newPassword: '', confirmPassword: '',
@@ -246,7 +265,7 @@
                     });
                     if (!resp.ok) {
                         const data = await resp.json().catch(() => ({}));
-                        this.error = data.detail || 'Invalid credentials';
+                        this.error = data.detail || data.error || 'Invalid credentials';
                         this.loading = false; return;
                     }
                     const data = await resp.json();
@@ -265,7 +284,7 @@
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({ username: this.username, password: this.password, mfa_code: this.mfaCode })
                     });
-                    if (!resp.ok) { const d = await resp.json().catch(()=>({})); this.error = d.detail || 'Invalid code'; this.mfaCode = ''; this.loading = false; return; }
+                    if (!resp.ok) { const d = await resp.json().catch(()=>({})); this.error = d.detail || d.error || 'Invalid code'; this.mfaCode = ''; this.loading = false; return; }
                     const data = await resp.json();
                     if (data.force_password_change) { this.showMfa = false; this.showChangePassword = true; this.loading = false; return; }
                     this._completeLogin(data);
@@ -281,17 +300,29 @@
                 this.error = '';
                 if (this.newPassword !== this.confirmPassword) { this.error = 'Passwords do not match'; return; }
                 if (this.newPassword.length < 12) { this.error = 'Minimum 12 characters required'; return; }
+                if (!/[A-Z]/.test(this.newPassword)) { this.error = 'Must include at least one uppercase letter'; return; }
+                if (!/[a-z]/.test(this.newPassword)) { this.error = 'Must include at least one lowercase letter'; return; }
+                if (!/[0-9]/.test(this.newPassword)) { this.error = 'Must include at least one digit'; return; }
+                if (!/[^A-Za-z0-9]/.test(this.newPassword)) { this.error = 'Must include at least one special character (!@#$%^&* etc.)'; return; }
                 this.loading = true;
                 try {
                     const resp = await fetch('/admin/auth/force-change-password', {
                         method: 'POST',
+                        credentials: 'include',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({ username: this.username, current_password: this.password, new_password: this.newPassword })
                     });
-                    if (!resp.ok) { const d = await resp.json().catch(()=>({})); this.error = d.detail || 'Failed'; this.loading = false; return; }
-                    this.password = this.newPassword;
-                    this.showChangePassword = false;
-                    await this.doLogin();
+                    if (!resp.ok) { const d = await resp.json().catch(()=>({})); this.error = d.detail || d.error || 'Password change failed'; this.loading = false; return; }
+                    const data = await resp.json();
+                    // force-change-password now returns a full token — complete login directly
+                    if (data.access_token) {
+                        this._completeLogin(data);
+                    } else {
+                        // Fallback: re-login if server returned old format
+                        this.password = this.newPassword;
+                        this.showChangePassword = false;
+                        await this.doLogin();
+                    }
                 } catch(e) { this.error = 'Connection error'; this.loading = false; }
             }
         };

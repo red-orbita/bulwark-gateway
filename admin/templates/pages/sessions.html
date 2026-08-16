@@ -1,0 +1,401 @@
+{% extends "base.html" %}
+{% block title %}Session Tracker — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Session Tracker{% endblock %}
+{% block content %}
+<div x-data="sessionsPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Session Decomposition Tracker</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Catches multi-turn decomposition attacks — a dangerous request split into individually-benign chunks across requests. The proxy accumulates weighted "threat signals" per session (tenant+agent) across a 5-minute and a 30-minute window; crossing a threshold escalates to WARN/BLOCK. Threshold changes below write to Redis and the proxy honors them within ~5s <em>without a restart</em>. Session keys are irreversible SHA-256 digests. All mutations are audit-logged.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Active Sessions</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="fmtNum(status.active_sessions)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">5-min BLOCK</p>
+            <p class="text-sm font-semibold text-red-300 mt-1" x-text="fmtNum(status.effective.block_threshold)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Signal Catalog</p>
+            <p class="text-sm font-semibold text-cyan-300 mt-1" x-text="fmtNum(status.catalog_counts.signals) + ' / ' + fmtNum(status.catalog_counts.combinations)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Override</p>
+            <p class="text-sm font-semibold mt-1" :class="status.overridden ? 'text-cyan-300' : 'text-gray-400'"
+               x-text="status.overridden ? 'Active' : 'Defaults'"></p>
+        </div>
+    </div>
+
+    <!-- Redis warning -->
+    <div x-show="!status.redis_connected" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="text-sm font-medium text-amber-200">Redis not reachable</p>
+                <p class="text-xs text-amber-200/80">Runtime overrides and active-session visibility require Redis. Without it, each proxy tracks sessions in-process only, using built-in default thresholds.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Runtime override -->
+        <div class="sg-card">
+            <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="sliders-horizontal" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Threshold Tuning</h2>
+            </div>
+            <p class="text-[11px] text-gray-500 mb-4">Lower thresholds = more aggressive detection (higher recall, more false positives). Windows are seconds. Leave a field blank to keep its current effective value; only changed fields are written.</p>
+
+            <div class="space-y-4">
+                <div>
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">5-minute window (fast decomposition)</p>
+                    <div class="grid grid-cols-3 gap-3">
+                        <template x-for="f in fields5m" :key="f.key">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1.5" x-text="f.label"></label>
+                                <input type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
+                                <p class="text-[10px] text-gray-600 mt-1">default <span class="font-mono" x-text="status.defaults[f.key]"></span></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">30-minute window (slow decomposition)</p>
+                    <div class="grid grid-cols-3 gap-3">
+                        <template x-for="f in fields30m" :key="f.key">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1.5" x-text="f.label"></label>
+                                <input type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
+                                <p class="text-[10px] text-gray-600 mt-1">default <span class="font-mono" x-text="status.defaults[f.key]"></span></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-1">
+                    <button @click="clearOverride()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                            :disabled="!canWrite || !status.overridden" title="Revert to built-in defaults">
+                        Clear Override
+                    </button>
+                    <button @click="saveOverride()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!canWrite || saving">
+                        <span x-text="saving ? 'Saving…' : 'Apply Override'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Effective + maintenance -->
+        <div class="space-y-6">
+            <div class="sg-card">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="gauge" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Effective Thresholds</h2>
+                </div>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <div class="flex justify-between"><span class="text-gray-400">5m BLOCK</span><span class="font-mono text-red-300" x-text="status.effective.block_threshold"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">30m BLOCK</span><span class="font-mono text-red-300" x-text="status.effective.block_threshold_30m"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">5m WARN</span><span class="font-mono text-amber-300" x-text="status.effective.warn_threshold"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">30m WARN</span><span class="font-mono text-amber-300" x-text="status.effective.warn_threshold_30m"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">5m window</span><span class="font-mono text-gray-300" x-text="status.effective.window_seconds + 's'"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">30m window</span><span class="font-mono text-gray-300" x-text="status.effective.window_30m_seconds + 's'"></span></div>
+                </div>
+            </div>
+
+            <div class="sg-card border-red-900/40">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="alert-octagon" class="w-4 h-4 text-red-400"></i>
+                    <h2 class="text-sm font-medium text-white">Maintenance</h2>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <p class="text-sm text-gray-200">Reset all sessions</p>
+                        <p class="text-[11px] text-gray-500">Clear accumulated signals for every session (both windows). Use for incident response or after tuning.</p>
+                    </div>
+                    <button @click="resetAll()" class="sg-btn sg-btn-sm" style="color:#fca5a5;" :disabled="!canWrite">Reset All</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active sessions -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="radar" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Active Sessions</h2>
+                <span class="text-xs text-gray-500" x-text="'(' + sessions.length + ')'"></span>
+            </div>
+        </div>
+        <div x-show="sessions.length === 0" x-cloak class="text-sm text-gray-500 py-6 text-center">
+            No active sessions with accumulated signals.
+        </div>
+        <div x-show="sessions.length > 0" class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-[11px] text-gray-500 uppercase tracking-wide border-b border-white/[0.06]">
+                        <th class="text-left font-medium py-2 pr-3">Session Key</th>
+                        <th class="text-left font-medium py-2 px-3">Window</th>
+                        <th class="text-right font-medium py-2 px-3">Score</th>
+                        <th class="text-right font-medium py-2 px-3">Signals</th>
+                        <th class="text-left font-medium py-2 px-3">Distinct</th>
+                        <th class="text-right font-medium py-2 px-3">TTL</th>
+                        <th class="text-right font-medium py-2 pl-3">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="s in sessions" :key="s.session_key + s.window">
+                        <tr class="border-b border-white/[0.04] hover:bg-white/[0.02]">
+                            <td class="py-2 pr-3 font-mono text-xs text-gray-300" x-text="s.session_key"></td>
+                            <td class="py-2 px-3">
+                                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                                      :class="s.window === '30m' ? 'bg-purple-500/15 text-purple-300' : 'bg-cyan-500/15 text-cyan-300'"
+                                      x-text="s.window"></span>
+                            </td>
+                            <td class="py-2 px-3 text-right font-mono"
+                                :class="scoreClass(s)" x-text="s.score.toFixed(1)"></td>
+                            <td class="py-2 px-3 text-right font-mono text-gray-300" x-text="s.signal_count"></td>
+                            <td class="py-2 px-3 text-xs text-gray-400 max-w-xs truncate" :title="s.distinct_signals.join(', ')" x-text="s.distinct_signals.join(', ')"></td>
+                            <td class="py-2 px-3 text-right font-mono text-gray-500" x-text="s.ttl_seconds === null ? '—' : s.ttl_seconds + 's'"></td>
+                            <td class="py-2 pl-3 text-right">
+                                <button @click="clearSession(s.session_key)" class="sg-btn sg-btn-ghost sg-btn-sm"
+                                        style="color:#fca5a5;" :disabled="!canWrite" title="Clear both windows for this session">Clear</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Signal catalog -->
+    <div class="sg-card">
+        <button @click="showCatalog = !showCatalog" class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2">
+                <i data-lucide="book-open" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Signal Catalog</h2>
+                <span class="text-xs text-gray-500" x-text="'(' + catalog.signals.length + ' signals, ' + catalog.combinations.length + ' combos)'"></span>
+            </div>
+            <i data-lucide="chevron-down" class="w-4 h-4 text-gray-500 transition-transform" :class="showCatalog ? 'rotate-180' : ''"></i>
+        </button>
+        <div x-show="showCatalog" x-cloak class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+                <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Decomposition Signals (weight)</p>
+                <div class="space-y-1 max-h-80 overflow-y-auto pr-2">
+                    <template x-for="sig in catalog.signals" :key="sig.signal_id">
+                        <div class="flex items-center justify-between text-xs py-1 border-b border-white/[0.03]">
+                            <span class="font-mono text-gray-300" x-text="sig.signal_id"></span>
+                            <span class="font-mono text-cyan-300" x-text="sig.weight.toFixed(1)"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div>
+                <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Dangerous Combinations (bonus)</p>
+                <div class="space-y-2 max-h-80 overflow-y-auto pr-2">
+                    <template x-for="(combo, i) in catalog.combinations" :key="i">
+                        <div class="text-xs py-1 border-b border-white/[0.03]">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-200" x-text="combo.description"></span>
+                                <span class="font-mono text-amber-300 ml-2" x-text="'+' + combo.bonus.toFixed(1)"></span>
+                            </div>
+                            <p class="font-mono text-[10px] text-gray-500 mt-0.5" x-text="combo.signals.join(' + ')"></p>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function sessionsPage() {
+    return {
+        loading: true,
+        saving: false,
+        canWrite: false,
+        showCatalog: false,
+        status: {
+            redis_connected: false, active_sessions: 0, overridden: false,
+            effective: { block_threshold: 8, warn_threshold: 5, window_seconds: 300, block_threshold_30m: 4.8, warn_threshold_30m: 3, window_30m_seconds: 1800 },
+            defaults: { block_threshold: 8, warn_threshold: 5, window_seconds: 300, block_threshold_30m: 4.8, warn_threshold_30m: 3, window_30m_seconds: 1800 },
+            override: {},
+            catalog_counts: { signals: 0, combinations: 0 },
+        },
+        sessions: [],
+        catalog: { signals: [], combinations: [] },
+        form: {},
+        fields5m: [
+            { key: 'block_threshold', label: 'BLOCK', step: '0.1' },
+            { key: 'warn_threshold', label: 'WARN', step: '0.1' },
+            { key: 'window_seconds', label: 'Window (s)', step: '1' },
+        ],
+        fields30m: [
+            { key: 'block_threshold_30m', label: 'BLOCK', step: '0.1' },
+            { key: 'warn_threshold_30m', label: 'WARN', step: '0.1' },
+            { key: 'window_30m_seconds', label: 'Window (s)', step: '1' },
+        ],
+
+        async init() {
+            await this.reloadAll();
+        },
+
+        async reloadAll() {
+            await this.loadStatus();
+            await Promise.all([this.loadActive(), this.loadCatalog()]);
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/sessions/status');
+                if (res.ok) {
+                    this.status = await res.json();
+                    this.canWrite = !!this.status.can_write;
+                    // Seed the form from effective thresholds.
+                    this.form = Object.assign({}, this.status.effective);
+                } else {
+                    showToast('Failed to load session status', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading session status', 'error');
+            }
+        },
+
+        async loadActive() {
+            try {
+                const res = await fetch('/admin/sessions/active');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.sessions = data.sessions || [];
+                }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        async loadCatalog() {
+            try {
+                const res = await fetch('/admin/sessions/signals');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.catalog = { signals: data.signals || [], combinations: data.combinations || [] };
+                }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        scoreClass(s) {
+            const block = s.window === '30m' ? this.status.effective.block_threshold_30m : this.status.effective.block_threshold;
+            const warn = s.window === '30m' ? this.status.effective.warn_threshold_30m : this.status.effective.warn_threshold;
+            if (s.score >= block) return 'text-red-400';
+            if (s.score >= warn) return 'text-amber-400';
+            return 'text-gray-300';
+        },
+
+        _changedFields() {
+            // Only send fields that differ from the current effective value.
+            const out = {};
+            const keys = ['block_threshold','warn_threshold','window_seconds','block_threshold_30m','warn_threshold_30m','window_30m_seconds'];
+            for (const k of keys) {
+                const v = this.form[k];
+                if (v === '' || v === null || v === undefined) continue;
+                const num = Number(v);
+                if (!Number.isFinite(num) || num <= 0) continue;
+                if (num !== Number(this.status.effective[k])) out[k] = num;
+            }
+            return out;
+        },
+
+        async saveOverride() {
+            const payload = this._changedFields();
+            if (Object.keys(payload).length === 0) {
+                showToast('No changes to apply', 'error');
+                return;
+            }
+            this.saving = true;
+            try {
+                const res = await fetch('/admin/sessions/config', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Save failed', 'error');
+                    return;
+                }
+                showToast('Threshold override applied', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during save', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async clearOverride() {
+            const ok = await showConfirm('Clear Runtime Override', 'Remove the runtime override so the proxy reverts to built-in default thresholds?', 'Clear');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/sessions/config', { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Clear failed', 'error');
+                    return;
+                }
+                showToast('Override cleared — reverting to defaults', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+
+        async clearSession(key) {
+            const ok = await showConfirm('Clear Session', 'Clear accumulated threat signals for session ' + key + ' (both windows)?', 'Clear');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/sessions/session/' + encodeURIComponent(key), { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Clear failed', 'error');
+                    return;
+                }
+                showToast('Session cleared', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+
+        async resetAll() {
+            const ok = await showConfirm('Reset All Sessions', 'Clear accumulated threat signals for ALL sessions? This resets decomposition tracking cluster-wide. Thresholds are kept.', 'Reset All');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/sessions/reset', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Reset failed', 'error');
+                    return;
+                }
+                const data = await res.json();
+                showToast(`Sessions reset (${data.keys_deleted} keys)`, 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during reset', 'error');
+            }
+        },
+
+        fmtNum(n) { return (Number(n) || 0).toLocaleString(); },
+    };
+}
+</script>
+{% endblock %}

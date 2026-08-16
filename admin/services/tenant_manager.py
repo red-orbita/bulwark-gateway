@@ -22,6 +22,8 @@ from admin.models.tenants import (
     HealthStatus,
     TenantCreate,
     TenantInfo,
+    TenantQuotaInfo,
+    TenantQuotaUpdate,
     TenantStatus,
     TenantUpdate,
 )
@@ -347,6 +349,78 @@ class TenantManager:
                 defaults["health_endpoint"] = req.health_endpoint
             self.persist()
             return self.get_defaults()
+
+    # --- Quota CRUD ---
+
+    _QUOTA_FIELDS = (
+        "max_concurrent_requests",
+        "max_tokens_per_day",
+        "max_request_size_bytes",
+        "allowed_models",
+        "priority_weight",
+    )
+
+    def get_tenant_quotas(self, tenant_id: str) -> Optional[TenantQuotaInfo]:
+        """Read a tenant's quota block. Returns defaults (configured=False) if
+        the tenant exists but has no `quotas:` block. Returns None if the
+        tenant does not exist.
+        """
+        with self._rw_lock:
+            tdata = self._data.get("tenants", {}).get(tenant_id)
+            if tdata is None or not isinstance(tdata, dict):
+                return None
+            quotas = tdata.get("quotas")
+            configured = isinstance(quotas, dict)
+            q = quotas if configured else {}
+            return TenantQuotaInfo(
+                tenant_id=tenant_id,
+                configured=configured,
+                max_concurrent_requests=int(q.get("max_concurrent_requests", 0) or 0),
+                max_tokens_per_day=int(q.get("max_tokens_per_day", 0) or 0),
+                max_request_size_bytes=int(q.get("max_request_size_bytes", 0) or 0),
+                allowed_models=q.get("allowed_models"),
+                priority_weight=float(q.get("priority_weight", 1.0) or 1.0),
+            )
+
+    def update_tenant_quotas(
+        self, tenant_id: str, req: TenantQuotaUpdate
+    ) -> Optional[TenantQuotaInfo]:
+        """Create or merge a tenant's quota block. Omitted fields are left
+        unchanged. Persists to agents.yaml so the proxy reloads via mtime.
+        Returns None if the tenant does not exist.
+        """
+        with self._rw_lock:
+            tdata = self._data.get("tenants", {}).get(tenant_id)
+            if tdata is None or not isinstance(tdata, dict):
+                return None
+            quotas = tdata.setdefault("quotas", {})
+            if not isinstance(quotas, dict):
+                quotas = {}
+                tdata["quotas"] = quotas
+            for field in self._QUOTA_FIELDS:
+                val = getattr(req, field, None)
+                if val is not None:
+                    # Normalise empty allowed_models list to None (all models)
+                    if field == "allowed_models" and isinstance(val, list) and not val:
+                        quotas.pop("allowed_models", None)
+                    else:
+                        quotas[field] = val
+            self.persist()
+            return self.get_tenant_quotas(tenant_id)
+
+    def clear_tenant_quotas(self, tenant_id: str) -> bool:
+        """Remove a tenant's quota block entirely (reverts to unlimited).
+        Returns True if a block was removed, False otherwise.
+        """
+        with self._rw_lock:
+            tdata = self._data.get("tenants", {}).get(tenant_id)
+            if tdata is None or not isinstance(tdata, dict):
+                return False
+            if "quotas" not in tdata:
+                return False
+            del tdata["quotas"]
+            self.persist()
+            return True
 
     # --- Helpers ---
 

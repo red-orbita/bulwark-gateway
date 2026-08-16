@@ -1,0 +1,448 @@
+{% extends "base.html" %}
+{% block title %}GDPR / Privacy — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}GDPR / Privacy{% endblock %}
+{% block content %}
+<div x-data="gdprPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">GDPR / Privacy Console</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Data subject rights (Art.15 access, Art.17 erasure), records of processing (Art.30) and retention enforcement. All actions are audit-logged.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="loadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Summary stats -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">Processing Activities</p>
+            <p class="text-2xl font-bold text-cyan-400 mt-1" x-text="inventory.length"></p>
+        </div>
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">Security Events Retention</p>
+            <p class="text-2xl font-bold text-white mt-1"><span x-text="retention.security_events_retention_days ?? '—'"></span> <span class="text-xs text-gray-500">days</span></p>
+        </div>
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">Audit Retention</p>
+            <p class="text-2xl font-bold text-white mt-1"><span x-text="retention.audit_retention_days ?? '—'"></span> <span class="text-xs text-gray-500">days</span></p>
+        </div>
+        <div class="sg-card">
+            <p class="text-xs text-gray-500">GDPR Requests Logged</p>
+            <p class="text-2xl font-bold text-white mt-1" x-text="requests.length"></p>
+        </div>
+    </div>
+
+    <!-- Data Subject Rights -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Subject lookup + Export (Art.15) -->
+        <div class="sg-card">
+            <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="search" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Data Subject Lookup &amp; Export</h2>
+                <span class="sg-badge sg-badge-brand ml-auto">Art.15</span>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">Subject Identifier</label>
+                    <input type="text" x-model.trim="subject.id" @keydown.enter="lookup()"
+                           class="sg-input w-full" placeholder="tenant_id, username, email or IP">
+                    <p class="text-[10px] text-gray-500 mt-1">Look up how many records reference this subject before exporting or erasing.</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button @click="lookup()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!subject.id || subject.loading">
+                        <i data-lucide="scan-search" class="w-4 h-4"></i>
+                        <span x-text="subject.loading ? 'Looking up…' : 'Count Records'"></span>
+                    </button>
+                </div>
+
+                <!-- Lookup result -->
+                <div x-show="subject.count !== null" x-cloak class="p-3 rounded-lg border border-gray-700 bg-gray-900/40">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-gray-400">Records found for <span class="font-mono text-cyan-300" x-text="subject.resolvedId"></span></span>
+                        <span class="text-lg font-bold" :class="subject.count > 0 ? 'text-amber-400' : 'text-gray-500'" x-text="subject.count"></span>
+                    </div>
+                </div>
+
+                <!-- Export options -->
+                <div class="space-y-2 pt-2" style="border-top: 1px solid rgba(255,255,255,0.06);">
+                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Export Includes</p>
+                    <label class="flex items-center gap-2 text-xs text-gray-300">
+                        <input type="checkbox" x-model="exportOpts.include_security_events" class="accent-cyan-500"> Security events
+                    </label>
+                    <label class="flex items-center gap-2 text-xs text-gray-300">
+                        <input type="checkbox" x-model="exportOpts.include_audit_entries" class="accent-cyan-500"> Audit entries
+                    </label>
+                    <label class="flex items-center gap-2 text-xs text-gray-300">
+                        <input type="checkbox" x-model="exportOpts.include_rate_limit_history" class="accent-cyan-500"> Rate-limit history
+                    </label>
+                    <button @click="exportData()" class="sg-btn sg-btn-success sg-btn-sm mt-2" :disabled="!subject.id || exporting">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                        <span x-text="exporting ? 'Exporting…' : 'Download JSON Export'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Erasure (Art.17) -->
+        <div class="sg-card border-red-900/30">
+            <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="user-x" class="w-4 h-4 text-red-400"></i>
+                <h2 class="text-sm font-medium text-white">Right to Erasure (Pseudonymization)</h2>
+                <span class="sg-badge ml-auto" style="background: rgba(239,68,68,0.12); color:#fca5a5;">Art.17</span>
+            </div>
+            <div class="space-y-4">
+                <div class="p-3 rounded-lg border border-red-900/40 bg-red-950/20 text-xs text-red-200/90 flex gap-2">
+                    <i data-lucide="alert-triangle" class="w-4 h-4 flex-shrink-0 mt-0.5"></i>
+                    <span>Pseudonymization is <strong>irreversible</strong>. Identifiable fields are replaced with one-way HMAC-SHA256 hashes and cannot be recovered.</span>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">Subject Identifier</label>
+                    <input type="text" x-model.trim="erase.id" class="sg-input w-full" placeholder="Same as lookup — required">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">Reason (legal basis)</label>
+                    <input type="text" x-model="erase.reason" class="sg-input w-full" placeholder="GDPR Art.17 right to erasure">
+                </div>
+                <button @click="startErasure()" class="sg-btn sg-btn-danger sg-btn-sm" :disabled="!erase.id">
+                    <i data-lucide="shield-x" class="w-4 h-4"></i>
+                    Begin Erasure…
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Retention -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="archive" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Retention Policy</h2>
+            </div>
+            <button @click="enforceRetention()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="enforcing">
+                <i data-lucide="play" class="w-3.5 h-3.5"></i>
+                <span x-text="enforcing ? 'Enforcing…' : 'Enforce Now'"></span>
+            </button>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+            <div>
+                <p class="text-xs text-gray-500">Last Enforcement</p>
+                <p class="text-gray-200 mt-1 text-xs font-mono" x-text="retention.last_enforcement || 'never'"></p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-500">Next Scheduled</p>
+                <p class="text-gray-200 mt-1 text-xs font-mono" x-text="retention.next_scheduled || '—'"></p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-500">Records Archived</p>
+                <p class="text-gray-200 mt-1 font-bold" x-text="retention.records_archived ?? 0"></p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-500">Records Deleted</p>
+                <p class="text-gray-200 mt-1 font-bold" x-text="retention.records_deleted ?? 0"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Inventory (Art.30) -->
+    <div class="sg-card">
+        <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="list-tree" class="w-4 h-4 text-cyan-400"></i>
+            <h2 class="text-sm font-medium text-white">Records of Processing Activities</h2>
+            <span class="sg-badge sg-badge-brand ml-auto">Art.30</span>
+        </div>
+        <div x-show="inventory.length === 0" class="py-8 text-center">
+            <i data-lucide="list-tree" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
+            <p class="text-sm text-gray-400">No processing activities reported</p>
+        </div>
+        <div x-show="inventory.length > 0" class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                        <th class="text-left py-2 px-3">Category</th>
+                        <th class="text-left py-2 px-3">Purpose</th>
+                        <th class="text-left py-2 px-3">Legal Basis</th>
+                        <th class="text-left py-2 px-3">Retention</th>
+                        <th class="text-center py-2 px-3">PII</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="cat in inventory" :key="cat.category">
+                        <tr class="border-b border-gray-800 hover:bg-white/[0.02] align-top">
+                            <td class="py-2.5 px-3">
+                                <p class="font-medium text-white text-xs" x-text="cat.category"></p>
+                                <p class="text-[10px] text-gray-500 mt-0.5" x-text="cat.description"></p>
+                            </td>
+                            <td class="py-2.5 px-3 text-xs text-gray-300" x-text="cat.purpose"></td>
+                            <td class="py-2.5 px-3 text-xs text-gray-300" x-text="cat.legal_basis"></td>
+                            <td class="py-2.5 px-3 text-xs text-gray-300 font-mono" x-text="cat.retention_period"></td>
+                            <td class="py-2.5 px-3 text-center">
+                                <span class="text-xs px-2 py-0.5 rounded-full"
+                                      :class="cat.contains_pii ? 'bg-amber-500/10 text-amber-400' : 'bg-gray-700 text-gray-400'"
+                                      x-text="cat.contains_pii ? 'Yes' : 'No'"></span>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-[10px] text-gray-600 mt-3">Controller: <span x-text="controller"></span> · DPO: <span x-text="dpoContact"></span></p>
+    </div>
+
+    <!-- GDPR Request Audit Trail -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="scroll-text" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">GDPR Request Audit Trail</h2>
+            </div>
+            <select x-model="requestFilter" @change="loadRequests()" class="sg-input sg-input-sm text-xs">
+                <option value="">All types</option>
+                <option value="pseudonymize">Pseudonymize</option>
+                <option value="export">Export</option>
+                <option value="retention_enforce">Retention</option>
+            </select>
+        </div>
+        <div x-show="requests.length === 0" class="py-8 text-center">
+            <i data-lucide="scroll-text" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
+            <p class="text-sm text-gray-400">No GDPR requests recorded yet</p>
+        </div>
+        <div x-show="requests.length > 0" class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                        <th class="text-left py-2 px-3">When</th>
+                        <th class="text-left py-2 px-3">Type</th>
+                        <th class="text-left py-2 px-3">Subject</th>
+                        <th class="text-left py-2 px-3">By</th>
+                        <th class="text-right py-2 px-3">Records</th>
+                        <th class="text-center py-2 px-3">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="r in requests" :key="r.id">
+                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
+                            <td class="py-2.5 px-3 text-xs text-gray-400 font-mono" x-text="r.requested_at"></td>
+                            <td class="py-2.5 px-3">
+                                <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300" x-text="r.request_type"></span>
+                            </td>
+                            <td class="py-2.5 px-3 text-xs font-mono text-gray-300" x-text="r.subject_id || '—'"></td>
+                            <td class="py-2.5 px-3 text-xs text-gray-300" x-text="r.requested_by"></td>
+                            <td class="py-2.5 px-3 text-right text-xs font-bold text-gray-200" x-text="r.records_affected"></td>
+                            <td class="py-2.5 px-3 text-center">
+                                <span class="text-xs px-2 py-0.5 rounded-full"
+                                      :class="r.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400' : r.status === 'failed' ? 'bg-red-500/10 text-red-400' : 'bg-gray-700 text-gray-400'"
+                                      x-text="r.status"></span>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Erasure Confirmation Modal -->
+    <div x-show="erase.modal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" @keydown.escape.window="erase.modal = false">
+        <div class="sg-card w-full max-w-md border-red-900/40" @click.away="erase.modal = false">
+            <div class="flex items-center gap-2 pb-3" style="border-bottom: 1px solid rgba(239,68,68,0.2);">
+                <i data-lucide="alert-octagon" class="w-5 h-5 text-red-400"></i>
+                <h3 class="text-base font-semibold text-white">Confirm Irreversible Erasure</h3>
+            </div>
+            <div class="py-4 space-y-4">
+                <p class="text-sm text-gray-300">This will pseudonymize <strong class="text-red-300" x-text="erase.count"></strong> record(s) for subject <span class="font-mono text-cyan-300" x-text="erase.id"></span>. This <strong>cannot be undone</strong>.</p>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">Type the confirmation phrase exactly:</label>
+                    <p class="text-xs font-mono text-amber-300 bg-gray-900/60 rounded px-2 py-1.5 mb-2 select-all" x-text="erase.phrase"></p>
+                    <input type="text" x-model="erase.typed" class="sg-input w-full" placeholder="Type the phrase above">
+                </div>
+            </div>
+            <div class="pt-3 flex justify-end gap-2" style="border-top: 1px solid rgba(239,68,68,0.2);">
+                <button @click="erase.modal = false" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                <button @click="confirmErasure()" class="sg-btn sg-btn-danger sg-btn-sm" :disabled="erase.typed !== erase.phrase || erase.running">
+                    <span x-text="erase.running ? 'Erasing…' : 'Erase Permanently'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function gdprPage() {
+    return {
+        inventory: [],
+        controller: '—',
+        dpoContact: '—',
+        retention: {},
+        requests: [],
+        requestFilter: '',
+        subject: { id: '', resolvedId: '', count: null, loading: false },
+        exportOpts: { include_security_events: true, include_audit_entries: true, include_rate_limit_history: true },
+        exporting: false,
+        enforcing: false,
+        erase: { id: '', reason: 'GDPR Art.17 right to erasure', count: 0, phrase: '', typed: '', modal: false, running: false },
+
+        async init() {
+            await this.loadAll();
+        },
+
+        async loadAll() {
+            await Promise.all([this.loadInventory(), this.loadRetention(), this.loadRequests()]);
+        },
+
+        async loadInventory() {
+            try {
+                const res = await fetch('/admin/gdpr/data-inventory');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.inventory = data.processing_activities || [];
+                    this.controller = data.controller || '—';
+                    this.dpoContact = data.dpo_contact || '—';
+                }
+            } catch (e) { console.error('inventory load failed', e); }
+        },
+
+        async loadRetention() {
+            try {
+                const res = await fetch('/admin/gdpr/retention/status');
+                if (res.ok) this.retention = await res.json();
+            } catch (e) { console.error('retention load failed', e); }
+        },
+
+        async loadRequests() {
+            try {
+                const qs = this.requestFilter ? ('?request_type=' + encodeURIComponent(this.requestFilter)) : '';
+                const res = await fetch('/admin/gdpr/requests' + qs);
+                if (res.ok) this.requests = await res.json();
+            } catch (e) { console.error('requests load failed', e); }
+        },
+
+        async lookup() {
+            if (!this.subject.id) return;
+            this.subject.loading = true;
+            this.subject.count = null;
+            try {
+                const res = await fetch('/admin/gdpr/subject/count?subject_id=' + encodeURIComponent(this.subject.id));
+                if (res.ok) {
+                    const data = await res.json();
+                    this.subject.count = data.records_found;
+                    this.subject.resolvedId = data.subject_id;
+                } else {
+                    const err = await res.json();
+                    showToast(err.detail || 'Lookup failed', 'error');
+                }
+            } catch (e) {
+                showToast('Network error during lookup', 'error');
+            } finally {
+                this.subject.loading = false;
+            }
+        },
+
+        async exportData() {
+            if (!this.subject.id) return;
+            this.exporting = true;
+            try {
+                const res = await fetch('/admin/gdpr/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ subject_id: this.subject.id, ...this.exportOpts }),
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast(err.detail || 'Export failed', 'error');
+                    return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `gdpr_export_${this.subject.id}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                showToast('Export downloaded', 'success');
+                await this.loadRequests();
+            } catch (e) {
+                showToast('Network error during export', 'error');
+            } finally {
+                this.exporting = false;
+            }
+        },
+
+        async startErasure() {
+            if (!this.erase.id) return;
+            // Fetch the exact confirmation phrase (count-based) from the backend
+            try {
+                const res = await fetch('/admin/gdpr/subject/count?subject_id=' + encodeURIComponent(this.erase.id));
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast(err.detail || 'Could not count records', 'error');
+                    return;
+                }
+                const data = await res.json();
+                this.erase.count = data.records_found;
+                this.erase.phrase = data.confirmation_required;
+                this.erase.typed = '';
+                this.erase.modal = true;
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+
+        async confirmErasure() {
+            if (this.erase.typed !== this.erase.phrase) return;
+            this.erase.running = true;
+            try {
+                const res = await fetch('/admin/gdpr/pseudonymize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        subject_id: this.erase.id,
+                        confirmation: this.erase.phrase,
+                        reason: this.erase.reason || 'GDPR Art.17 right to erasure',
+                    }),
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast((err.detail && err.detail.error) || err.detail || 'Erasure failed', 'error');
+                    return;
+                }
+                this.erase.modal = false;
+                showToast('Subject pseudonymized', 'success');
+                this.erase.id = '';
+                this.subject.count = null;
+                await this.loadRequests();
+            } catch (e) {
+                showToast('Network error during erasure', 'error');
+            } finally {
+                this.erase.running = false;
+            }
+        },
+
+        async enforceRetention() {
+            const ok = await showConfirm('Enforce Retention', 'Archive and delete records beyond their retention period? This is audit-logged.', 'Enforce');
+            if (!ok) return;
+            this.enforcing = true;
+            try {
+                const res = await fetch('/admin/gdpr/retention/enforce', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast(err.detail || 'Enforcement failed', 'error');
+                    return;
+                }
+                showToast('Retention policy enforced', 'success');
+                await Promise.all([this.loadRetention(), this.loadRequests()]);
+            } catch (e) {
+                showToast('Network error during enforcement', 'error');
+            } finally {
+                this.enforcing = false;
+            }
+        },
+    };
+}
+</script>
+{% endblock %}

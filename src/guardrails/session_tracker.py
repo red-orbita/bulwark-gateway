@@ -13,6 +13,7 @@ Architecture:
 Redis keys:
   bulwark:session:{session_key}:signals  — Sorted set {signal_id: timestamp}
   bulwark:session:{session_key}:score    — Float score with TTL
+  bulwark:session:config                 — HASH {thresholds/windows} (admin runtime override)
 
 The tracker is stateless if Redis is unavailable (graceful degradation to per-request only).
 """
@@ -30,6 +31,23 @@ import structlog
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 
 logger = structlog.get_logger()
+
+# Admin-managed runtime override (see admin/routes/sessions.py). The proxy honors
+# these tuning values without a restart, re-reading at most once per interval to
+# keep the request hot path cheap.
+RUNTIME_CONFIG_KEY = "bulwark:session:config"
+_RUNTIME_REFRESH_INTERVAL = 5.0  # seconds
+
+# Tunable fields exposed to the admin override, mapped to instance attributes.
+_TUNABLE_FIELDS: dict[str, str] = {
+    "block_threshold": "BLOCK_THRESHOLD",
+    "warn_threshold": "WARN_THRESHOLD",
+    "window_seconds": "WINDOW_SECONDS",
+    "block_threshold_30m": "BLOCK_THRESHOLD_30M",
+    "warn_threshold_30m": "WARN_THRESHOLD_30M",
+    "window_30m_seconds": "WINDOW_30M_SECONDS",
+}
+_INT_FIELDS = {"window_seconds", "window_30m_seconds"}
 
 # Decomposition topic indicators — individually benign but dangerous when accumulated
 # Each carries a weight; accumulating >threshold within time window triggers BLOCK
@@ -128,6 +146,44 @@ class SessionDecompositionTracker:
         self._redis = None
         self._local_sessions: dict[str, SessionState] = {}
         self._initialized = False
+        # Seed instance-level tunables from class defaults. Instance attributes
+        # shadow the class constants, so all existing ``self.BLOCK_THRESHOLD``
+        # reads transparently pick up admin runtime overrides.
+        cls = type(self)
+        for attr in _TUNABLE_FIELDS.values():
+            setattr(self, attr, getattr(cls, attr))
+        self._runtime_checked_at = 0.0
+
+    def _refresh_runtime_config(self) -> None:
+        """Honor admin runtime overrides (thresholds/windows) from Redis.
+
+        Throttled to at most one lookup per ``_RUNTIME_REFRESH_INTERVAL`` so the
+        request hot path stays cheap. No-op without Redis (defaults apply).
+        Invalid values are ignored; only known tunable fields are applied.
+        """
+        if not self._redis:
+            return
+        now = time.time()
+        if (now - self._runtime_checked_at) < _RUNTIME_REFRESH_INTERVAL:
+            return
+        self._runtime_checked_at = now
+        try:
+            cfg = self._redis.hgetall(RUNTIME_CONFIG_KEY) or {}
+        except Exception:
+            return
+        if not cfg:
+            return
+        for field_name, attr in _TUNABLE_FIELDS.items():
+            if field_name not in cfg:
+                continue
+            raw = cfg[field_name]
+            try:
+                value: float | int = int(raw) if field_name in _INT_FIELDS else float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value <= 0:
+                continue
+            setattr(self, attr, value)
 
     def initialize(self, redis_url: Optional[str] = None, redis_tls_insecure: bool = False):
         """Initialize Redis connection (call once at startup)."""
@@ -179,6 +235,9 @@ class SessionDecompositionTracker:
         """
         if not self._initialized:
             return GuardrailResult(verdict=Verdict.ALLOW)
+
+        # Honor any admin runtime tuning (throttled, cheap on the hot path).
+        self._refresh_runtime_config()
 
         # Extract signals from current request
         now = time.time()

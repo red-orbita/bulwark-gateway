@@ -157,6 +157,8 @@ services:
       BULWARK_REDIS_URL: redis://redis:6379/0
       BULWARK_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       BULWARK_IOC_PATH: /app/config/iocs.json
+      # Cookie security: set to "false" for HTTP-only local dev (no TLS termination)
+      BULWARK_HTTPS: "${BULWARK_HTTPS:-false}"
       # Enrichment DB (read-only access to proxy's replay DB)
       BULWARK_REPLAY_DB_PATH: /app/shared/enrichment/attack_replay.db
       # Secrets via _FILE env vars
@@ -185,8 +187,10 @@ services:
       - siem_stats:/app/shared/siem
       - reports:/app/reports
       - enrichment_data:/app/shared/enrichment
+      - ./admin/main.py:/app/admin/main.py:ro
       - ./admin/templates:/app/admin/templates:ro
       - ./admin/routes:/app/admin/routes:ro
+      - ./admin/services:/app/admin/services:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/admin/health')"]
       interval: 15s

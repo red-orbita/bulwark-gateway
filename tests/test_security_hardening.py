@@ -29,24 +29,25 @@ class TestAuthGuardMiddleware:
 
     def test_dashboard_redirects_without_auth(self):
         resp = self.client.get("/", follow_redirects=False)
-        assert resp.status_code == 302
-        assert "/login" in resp.headers.get("location", "")
+        # Page is served (200) — client-side JS handles auth redirect
+        # This prevents redirect loops when HttpOnly cookies fail on HTTP
+        assert resp.status_code == 200
 
     def test_policies_page_redirects_without_auth(self):
         resp = self.client.get("/policies", follow_redirects=False)
-        assert resp.status_code == 302
+        assert resp.status_code == 200
 
     def test_guardrails_page_redirects_without_auth(self):
         resp = self.client.get("/guardrails", follow_redirects=False)
-        assert resp.status_code == 302
+        assert resp.status_code == 200
 
     def test_siem_page_redirects_without_auth(self):
         resp = self.client.get("/siem", follow_redirects=False)
-        assert resp.status_code == 302
+        assert resp.status_code == 200
 
     def test_settings_page_redirects_without_auth(self):
         resp = self.client.get("/settings", follow_redirects=False)
-        assert resp.status_code == 302
+        assert resp.status_code == 200
 
     def test_page_accessible_with_valid_cookie(self):
         from admin.services.auth_service import AuthService

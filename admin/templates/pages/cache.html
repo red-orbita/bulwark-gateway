@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% block title %}Response Cache — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Response Cache{% endblock %}
+{% block content %}
+<div x-data="cachePage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Response Cache</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Exact-match caching of LLM responses (tenant-isolated SHA-256 keys) to cut cost and latency. The runtime kill-switch below writes to Redis and the proxy honors it within ~5s <em>without a restart</em>. Disabling the cache guarantees fresh policy/IOC evaluation on every request. All mutations are audit-logged.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Effective State</p>
+            <p class="text-sm font-semibold mt-1" :class="status.effective.enabled ? 'text-emerald-400' : 'text-gray-400'"
+               x-text="status.effective.enabled ? 'Enabled' : 'Disabled'"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Hit Rate</p>
+            <p class="text-sm font-semibold text-cyan-300 mt-1" x-text="(status.stats.hit_rate * 100).toFixed(1) + '%'"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Cached Entries</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="fmtNum(status.entries)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Tokens Saved</p>
+            <p class="text-sm font-semibold text-emerald-400 mt-1" x-text="fmtNum(status.stats.savings_tokens)"></p>
+        </div>
+    </div>
+
+    <!-- Redis warning -->
+    <div x-show="!status.redis_connected" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="text-sm font-medium text-amber-200">Redis not reachable</p>
+                <p class="text-xs text-amber-200/80">The runtime kill-switch and shared stats require Redis. Without it, each proxy uses only its in-process LRU cache and env configuration.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Runtime override -->
+        <div class="sg-card">
+            <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="sliders-horizontal" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Runtime Override</h2>
+            </div>
+
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-200">Cache enabled</p>
+                        <p class="text-[11px] text-gray-500">Kill-switch — disable to force fresh responses cluster-wide.</p>
+                    </div>
+                    <button type="button" @click="form.enabled = !form.enabled" :disabled="!canWrite"
+                            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+                            :class="form.enabled ? 'bg-emerald-500' : 'bg-gray-600'">
+                        <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                              :class="form.enabled ? 'translate-x-6' : 'translate-x-1'"></span>
+                    </button>
+                </div>
+
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">TTL (seconds) — <span class="text-gray-600">1 to 86400</span></label>
+                    <input type="number" min="1" max="86400" x-model.number="form.ttl" class="sg-input w-full" :disabled="!canWrite">
+                    <p class="text-[11px] text-gray-500 mt-1">Lower TTL narrows the staleness window after policy/IOC updates.</p>
+                </div>
+
+                <div class="text-[11px] text-gray-400 bg-white/[0.02] rounded px-3 py-2 space-y-1">
+                    <p><span class="text-gray-500">Env baseline:</span>
+                        <span class="font-mono" x-text="status.env.enabled ? 'enabled' : 'disabled'"></span>,
+                        TTL <span class="font-mono" x-text="status.env.ttl_seconds + 's'"></span></p>
+                    <p><span class="text-gray-500">Override active:</span>
+                        <span class="font-mono" :class="status.override.overridden ? 'text-cyan-300' : 'text-gray-500'"
+                              x-text="status.override.overridden ? 'yes' : 'no (using env)'"></span></p>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-1">
+                    <button @click="clearOverride()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                            :disabled="!canWrite || !status.override.overridden" title="Revert to env config">
+                        Clear Override
+                    </button>
+                    <button @click="saveOverride()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!canWrite || saving">
+                        <span x-text="saving ? 'Saving…' : 'Apply Override'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats + danger -->
+        <div class="space-y-6">
+            <div class="sg-card">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="activity" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Performance</h2>
+                </div>
+                <div class="grid grid-cols-2 gap-3 text-sm">
+                    <div class="flex justify-between"><span class="text-gray-400">Hits</span><span class="font-mono text-emerald-400" x-text="fmtNum(status.stats.hits)"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Misses</span><span class="font-mono text-gray-300" x-text="fmtNum(status.stats.misses)"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Evictions</span><span class="font-mono text-amber-400" x-text="fmtNum(status.stats.evictions)"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Lookups</span><span class="font-mono text-gray-300" x-text="fmtNum(status.stats.total_lookups)"></span></div>
+                </div>
+            </div>
+
+            <div class="sg-card border-red-900/40">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="alert-octagon" class="w-4 h-4 text-red-400"></i>
+                    <h2 class="text-sm font-medium text-white">Maintenance</h2>
+                </div>
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-sm text-gray-200">Flush cache</p>
+                            <p class="text-[11px] text-gray-500">Drop all cached entries (keeps stats &amp; override).</p>
+                        </div>
+                        <button @click="flush()" class="sg-btn sg-btn-sm" style="color:#fca5a5;" :disabled="!canWrite">Flush</button>
+                    </div>
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-sm text-gray-200">Reset stats</p>
+                            <p class="text-[11px] text-gray-500">Clear hit/miss/eviction/savings counters.</p>
+                        </div>
+                        <button @click="resetStats()" class="sg-btn sg-btn-sm" style="color:#fca5a5;" :disabled="!canWrite">Reset</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function cachePage() {
+    return {
+        loading: true,
+        saving: false,
+        canWrite: false,
+        status: {
+            redis_connected: false, entries: 0,
+            effective: { enabled: false, ttl_seconds: 300 },
+            env: { enabled: false, ttl_seconds: 300 },
+            override: { enabled: null, ttl: null, overridden: false },
+            stats: { hits: 0, misses: 0, evictions: 0, savings_tokens: 0, hit_rate: 0, total_lookups: 0 },
+        },
+        form: { enabled: false, ttl: 300 },
+
+        async init() {
+            await this.reloadAll();
+        },
+
+        async reloadAll() {
+            await this.loadStatus();
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/cache/status');
+                if (res.ok) {
+                    this.status = await res.json();
+                    this.canWrite = !!this.status.can_write;
+                    // Seed the form from effective state.
+                    this.form.enabled = this.status.effective.enabled;
+                    this.form.ttl = this.status.effective.ttl_seconds;
+                } else {
+                    showToast('Failed to load cache status', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading cache status', 'error');
+            }
+        },
+
+        async saveOverride() {
+            const ttl = Math.min(86400, Math.max(1, parseInt(this.form.ttl) || 300));
+            this.saving = true;
+            try {
+                const res = await fetch('/admin/cache/config', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: this.form.enabled, ttl: ttl }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Save failed', 'error');
+                    return;
+                }
+                showToast('Runtime override applied', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during save', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async clearOverride() {
+            const ok = await showConfirm('Clear Runtime Override', 'Remove the runtime override so every proxy reverts to its environment configuration?', 'Clear');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/cache/config', { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Clear failed', 'error');
+                    return;
+                }
+                showToast('Override cleared — reverting to env config', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+
+        async flush() {
+            const ok = await showConfirm('Flush Response Cache', 'Drop all cached responses now? Subsequent requests will hit the backend until the cache refills.', 'Flush');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/cache/flush', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Flush failed', 'error');
+                    return;
+                }
+                const data = await res.json();
+                showToast(`Cache flushed (${data.entries_deleted} entries)`, 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during flush', 'error');
+            }
+        },
+
+        async resetStats() {
+            const ok = await showConfirm('Reset Cache Stats', 'Clear all hit/miss/eviction/savings counters? Cached entries are kept.', 'Reset');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/cache/stats/reset', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Reset failed', 'error');
+                    return;
+                }
+                showToast('Cache stats reset', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during reset', 'error');
+            }
+        },
+
+        fmtNum(n) { return (Number(n) || 0).toLocaleString(); },
+    };
+}
+</script>
+{% endblock %}

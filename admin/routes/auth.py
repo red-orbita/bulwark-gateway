@@ -26,6 +26,29 @@ from cachetools import TTLCache
 _LOGIN_ATTEMPTS: TTLCache = TTLCache(maxsize=5000, ttl=_LOCKOUT_SECONDS)
 _USERNAME_ATTEMPTS: TTLCache = TTLCache(maxsize=5000, ttl=_LOCKOUT_SECONDS)
 
+
+def _should_set_secure_cookie(request: Request) -> bool:
+    """Determine if the session cookie should have the Secure flag.
+
+    Logic (priority order):
+    1. Explicit BULWARK_HTTPS env var overrides everything
+    2. If behind a reverse proxy with X-Forwarded-Proto: https → secure
+    3. If request URL scheme is https → secure
+    4. Otherwise (plain HTTP, localhost dev) → not secure
+    """
+    explicit = os.environ.get("BULWARK_HTTPS", "").lower().strip()
+    if explicit in ("true", "1", "yes"):
+        return True
+    if explicit in ("false", "0", "no"):
+        return False
+    # Auto-detect from request
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if forwarded_proto == "https":
+        return True
+    if request.url.scheme == "https":
+        return True
+    return False
+
 # SECURITY FIX (APT-08): Distributed rate limiting via Redis.
 # In-memory rate limiting is per-process — with 4 workers * 2 replicas,
 # an attacker gets 40 attempts instead of 5. Redis provides a single
@@ -216,16 +239,13 @@ async def login(req: LoginRequest, request: Request, response: Response):
         media_type="application/json",
     )
     # Set HttpOnly cookie for browser-based auth
-    # SECURITY FIX (VULN 1.11): Default to secure=True in production.
-    # Only disable for explicit local development (BULWARK_HTTPS=false).
-    # Do NOT trust X-Forwarded-Proto from client — it's easily spoofed.
-    is_secure = os.environ.get("BULWARK_HTTPS", "true").lower() not in ("0", "false", "no")
+    is_secure = _should_set_secure_cookie(request)
     response.set_cookie(
         key="admin_token",
         value=token,
         httponly=True,
         secure=is_secure,
-        samesite="strict",
+        samesite="strict" if is_secure else "lax",
         max_age=28800,  # 8h — aligned with JWT expiry
         path="/",
     )
@@ -307,6 +327,7 @@ async def force_change_password(request: Request):
     """Change password without token — only for users with force_password_change=true.
     
     Requires username + current_password verification (rate-limited).
+    On success, returns a full login token so the client doesn't need a second login.
     """
     ip = request.client.host if request.client else "unknown"
 
@@ -351,4 +372,28 @@ async def force_change_password(request: Request):
     audit = get_audit_logger()
     await audit.log(actor=username, action="auth.force_change_password", resource_type="user", resource_id=db_user["id"])
 
-    return {"status": "password_changed"}
+    # Issue token immediately (no need for second login round-trip)
+    from ..models.auth import UserRole
+    role = UserRole(db_user["role"])
+    user_agent = request.headers.get("user-agent")
+    token = AuthService.create_token(username, role, user_id=db_user["id"], ip=ip, user_agent=user_agent)
+
+    response = Response(
+        content=LoginResponse(
+            access_token=token,
+            role=role,
+            username=username,
+        ).model_dump_json(),
+        media_type="application/json",
+    )
+    is_secure = _should_set_secure_cookie(request)
+    response.set_cookie(
+        key="admin_token",
+        value=token,
+        httponly=True,
+        secure=is_secure,
+        samesite="strict" if is_secure else "lax",
+        max_age=28800,
+        path="/",
+    )
+    return response

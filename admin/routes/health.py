@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from datetime import datetime, timezone
@@ -229,7 +230,13 @@ async def metrics_stream(request: Request, token: Optional[str] = Query(None)):
 
 import time as _time
 
-_telemetry_cache: dict = {"proxy": {}, "redis": {}, "redis_health": {"status": "unknown"}, "ts": 0.0}
+_telemetry_cache: dict = {
+    "proxy": {},
+    "redis": {},
+    "redis_health": {"status": "unknown"},
+    "scanners": {"available": False},
+    "ts": 0.0,
+}
 _CACHE_TTL = 4.0  # seconds between background refreshes
 _bg_task_started = False
 
@@ -271,10 +278,21 @@ async def _background_telemetry_refresh():
             except Exception:
                 pass
 
+            # Fetch scanner pipeline status from the proxy internal endpoint
+            # (network-isolated, requires the proxy API key which the background
+            # client already carries). Best-effort — the panel degrades
+            # gracefully to "unavailable" if the proxy is unreachable.
+            scanners = {"available": False}
+            with contextlib.suppress(Exception):
+                sresp = await client.get(f"{PROXY_URL}/internal/scanners/status")
+                if sresp.status_code == 200:
+                    scanners = _summarize_scanners(sresp.json())
+
             _telemetry_cache = {
                 "proxy": proxy_stats,
                 "redis": redis_counters,
                 "redis_health": redis_health,
+                "scanners": scanners,
                 "ts": _time.monotonic(),
             }
         except Exception:
@@ -299,6 +317,116 @@ def _get_cached_telemetry() -> tuple[dict, dict]:
 def _get_cached_redis_health() -> dict:
     """Return Redis health info from cache. Non-blocking, instant."""
     return _telemetry_cache.get("redis_health", {"status": "unknown"})
+
+
+def _get_cached_scanners() -> dict:
+    """Return scanner pipeline summary from cache. Non-blocking, instant."""
+    return _telemetry_cache.get("scanners", {"available": False})
+
+
+def _summarize_scanners(raw: dict) -> dict:
+    """Condense the proxy /internal/scanners/status payload for the infra panel.
+
+    Keeps only real, operator-relevant fields; computes a healthy/total roll-up.
+    Never fabricates values — missing fields degrade to None/0.
+    """
+    raw = raw or {}
+    scanners = raw.get("scanners") or []
+    healthy = sum(1 for s in scanners if s.get("healthy"))
+    lanes = raw.get("lanes") or {}
+    return {
+        "available": True,
+        "ml_enabled": bool(raw.get("ml_enabled", False)),
+        "ml_blocking": bool(raw.get("ml_blocking", False)),
+        "ml_timeout_ms": raw.get("ml_timeout_ms"),
+        "rag_enabled": bool(raw.get("rag_enabled", False)),
+        "multilingual_enabled": bool(raw.get("multilingual_enabled", False)),
+        "lanes": {
+            "input_blocking": lanes.get("input_blocking", 0),
+            "input_async": lanes.get("input_async", 0),
+            "output_blocking": lanes.get("output_blocking", 0),
+            "output_async": lanes.get("output_async", 0),
+            "total": lanes.get("total", 0),
+        },
+        "scanner_total": len(scanners),
+        "scanner_healthy": healthy,
+        "scanners": [
+            {
+                "name": s.get("name", "unknown"),
+                "type": s.get("type"),
+                "version": s.get("version"),
+                "enabled": bool(s.get("enabled", False)),
+                "healthy": bool(s.get("healthy", False)),
+            }
+            for s in scanners
+        ],
+    }
+
+
+@router.get("/infra")
+async def health_infra(
+    request: Request,
+    _user: TokenPayload = Depends(require_permission("admin:read")),
+):
+    """Read-only infrastructure snapshot for the Status page.
+
+    Aggregates ONLY real, already-cached data (zero blocking I/O in the request
+    path), clearly attributed to its source:
+
+      * ``admin``     — this portal's own uptime/version (in-process metrics)
+      * ``redis``     — connectivity, version, memory, latency (pooled probe)
+      * ``proxy``     — live counters/latency from the proxy /health/stats
+      * ``scanners``  — pipeline state from the proxy internal endpoint
+      * ``runtime``   — the admin's own operational config (env-derived)
+
+    No Kubernetes/pod introspection is performed — the admin service has no
+    cluster API access, so nothing here is fabricated.
+    """
+    _ensure_bg_task()
+    snap = get_metrics().snapshot()
+    proxy_stats, _ = _get_cached_telemetry()
+    redis_info = _get_cached_redis_health()
+    scanners = _get_cached_scanners()
+
+    proxy_reachable = bool(proxy_stats)
+    proxy = {
+        "reachable": proxy_reachable,
+        "uptime_seconds": proxy_stats.get("uptime_seconds"),
+        "requests_total": proxy_stats.get("requests_total", 0),
+        "requests_per_second": proxy_stats.get("requests_per_second", 0),
+        "verdicts": {
+            "blocked": proxy_stats.get("blocked", 0),
+            "warned": proxy_stats.get("warned", 0),
+            "allowed": proxy_stats.get("allowed", 0),
+            "redacted": proxy_stats.get("redacted", 0),
+            "errors": proxy_stats.get("errors", 0),
+        },
+        "latency": {
+            "p50_ms": proxy_stats.get("latency_p50_ms"),
+            "p95_ms": proxy_stats.get("latency_p95_ms"),
+            "p99_ms": proxy_stats.get("latency_p99_ms"),
+        },
+    }
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "admin": {
+            "version": getattr(request.app, "version", "unknown"),
+            "uptime_seconds": snap.uptime_seconds,
+        },
+        "redis": {
+            "status": redis_info.get("status", "unknown"),
+            "version": redis_info.get("version"),
+            "memory": redis_info.get("memory"),
+            "latency_ms": redis_info.get("latency_ms"),
+        },
+        "proxy": proxy,
+        "scanners": scanners,
+        "runtime": {
+            "proxy_url": PROXY_URL,
+            "sse_interval_seconds": SSE_INTERVAL,
+        },
+    }
 
 
 def _fetch_redis_all_sync() -> tuple[dict, dict]:

@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block title %}Cost & Usage — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Cost &amp; Usage{% endblock %}
+{% block content %}
+<div x-data="costPage()" x-init="init()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Cost &amp; Token Usage</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Token consumption and estimated spend per tenant and agent, accumulated by the proxy from backend <span class="font-mono text-gray-300">usage</span> data and persisted in Redis. Costs are <em>estimates</em> based on the reference pricing table below. Resets are audit-logged.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+            <button @click="resetAll()" class="sg-btn sg-btn-sm" style="color:#fca5a5;" x-show="canWrite">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                Reset All
+            </button>
+        </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Accounting</p>
+            <p class="text-sm font-semibold mt-1" :class="status.redis_connected ? 'text-emerald-400' : 'text-amber-400'"
+               x-text="status.redis_connected ? 'Redis active' : 'In-memory only'"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Total Tokens</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="fmtNum(status.global.total_tokens)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Est. Spend</p>
+            <p class="text-sm font-semibold text-cyan-300 mt-1" x-text="fmtUsd(status.global.estimated_cost_usd)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Tenants Tracked</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="status.tenants_tracked"></p>
+        </div>
+    </div>
+
+    <!-- Redis warning -->
+    <div x-show="!status.redis_connected" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="text-sm font-medium text-amber-200">Redis not reachable</p>
+                <p class="text-xs text-amber-200/80">Cost counters are then held only in each proxy process and cannot be aggregated here. Connect Redis for persistent, cluster-wide accounting.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tenants table -->
+    <div class="sg-card">
+        <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="coins" class="w-4 h-4 text-cyan-400"></i>
+            <h2 class="text-sm font-medium text-white">Spend by Tenant</h2>
+        </div>
+
+        <div x-show="loading" class="py-8 text-center text-sm text-gray-500">Loading…</div>
+
+        <div x-show="!loading && rows.length === 0" x-cloak class="py-8 text-center">
+            <i data-lucide="coins" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
+            <p class="text-sm text-gray-400">No usage recorded yet. Costs appear once the proxy forwards requests that return token usage.</p>
+        </div>
+
+        <div x-show="!loading && rows.length > 0" class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                        <th class="text-left py-2 px-3">Tenant</th>
+                        <th class="text-right py-2 px-3">Requests</th>
+                        <th class="text-right py-2 px-3">Prompt</th>
+                        <th class="text-right py-2 px-3">Completion</th>
+                        <th class="text-right py-2 px-3">Total tokens</th>
+                        <th class="text-right py-2 px-3">Est. cost</th>
+                        <th class="text-right py-2 px-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="r in rows" :key="r.tenant_id">
+                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
+                            <td class="py-2.5 px-3 font-mono text-[12px] text-cyan-300" x-text="r.tenant_id"></td>
+                            <td class="py-2.5 px-3 text-right text-xs" x-text="fmtNum(r.total_requests)"></td>
+                            <td class="py-2.5 px-3 text-right text-xs" x-text="fmtNum(r.prompt_tokens)"></td>
+                            <td class="py-2.5 px-3 text-right text-xs" x-text="fmtNum(r.completion_tokens)"></td>
+                            <td class="py-2.5 px-3 text-right text-xs font-semibold text-white" x-text="fmtNum(r.total_tokens)"></td>
+                            <td class="py-2.5 px-3 text-right text-xs font-semibold text-cyan-300" x-text="fmtUsd(r.estimated_cost_usd)"></td>
+                            <td class="py-2.5 px-3">
+                                <div class="flex items-center justify-end gap-1.5">
+                                    <button @click="openDetail(r)" class="sg-btn sg-btn-ghost sg-btn-xs" title="Per-agent breakdown">
+                                        <i data-lucide="list-tree" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <button @click="resetTenant(r)" class="sg-btn sg-btn-xs" style="color:#fca5a5;"
+                                            title="Reset this tenant's counters" x-show="canWrite">
+                                        <i data-lucide="eraser" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+                <tfoot x-show="rows.length > 1">
+                    <tr class="text-xs text-gray-300 font-semibold">
+                        <td class="py-2.5 px-3 text-right" colspan="4">Global total</td>
+                        <td class="py-2.5 px-3 text-right text-white" x-text="fmtNum(status.global.total_tokens)"></td>
+                        <td class="py-2.5 px-3 text-right text-cyan-300" x-text="fmtUsd(status.global.estimated_cost_usd)"></td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <!-- Pricing reference -->
+    <div class="sg-card">
+        <button @click="pricingOpen = !pricingOpen" class="flex items-center gap-2 w-full text-left">
+            <i data-lucide="receipt" class="w-4 h-4 text-cyan-400"></i>
+            <h2 class="text-sm font-medium text-white flex-1">Reference Pricing <span class="text-gray-500 font-normal">(USD per 1M tokens, read-only)</span></h2>
+            <i :data-lucide="pricingOpen ? 'chevron-up' : 'chevron-down'" class="w-4 h-4 text-gray-500"></i>
+        </button>
+        <div x-show="pricingOpen" x-cloak class="mt-4 overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                        <th class="text-left py-2 px-3">Model pattern</th>
+                        <th class="text-right py-2 px-3">Input</th>
+                        <th class="text-right py-2 px-3">Output</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="p in pricing" :key="p.model">
+                        <tr class="border-b border-gray-800">
+                            <td class="py-2 px-3 font-mono text-[12px] text-gray-200" x-text="p.model"></td>
+                            <td class="py-2 px-3 text-right text-xs" x-text="'$' + p.input_per_1m.toFixed(2)"></td>
+                            <td class="py-2 px-3 text-right text-xs" x-text="'$' + p.output_per_1m.toFixed(2)"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+            <p class="text-[11px] text-gray-500 mt-3">Pricing mirrors the proxy's built-in table (<span class="font-mono">DEFAULT_PRICING</span>). Self-hosted models are billed at $0.00.</p>
+        </div>
+    </div>
+
+    <!-- Detail modal -->
+    <div x-show="detail.modal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" @keydown.escape.window="detail.modal = false">
+        <div class="sg-card w-full max-w-2xl" @click.away="detail.modal = false">
+            <div class="flex items-center gap-2 pb-3" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+                <i data-lucide="list-tree" class="w-5 h-5 text-cyan-400"></i>
+                <h3 class="text-base font-semibold text-white">Agent Breakdown — <span class="font-mono text-cyan-300" x-text="detail.tenant_id"></span></h3>
+            </div>
+            <div class="py-4">
+                <div x-show="detail.loading" class="py-6 text-center text-sm text-gray-500">Loading…</div>
+                <div x-show="!detail.loading && detail.agents.length === 0" x-cloak class="py-6 text-center text-sm text-gray-400">No per-agent data recorded.</div>
+                <div x-show="!detail.loading && detail.agents.length > 0" class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-700 text-gray-400 text-xs">
+                                <th class="text-left py-2 px-3">Agent</th>
+                                <th class="text-left py-2 px-3">Model</th>
+                                <th class="text-right py-2 px-3">Requests</th>
+                                <th class="text-right py-2 px-3">Total tokens</th>
+                                <th class="text-right py-2 px-3">Est. cost</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="a in detail.agents" :key="a.agent_id">
+                                <tr class="border-b border-gray-800">
+                                    <td class="py-2 px-3 font-mono text-[12px] text-cyan-300" x-text="a.agent_id"></td>
+                                    <td class="py-2 px-3 text-xs text-gray-300" x-text="a.model"></td>
+                                    <td class="py-2 px-3 text-right text-xs" x-text="fmtNum(a.total_requests)"></td>
+                                    <td class="py-2 px-3 text-right text-xs" x-text="fmtNum(a.total_tokens)"></td>
+                                    <td class="py-2 px-3 text-right text-xs text-cyan-300" x-text="fmtUsd(a.estimated_cost_usd)"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="pt-3 flex justify-end" style="border-top: 1px solid rgba(255,255,255,0.08);">
+                <button @click="detail.modal = false" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function costPage() {
+    return {
+        loading: true,
+        pricingOpen: false,
+        canWrite: false,
+        status: { redis_connected: false, tenants_tracked: 0, global: { total_tokens: 0, estimated_cost_usd: 0, prompt_tokens: 0, completion_tokens: 0, total_requests: 0 } },
+        rows: [],
+        pricing: [],
+        detail: { modal: false, tenant_id: '', loading: false, agents: [] },
+
+        async init() {
+            await this.reloadAll();
+            this.loadPricing();
+        },
+
+        async reloadAll() {
+            await Promise.all([this.loadStatus(), this.loadRows()]);
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/cost/status');
+                if (res.ok) {
+                    this.status = await res.json();
+                    this.canWrite = !!this.status.can_write;
+                }
+            } catch (e) { console.error('cost status failed', e); }
+        },
+
+        async loadRows() {
+            this.loading = true;
+            try {
+                const res = await fetch('/admin/cost/tenants');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.rows = data.tenants || [];
+                } else {
+                    showToast('Failed to load cost data', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading cost data', 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async loadPricing() {
+            try {
+                const res = await fetch('/admin/cost/pricing');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.pricing = data.pricing || [];
+                }
+            } catch (e) { /* non-critical */ }
+        },
+
+        async openDetail(r) {
+            this.detail = { modal: true, tenant_id: r.tenant_id, loading: true, agents: [] };
+            try {
+                const res = await fetch('/admin/cost/tenant/' + encodeURIComponent(r.tenant_id));
+                if (res.ok) {
+                    const data = await res.json();
+                    this.detail.agents = data.agents || [];
+                } else {
+                    showToast('Failed to load agent breakdown', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading breakdown', 'error');
+            } finally {
+                this.detail.loading = false;
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            }
+        },
+
+        async resetTenant(r) {
+            const ok = await showConfirm('Reset Tenant Counters', `Permanently clear all token/cost counters for '${r.tenant_id}'? Historical spend for this tenant will be lost.`, 'Reset');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/cost/tenant/' + encodeURIComponent(r.tenant_id), { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Reset failed', 'error');
+                    return;
+                }
+                showToast('Tenant counters reset', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during reset', 'error');
+            }
+        },
+
+        async resetAll() {
+            const ok = await showConfirm('Reset ALL Cost Counters', 'This permanently clears global, per-tenant, and per-agent token/cost counters across the entire deployment. This cannot be undone.', 'Reset Everything');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/cost/reset', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Reset failed', 'error');
+                    return;
+                }
+                showToast('All cost counters reset', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during reset', 'error');
+            }
+        },
+
+        fmtNum(n) { return (Number(n) || 0).toLocaleString(); },
+        fmtUsd(n) {
+            n = Number(n) || 0;
+            if (n === 0) return '$0.00';
+            if (n < 0.01) return '$' + n.toFixed(6);
+            return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        },
+    };
+}
+</script>
+{% endblock %}
