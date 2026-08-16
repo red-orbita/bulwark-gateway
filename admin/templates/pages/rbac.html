@@ -184,13 +184,14 @@
                 <button @click="sessionsUser = null" class="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-700">&times; Close</button>
             </div>
             <table class="w-full text-xs">
-                <thead><tr class="text-gray-400 border-b border-gray-700/50"><th class="px-4 py-2 text-left">Session ID</th><th class="px-4 py-2 text-left">Created</th><th class="px-4 py-2 text-left">IP Address</th><th class="px-4 py-2 text-right">Action</th></tr></thead>
+                <thead><tr class="text-gray-400 border-b border-gray-700/50"><th class="px-4 py-2 text-left">Session ID</th><th class="px-4 py-2 text-left">Created</th><th class="px-4 py-2 text-left">IP Address</th><th class="px-4 py-2 text-left">Device</th><th class="px-4 py-2 text-right">Action</th></tr></thead>
                 <tbody class="divide-y divide-gray-700/30">
                     <template x-for="s in sessions" :key="s.id">
                         <tr class="hover:bg-gray-700/20">
                             <td class="px-4 py-2 font-mono text-gray-300" x-text="s.id.substring(0,16) + '...'"></td>
                             <td class="px-4 py-2 text-gray-400" x-text="new Date(s.created_at).toLocaleString()"></td>
-                            <td class="px-4 py-2 text-gray-400" x-text="s.ip || 'Unknown'"></td>
+                            <td class="px-4 py-2 text-gray-400 font-mono" x-text="s.ip_address || 'Unknown'"></td>
+                            <td class="px-4 py-2 text-gray-400 truncate max-w-[16rem]" :title="s.user_agent || ''" x-text="s.user_agent || 'Unknown'"></td>
                             <td class="px-4 py-2 text-right">
                                 <button @click="revokeSession(s)" class="px-2 py-1 bg-red-800 hover:bg-red-700 rounded text-red-200">Revoke</button>
                             </td>
