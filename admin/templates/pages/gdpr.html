@@ -191,6 +191,11 @@
             </table>
         </div>
         <p class="text-[10px] text-gray-600 mt-3">Controller: <span x-text="controller"></span> · DPO: <span x-text="dpoContact"></span></p>
+        <p x-show="!controllerConfigured" class="text-[10px] text-amber-400 mt-1" role="alert">
+            Art.30(1)(a) controller / DPO identity is not configured. Set
+            <code class="text-amber-300">BULWARK_GDPR_CONTROLLER</code> and
+            <code class="text-amber-300">BULWARK_GDPR_DPO_CONTACT</code> to complete the Record of Processing Activities.
+        </p>
     </div>
 
     <!-- GDPR Request Audit Trail -->
@@ -276,6 +281,7 @@ function gdprPage() {
         inventory: [],
         controller: '—',
         dpoContact: '—',
+        controllerConfigured: true,
         retention: {},
         requests: [],
         requestFilter: '',
@@ -301,6 +307,7 @@ function gdprPage() {
                     this.inventory = data.processing_activities || [];
                     this.controller = data.controller || '—';
                     this.dpoContact = data.dpo_contact || '—';
+                    this.controllerConfigured = data.controller_configured !== false;
                 }
             } catch (e) { console.error('inventory load failed', e); }
         },

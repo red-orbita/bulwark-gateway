@@ -89,6 +89,13 @@ data:
   DB_ENCRYPTION_KEY_FILE: "/run/secrets/db-encryption-key"
   BULWARK_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
   BULWARK_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  {{- if .Values.admin.gdpr }}
+  # GDPR Art.30 RoPA controller / DPO identity (mandatory when set;
+  # unset fields are honestly reported as "NOT CONFIGURED").
+  BULWARK_GDPR_CONTROLLER: {{ .Values.admin.gdpr.controller | quote }}
+  BULWARK_GDPR_CONTROLLER_CONTACT: {{ .Values.admin.gdpr.controllerContact | quote }}
+  BULWARK_GDPR_DPO_CONTACT: {{ .Values.admin.gdpr.dpoContact | quote }}
+  {{- end }}
   {{- if eq .Values.admin.database.type "postgresql" }}
   # PostgreSQL database configuration
   BULWARK_ADMIN_DB_URL_FILE: "/run/secrets-pg/postgresql-url"

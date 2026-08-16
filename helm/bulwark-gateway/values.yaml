@@ -195,6 +195,17 @@ admin:
   jwtExpiryHours: 8
   # -- CORS allowed origins (comma-separated, empty = all)
   corsOrigins: ""
+  # -- GDPR Art.30 RoPA (Records of Processing Activities) identity.
+  # Populate to name the data controller / DPO in the data-inventory report.
+  # Leave blank and the endpoint honestly reports "NOT CONFIGURED" instead of
+  # a fabricated placeholder (Art.30(1)(a) mandatory fields).
+  gdpr:
+    # -- Data controller legal entity name
+    controller: ""
+    # -- Data controller contact (postal address / email)
+    controllerContact: ""
+    # -- Data Protection Officer contact (name / email)
+    dpoContact: ""
   # -- Database configuration for admin service (HA support)
   database:
     # -- Database type: "sqlite" (default, dev/small) or "postgresql" (enterprise HA)

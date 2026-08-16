@@ -41,6 +41,35 @@ GDPR_REQUESTS_DB = Path(os.getenv("BULWARK_GDPR_REQUESTS_DB", "data/gdpr/request
 RETENTION_SECURITY_EVENTS_DAYS = int(os.getenv("BULWARK_RETENTION_SECURITY_DAYS", "90"))
 RETENTION_AUDIT_DAYS = int(os.getenv("BULWARK_RETENTION_AUDIT_DAYS", "365"))
 
+# ─── Art.30 controller identity ─────────────────────────────────────────────────
+# Art.30 records MUST name the data controller and (where applicable) the DPO.
+# These are deployment-specific and therefore configurable. When unset we return
+# an explicit "not configured" marker instead of a made-up value, so an operator
+# can see at a glance that a mandatory Art.30 field still needs to be populated
+# rather than being lulled by a plausible-looking placeholder.
+_GDPR_NOT_CONFIGURED = "NOT CONFIGURED — set via deployment configuration"
+
+
+def controller_identity() -> dict:
+    """Return the configurable Art.30 controller / DPO identity block.
+
+    Env vars (all optional):
+      BULWARK_GDPR_CONTROLLER          — controller legal entity name
+      BULWARK_GDPR_CONTROLLER_CONTACT  — controller contact (address / email)
+      BULWARK_GDPR_DPO_CONTACT         — Data Protection Officer contact
+    """
+    controller = os.getenv("BULWARK_GDPR_CONTROLLER", "").strip()
+    controller_contact = os.getenv("BULWARK_GDPR_CONTROLLER_CONTACT", "").strip()
+    dpo_contact = os.getenv("BULWARK_GDPR_DPO_CONTACT", "").strip()
+    configured = bool(controller and dpo_contact)
+    return {
+        "controller": controller or _GDPR_NOT_CONFIGURED,
+        "controller_contact": controller_contact or _GDPR_NOT_CONFIGURED,
+        "dpo_contact": dpo_contact or _GDPR_NOT_CONFIGURED,
+        "configured": configured,
+    }
+
+
 # Redis keys for GDPR salt storage
 REDIS_GDPR_SALT_PREFIX = "bulwark:gdpr:salt:"
 REDIS_GDPR_REQUESTS_KEY = "bulwark:gdpr:requests"

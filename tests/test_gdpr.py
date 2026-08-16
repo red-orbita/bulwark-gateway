@@ -475,6 +475,75 @@ class TestDataInventory:
             assert "pseudonymizable" in item
 
 
+# ─── Controller Identity Tests (Art.30 mandatory fields) ─────────────────────
+
+
+class TestControllerIdentity:
+    """Test configurable Art.30 controller / DPO identity block.
+
+    Art.30(1)(a) requires the RoPA to name the controller (and its DPO where
+    applicable). These are deployment-specific and must be honestly reported
+    as "not configured" when unset rather than fabricated.
+    """
+
+    def test_unset_reports_not_configured(self, monkeypatch):
+        """With no env vars, every field must flag NOT CONFIGURED (not a placeholder)."""
+        from admin.services.gdpr import controller_identity
+
+        monkeypatch.delenv("BULWARK_GDPR_CONTROLLER", raising=False)
+        monkeypatch.delenv("BULWARK_GDPR_CONTROLLER_CONTACT", raising=False)
+        monkeypatch.delenv("BULWARK_GDPR_DPO_CONTACT", raising=False)
+
+        identity = controller_identity()
+
+        assert identity["configured"] is False
+        assert "NOT CONFIGURED" in identity["controller"]
+        assert "NOT CONFIGURED" in identity["controller_contact"]
+        assert "NOT CONFIGURED" in identity["dpo_contact"]
+
+    def test_fully_configured(self, monkeypatch):
+        """When all mandatory fields are set, they are returned verbatim and configured=True."""
+        from admin.services.gdpr import controller_identity
+
+        monkeypatch.setenv("BULWARK_GDPR_CONTROLLER", "Acme Corp GmbH")
+        monkeypatch.setenv("BULWARK_GDPR_CONTROLLER_CONTACT", "privacy@acme.example")
+        monkeypatch.setenv("BULWARK_GDPR_DPO_CONTACT", "dpo@acme.example")
+
+        identity = controller_identity()
+
+        assert identity["configured"] is True
+        assert identity["controller"] == "Acme Corp GmbH"
+        assert identity["controller_contact"] == "privacy@acme.example"
+        assert identity["dpo_contact"] == "dpo@acme.example"
+
+    def test_partial_config_is_not_considered_configured(self, monkeypatch):
+        """Controller without a DPO contact must NOT be reported as fully configured."""
+        from admin.services.gdpr import controller_identity
+
+        monkeypatch.setenv("BULWARK_GDPR_CONTROLLER", "Acme Corp GmbH")
+        monkeypatch.delenv("BULWARK_GDPR_CONTROLLER_CONTACT", raising=False)
+        monkeypatch.delenv("BULWARK_GDPR_DPO_CONTACT", raising=False)
+
+        identity = controller_identity()
+
+        assert identity["configured"] is False
+        assert identity["controller"] == "Acme Corp GmbH"
+        assert "NOT CONFIGURED" in identity["dpo_contact"]
+
+    def test_whitespace_only_values_treated_as_unset(self, monkeypatch):
+        """Whitespace-only env vars must not satisfy the mandatory-field requirement."""
+        from admin.services.gdpr import controller_identity
+
+        monkeypatch.setenv("BULWARK_GDPR_CONTROLLER", "   ")
+        monkeypatch.setenv("BULWARK_GDPR_DPO_CONTACT", "\t")
+
+        identity = controller_identity()
+
+        assert identity["configured"] is False
+        assert "NOT CONFIGURED" in identity["controller"]
+        assert "NOT CONFIGURED" in identity["dpo_contact"]
+
+
 # ─── Request History Tests ────────────────────────────────────────────────────
 
 

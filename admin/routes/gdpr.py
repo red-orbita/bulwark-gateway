@@ -18,6 +18,7 @@ from ..services.auth_service import require_role
 from ..services.gdpr import (
     PseudonymizeRequest,
     ExportRequest,
+    controller_identity,
     get_gdpr_service,
 )
 
@@ -152,10 +153,13 @@ async def get_data_inventory(
     """
     gdpr = get_gdpr_service()
     inventory = await gdpr.data_inventory()
+    identity = controller_identity()
     return {
         "processing_activities": inventory,
-        "controller": "Bulwark Gateway operator (see deployment config)",
-        "dpo_contact": "Configured by deploying organization",
+        "controller": identity["controller"],
+        "controller_contact": identity["controller_contact"],
+        "dpo_contact": identity["dpo_contact"],
+        "controller_configured": identity["configured"],
         "last_updated": "auto-generated",
         "total_categories": len(inventory),
     }

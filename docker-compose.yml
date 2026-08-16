@@ -157,6 +157,12 @@ services:
       BULWARK_REDIS_URL: redis://redis:6379/0
       BULWARK_REDIS_PASSWORD_FILE: /run/secrets/redis_password
       BULWARK_IOC_PATH: /app/config/iocs.json
+      # GDPR Art.30 controller / DPO identity (RoPA mandatory fields).
+      # Leave unset to have the data-inventory endpoint honestly report
+      # "NOT CONFIGURED" instead of a fabricated placeholder.
+      BULWARK_GDPR_CONTROLLER: ${BULWARK_GDPR_CONTROLLER:-}
+      BULWARK_GDPR_CONTROLLER_CONTACT: ${BULWARK_GDPR_CONTROLLER_CONTACT:-}
+      BULWARK_GDPR_DPO_CONTACT: ${BULWARK_GDPR_DPO_CONTACT:-}
       # Cookie security: set to "false" for HTTP-only local dev (no TLS termination)
       BULWARK_HTTPS: "${BULWARK_HTTPS:-false}"
       # Enrichment DB (read-only access to proxy's replay DB)
