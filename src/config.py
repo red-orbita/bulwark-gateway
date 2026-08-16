@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     fail_mode: str = "closed"  # "closed" (block on error) or "open" (allow on error)
     cors_origins: List[str] = []  # Empty = no CORS; set explicitly via BULWARK_CORS_ORIGINS
 
+    # Output filter — opt-in PII redaction (high-false-positive types, off by default)
+    # Emails and phone numbers are frequently *legitimate* agent output (e.g. a
+    # support bot returning a contact address). Redacting them unconditionally
+    # breaks those flows, so redaction is gated behind explicit config. A tenant
+    # with stricter requirements (e.g. healthcare) can enable it globally here.
+    redact_email: bool = False   # Redact email addresses in LLM output ([REDACTED:EMAIL])
+    redact_phone: bool = False   # Redact phone numbers in LLM output ([REDACTED:PHONE])
+
     # Multi-tenancy (Tier 2: Pod-level isolation)
     # Comma-separated list of tenant IDs this pod is allowed to serve.
     # Empty = serve all tenants (shared pool mode).

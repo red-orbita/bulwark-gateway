@@ -54,7 +54,10 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 input_guardrail = InputGuardrail()
-output_filter = OutputFilter()
+output_filter = OutputFilter(
+    redact_email=settings.redact_email,
+    redact_phone=settings.redact_phone,
+)
 
 
 def _resolve_vault_key(tenant_id: str, provider: str) -> str | None:

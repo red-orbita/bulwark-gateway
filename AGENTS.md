@@ -605,6 +605,8 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_LOG_LEVEL` | str | `INFO` | Python log level |
 | `BULWARK_FAIL_MODE` | str | `closed` | `closed` (block on error) or `open` |
 | `BULWARK_CORS_ORIGINS` | List | `[]` | Allowed CORS origins |
+| `BULWARK_REDACT_EMAIL` | bool | `false` | Opt-in: redact emails in LLM output (`[REDACTED:EMAIL]`) |
+| `BULWARK_REDACT_PHONE` | bool | `false` | Opt-in: redact phone numbers in LLM output (`[REDACTED:PHONE]`) |
 | `BULWARK_WEBHOOK_ALERT_URLS` | str | `""` | Webhook URLs for alerts |
 
 ### Docker Secrets Support

@@ -137,7 +137,7 @@ _MARKDOWN_TABLE_CREDENTIAL_RE = re.compile(
 
 # === PII Patterns ===
 PII_PATTERNS: list[tuple[re.Pattern, str, str | None]] = [
-    (re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "EMAIL", None),
+    (re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "EMAIL", "[REDACTED:EMAIL]"),
     # Credit cards: with dashes, spaces, OR dots (Visa, MC, Amex, Discover)
     (
         re.compile(r"\b4[0-9]{3}[-\s.]?[0-9]{4}[-\s.]?[0-9]{4}[-\s.]?[0-9]{4}\b"),
@@ -160,7 +160,7 @@ PII_PATTERNS: list[tuple[re.Pattern, str, str | None]] = [
         "[REDACTED:CC]",
     ),
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "SSN", "[REDACTED:SSN]"),
-    (re.compile(r"\+\d{1,3}[-.\s]?\d{6,14}"), "PHONE", None),
+    (re.compile(r"\+\d{1,3}[-.\s]?\d{6,14}"), "PHONE", "[REDACTED:PHONE]"),
     # V5: IBAN (International Bank Account Number)
     (
         re.compile(r"\b[A-Z]{2}\d{2}\s?[A-Z0-9]{4}\s?(?:\d{4}\s?){2,7}\d{1,4}\b"),
@@ -518,12 +518,19 @@ class OutputFilter:
         redact_internal: bool = False,
         detect_injection: bool = True,
         custom_patterns: list | None = None,
+        redact_email: bool = False,
+        redact_phone: bool = False,
     ):
         self.redact_pii = redact_pii
         self.redact_secrets = redact_secrets
         self.redact_internal = redact_internal
         self.detect_injection = detect_injection
         self.custom_patterns = custom_patterns or []
+        # Opt-in redaction for high-false-positive PII types. Emails and phone
+        # numbers are frequently legitimate agent output (support contact info),
+        # so they are only redacted when explicitly enabled. Off by default.
+        self.redact_email = redact_email
+        self.redact_phone = redact_phone
 
     def inspect_and_redact(
         self, content: str, tenant_id: str = "", agent_id: str = ""
@@ -628,8 +635,17 @@ class OutputFilter:
         # 4. Check and redact PII
         if self.redact_pii:
             for pattern, name, replacement in PII_PATTERNS:
+                if replacement is None:
+                    continue
+                # Opt-in gating for high-false-positive PII types: emails and
+                # phone numbers are only redacted when explicitly enabled, since
+                # they are frequently legitimate agent output.
+                if name == "EMAIL" and not self.redact_email:
+                    continue
+                if name == "PHONE" and not self.redact_phone:
+                    continue
                 matches = pattern.findall(modified)
-                if matches and replacement:
+                if matches:
                     events.append(
                         SecurityEvent(
                             tenant_id=tenant_id,
