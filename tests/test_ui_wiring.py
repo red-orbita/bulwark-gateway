@@ -182,3 +182,36 @@ def test_ui_fetch_has_matching_route(page, line, method, path):
         f"{page}:{line} calls {method} {pretty} but no matching admin route exists "
         f"(broken UI→backend wiring)"
     )
+
+
+def test_ui_config_sections_are_real():
+    """UI writes to ``/admin/config/{section}`` must target a real section.
+
+    The parametrized wiring test above only proves the ``PUT /{section}`` route
+    exists — it cannot see that a *literal* section value (e.g. ``settings``) is
+    not one the ConfigManager accepts, which fails at runtime with HTTP 400. This
+    guards that regression class explicitly.
+    """
+    from admin.services.config_manager import SECTIONS
+
+    offenders: list[str] = []
+    for page, line, method, path in _UI_CALLS:
+        # Only PUT maps to the dynamic ``/admin/config/{section}`` write route;
+        # literal sub-routes (/validate, /onboarding-complete, /sections, ...)
+        # are POST/GET and must be excluded from section validation.
+        if method != "PUT":
+            continue
+        segs = path.strip("/").split("/")
+        if len(segs) == 3 and segs[0] == "admin" and segs[1] == "config":
+            section = segs[2]
+            if _WILD in section:
+                continue  # dynamic, cannot validate statically
+            if section not in SECTIONS:
+                offenders.append(f"{page}:{line} -> PUT /admin/config/{section}")
+
+    assert not offenders, (
+        "UI targets non-existent config section(s) (PUT will 400 at runtime): "
+        + "; ".join(offenders)
+        + f". Valid sections: {sorted(SECTIONS)}"
+    )
+

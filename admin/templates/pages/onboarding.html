@@ -92,16 +92,6 @@
                         <label class="sg-label">Rate Limit (requests/min)</label>
                         <input type="number" x-model.number="config.rate_limit" class="sg-input" min="1" max="10000">
                     </div>
-
-                    <div class="flex items-center justify-between p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                        <div>
-                            <p class="text-sm text-white">Enable Telemetry</p>
-                            <p class="text-xs text-gray-400">Collect metrics for dashboard and monitoring.</p>
-                        </div>
-                        <button @click="config.telemetry = !config.telemetry" class="sg-toggle" :class="config.telemetry && 'active'">
-                            <span class="sg-toggle-thumb"></span>
-                        </button>
-                    </div>
                 </div>
             </div>
 
@@ -213,7 +203,6 @@
                         <p class="text-xs text-gray-400 uppercase mb-1">Security</p>
                         <div class="flex gap-2">
                             <span class="sg-badge sg-badge-success">Password changed</span>
-                            <span class="sg-badge" :class="config.telemetry ? 'sg-badge-brand' : 'sg-badge-neutral'" x-text="config.telemetry ? 'Telemetry ON' : 'Telemetry OFF'"></span>
                         </div>
                     </div>
                 </div>
@@ -260,7 +249,6 @@ function onboardingWizard() {
             backend_url: 'http://host.docker.internal:8000',
             fail_mode: 'closed',
             rate_limit: 60,
-            telemetry: true,
             siem_transport: 'none',
             siem_host: '',
             siem_port: 514,
@@ -330,17 +318,30 @@ function onboardingWizard() {
                     body: JSON.stringify({ new_password: this.config.admin_password })
                 });
 
-                // 2. Apply settings
-                await fetch('/admin/config/settings', {
+                // 2. Apply settings. There is no "settings" config section; the
+                // fields live in the real sections proxy + rate_limiting, and
+                // each PUT /admin/config/{section} rejects fields outside it.
+                const proxyResp = await fetch('/admin/config/proxy', {
                     method: 'PUT',
                     headers,
                     body: JSON.stringify({
                         backend_url: this.config.backend_url,
-                        fail_mode: this.config.fail_mode,
-                        rate_limit_rpm: this.config.rate_limit,
-                        telemetry_enabled: this.config.telemetry
+                        fail_mode: this.config.fail_mode
                     })
                 });
+                if (!proxyResp.ok) {
+                    const detail = await proxyResp.text();
+                    throw new Error(`Backend config failed (HTTP ${proxyResp.status}): ${detail}`);
+                }
+                const rateResp = await fetch('/admin/config/rate_limiting', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({ rate_limit_rpm: this.config.rate_limit })
+                });
+                if (!rateResp.ok) {
+                    const detail = await rateResp.text();
+                    throw new Error(`Rate limit config failed (HTTP ${rateResp.status}): ${detail}`);
+                }
 
                 // 3. Toggle guardrail modules
                 const disabledModules = this.modules.filter(m => !m.enabled).map(m => m.id);
