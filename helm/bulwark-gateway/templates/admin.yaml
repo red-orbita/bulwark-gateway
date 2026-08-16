@@ -113,6 +113,18 @@ spec:
               mountPath: /app/plugins
             - name: tmp
               mountPath: /tmp
+          # Startup probe: the admin lifespan does real blocking work on cold
+          # start (PostgreSQL audit-chain restore + loading the full IOC DB, tens
+          # of thousands of entries) before uvicorn accepts connections. Give it
+          # up to 150s (30 x 5s) to finish before liveness/readiness take over,
+          # so a legitimately slow first boot is not mistaken for a hang.
+          startupProbe:
+            httpGet:
+              path: /admin/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /admin/health

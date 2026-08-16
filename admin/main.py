@@ -59,22 +59,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.user_store import get_user_store
     user_store = get_user_store()
     user_store.initialize()
-    # Eagerly seed admin-managed shared state at startup so the agents registry
-    # and IOC DB exist in the shared admin_data volume / admin-data PVC BEFORE
-    # the proxy reads them read-only. Both are lazy singletons whose __init__
-    # seeds from the image's config/ files (_ensure_writable_copy / _migrate_legacy);
-    # without this, agents.yaml is only written when the tenants UI is first opened,
-    # leaving the proxy with an empty registry on boot. Baked into the image so it
-    # applies identically to Docker Compose (depends_on: admin) and Helm (shared PVC).
+    # Eagerly seed the agents registry at startup so agents.yaml exists in the
+    # shared admin_data volume / admin-data PVC BEFORE the proxy reads it
+    # read-only. TenantManager is a lazy singleton whose __init__ seeds from the
+    # image's config/agents.yaml (_ensure_writable_copy); without this, agents.yaml
+    # is only written when the tenants UI is first opened, leaving the proxy with an
+    # empty registry on boot. Baked into the image so it applies identically to
+    # Docker Compose (depends_on: admin) and Helm (shared PVC).
+    #
+    # NOTE: the IOC DB is intentionally NOT seeded here — the feed scheduler below
+    # already calls get_ioc_store() during startup (feed_scheduler seeds from
+    # config/iocs.json). Loading it twice just re-parses a large file on the hot
+    # startup path and risks racing a concurrent writer during rolling updates.
+    #
     # Best-effort: a not-yet-writable volume must not crash the admin (the lazy
-    # singletons will retry on first request), so failures are logged, not fatal.
+    # singleton retries on first request), so failures are logged, not fatal.
     try:
         from .services.tenant_manager import get_tenant_manager
         get_tenant_manager()
-        from .services.ioc_store import get_ioc_store
-        get_ioc_store()
     except Exception as exc:  # noqa: BLE001 — startup seeding is best-effort
-        logger.warning("shared_state_seed_deferred error=%s", exc)
+        logger.warning("agents_seed_deferred error=%s", exc)
     # Start background feed scheduler
     from .services.feed_scheduler import get_feed_scheduler
     scheduler = get_feed_scheduler()
