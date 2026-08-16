@@ -2,7 +2,7 @@
 Per-tenant resource quota enforcement middleware.
 
 Prevents "noisy neighbor" problems in multi-tenancy by enforcing:
-  1. max_concurrent_requests — asyncio.Semaphore per tenant (per-process)
+  1. max_concurrent_requests — global in-flight limit (Redis; per-process fallback)
   2. max_tokens_per_day — Daily token budget tracked in Redis
   3. max_request_size_bytes — Maximum request payload size
   4. allowed_models — Model access control per tenant
@@ -12,9 +12,10 @@ Placement: AFTER AuthMiddleware (needs tenant_id), BEFORE guardrail pipeline.
 Degrades gracefully: falls back to in-memory if Redis unavailable.
 """
 
-import asyncio
 import json
-from datetime import datetime, timezone, timedelta
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import redis
@@ -174,6 +175,123 @@ class TokenBudgetTracker:
         return max(0, budget - used)
 
 
+# Atomic acquire: prune expired in-flight slots, count, and reserve one slot
+# only if under the limit — all in a single Redis round-trip so concurrent
+# pods cannot race past the limit (Redis executes Lua scripts atomically).
+#   KEYS[1] = concurrency key (sorted set: member -> start_timestamp)
+#   ARGV[1] = now, ARGV[2] = limit, ARGV[3] = member, ARGV[4] = stale_seconds,
+#   ARGV[5] = ttl_seconds
+# Returns 1 if the slot was acquired, 0 if the tenant is at its limit.
+_ACQUIRE_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local member = ARGV[3]
+local stale = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+redis.call('ZREMRANGEBYSCORE', key, 0, now - stale)
+if redis.call('ZCARD', key) >= limit then
+  return 0
+end
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, ttl)
+return 1
+"""
+
+
+class DistributedConcurrencyLimiter:
+    """Global per-tenant in-flight concurrency limiter.
+
+    Enforces ``max_concurrent_requests`` across ALL proxy replicas via a Redis
+    sorted set of in-flight request tokens (self-healing: tokens older than the
+    max request lifetime are pruned automatically, so a crashed pod never leaks
+    slots forever).
+
+    Falls back to a per-process ``asyncio.Semaphore`` when Redis is unavailable
+    — the same behaviour the middleware had before, but now that path is the
+    explicit *degraded* mode instead of the default. This closes the audit gap
+    where a limit of N was silently enforced as ``N × replica_count`` globally.
+    """
+
+    def __init__(self, redis_client: "Optional[redis.Redis]", stale_seconds: int):
+        self._redis = redis_client
+        self._stale = max(5, int(stale_seconds))
+        self._script = None
+        # Per-process fallback state (used when Redis is down).
+        self._local_counts: dict[str, int] = {}
+        if self._redis is not None:
+            try:
+                self._script = self._redis.register_script(_ACQUIRE_LUA)
+            except Exception:
+                self._redis = None
+
+    @property
+    def distributed(self) -> bool:
+        """True when limits are enforced globally (Redis), False when per-process."""
+        return self._redis is not None and self._script is not None
+
+    @staticmethod
+    def _key(tenant_id: str) -> str:
+        return f"bulwark:quota:concurrent:{tenant_id}"
+
+    def try_acquire(self, tenant_id: str, limit: int) -> tuple[bool, Optional[str]]:
+        """Attempt to reserve a concurrency slot.
+
+        Returns ``(acquired, token)``. ``token`` must be passed back to
+        :meth:`release` when the request finishes.
+        """
+        if self.distributed:
+            try:
+                member = uuid.uuid4().hex
+                ok = self._script(  # type: ignore[misc]
+                    keys=[self._key(tenant_id)],
+                    args=[time.time(), limit, member, self._stale, self._stale],
+                )
+                if int(ok) == 1:
+                    return True, f"r:{member}"
+                return False, None
+            except Exception:
+                # Redis hiccup — degrade to per-process accounting for this call.
+                logger.debug("concurrency limiter redis error, using local fallback")
+
+        used = self._local_counts.get(tenant_id, 0)
+        if used >= limit:
+            return False, None
+        self._local_counts[tenant_id] = used + 1
+        return True, "l:"
+
+    def release(self, tenant_id: str, token: Optional[str]) -> None:
+        """Release a previously acquired slot. Safe to call with ``None``."""
+        if not token:
+            return
+        if token.startswith("r:"):
+            if self._redis is not None:
+                try:
+                    self._redis.zrem(self._key(tenant_id), token[2:])
+                    return
+                except Exception:
+                    return
+            return
+        # Local fallback token.
+        self._local_counts[tenant_id] = max(
+            0, self._local_counts.get(tenant_id, 0) - 1
+        )
+
+    def in_flight(self, tenant_id: str) -> int:
+        """Best-effort current in-flight count (for informational headers)."""
+        if self.distributed:
+            try:
+                key = self._key(tenant_id)
+                self._redis.zremrangebyscore(  # type: ignore[union-attr]
+                    key, 0, time.time() - self._stale
+                )
+                return int(self._redis.zcard(key))  # type: ignore[union-attr]
+            except Exception:
+                return 0
+        return self._local_counts.get(tenant_id, 0)
+
+
+
 class QuotaMiddleware(BaseHTTPMiddleware):
     """Per-tenant resource quota enforcement.
 
@@ -183,22 +301,27 @@ class QuotaMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app):
         super().__init__(app)
-        self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._token_tracker = TokenBudgetTracker(
             redis_url=getattr(settings, "redis_url", None)
         )
-        self._concurrent_counts: dict[str, int] = {}  # tenant → active requests
-
-    def _get_semaphore(self, tenant_id: str, limit: int) -> asyncio.Semaphore:
-        """Get or create per-tenant concurrency semaphore."""
-        if tenant_id not in self._semaphores:
-            self._semaphores[tenant_id] = asyncio.Semaphore(limit)
-            self._concurrent_counts[tenant_id] = 0
-        return self._semaphores[tenant_id]
+        # Global concurrency limiter shares the token tracker's Redis client so
+        # we don't open a second connection pool. Stale window = backend timeout
+        # plus a margin, so a crashed pod's in-flight slots self-expire.
+        _timeout = float(getattr(settings, "backend_timeout", 120.0) or 120.0)
+        self._concurrency = DistributedConcurrencyLimiter(
+            redis_client=self._token_tracker._redis,
+            stale_seconds=int(_timeout) + 30,
+        )
+        if not self._concurrency.distributed:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Concurrency quota using per-process fallback (no Redis). "
+                "max_concurrent_requests is enforced PER REPLICA, not globally."
+            )
 
     def _concurrent_remaining(self, tenant_id: str, limit: int) -> int:
-        """Calculate remaining concurrent request slots."""
-        used = self._concurrent_counts.get(tenant_id, 0)
+        """Calculate remaining concurrent request slots (best-effort)."""
+        used = self._concurrency.in_flight(tenant_id)
         return max(0, limit - used)
 
     async def dispatch(self, request: Request, call_next):
@@ -313,19 +436,13 @@ class QuotaMiddleware(BaseHTTPMiddleware):
                     },
                 )
 
-        # --- Check 4: Concurrent request limit ---
-        semaphore: asyncio.Semaphore | None = None
+        # --- Check 4: Concurrent request limit (enforced globally via Redis) ---
+        conc_token: Optional[str] = None
         if quota.max_concurrent_requests > 0:
-            semaphore = self._get_semaphore(tenant_id, quota.max_concurrent_requests)
-            # SECURITY (L-02 fix): Use atomic try-acquire pattern instead of
-            # separate check + acquire (TOCTOU race condition).
-            try:
-                acquired = semaphore._value > 0  # noqa: SLF001
-                if not acquired:
-                    raise asyncio.QueueEmpty()  # Signal: limit reached
-                # Attempt non-blocking acquire (atomic with check)
-                await asyncio.wait_for(semaphore.acquire(), timeout=0.001)
-            except (asyncio.TimeoutError, asyncio.QueueEmpty):
+            acquired, conc_token = self._concurrency.try_acquire(
+                tenant_id, quota.max_concurrent_requests
+            )
+            if not acquired:
                 concurrent_remaining = self._concurrent_remaining(
                     tenant_id, quota.max_concurrent_requests
                 )
@@ -348,10 +465,6 @@ class QuotaMiddleware(BaseHTTPMiddleware):
                     },
                 )
 
-            self._concurrent_counts[tenant_id] = (
-                self._concurrent_counts.get(tenant_id, 0) + 1
-            )
-
         try:
             # Forward request
             response = await call_next(request)
@@ -367,12 +480,9 @@ class QuotaMiddleware(BaseHTTPMiddleware):
             return response
 
         finally:
-            # Release concurrency semaphore
-            if semaphore is not None:
-                semaphore.release()
-                self._concurrent_counts[tenant_id] = max(
-                    0, self._concurrent_counts.get(tenant_id, 0) - 1
-                )
+            # Release the global concurrency slot.
+            if conc_token is not None:
+                self._concurrency.release(tenant_id, conc_token)
 
     async def _track_token_usage(
         self, response: Response, tenant_id: str, quota: TenantQuotaConfig
