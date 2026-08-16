@@ -750,6 +750,11 @@ class ToolPolicyEngine:
             # Normalize Unicode dot leaders/confusables to ASCII
             value_normalized = unicodedata.normalize("NFKC", value_normalized)
             value_normalized = value_normalized.replace("\u2024", ".").replace("\uff0e", ".")
+            # Strip trailing/leading whitespace, control chars and null bytes so that
+            # anchored ($) patterns cannot be evaded with e.g. "secrets/id_rsa "
+            # or trailing dots/slashes ("id_rsa." == "id_rsa" on some filesystems).
+            value_normalized = re.sub(r"[\s\x00-\x1f\x7f]+", "", value_normalized)
+            value_normalized = value_normalized.rstrip(". ")
             # Strip glob wildcards — expand * to match any suffix
             # For "/etc/shado*" we want to check "/etc/shadow" etc.
             # Strategy: if contains glob, also check without trailing partial + wildcard

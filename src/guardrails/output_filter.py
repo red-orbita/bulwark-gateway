@@ -321,6 +321,25 @@ DANGEROUS_OUTPUT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "shell_named_pipe_revshell",
         "critical",
     ),
+    # PENTEST fix: process substitution pipe-to-shell — bash <(curl ...),
+    # . <(curl ...), source <(wget ...). Functionally identical to curl|sh but
+    # avoids the literal pipe so the earlier rule does not fire.
+    (
+        re.compile(
+            r"\b(?:ba|z|k|d)?sh\b\s*<\(\s*(?:curl|wget|fetch)\b"
+            r"|(?:^|[;&|]|\bsource\b|(?<!\S)\.)\s*<\(\s*(?:curl|wget|fetch)\b",
+            re.IGNORECASE,
+        ),
+        "shell_procsub_pipe_exec",
+        "critical",
+    ),
+    # PENTEST fix: socat reverse/bind shell — socat TCP:host:port EXEC:/bin/sh,
+    # socat ... SYSTEM:..., socat TCP-LISTEN:... EXEC:...
+    (
+        re.compile(r"\bsocat\b.{0,80}(?:EXEC|SYSTEM|SHELL)\s*[:=]", re.IGNORECASE | re.DOTALL),
+        "shell_socat_revshell",
+        "critical",
+    ),
     # SQL injection patterns in output
     (
         re.compile(
@@ -402,7 +421,8 @@ DANGEROUS_OUTPUT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
     # benign HTTP client code. GAP-02 remediation.
     (
         re.compile(
-            r"(?:urlopen|requests\.(?:get|post)|urllib\.request|http\.client|socket\.)"
+            r"(?:urlopen|requests\.(?:get|post)|urllib\.request|urllib3|http\.client|httpx\.|"
+            r"aiohttp|session\.(?:get|post|put|request)|socket\.)"
             r".{0,120}"
             r"(?:os\.uname\(\)|socket\.gethostname\(\)|getpass\.getuser\(\)|platform\.node\(\)|os\.getlogin\(\))",
             re.IGNORECASE | re.DOTALL,
@@ -414,7 +434,8 @@ DANGEROUS_OUTPUT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         re.compile(
             r"(?:os\.uname\(\)|socket\.gethostname\(\)|getpass\.getuser\(\)|platform\.node\(\)|os\.getlogin\(\))"
             r".{0,120}"
-            r"(?:urlopen|requests\.(?:get|post)|urllib\.request|http\.client|socket\.)",
+            r"(?:urlopen|requests\.(?:get|post)|urllib\.request|urllib3|http\.client|httpx\.|"
+            r"aiohttp|session\.(?:get|post|put|request)|socket\.)",
             re.IGNORECASE | re.DOTALL,
         ),
         "code_exfil_beacon_rev",
@@ -474,6 +495,17 @@ _UNICODE_TAGS_RE = re.compile(r"[\U000E0000-\U000E007F]")
 _BIDI_RE = re.compile(r"[\u200E\u200F\u202A-\u202E\u2066-\u2069]")
 # Zero-width characters in suspicious quantities
 _ZERO_WIDTH_RE = re.compile(r"[\u200B\u200C\u200D\uFEFF]{3,}")
+# Invisible/zero-width characters (single) — stripped before secret matching so a
+# credential cannot be split with an inserted zero-width char (e.g. "AKIA\u200bIOSF...").
+_INVISIBLE_STRIP_RE = re.compile(
+    r"[\u200b-\u200f\u2028-\u202f\u2060-\u2069\ufeff\u00ad\u180e\ufff9-\ufffb"
+    r"\U000E0000-\U000E007F\uFE00-\uFE0F\U000E0100-\U000E01EF]"
+)
+
+
+def _strip_invisible(text: str) -> str:
+    """Remove invisible/zero-width/tag chars used to evade secret regex."""
+    return _INVISIBLE_STRIP_RE.sub("", text)
 
 
 class OutputFilter:
@@ -528,7 +560,10 @@ class OutputFilter:
             # Fullwidth characters (e.g. ｓｋ-proj-) and other Unicode equivalents
             # bypass ASCII regex patterns. We normalize a scanning copy while
             # preserving the original for non-secret content.
-            scan_content = unicodedata.normalize("NFKC", modified)
+            # PENTEST fix: NFKC does NOT remove zero-width/invisible chars, so a
+            # secret split with e.g. U+200B ("AKIA\u200bIOSF...") still bypasses.
+            # Strip invisibles on the scan copy too.
+            scan_content = _strip_invisible(unicodedata.normalize("NFKC", modified))
             for pattern, name, replacement in REDACTION_PATTERNS:
                 matches = pattern.findall(scan_content)
                 if matches:
@@ -560,9 +595,13 @@ class OutputFilter:
                             # If the secret is in fullwidth/Unicode form, normalize
                             # the entire output so the replacement actually works.
                             modified = pattern.sub(replacement, modified)
-                            if modified != pattern.sub(replacement, modified):
-                                # Secret was in non-ASCII form; normalize output
-                                modified = unicodedata.normalize("NFKC", modified)
+                            # PENTEST fix: if the secret evaded the sub above via
+                            # fullwidth/zero-width chars, it still matches on a
+                            # normalized+invisible-stripped copy. Rebuild modified
+                            # from that cleaned form so the redaction actually sticks
+                            # (otherwise verdict=REDACT but the secret leaks).
+                            if pattern.search(_strip_invisible(unicodedata.normalize("NFKC", modified))):
+                                modified = _strip_invisible(unicodedata.normalize("NFKC", modified))
                                 modified = pattern.sub(replacement, modified)
                             scan_content = pattern.sub(replacement, scan_content)
                         verdict = Verdict.REDACT

@@ -36,6 +36,32 @@ INJECTION_PATTERNS: list[Pattern] = [
         "critical",
         "DAN/jailbreak persona injection",
     ),
+    # PENTEST fix: "developer mode" / "unrestricted mode" jailbreak — a common
+    # framing that asks the model to switch into an unfiltered operating mode.
+    Pattern(
+        re.compile(
+            r"(enable|activate|switch\s+to|enter|turn\s+on|go\s+into)\b.{0,30}"
+            r"(unrestricted|unfiltered|unlocked|jailbroken|god|sudo|root|dev(?:eloper)?)\s*mode",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK,
+        "critical",
+        "Developer/unrestricted mode jailbreak",
+    ),
+    # PENTEST fix: "forget/ignore ... directives" — the existing override rule did
+    # not include the noun "directives" (nor "guardrails"), letting phrasings like
+    # "forget all prior directives" slip through.
+    Pattern(
+        re.compile(
+            r"(forget|ignore|disregard|discard|drop|override|bypass|abandon)\s+"
+            r"(all\s+|any\s+|your\s+)?(prior|previous|earlier|above|preceding|the)?\s*"
+            r"(directives?|guardrails?|guidelines?|safeguards?|restrictions?|constraints?)",
+            re.I,
+        ),
+        ThreatCategory.PROMPT_INJECTION,
+        "high",
+        "Instruction override (forget/ignore directives/guardrails)",
+    ),
     Pattern(
         re.compile(r"(system\s*prompt|system\s*message|initial\s*instructions?)\s*[:=]", re.I),
         ThreatCategory.PROMPT_INJECTION,
@@ -1173,6 +1199,49 @@ TOOL_ABUSE_PATTERNS: list[Pattern] = [
         ThreatCategory.PROMPT_INJECTION,
         "high",
         "Covert-action / secrecy directive (silently / en silencio)",
+    ),
+    # PENTEST fix: process substitution as a curl|sh equivalent — `bash <(curl ...)`,
+    # `. <(wget ...)`, `source <(curl ...)`. Avoids the literal pipe so the earlier
+    # pipe-to-shell rule does not fire, yet is functionally identical.
+    Pattern(
+        re.compile(
+            r"\b(?:ba|z|k|d)?sh\b\s*<\(\s*(?:curl|wget|fetch)\b"
+            r"|(?:^|[;&|]|\bsource\b|(?<!\S)\.)\s*<\(\s*(?:curl|wget|fetch)\b",
+            re.I,
+        ),
+        ThreatCategory.TOOL_ABUSE,
+        "critical",
+        "Process-substitution pipe-to-shell (bash <(curl ...))",
+    ),
+    # PENTEST fix: socat reverse/bind shell — `socat TCP:host:port EXEC:/bin/sh`,
+    # `socat ... SYSTEM:...`, `socat TCP-LISTEN:... EXEC:...`.
+    Pattern(
+        re.compile(r"\bsocat\b.{0,80}(?:EXEC|SYSTEM|SHELL)\s*[:=]", re.I | re.S),
+        ThreatCategory.REVERSE_SHELL,
+        "critical",
+        "socat reverse/bind shell (EXEC/SYSTEM)",
+    ),
+    # PENTEST fix: Python reverse shell one-liner — socket connect + dup2/pty/
+    # subprocess to /bin/sh. Requires both a socket call and a shell hand-off to
+    # keep benign networking code from matching.
+    Pattern(
+        re.compile(
+            r"socket\.socket\s*\(.{0,200}(?:\.connect\s*\(|SOCK_STREAM)"
+            r".{0,200}(?:pty\.spawn|os\.dup2|subprocess\.(?:call|Popen|run)|/bin/(?:ba)?sh)",
+            re.I | re.S,
+        ),
+        ThreatCategory.REVERSE_SHELL,
+        "critical",
+        "Python socket reverse shell one-liner",
+    ),
+    Pattern(
+        re.compile(
+            r"(?:import\s+pty|from\s+pty\s+import).{0,120}pty\.spawn\s*\(\s*['\"]?/bin/(?:ba)?sh",
+            re.I | re.S,
+        ),
+        ThreatCategory.REVERSE_SHELL,
+        "critical",
+        "Python pty.spawn shell escalation",
     ),
 ]
 
