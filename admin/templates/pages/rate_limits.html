@@ -133,7 +133,7 @@
 
     <!-- Add/Edit Modal -->
     <div x-show="showAdd" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @keydown.escape.window="showAdd = false">
-        <div class="sg-card w-full max-w-md" @click.away="showAdd = false">
+        <div class="sg-card w-full max-w-md overflow-y-auto" style="max-height:90vh" @click.away="showAdd = false">
             <h3 class="text-lg font-medium text-white mb-4" x-text="editMode ? 'Edit Rate Limit' : 'Add Tenant Override'"></h3>
             <div class="space-y-4">
                 <div>

@@ -78,7 +78,7 @@
 
     <!-- ======== MODAL: Create Tenant ======== -->
     <div x-show="showCreate" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.stop>
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">New Tenant</h3>
                 <button @click="showCreate = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
@@ -247,7 +247,7 @@
 
     <!-- ======== MODAL: Global Defaults ======== -->
     <div x-show="showDefaultsModal" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.stop>
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Global Agent Defaults</h3>
                 <button @click="showDefaultsModal = false" class="text-gray-400 hover:text-white text-xl">&times;</button>

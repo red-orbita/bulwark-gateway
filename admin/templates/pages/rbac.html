@@ -323,7 +323,7 @@
 
     <!-- Create/Edit User Modal -->
     <div x-show="showModal" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showModal = false">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl" @click.away="showModal = false">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:90vh" @click.away="showModal = false">
             <div class="p-5 border-b border-gray-700">
                 <h3 class="text-lg font-semibold" x-text="editing ? 'Edit User' : 'Create New User'"></h3>
                 <p class="text-xs text-gray-400 mt-1" x-text="editing ? 'Update user properties' : 'Add a new user to the system'"></p>
@@ -375,7 +375,7 @@
 
     <!-- Reset Password Modal -->
     <div x-show="showResetPw" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showResetPw = false">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl overflow-y-auto" style="max-height:90vh">
             <div class="p-5 border-b border-gray-700">
                 <h3 class="text-lg font-semibold">Reset Password</h3>
                 <p class="text-xs text-gray-400 mt-1">Set a new password for <span class="text-cyan-400 font-medium" x-text="resetPwUser?.username"></span></p>
@@ -400,7 +400,7 @@
 
     <!-- Delete Confirm Modal -->
     <div x-show="showDeleteConfirm" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showDeleteConfirm = false">
-        <div class="bg-gray-800 rounded-xl border border-red-800/50 w-full max-w-sm shadow-2xl">
+        <div class="bg-gray-800 rounded-xl border border-red-800/50 w-full max-w-sm shadow-2xl overflow-y-auto" style="max-height:90vh">
             <div class="p-5 border-b border-gray-700">
                 <h3 class="text-lg font-semibold text-red-400">Delete User</h3>
             </div>
@@ -417,7 +417,7 @@
 
     <!-- MFA Setup Modal -->
     <div x-show="mfaUri" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="mfaUri = null; mfaSecret = null">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl text-center">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl text-center overflow-y-auto" style="max-height:90vh">
             <div class="p-5 border-b border-gray-700">
                 <h3 class="text-lg font-semibold">MFA Setup</h3>
                 <p class="text-xs text-gray-400 mt-1">Scan the QR code with your authenticator app</p>
@@ -439,7 +439,7 @@
 
     <!-- Create Role Modal -->
     <div x-show="showCreateRole" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showCreateRole = false">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.away="showCreateRole = false">
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.away="showCreateRole = false">
             <div class="p-5 border-b border-gray-700">
                 <h3 class="text-lg font-semibold">Create New Role</h3>
                 <p class="text-xs text-gray-400 mt-1">Define a custom role with specific permissions</p>

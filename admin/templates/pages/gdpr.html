@@ -252,7 +252,7 @@
 
     <!-- Erasure Confirmation Modal -->
     <div x-show="erase.modal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" @keydown.escape.window="erase.modal = false">
-        <div class="sg-card w-full max-w-md border-red-900/40" @click.away="erase.modal = false">
+        <div class="sg-card w-full max-w-md border-red-900/40 overflow-y-auto" style="max-height:90vh" @click.away="erase.modal = false">
             <div class="flex items-center gap-2 pb-3" style="border-bottom: 1px solid rgba(239,68,68,0.2);">
                 <i data-lucide="alert-octagon" class="w-5 h-5 text-red-400"></i>
                 <h3 class="text-base font-semibold text-white">Confirm Irreversible Erasure</h3>

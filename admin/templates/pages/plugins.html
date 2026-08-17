@@ -118,7 +118,7 @@
 
     <!-- ======== MODAL: Install Plugin ======== -->
     <div x-show="showInstall" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl" @click.stop>
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Install Plugin</h3>
                 <button @click="showInstall = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
@@ -180,7 +180,7 @@
 
     <!-- ======== MODAL: Create Template (Scaffold) ======== -->
     <div x-show="showScaffold" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl" @click.stop>
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Create Plugin Template</h3>
                 <button @click="showScaffold = false" class="text-gray-400 hover:text-white text-xl">&times;</button>

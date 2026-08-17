@@ -147,7 +147,7 @@
 
     <!-- Detail modal -->
     <div x-show="detail.modal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" @keydown.escape.window="detail.modal = false">
-        <div class="sg-card w-full max-w-2xl" @click.away="detail.modal = false">
+        <div class="sg-card w-full max-w-2xl overflow-y-auto" style="max-height:90vh" @click.away="detail.modal = false">
             <div class="flex items-center gap-2 pb-3" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
                 <i data-lucide="list-tree" class="w-5 h-5 text-cyan-400"></i>
                 <h3 class="text-base font-semibold text-white">Agent Breakdown — <span class="font-mono text-cyan-300" x-text="detail.tenant_id"></span></h3>
