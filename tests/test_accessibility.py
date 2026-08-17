@@ -477,5 +477,48 @@ def test_client_paginated_users_table_does_not_fake_sort():
     )
 
 
+# ─── Visual-identity guards (avoid the "generic AI console" look) ─────────────
+
+# Emoji / pictograph blocks — deliberately excludes the arrows block (U+2190–21FF)
+# so typographic arrows like "→" in copy remain allowed.
+_EMOJI = re.compile(
+    "["
+    "\U0001f300-\U0001faff"  # symbols, pictographs, emoticons, transport, extended-A
+    "\U00002600-\U000027bf"  # misc symbols + dingbats (✓ ✗ ⚙ ✈ …)
+    "\U00002b00-\U00002bff"  # misc symbols and arrows (stars, etc.)
+    "\U0000fe00-\U0000fe0f"  # variation selectors (emoji presentation)
+    "\U00002190-\U000021ff"  # arrows — checked separately, allowed only in text
+    "]"
+)
+
+
+def test_templates_use_vector_icons_not_emoji():
+    """Emoji rendered as UI icons are the hallmark of a generic, machine-made
+    console. The admin UI ships a vendored Lucide icon set; every glyph must come
+    from it. Typographic arrows (→ ←) are tolerated inside copy but nothing else."""
+    offenders: list[str] = []
+    allowed_arrows = {"\u2192", "\u2190", "\u2194", "\u21b5", "\u21d2"}
+    for page in PAGES_DIR.glob("*.html"):
+        for lineno, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
+            hits = [c for c in _EMOJI.findall(line) if c not in allowed_arrows]
+            if hits:
+                offenders.append(f"{page.name}:{lineno} {hits!r}")
+    assert not offenders, "Emoji used as iconography (use Lucide instead):\n" + "\n".join(
+        offenders
+    )
+
+
+def test_notification_channel_icons_are_lucide_names():
+    """The notification channel glyphs must resolve to Lucide icon names, not the
+    emoji set that previously shipped (💬 🟦 📟 …)."""
+    src = (PAGES_DIR / "notifications.html").read_text(encoding="utf-8")
+    assert ':data-lucide="typeIcon(' in src, (
+        "notification channel icon must render via <i :data-lucide=...>, not emoji"
+    )
+    assert "slack: 'slack'" in src and "email: 'mail'" in src, (
+        "typeIcon must map channel types to Lucide icon names"
+    )
+
+
 
 

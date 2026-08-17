@@ -279,7 +279,7 @@
                                                 <svg class="w-4 h-4 text-gray-500 transition-transform duration-200" :class="open ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                                                 </svg>
-                                                <span x-text="group.icon" class="text-base"></span>
+                                                <i :data-lucide="group.icon" class="w-4 h-4 text-gray-400" aria-hidden="true"></i>
                                                 <span x-text="group.name"></span>
                                             </h4>
                                             <span class="text-[11px] text-gray-500 font-mono"
@@ -525,31 +525,31 @@ function accessControlManager() {
         showCreateRole: false,
         newRoleForm: { name: '', label: '', description: '', clone_from: '' },
         permissionGroups: [
-            { name: 'Policies', icon: '📋', permissions: [
+            { name: 'Policies', icon: 'file-lock', permissions: [
                 { id: 'policies:read', label: 'View policies' },
                 { id: 'policies:write', label: 'Create and edit policies' },
                 { id: 'policies:delete', label: 'Delete policies' },
                 { id: 'policies:apply', label: 'Apply policies to tenants' },
             ]},
-            { name: 'Guardrails', icon: '🛡', permissions: [
+            { name: 'Guardrails', icon: 'shield-alert', permissions: [
                 { id: 'guardrails:read', label: 'View guardrail patterns and config' },
                 { id: 'guardrails:write', label: 'Create, edit, and toggle patterns' },
                 { id: 'guardrails:test', label: 'Run sandbox tests' },
             ]},
-            { name: 'Threat Intelligence', icon: '🔍', permissions: [
+            { name: 'Threat Intelligence', icon: 'search', permissions: [
                 { id: 'iocs:read', label: 'View IOC feeds and indicators' },
                 { id: 'iocs:write', label: 'Manage IOC feeds and sources' },
             ]},
-            { name: 'SIEM & Monitoring', icon: '📡', permissions: [
+            { name: 'SIEM & Monitoring', icon: 'radio-tower', permissions: [
                 { id: 'siem:read', label: 'View SIEM configuration' },
                 { id: 'siem:write', label: 'Configure SIEM transport and endpoints' },
                 { id: 'siem:test', label: 'Test SIEM connectivity' },
             ]},
-            { name: 'Audit & Compliance', icon: '📜', permissions: [
+            { name: 'Audit & Compliance', icon: 'scroll-text', permissions: [
                 { id: 'audit:read', label: 'View audit logs' },
                 { id: 'audit:export', label: 'Export audit data (CSV/JSON)' },
             ]},
-            { name: 'System Administration', icon: '⚙', permissions: [
+            { name: 'System Administration', icon: 'settings', permissions: [
                 { id: 'admin:read', label: 'Access admin portal' },
                 { id: 'users:manage', label: 'Manage users and roles' },
                 { id: 'orchestrator:trigger', label: 'Trigger orchestrator tasks (Red Team, QA)' },

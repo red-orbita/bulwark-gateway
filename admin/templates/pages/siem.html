@@ -91,7 +91,10 @@
     <div x-show="pageTestResult" x-cloak class="sg-card">
         <h3 class="text-sm font-semibold text-white mb-2">Connection Test Result</h3>
         <div class="p-3 rounded-lg text-sm" :class="pageTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
-            <p x-text="pageTestResult?.success ? '✓ Connection successful' : '✗ ' + (pageTestResult?.error || 'Connection failed')"></p>
+            <div class="flex items-start gap-2">
+                <i :data-lucide="pageTestResult?.success ? 'check-circle-2' : 'x-circle'" class="w-4 h-4 mt-0.5 shrink-0" :class="pageTestResult?.success ? 'text-green-400' : 'text-red-400'" aria-hidden="true"></i>
+                <p x-text="pageTestResult?.success ? 'Connection successful' : (pageTestResult?.error || 'Connection failed')"></p>
+            </div>
             <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (pageTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (pageTestResult?.platform || '-')"></p>
         </div>
     </div>
@@ -208,7 +211,10 @@
                 </div>
                 <!-- Test result INSIDE the modal -->
                 <div x-show="modalTestResult" class="p-3 rounded-lg text-sm" :class="modalTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
-                    <p x-text="modalTestResult?.success ? '✓ Connection successful' : '✗ ' + (modalTestResult?.error || 'Connection failed')"></p>
+                    <div class="flex items-start gap-2">
+                        <i :data-lucide="modalTestResult?.success ? 'check-circle-2' : 'x-circle'" class="w-4 h-4 mt-0.5 shrink-0" :class="modalTestResult?.success ? 'text-green-400' : 'text-red-400'" aria-hidden="true"></i>
+                        <p x-text="modalTestResult?.success ? 'Connection successful' : (modalTestResult?.error || 'Connection failed')"></p>
+                    </div>
                     <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (modalTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (modalTestResult?.platform || '-')"></p>
                 </div>
                 <!-- Buttons -->

@@ -25,9 +25,9 @@
             <div class="sg-card">
                 <div class="flex items-start justify-between">
                     <div class="flex items-center gap-3">
-                        <div class="w-10 h-10 rounded-lg flex items-center justify-center text-lg"
+                        <div class="w-10 h-10 rounded-lg flex items-center justify-center"
                              :class="typeColor(ch.type)">
-                            <span x-text="typeIcon(ch.type)"></span>
+                            <i :data-lucide="typeIcon(ch.type)" class="w-5 h-5" aria-hidden="true"></i>
                         </div>
                         <div>
                             <h3 class="font-semibold text-white text-sm" x-text="ch.name"></h3>
@@ -425,9 +425,9 @@ function notificationManager() {
         formTypeChanged() { /* Reset type-specific fields if needed */ },
 
         typeIcon(t) {
-            const icons = { slack: '💬', teams: '🟦', discord: '🎮', pagerduty: '📟',
-                           opsgenie: '🔔', telegram: '✈️', google_chat: '💚', email: '📧', generic: '🔗' };
-            return icons[t] || '🔔';
+            const icons = { slack: 'slack', teams: 'users', discord: 'message-circle', pagerduty: 'siren',
+                           opsgenie: 'bell-ring', telegram: 'send', google_chat: 'message-square', email: 'mail', generic: 'webhook' };
+            return icons[t] || 'bell-ring';
         },
 
         typeColor(t) {
