@@ -46,6 +46,15 @@ spec:
       {{- end }}
       serviceAccountName: bulwark-proxy
       automountServiceAccountToken: false
+      # DNS: lower ndots so fully-qualified in-cluster names (backend/redis
+      # "*.svc.cluster.local", 4 dots) resolve as absolute on the first query
+      # instead of being treated as relative under the default ndots:5 (which
+      # appends every search domain first and can add multi-second per-connection
+      # latency on clusters with slow/leaked search domains).
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "{{ .Values.proxy.dnsNdots | default "2" }}"
       {{- if .Values.proxy.scheduling.podAntiAffinity.enabled }}
       affinity:
         podAntiAffinity:

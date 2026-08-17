@@ -50,7 +50,8 @@ admin:
   resources:
     limits:
       memory: 512Mi
-      cpu: "1"
+      # bcrypt login verify needs a full core briefly; 2 cores avoids throttling.
+      cpu: "2"
     requests:
       memory: 256Mi
       cpu: 250m

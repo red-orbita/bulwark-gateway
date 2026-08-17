@@ -28,6 +28,10 @@ backend:
 proxy:
   # -- Number of replicas (minimum for HPA)
   replicas: 2
+  # -- DNS ndots for the pod resolver. Lower than the k8s default (5) so that
+  # fully-qualified in-cluster service DNS names resolve as absolute on the first
+  # query (avoids multi-second search-domain expansion per new connection).
+  dnsNdots: "2"
   image:
     # -- Proxy container image repository
     repository: bulwark-gateway-proxy
@@ -180,6 +184,10 @@ proxy:
 admin:
   # -- Number of replicas
   replicas: 1
+  # -- DNS ndots for the pod resolver. Lower than the k8s default (5) so the
+  # PostgreSQL/Redis service DSNs (*.svc.cluster.local) resolve as absolute on the
+  # first query instead of paying multi-second search-domain expansion per login.
+  dnsNdots: "2"
   image:
     # -- Admin container image repository
     repository: bulwark-gateway-admin
@@ -193,13 +201,16 @@ admin:
     limits:
       # -- Memory limit
       memory: 256Mi
-      # -- CPU limit
-      cpu: 500m
+      # -- CPU limit. Must allow a full core briefly: bcrypt (cost 12) password
+      # verification is single-threaded and CPU-bound (~250ms on one core). A
+      # low limit (e.g. 500m) causes cgroup throttling that stretches each login
+      # verify ~10x (measured: 2.4s per verify, ~9s per login). Keep at 2 cores.
+      cpu: "2"
     requests:
       # -- Memory request
       memory: 64Mi
       # -- CPU request
-      cpu: 100m
+      cpu: 250m
   # -- JWT token expiry (hours)
   jwtExpiryHours: 8
   # -- CORS allowed origins (comma-separated, empty = all)

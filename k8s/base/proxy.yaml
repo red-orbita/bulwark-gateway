@@ -32,6 +32,12 @@ spec:
     spec:
       serviceAccountName: bulwark-proxy
       automountServiceAccountToken: false
+      # Resolve FQDN service names (backend/redis *.svc.cluster.local) as absolute
+      # on the first query; avoids search-domain expansion under default ndots:5.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
       securityContext:
         runAsNonRoot: true
         runAsUser: 999

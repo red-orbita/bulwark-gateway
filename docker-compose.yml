@@ -277,9 +277,12 @@ services:
       - egress-net  # Required for host port publishing
     deploy:
       resources:
+        # bcrypt (cost 12) login verification is single-threaded CPU-bound
+        # (~250ms on one core). A 0.5 CPU cap causes cgroup throttling that
+        # stretches each login ~10x (~9s). Allow a full core burst (2.0).
         limits:
           memory: ${ADMIN_MEMORY_LIMIT:-256M}
-          cpus: "${ADMIN_CPU_LIMIT:-0.5}"
+          cpus: "${ADMIN_CPU_LIMIT:-2.0}"
 
   # ── Redis (Rate Limiting + State) ───────────────────────
   redis:

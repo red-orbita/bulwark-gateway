@@ -34,10 +34,12 @@ admin:
   resources:
     limits:
       memory: 256Mi
-      cpu: 500m
+      # bcrypt (cost 12) login verify is single-threaded CPU-bound (~250ms on
+      # one core). A 500m cap causes cgroup throttling → ~9s logins. Allow 2 cores.
+      cpu: "2"
     requests:
       memory: 128Mi
-      cpu: 100m
+      cpu: 250m
 
 # Redis — external managed instance for production
 redis:

@@ -29,6 +29,12 @@ spec:
     spec:
       serviceAccountName: bulwark-admin
       automountServiceAccountToken: false
+      # Resolve FQDN service DSNs (*.svc.cluster.local) as absolute on the first
+      # query; avoids ~6s search-domain expansion per login under default ndots:5.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
@@ -51,10 +57,13 @@ spec:
           resources:
             limits:
               memory: 768Mi
-              cpu: "1000m"
+              # bcrypt (cost 12) login verify is single-threaded CPU-bound
+              # (~250ms/core). Sub-core caps cause throttling → multi-second
+              # logins. Allow 2 cores for burst + concurrent logins.
+              cpu: "2"
             requests:
               memory: 384Mi
-              cpu: "200m"
+              cpu: "250m"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
