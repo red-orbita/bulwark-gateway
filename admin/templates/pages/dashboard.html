@@ -180,7 +180,7 @@
                     <i data-lucide="users" class="w-4 h-4 text-purple-400"></i>
                     <h3 class="text-sm font-semibold text-white">Tenant Activity</h3>
                 </div>
-                <button @click="loadTenantUsage()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <button @click="loadTenantUsage()" aria-label="Refresh tenant usage" title="Refresh" class="sg-btn sg-btn-ghost sg-btn-sm">
                     <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
                 </button>
             </div>
@@ -224,7 +224,7 @@
                 <p class="sg-error-title">Couldn't load tenant usage</p>
                 <p class="sg-error-desc" x-text="tenantsError"></p>
                 <div class="sg-error-action">
-                    <button @click="loadTenantUsage()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <button @click="loadTenantUsage()" aria-label="Refresh tenant usage" title="Refresh" class="sg-btn sg-btn-ghost sg-btn-sm">
                         <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
                     </button>
                 </div>
@@ -297,7 +297,7 @@
                     <i data-lucide="shield-alert" class="w-4 h-4 text-red-400"></i>
                     <h3 class="text-sm font-semibold text-white">Recent Blocked Attacks</h3>
                 </div>
-                <button @click="loadBlocks()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <button @click="loadBlocks()" aria-label="Refresh recent blocks" title="Refresh" class="sg-btn sg-btn-ghost sg-btn-sm">
                     <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
                 </button>
             </div>
@@ -335,7 +335,7 @@
                 <p class="sg-error-title">Couldn't load recent blocks</p>
                 <p class="sg-error-desc" x-text="blocksError"></p>
                 <div class="sg-error-action">
-                    <button @click="loadBlocks()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <button @click="loadBlocks()" aria-label="Refresh recent blocks" title="Refresh" class="sg-btn sg-btn-ghost sg-btn-sm">
                         <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
                     </button>
                 </div>

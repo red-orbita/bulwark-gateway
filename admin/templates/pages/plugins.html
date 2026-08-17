@@ -140,7 +140,10 @@
             <div x-show="installTab === 'upload'" class="p-6 space-y-4">
                 <p class="text-xs text-gray-400">Upload a <code class="text-cyan-400">.zip</code> or <code class="text-cyan-400">.tar.gz</code> archive containing a valid plugin (must include <code class="text-cyan-400">bulwark-plugin.yaml</code>).</p>
                 <div class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-cyan-500/50 transition-colors cursor-pointer"
+                     role="button" tabindex="0" aria-label="Upload plugin archive"
                      @click="$refs.fileInput.click()"
+                     @keydown.enter.prevent="$refs.fileInput.click()"
+                     @keydown.space.prevent="$refs.fileInput.click()"
                      @dragover.prevent="dragOver = true"
                      @dragleave="dragOver = false"
                      @drop.prevent="handleDrop($event)"

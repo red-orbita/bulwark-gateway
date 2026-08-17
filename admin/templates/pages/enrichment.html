@@ -13,7 +13,7 @@
             <span class="text-xs px-2.5 py-1 rounded-full font-medium"
                   :class="status.enabled ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-gray-700 text-gray-400 border border-gray-600'"
                   x-text="status.enabled ? 'Pipeline Active' : 'Pipeline Disabled'"></span>
-            <button @click="loadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+            <button @click="loadAll()" aria-label="Refresh enrichment data" title="Refresh" class="sg-btn sg-btn-ghost sg-btn-sm">
                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
             </button>
         </div>
@@ -155,10 +155,10 @@
                             </div>
                         </div>
                         <div x-show="regexFilter === 'pending'" class="flex gap-1 shrink-0">
-                            <button @click="reviewCandidate(c.id, 'approve')" class="sg-btn sg-btn-success sg-btn-sm !px-2 !py-1">
+                            <button @click="reviewCandidate(c.id, 'approve')" aria-label="Approve candidate" title="Approve" class="sg-btn sg-btn-success sg-btn-sm !px-2 !py-1">
                                 <i data-lucide="check" class="w-3.5 h-3.5"></i>
                             </button>
-                            <button @click="reviewCandidate(c.id, 'reject')" class="sg-btn sg-btn-ghost sg-btn-sm !px-2 !py-1 hover:!text-red-400">
+                            <button @click="reviewCandidate(c.id, 'reject')" aria-label="Reject candidate" title="Reject" class="sg-btn sg-btn-ghost sg-btn-sm !px-2 !py-1 hover:!text-red-400">
                                 <i data-lucide="x" class="w-3.5 h-3.5"></i>
                             </button>
                         </div>

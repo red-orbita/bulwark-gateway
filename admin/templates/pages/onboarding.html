@@ -44,7 +44,7 @@
                         <p class="text-xs text-gray-500 mb-1">Change the default admin password to something strong.</p>
                         <div class="relative">
                             <input :type="showPassword ? 'text' : 'password'" x-model="config.admin_password" class="sg-input pr-10" placeholder="New admin password">
-                            <button @click="showPassword = !showPassword" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">
+                            <button @click="showPassword = !showPassword" :aria-label="showPassword ? 'Hide password' : 'Show password'" type="button" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">
                                 <i :data-lucide="showPassword ? 'eye-off' : 'eye'" class="w-4 h-4"></i>
                             </button>
                         </div>

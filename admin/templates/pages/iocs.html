@@ -117,10 +117,10 @@
                             </td>
                             <td class="text-right">
                                 <div class="flex items-center justify-end gap-1">
-                                    <button @click="editIoc(ioc)" class="sg-btn sg-btn-secondary sg-btn-sm">
+                                    <button @click="editIoc(ioc)" aria-label="Edit IOC" title="Edit" class="sg-btn sg-btn-secondary sg-btn-sm">
                                         <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                                     </button>
-                                    <button @click="deleteIoc(ioc)" class="sg-btn sg-btn-danger sg-btn-sm">
+                                    <button @click="deleteIoc(ioc)" aria-label="Delete IOC" title="Delete" class="sg-btn sg-btn-danger sg-btn-sm">
                                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                     </button>
                                 </div>
@@ -195,10 +195,10 @@
                                     <button @click="triggerFeed(feed)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Run now">
                                         <i data-lucide="play" class="w-3.5 h-3.5"></i>
                                     </button>
-                                    <button @click="editFeed(feed)" class="sg-btn sg-btn-secondary sg-btn-sm">
+                                    <button @click="editFeed(feed)" aria-label="Edit feed" title="Edit" class="sg-btn sg-btn-secondary sg-btn-sm">
                                         <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                                     </button>
-                                    <button @click="deleteFeed(feed)" class="sg-btn sg-btn-danger sg-btn-sm">
+                                    <button @click="deleteFeed(feed)" aria-label="Delete feed" title="Delete" class="sg-btn sg-btn-danger sg-btn-sm">
                                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                     </button>
                                 </div>

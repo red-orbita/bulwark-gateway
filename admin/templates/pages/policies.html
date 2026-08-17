@@ -112,7 +112,7 @@
                     </div>
                     <h3 class="text-base font-semibold text-white" x-text="editingPolicy ? 'Edit Policy' : 'Create Policy'"></h3>
                 </div>
-                <button @click="showCreate=false; editingPolicy=null" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors">
+                <button @click="showCreate=false; editingPolicy=null" aria-label="Close dialog" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors">
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
@@ -238,7 +238,7 @@
                         <p class="text-[11px] text-gray-500 font-mono" x-text="versionsPolicy?.name"></p>
                     </div>
                 </div>
-                <button @click="closeVersions()" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors">
+                <button @click="closeVersions()" aria-label="Close dialog" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors">
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>

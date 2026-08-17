@@ -643,5 +643,85 @@ def test_all_data_tables_use_the_design_system_table_class():
     assert not offenders, "raw tables must adopt .sg-table:\n" + "\n".join(offenders)
 
 
+# ─── Icon-only controls carry an accessible name (WCAG 4.1.2) ────────────────
+
+# A <button> or <a> whose ONLY child is a single Lucide icon (no text, no
+# x-text) is invisible to screen readers unless it carries an accessible name.
+# This regex matches exactly that shape so the guard is exhaustive across every
+# page — it catches new unlabelled icon buttons the moment they are added.
+_ICON_ONLY_CONTROL = re.compile(
+    r"<(?P<tag>button|a)(?P<attrs>[^>]*)>\s*"
+    r"<i\b[^>]*?:?data-lucide[^>]*>\s*</i>\s*"
+    r"</(?P=tag)>",
+    re.DOTALL,
+)
+
+
+def _has_accessible_name(attrs: str) -> bool:
+    # aria-label / :aria-label (dynamic) / title / aria-labelledby all provide a name.
+    return bool(re.search(r'(?::?aria-label|title|aria-labelledby)\s*=', attrs))
+
+
+def test_all_icon_only_controls_have_accessible_names():
+    """WCAG 4.1.2 — every icon-only button/link across the admin pages (and the
+    shared shell) must expose an accessible name. Regression guard for the sweep
+    that labelled modal-close, refresh, and row-action icon buttons."""
+    offenders: list[str] = []
+    targets = list(PAGES_DIR.glob("*.html")) + [BASE_HTML]
+    for page in targets:
+        src = page.read_text(encoding="utf-8")
+        for m in _ICON_ONLY_CONTROL.finditer(src):
+            if not _has_accessible_name(m.group("attrs")):
+                lineno = src.count("\n", 0, m.start()) + 1
+                snippet = re.sub(r"\s+", " ", m.group(0))[:100]
+                offenders.append(f"{page.name}:{lineno} {snippet}")
+    assert not offenders, (
+        "Icon-only controls missing an accessible name (add aria-label/title):\n"
+        + "\n".join(offenders)
+    )
+
+
+# ─── Interactive non-button elements are keyboard operable (WCAG 2.1.1) ───────
+
+
+def test_interactive_divs_are_keyboard_operable():
+    """A <div> that activates behaviour on @click must also be reachable and
+    operable by keyboard (role=button + tabindex + a key handler). Guards the
+    two enhancement widgets that are not native buttons: the evaluation result
+    row and the plugin upload dropzone."""
+    cases = [
+        ("evaluation.html", "expandedRow = expandedRow === idx"),
+        ("plugins.html", "$refs.fileInput.click()"),
+    ]
+    for page, action in cases:
+        src = (PAGES_DIR / page).read_text(encoding="utf-8")
+        # locate the interactive div block that owns the @click action
+        m = re.search(r"<div\b[^>]*@click=\"[^\"]*"
+                      + re.escape(action) + r"[^\"]*\"[^>]*>", src, re.DOTALL)
+        assert m, f"{page}: interactive div for {action!r} not found"
+        block = m.group(0)
+        assert 'role="button"' in block, f"{page}: interactive div needs role=button"
+        assert 'tabindex="0"' in block, f"{page}: interactive div needs tabindex=0"
+        assert "@keydown.enter" in block, f"{page}: interactive div needs an enter handler"
+
+
+def test_profile_chip_has_single_canonical_control():
+    """The sidebar profile chip previously carried three redundant open-profile
+    affordances (clickable avatar div, clickable name div, gear button). The two
+    non-semantic clickable divs are removed; the labelled gear button is the one
+    keyboard-accessible control."""
+    src = BASE_HTML.read_text(encoding="utf-8")
+    # the avatar/name text is presentational now — no click handlers on those divs
+    assert 'flex-1 min-w-0 cursor-pointer' not in src, (
+        "profile name div must not be a non-semantic clickable"
+    )
+    # the real control remains: a labelled icon button
+    assert re.search(
+        r'<button[^>]*@click="showProfile = true; loadProfile\(\)"[^>]*title="Profile Settings"',
+        src,
+    ), "the canonical profile button must remain"
+
+
+
 
 
