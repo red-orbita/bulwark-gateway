@@ -30,8 +30,17 @@
                 <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));">
                     <i data-lucide="activity" class="w-[18px] h-[18px] text-emerald-400"></i>
                 </div>
-                <span class="sg-badge sg-badge-success">
-                    <i data-lucide="trending-down" class="w-3 h-3"></i> On target
+                <span class="sg-badge" x-cloak
+                      :class="latencyP95 === null ? 'sg-badge-neutral' : (latencyP95 <= latencyTarget ? 'sg-badge-success' : 'sg-badge-danger')">
+                    <template x-if="latencyP95 === null">
+                        <span class="flex items-center gap-1"><i data-lucide="minus" class="w-3 h-3"></i> No data</span>
+                    </template>
+                    <template x-if="latencyP95 !== null && latencyP95 <= latencyTarget">
+                        <span class="flex items-center gap-1"><i data-lucide="trending-down" class="w-3 h-3"></i> On target</span>
+                    </template>
+                    <template x-if="latencyP95 !== null && latencyP95 > latencyTarget">
+                        <span class="flex items-center gap-1"><i data-lucide="trending-up" class="w-3 h-3"></i> Above target</span>
+                    </template>
                 </span>
             </div>
             <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Latency P95</p>
@@ -423,6 +432,9 @@ function dashboardPage() {
         bypassRate: 0,
         fpRate: 0,
         circuitState: 'closed',
+        // Live P95 latency vs the stated target (see "Target ≤ 40ms"); null until first sample.
+        latencyP95: null,
+        latencyTarget: 40,
         taskId: null,
         taskOutput: null,
         // Live connection state (reflects the real SSE stream)
@@ -442,6 +454,7 @@ function dashboardPage() {
             this.loadTenantUsage();
             this.loadPersistedBypassRate();
             this._sparkIdx = 0;
+            this._latencyStatus = null;
             this.connectSSE();
             // Refresh the "updated Ns ago" label once per second
             setInterval(() => this.tickLastUpdate(), 1000);
@@ -552,6 +565,7 @@ function dashboardPage() {
             // Update sparklines
             const idx = this._sparkIdx % 20;
             if (data.latency_p95_ms !== undefined) {
+                this.latencyP95 = data.latency_p95_ms;
                 const pct = Math.min(100, (data.latency_p95_ms / 60) * 100);
                 this.sparklines.latency[idx] = pct;
             }
@@ -573,6 +587,15 @@ function dashboardPage() {
             // Update circuit state + operator-facing posture line (real state)
             this.circuitState = data.circuit_state || 'closed';
             this.postureLine = this.buildPostureLine(data);
+
+            // Re-render the latency badge icon only when its state actually flips.
+            const lat = this.latencyP95 === null
+                ? 'none'
+                : (this.latencyP95 <= this.latencyTarget ? 'ok' : 'over');
+            if (lat !== this._latencyStatus) {
+                this._latencyStatus = lat;
+                this.$nextTick(() => window.lucide && lucide.createIcons());
+            }
         },
 
         buildPostureLine(data) {

@@ -416,8 +416,18 @@ function policiesManager() {
         },
 
         async togglePolicy(policy) {
-            const resp = await fetch(`/admin/policies/${policy.name}/toggle`, { method: 'POST' });
-            if (resp.ok) { policy.active = !policy.active; showToast(`Policy ${policy.active ? 'enabled' : 'disabled'}`, 'success'); }
+            const previous = policy.active;
+            try {
+                const resp = await fetch(`/admin/policies/${policy.name}/toggle`, { method: 'POST' });
+                if (!resp.ok) throw new Error('toggle failed');
+                const data = await resp.json();
+                // Trust the server's authoritative state, not an optimistic flip.
+                policy.active = data.active;
+                showToast(`Policy ${policy.active ? 'enabled' : 'disabled'}`, 'success');
+            } catch(e) {
+                policy.active = previous;
+                showToast(`Failed to toggle policy '${policy.name}'`, 'error');
+            }
             this.$nextTick(() => lucide.createIcons());
         },
 

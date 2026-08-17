@@ -319,11 +319,15 @@ function onboardingWizard() {
                 const headers = { 'Content-Type': 'application/json' };
 
                 // 1. Change password
-                await fetch('/admin/auth/change-password', {
+                const pwResp = await fetch('/admin/auth/change-password', {
                     method: 'POST',
                     headers,
                     body: JSON.stringify({ new_password: this.config.admin_password })
                 });
+                if (!pwResp.ok) {
+                    const detail = await pwResp.text();
+                    throw new Error(`Password change failed (HTTP ${pwResp.status}): ${detail}`);
+                }
 
                 // 2. Apply settings. There is no "settings" config section; the
                 // fields live in the real sections proxy + rate_limiting, and
@@ -353,11 +357,15 @@ function onboardingWizard() {
                 // 3. Toggle guardrail modules
                 const disabledModules = this.modules.filter(m => !m.enabled).map(m => m.id);
                 if (disabledModules.length > 0) {
-                    await fetch('/admin/guardrails/bulk-toggle', {
+                    const grResp = await fetch('/admin/guardrails/bulk-toggle', {
                         method: 'POST',
                         headers,
                         body: JSON.stringify({ disable: disabledModules })
                     });
+                    if (!grResp.ok) {
+                        const detail = await grResp.text();
+                        throw new Error(`Guardrail setup failed (HTTP ${grResp.status}): ${detail}`);
+                    }
                 }
 
                 // 4. SIEM config (if not none)
@@ -401,10 +409,14 @@ function onboardingWizard() {
                 }
 
                 // 5. Mark onboarding complete
-                await fetch('/admin/config/onboarding-complete', {
+                const doneResp = await fetch('/admin/config/onboarding-complete', {
                     method: 'POST',
                     headers
                 });
+                if (!doneResp.ok) {
+                    const detail = await doneResp.text();
+                    throw new Error(`Finalization failed (HTTP ${doneResp.status}): ${detail}`);
+                }
 
                 // Redirect to dashboard
                 window.$toast?.('Setup complete! Redirecting...', 'success');

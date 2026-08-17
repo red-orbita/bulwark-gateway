@@ -460,12 +460,30 @@ function guardrailsManager() {
             }
         },
         async togglePattern(pattern) {
-            const resp = await fetch('/admin/guardrails/patterns/' + pattern.id + '/toggle', { method: 'POST' });
-            if (resp.ok) { pattern.enabled = !pattern.enabled; this.$nextTick(() => lucide.createIcons()); }
+            const previous = pattern.enabled;
+            try {
+                const resp = await fetch('/admin/guardrails/patterns/' + pattern.id + '/toggle', { method: 'POST' });
+                if (!resp.ok) throw new Error('toggle failed');
+                const data = await resp.json();
+                // Trust the server's authoritative state, not an optimistic flip.
+                pattern.enabled = data.enabled;
+                this.$nextTick(() => lucide.createIcons());
+            } catch(e) {
+                pattern.enabled = previous;
+                showToast('Failed to toggle pattern', 'error');
+            }
         },
         async updateParams() {
-            await fetch('/admin/guardrails/params', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.params) });
-            showToast('Parameters updated', 'success');
+            const previous = { ...this.params };
+            try {
+                const resp = await fetch('/admin/guardrails/params', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.params) });
+                if (!resp.ok) throw new Error('update failed');
+                this.params = await resp.json();
+                showToast('Parameters updated', 'success');
+            } catch(e) {
+                this.params = previous;
+                showToast('Failed to update parameters', 'error');
+            }
         },
         async runSandbox(layer) {
             this.sandboxResult = null;
@@ -513,10 +531,20 @@ function guardrailsManager() {
         },
         async savePattern() {
             if (!this.editingPattern) return;
-            Object.assign(this.editingPattern, this.editForm);
-            await fetch('/admin/guardrails/patterns/' + this.editingPattern.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.editForm) });
-            this.editingPattern = null;
-            showToast('Pattern saved', 'success');
+            try {
+                const resp = await fetch('/admin/guardrails/patterns/' + this.editingPattern.id, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.editForm) });
+                if (!resp.ok) {
+                    const e = await resp.json().catch(() => ({}));
+                    throw new Error(e.detail || `Save failed (${resp.status})`);
+                }
+                // Apply the server's authoritative pattern, not the local edit form.
+                Object.assign(this.editingPattern, await resp.json());
+                this.editingPattern = null;
+                showToast('Pattern saved', 'success');
+            } catch(e) {
+                // Keep the modal open so the operator can fix and retry.
+                showToast(e.message || 'Failed to save pattern', 'error');
+            }
         },
         async createPattern() {
             const resp = await fetch('/admin/guardrails/patterns', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.newForm) });
