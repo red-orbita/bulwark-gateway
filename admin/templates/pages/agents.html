@@ -227,7 +227,8 @@ function agentsManager() {
             else { const err = await resp.json(); showToast(err.detail || JSON.stringify(err), 'error'); }
         },
         async togglePause(a) {
-            await fetch(`/admin/agents/${a.tenant_id}/${a.agent_id}/pause`, { method: 'PATCH' });
+            const resp = await fetch(`/admin/agents/${a.tenant_id}/${a.agent_id}/pause`, { method: 'PATCH' });
+            if (!resp.ok) { showToast(`Failed to update '${a.agent_id}'`, 'error'); return; }
             await this.loadAgents();
         },
         async healthCheck(a) {

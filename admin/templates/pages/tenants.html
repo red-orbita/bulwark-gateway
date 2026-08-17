@@ -352,7 +352,8 @@ function tenantsManager() {
         // --- Table actions ---
         async togglePause(t) {
             const resp = await fetch(`/admin/tenants/${t.id}/pause`, { method: 'PATCH' });
-            if (resp.ok) await this.init();
+            if (resp.ok) { await this.init(); }
+            else { showToast(`Failed to update '${t.id}'`, 'error'); }
         },
         async deleteTenant(t) {
             const ok = await showConfirm('Delete Tenant', `Delete "${t.id}" and ALL its agents?`, 'Delete');

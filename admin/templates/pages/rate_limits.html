@@ -251,32 +251,34 @@ function rateLimitsPage() {
                     body: JSON.stringify(this.form),
                 });
                 if (!res.ok) {
-                    const err = await res.json();
-                    alert(err.detail || 'Save failed');
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Save failed', 'error');
                     return;
                 }
                 this.showAdd = false;
                 this.editMode = false;
                 this.form = { tenant_id: '', rpm: this.globalConfig.rate_limit_rpm };
                 await this.loadStatus();
+                showToast('Override saved', 'success');
             } catch (e) {
-                console.error('Save failed:', e);
+                showToast('Save failed', 'error');
             }
         },
 
         async removeTenant(tid) {
-            if (!confirm(`Remove rate limit override for "${tid}"?`)) return;
+            if (!await showConfirm('Remove override', `Remove rate limit override for "${tid}"?`, 'Remove')) return;
             try {
                 const res = await fetch(`/admin/rate-limits/tenant/${tid}`, { method: 'DELETE' });
                 if (!res.ok) throw new Error('Delete failed');
                 await this.loadStatus();
+                showToast('Override removed', 'success');
             } catch (e) {
-                console.error('Delete failed:', e);
+                showToast('Failed to remove override', 'error');
             }
         },
 
         async resetAll() {
-            if (!confirm('Remove ALL per-tenant overrides?')) return;
+            if (!await showConfirm('Remove all overrides', 'Remove ALL per-tenant overrides?', 'Remove all')) return;
             try {
                 const res = await fetch('/admin/rate-limits/reset', {
                     method: 'POST',
@@ -284,8 +286,9 @@ function rateLimitsPage() {
                 });
                 if (!res.ok) throw new Error('Reset failed');
                 await this.loadStatus();
+                showToast('All overrides removed', 'success');
             } catch (e) {
-                console.error('Reset failed:', e);
+                showToast('Failed to reset overrides', 'error');
             }
         },
     };

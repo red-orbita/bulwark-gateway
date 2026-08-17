@@ -304,15 +304,17 @@ function siemManager() {
         },
         editTransport(t) { this.modalTestResult = null; this.editingTransport = t; this.form = { ...t }; },
         async deleteTransport(t) {
-            if (!confirm(`Delete transport "${t.platform}" (${t.endpoint})?`)) return;
+            if (!await showConfirm('Delete transport', `Delete transport "${t.platform}" (${t.endpoint})?`, 'Delete')) return;
             const resp = await fetch(`/admin/siem/transport/${t.id}`, { method: 'DELETE' });
-            if (resp.ok) await this.init();
+            if (resp.ok) { await this.init(); showToast('Transport deleted', 'success'); }
+            else { showToast('Failed to delete transport', 'error'); }
         },
         async saveTransport() {
             const method = this.editingTransport ? 'PUT' : 'POST';
             const url = this.editingTransport ? `/admin/siem/transport/${this.editingTransport.id}` : '/admin/siem/transport';
             const resp = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.form) });
-            if (resp.ok) { this.showCreate = false; this.editingTransport = null; await this.init(); }
+            if (resp.ok) { this.showCreate = false; this.editingTransport = null; await this.init(); showToast('Transport saved', 'success'); }
+            else { const e = await resp.json().catch(() => ({})); showToast(e.detail || 'Failed to save transport', 'error'); }
         }
     };
 }

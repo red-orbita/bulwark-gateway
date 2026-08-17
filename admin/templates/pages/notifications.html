@@ -306,9 +306,10 @@ function notificationManager() {
         },
 
         async toggleChannel(id) {
-            await fetch(`/admin/notifications/channels/${id}/toggle`, {
+            const res = await fetch(`/admin/notifications/channels/${id}/toggle`, {
                 method: 'POST',
             });
+            if (!res.ok) { showToast('Failed to toggle channel', 'error'); return; }
             await this.loadChannels();
         },
 
@@ -325,11 +326,13 @@ function notificationManager() {
         },
 
         async deleteChannel(id) {
-            if (!confirm('Delete this notification channel?')) return;
-            await fetch(`/admin/notifications/channels/${id}`, {
+            if (!await showConfirm('Delete channel', 'Delete this notification channel?', 'Delete')) return;
+            const res = await fetch(`/admin/notifications/channels/${id}`, {
                 method: 'DELETE',
             });
+            if (!res.ok) { showToast('Failed to delete channel', 'error'); return; }
             await this.loadChannels();
+            showToast('Channel deleted', 'success');
         },
 
         async reloadChannels() {

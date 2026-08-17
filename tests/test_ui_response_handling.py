@@ -109,3 +109,42 @@ def test_dashboard_latency_badge_is_bound_to_real_p95():
     ) is None, "static hardcoded 'On target' badge must not be reintroduced"
     # updateMetrics must feed the real value into latencyP95.
     assert "this.latencyP95 = data.latency_p95_ms" in src
+
+
+# --- consistency: no native browser dialogs ----------------------------------
+
+_NATIVE_DIALOG = re.compile(r"(?<![.\w])(?:confirm|alert)\s*\(")
+# discovery.html contains the message text "shadow AI alert(s) detected" — not a dialog call.
+_DIALOG_ALLOW = {"discovery.html"}
+
+
+def test_no_native_browser_dialogs_in_admin_pages():
+    offenders = []
+    for path in sorted(_PAGES.glob("*.html")):
+        if path.name in _DIALOG_ALLOW:
+            continue
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if _NATIVE_DIALOG.search(line):
+                offenders.append(f"{path.name}:{i}: {line.strip()[:80]}")
+    assert not offenders, (
+        "Native confirm()/alert() found — use the app's showConfirm()/showToast() "
+        f"for consistent, themed dialogs: {offenders}"
+    )
+
+
+# --- low-severity toggles must surface failures ------------------------------
+
+
+def test_reload_after_post_toggles_error_toast_on_failure():
+    cases = [
+        ("agents.html", "togglePause"),
+        ("tenants.html", "togglePause"),
+        ("notifications.html", "toggleChannel"),
+    ]
+    for page, handler in cases:
+        body = _handler(_read(page), handler)
+        assert (".ok" in body) or ("resp.ok" in body) or ("res.ok" in body), (
+            f"{page}:{handler} must check the response status"
+        )
+        assert "'error'" in body, f"{page}:{handler} must error-toast on failure"
+

@@ -343,7 +343,7 @@ function enrichmentPage() {
 
         async reviewCandidate(id, action) {
             const label = action === 'approve' ? 'Approve' : 'Reject';
-            if (!confirm(`${label} this regex candidate?`)) return;
+            if (!await showConfirm(`${label} candidate`, `${label} this regex candidate?`, label)) return;
             try {
                 const res = await fetch('/admin/enrichment/regex-candidates/review', {
                     method: 'POST',
@@ -353,11 +353,12 @@ function enrichmentPage() {
                 if (res.ok) {
                     await this.loadCandidates();
                     await this.loadStats();
+                    showToast(`Candidate ${action === 'approve' ? 'approved' : 'rejected'}`, 'success');
                 } else {
-                    const err = await res.json();
-                    alert(err.detail || 'Review failed');
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Review failed', 'error');
                 }
-            } catch (e) { console.error('Review failed:', e); }
+            } catch (e) { showToast('Review failed', 'error'); }
         },
     };
 }

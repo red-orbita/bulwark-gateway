@@ -377,7 +377,7 @@ function mlScannersPage() {
         },
 
         async resetDefaults() {
-            if (!confirm('Reset all scanners to default settings?')) return;
+            if (!await showConfirm('Reset scanners', 'Reset all scanners to default settings?', 'Reset')) return;
             this.saving = true;
             try {
                 const res = await fetch('/admin/ml-scanners/reset', {
