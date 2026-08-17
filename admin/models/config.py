@@ -122,3 +122,4 @@ class SIEMTestResult(BaseModel):
     transport: str
     latency_ms: float
     error: Optional[str] = None
+    detail: Optional[str] = None  # what the probe actually verified (honest scope)

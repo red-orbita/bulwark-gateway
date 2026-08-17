@@ -93,7 +93,7 @@
         <div class="p-3 rounded-lg text-sm" :class="pageTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
             <div class="flex items-start gap-2">
                 <i :data-lucide="pageTestResult?.success ? 'check-circle-2' : 'x-circle'" class="w-4 h-4 mt-0.5 shrink-0" :class="pageTestResult?.success ? 'text-green-400' : 'text-red-400'" aria-hidden="true"></i>
-                <p x-text="pageTestResult?.success ? 'Connection successful' : (pageTestResult?.error || 'Connection failed')"></p>
+                <p x-text="pageTestResult?.success ? (pageTestResult?.detail || 'Connection successful') : (pageTestResult?.error || 'Connection failed')"></p>
             </div>
             <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (pageTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (pageTestResult?.platform || '-')"></p>
         </div>
@@ -213,7 +213,7 @@
                 <div x-show="modalTestResult" class="p-3 rounded-lg text-sm" :class="modalTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
                     <div class="flex items-start gap-2">
                         <i :data-lucide="modalTestResult?.success ? 'check-circle-2' : 'x-circle'" class="w-4 h-4 mt-0.5 shrink-0" :class="modalTestResult?.success ? 'text-green-400' : 'text-red-400'" aria-hidden="true"></i>
-                        <p x-text="modalTestResult?.success ? 'Connection successful' : (modalTestResult?.error || 'Connection failed')"></p>
+                        <p x-text="modalTestResult?.success ? (modalTestResult?.detail || 'Connection successful') : (modalTestResult?.error || 'Connection failed')"></p>
                     </div>
                     <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (modalTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (modalTestResult?.platform || '-')"></p>
                 </div>
@@ -260,8 +260,19 @@ function siemManager() {
             if (sr.ok) this.stats = await sr.json();
         },
         async toggleTransport(t) {
-            const resp = await fetch(`/admin/siem/transport/${t.id}/toggle`, { method: 'POST' });
-            if (resp.ok) t.enabled = !t.enabled;
+            const previous = t.enabled;
+            try {
+                const resp = await fetch(`/admin/siem/transport/${t.id}/toggle`, { method: 'POST' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    // Trust the server's authoritative state, not an optimistic flip.
+                    t.enabled = typeof data.enabled === 'boolean' ? data.enabled : !previous;
+                } else {
+                    t.enabled = previous;  // revert on failure
+                }
+            } catch (e) {
+                t.enabled = previous;  // revert on network error
+            }
         },
         async testExistingTransport(t) {
             this.pageTestResult = null;

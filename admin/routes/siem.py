@@ -270,7 +270,12 @@ async def test_siem_connection(
     config: dict = Body(...),
     user: TokenPayload = Depends(require_permission("siem:test")),
 ):
-    """Test SIEM connectivity (dry-run send)."""
+    """Test SIEM connectivity with a real probe (no fabricated results).
+
+    Wazuh runs a full API/analysisd check. Every other transport runs a real
+    connectivity probe appropriate to its protocol (HTTP request, TCP/TLS
+    handshake, UDP datagram, or filesystem writability) with measured latency.
+    """
     audit = get_audit_logger()
     platform = config.get("platform", config.get("transport_id", "unknown"))
     await audit.log(actor=user.sub, action="siem_test", resource_type="siem", resource_id=platform)
@@ -279,18 +284,257 @@ async def test_siem_connection(
     if platform == "wazuh":
         return await _test_wazuh_connection(config)
 
-    # Generic: simulate connection test
-    endpoint = config.get("endpoint", "")
-    if not endpoint:
-        return SIEMTestResult(success=False, platform=platform, transport="n/a", latency_ms=0.0, error="No endpoint specified")
+    return await _probe_transport(config)
 
+
+async def _probe_transport(config: dict) -> SIEMTestResult:
+    """Dispatch a real connectivity probe based on the transport type."""
+    ttype = config.get("transport_type", "http_rest")
+    platform = config.get("platform", "unknown")
+    endpoint = config.get("endpoint", "")
+
+    if not endpoint:
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype,
+            latency_ms=0.0, error="No endpoint specified",
+        )
+
+    if ttype == "file":
+        return _probe_file(config, platform, ttype)
+    if ttype == "http_rest":
+        return await _probe_http(config, platform, ttype)
+    if ttype == "syslog_udp":
+        return await _probe_udp(config, platform, ttype)
+    # syslog_tcp, syslog_tls, tcp_tls → TCP connect (TLS variants add a handshake)
+    use_tls = ttype in ("syslog_tls", "tcp_tls")
+    return await _probe_tcp(config, platform, ttype, use_tls=use_tls)
+
+
+# ─── Real connectivity probes ────────────────────────────────────────────────
+
+# Networks that remain blocked even for the authenticated admin connectivity
+# test. Loopback and link-local (cloud metadata lives at 169.254.169.254) are
+# always off-limits. RFC1918/CGNAT private ranges are intentionally NOT blocked
+# here: real SIEM collectors live on internal networks and this is an
+# authenticated, dedicated ``siem:test`` action. The export path
+# (create_transport) keeps the stricter full blocklist.
+_TEST_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _check_probe_host(hostname: str, port: int) -> str | None:
+    """Resolve a bare host and reject loopback/link-local targets. None = safe."""
+    hostname = (hostname or "").lower().rstrip(".")
+    if not hostname:
+        return "Empty hostname"
+    if hostname in _BLOCKED_HOSTNAMES:
+        return f"Blocked hostname: {hostname}"
+    if hostname.endswith(".internal"):
+        return f"Blocked internal hostname: {hostname}"
+    try:
+        addr_infos = socket.getaddrinfo(hostname, port or 0, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError):
+        return f"Cannot resolve hostname: {hostname}"
+    for info in addr_infos:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return f"Invalid IP: {ip_str}"
+        for net in _TEST_BLOCKED_NETWORKS:
+            if ip in net:
+                return f"IP {ip_str} in blocked range {net}"
+    return None
+
+
+def _endpoint_host_port(endpoint: str, default_port: int) -> tuple[str, int]:
+    """Extract (host, port) from an endpoint that may be a URL, host, or host:port."""
+    if "://" in endpoint:
+        parsed = urlparse(endpoint)
+        return (parsed.hostname or ""), (parsed.port or default_port)
+    # Bare "host" or "host:port" (ignore bracketed IPv6 for simplicity)
+    if endpoint.count(":") == 1 and not endpoint.startswith("["):
+        host, _, port_str = endpoint.partition(":")
+        return host, int(port_str) if port_str.isdigit() else default_port
+    return endpoint, default_port
+
+
+def _probe_file(config: dict, platform: str, ttype: str) -> SIEMTestResult:
+    """Verify the target NDJSON path's directory exists and is writable."""
+    import os
+    import time
+
+    path = config.get("endpoint", "")
+    start = time.time()
+    parent = os.path.dirname(path) or "."
+    latency = (time.time() - start) * 1000
+    if not os.path.isdir(parent):
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"Directory does not exist on gateway host: {parent}",
+        )
+    if not os.access(parent, os.W_OK):
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"Directory not writable on gateway host: {parent}",
+        )
     return SIEMTestResult(
-        success=True,
-        platform=platform,
-        transport=config.get("transport_type", "simulated"),
-        latency_ms=12.5,
-        error=None,
+        success=True, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+        detail=f"Directory writable: {parent}",
     )
+
+
+async def _probe_http(config: dict, platform: str, ttype: str) -> SIEMTestResult:
+    """Confirm the HTTP(S) endpoint is reachable (any HTTP response = up)."""
+    import time
+
+    import httpx
+
+    endpoint = config.get("endpoint", "")
+    default_port = int(config.get("port", 443) or 443)
+    host, port = _endpoint_host_port(endpoint, default_port)
+
+    ssrf_error = _check_probe_host(host, port)
+    if ssrf_error:
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=0.0,
+            error=f"Endpoint blocked (SSRF protection): {ssrf_error}",
+        )
+
+    if "://" in endpoint:
+        url = endpoint
+    else:
+        scheme = "http" if port in (80, 8080) else "https"
+        url = f"{scheme}://{host}:{port}"
+
+    start = time.time()
+    try:
+        async with httpx.AsyncClient(verify=True, timeout=10.0, follow_redirects=False) as client:
+            resp = await client.request("HEAD", url)
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=True, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            detail=f"Reachable (HTTP {resp.status_code})",
+        )
+    except httpx.ConnectTimeout:
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"Connection to {url} timed out",
+        )
+    except httpx.ConnectError as e:
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"Cannot connect to {url}: {e}",
+        )
+    except Exception as e:
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"Probe failed: {e}",
+        )
+
+
+async def _probe_tcp(config: dict, platform: str, ttype: str, *, use_tls: bool) -> SIEMTestResult:
+    """Open a TCP connection (and TLS handshake for TLS variants)."""
+    import asyncio
+    import contextlib
+    import ssl
+    import time
+
+    endpoint = config.get("endpoint", "")
+    default_port = int(config.get("port", 514) or 514)
+    host, port = _endpoint_host_port(endpoint, default_port)
+
+    ssrf_error = _check_probe_host(host, port)
+    if ssrf_error:
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=0.0,
+            error=f"Endpoint blocked (SSRF protection): {ssrf_error}",
+        )
+
+    ssl_context = None
+    if use_tls:
+        # Connectivity probe: confirm the port is open and TLS handshakes. The
+        # certificate is not verified here (collectors are often self-signed);
+        # the detail message states this explicitly so the result is honest.
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+    start = time.time()
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, ssl=ssl_context), timeout=10.0
+        )
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+        latency = (time.time() - start) * 1000
+        detail = (
+            f"TLS handshake OK to {host}:{port} (certificate not verified)"
+            if use_tls else f"TCP connect OK to {host}:{port}"
+        )
+        return SIEMTestResult(
+            success=True, platform=platform, transport=ttype,
+            latency_ms=round(latency, 2), detail=detail,
+        )
+    except asyncio.TimeoutError:
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"Connection to {host}:{port} timed out",
+        )
+    except (OSError, ssl.SSLError) as e:
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"Cannot connect to {host}:{port}: {e}",
+        )
+
+
+async def _probe_udp(config: dict, platform: str, ttype: str) -> SIEMTestResult:
+    """Send a datagram over UDP. Delivery is not confirmable (connectionless)."""
+    import socket as _socket
+    import time
+
+    endpoint = config.get("endpoint", "")
+    default_port = int(config.get("port", 514) or 514)
+    host, port = _endpoint_host_port(endpoint, default_port)
+
+    ssrf_error = _check_probe_host(host, port)
+    if ssrf_error:
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=0.0,
+            error=f"Endpoint blocked (SSRF protection): {ssrf_error}",
+        )
+
+    start = time.time()
+    sock = None
+    try:
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        sock.settimeout(5.0)
+        sock.connect((host, port))  # resolves + sets default peer
+        sock.send(b"<134>bulwark-gateway siem connectivity probe\n")
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=True, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            detail=f"UDP datagram sent to {host}:{port} — delivery not confirmable (connectionless)",
+        )
+    except (OSError, _socket.gaierror) as e:
+        latency = (time.time() - start) * 1000
+        return SIEMTestResult(
+            success=False, platform=platform, transport=ttype, latency_ms=round(latency, 2),
+            error=f"UDP probe to {host}:{port} failed: {e}",
+        )
+    finally:
+        if sock is not None:
+            sock.close()
 
 
 async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
