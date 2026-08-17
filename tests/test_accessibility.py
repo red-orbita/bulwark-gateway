@@ -441,5 +441,41 @@ def test_paginated_tables_do_not_fake_global_sort():
         )
 
 
+# ─── Management tables adopt the sg-table system ─────────────────────────────
+
+MANAGEMENT_TABLE_VIEWS = ("plugins", "tenants", "rbac")
+
+
+def test_management_tables_adopt_sticky_sg_table():
+    """plugins/tenants/rbac(users+sessions) must use the shared sg-table design
+    system with sticky headers — not hand-rolled or bare-scroll tables."""
+    for name in MANAGEMENT_TABLE_VIEWS:
+        src = (PAGES_DIR / f"{name}.html").read_text(encoding="utf-8")
+        assert "sg-table-scroll" in src, f"{name}: table not wrapped for sticky header"
+        assert 'class="sg-table' in src, f"{name}: table does not use sg-table"
+
+
+def test_management_tables_drop_bespoke_table_markup():
+    """No raw `w-full text-*` tables or redundant overflow-x-auto wrappers should
+    survive the migration to sg-table (visual-consistency regression guard)."""
+    for name in MANAGEMENT_TABLE_VIEWS:
+        src = (PAGES_DIR / f"{name}.html").read_text(encoding="utf-8")
+        assert '<table class="w-full' not in src, (
+            f"{name}: bespoke table markup must be replaced by sg-table"
+        )
+        assert "overflow-x-auto" not in src, (
+            f"{name}: overflow-x-auto is superseded by sg-table-scroll"
+        )
+
+
+def test_client_paginated_users_table_does_not_fake_sort():
+    """rbac users are client-paginated; we deliberately ship sticky headers without
+    sort controls so no header implies an ordering it does not apply globally."""
+    src = (PAGES_DIR / "rbac.html").read_text(encoding="utf-8")
+    assert "sg-th-sort" not in src, (
+        "rbac: users table must not expose sort headers it does not honour"
+    )
+
+
 
 

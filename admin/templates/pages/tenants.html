@@ -32,14 +32,14 @@
 
     <!-- Tenant Table -->
     <div x-show="!loading" class="sg-card !p-0">
-        <div class="overflow-x-auto">
+        <div class="sg-table-scroll">
             <table class="sg-table">
                 <thead>
                     <tr>
                         <th>ID</th>
                         <th>Name</th>
                         <th>Status</th>
-                        <th>Agents</th>
+                        <th class="sg-num">Agents</th>
                         <th>Contact</th>
                         <th class="text-right">Actions</th>
                     </tr>
@@ -54,7 +54,7 @@
                                     :class="tenant.status === 'active' ? 'sg-badge-success' : tenant.status === 'paused' ? 'sg-badge-warning' : 'sg-badge-danger'"
                                     x-text="tenant.status"></span>
                             </td>
-                            <td x-text="tenant.agent_count || 0"></td>
+                            <td class="sg-num" x-text="tenant.agent_count || 0"></td>
                             <td class="text-gray-400 text-xs" x-text="tenant.contact_email || '—'"></td>
                             <td class="text-right">
                                 <div class="flex items-center justify-end gap-1">
