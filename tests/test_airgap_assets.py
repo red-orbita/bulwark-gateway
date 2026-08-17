@@ -125,6 +125,39 @@ def test_vendored_assets_have_sri_entries():
         assert sri[asset].startswith("sha384-"), f"{asset} SRI malformed"
 
 
+def _sri_for(path: Path) -> str:
+    import base64
+    import hashlib
+
+    return "sha384-" + base64.b64encode(
+        hashlib.sha384(path.read_bytes()).digest()
+    ).decode()
+
+
+@pytest.mark.parametrize("asset", ["tailwind.min.css", "fonts.css"])
+def test_stylesheet_sri_matches_file_contents(asset):
+    """A stale SRI hash silently breaks the UI: the browser refuses to apply a
+    stylesheet whose integrity doesn't match, so editing the CSS without
+    re-hashing ships a blank/unstyled admin. Lock the hash to the bytes."""
+    css_path = _STATIC / "css" / asset
+    actual = _sri_for(css_path)
+
+    sri = json.loads((_STATIC / "sri-hashes.json").read_text(encoding="utf-8"))
+    assert sri.get(asset) == actual, (
+        f"sri-hashes.json[{asset}] is stale — recompute after editing the CSS"
+    )
+
+    base = (_TEMPLATES / "base.html").read_text(encoding="utf-8")
+    m = re.search(
+        rf"""href=['"]/static/css/{re.escape(asset)}['"][^>]*integrity=['"](sha384-[^'"]+)['"]""",
+        base,
+    )
+    assert m, f"base.html does not load {asset} with an integrity attribute"
+    assert m.group(1) == actual, (
+        f"base.html integrity for {asset} is stale — recompute after editing CSS"
+    )
+
+
 def test_qrcode_referenced_with_integrity():
     rbac = (_TEMPLATES / "pages" / "rbac.html").read_text(encoding="utf-8")
     assert "/static/js/vendor/qrcode.min.js" in rbac

@@ -547,10 +547,19 @@ th[aria-sort="descending"] .sg-th-sort-icon { transform: rotate(180deg); }
    animate opacity — a whole-subtree opacity fade masks the per-card cascade
    below (children are invisible while the parent fades 0→1, so the stagger is
    never perceived). We keep only a tiny, fast transform settle so the page
-   feels anchored while the CARDS deliver the visible sequential entrance. */
+   feels anchored while the CARDS deliver the visible sequential entrance.
+
+   CRITICAL: the resting keyframe MUST be `transform: none`, never
+   `translateY(0)`. #main-content wraps every page's modals, and any transform
+   value other than `none` turns <main> into the containing block for
+   `position: fixed` descendants (CSS Transforms spec). With translateY(0) held
+   by `animation-fill-mode: both`, modal overlays (`fixed inset-0`) anchored to
+   <main> instead of the viewport, clipping the top of tall modals with no way
+   to scroll to it. `none` at rest keeps the entrance settle while leaving the
+   viewport as the fixed containing block. */
 @keyframes sg-page-settle {
     from { transform: translateY(4px); }
-    to   { transform: translateY(0); }
+    to   { transform: none; }
 }
 .sg-page-enter { animation: sg-page-settle 0.3s var(--sg-ease) both; }
 
