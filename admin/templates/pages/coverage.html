@@ -7,7 +7,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Security Coverage Matrix</h1>
-            <p class="text-sm text-gray-400 mt-0.5">OWASP LLM Top 10 coverage, detection techniques, and language support</p>
+            <p class="text-sm text-gray-400 mt-0.5">Architecture reference: which threat classes each defense layer is designed to cover</p>
         </div>
         <div class="flex items-center gap-2">
             <span class="sg-badge sg-badge-success">Protected</span>
@@ -16,26 +16,38 @@
         </div>
     </div>
 
+    <!-- Honesty note: this is a design-time capability map, not live telemetry.
+         Only the "Regex Patterns" count is read from the running configuration. -->
+    <div class="flex items-start gap-2 px-4 py-3 rounded-lg bg-gray-800/40 border border-white/5">
+        <i data-lucide="info" class="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0"></i>
+        <p class="text-xs text-gray-400">
+            This is a static reference of the gateway's <span class="text-gray-200">designed</span> coverage.
+            Counts are derived from the matrices below; only <span class="text-gray-200">Regex Patterns</span>
+            is read live from the active configuration.
+        </p>
+    </div>
+
     <!-- Stats Cards -->
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <div class="sg-card text-center">
-            <p class="text-3xl font-bold text-cyan-400" x-text="stats.total_techniques"></p>
+            <p class="text-3xl font-bold text-cyan-400" x-text="techniqueCount"></p>
             <p class="text-xs text-gray-400 mt-1">Detection Techniques</p>
         </div>
         <div class="sg-card text-center">
-            <p class="text-3xl font-bold text-green-400" x-text="stats.total_patterns"></p>
-            <p class="text-xs text-gray-400 mt-1">Regex Patterns</p>
+            <p class="text-3xl font-bold text-green-400" x-text="stats.total_patterns === null ? '—' : stats.total_patterns"></p>
+            <p class="text-xs text-gray-400 mt-1">Regex Patterns <span class="text-gray-600" x-show="stats.total_patterns !== null">· live</span></p>
+            <p class="text-[10px] text-amber-400/80 mt-0.5" x-show="stats.total_patterns === null" x-cloak>count unavailable</p>
         </div>
         <div class="sg-card text-center">
-            <p class="text-3xl font-bold text-purple-400">3</p>
+            <p class="text-3xl font-bold text-purple-400" x-text="layers.length"></p>
             <p class="text-xs text-gray-400 mt-1">Defense Layers</p>
         </div>
         <div class="sg-card text-center">
-            <p class="text-3xl font-bold text-yellow-400">7</p>
+            <p class="text-3xl font-bold text-yellow-400" x-text="languages.length"></p>
             <p class="text-xs text-gray-400 mt-1">Languages</p>
         </div>
         <div class="sg-card text-center">
-            <p class="text-3xl font-bold text-orange-400">9/10</p>
+            <p class="text-3xl font-bold text-orange-400"><span x-text="owaspCoveredCount"></span>/<span x-text="owasp.length"></span></p>
             <p class="text-xs text-gray-400 mt-1">OWASP LLM Top 10</p>
         </div>
     </div>
@@ -144,7 +156,15 @@
 <script>
 function coverageManager() {
     return {
-        stats: { total_techniques: 44, total_patterns: 277 },
+        stats: { total_patterns: null },
+        // Derived counts — computed from the reference matrices so they can never
+        // silently drift away from the data actually rendered on this page.
+        get techniqueCount() {
+            return this.layers.reduce((n, l) => n + l.attacks.length, 0) + this.evasions.length;
+        },
+        get owaspCoveredCount() {
+            return this.owasp.filter(o => o.covered !== 'none').length;
+        },
         owasp: [
             { id: 'LLM01', name: 'Prompt Injection', covered: 'full', layer: 'Input + Output' },
             { id: 'LLM02', name: 'Insecure Output Handling', covered: 'full', layer: 'Output (17 patterns)' },
@@ -221,13 +241,15 @@ function coverageManager() {
             { name: 'Arabic', injection: true, plan: false, memory: false },
         ],
         async init() {
+            // Only the pattern count is live. On failure, leave it null so the UI
+            // shows "unavailable" instead of a stale hardcoded number.
             try {
                 const resp = await fetch('/admin/guardrails/patterns');
                 if (resp.ok) {
                     const data = await resp.json();
-                    this.stats.total_patterns = data.length;
+                    this.stats.total_patterns = Array.isArray(data) ? data.length : null;
                 }
-            } catch(e) {}
+            } catch(e) { this.stats.total_patterns = null; }
         }
     };
 }
