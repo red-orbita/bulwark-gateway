@@ -454,8 +454,22 @@ function iocsManager() {
             showToast('IOC deleted', 'success');
         },
         async toggleActive(ioc) {
-            await fetch(`/admin/iocs/${ioc.id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ...ioc, active: !ioc.active }) });
-            ioc.active = !ioc.active;
+            const previous = ioc.active;
+            try {
+                const resp = await fetch(`/admin/iocs/${ioc.id}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ...ioc, active: !ioc.active }) });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    // Trust the server's persisted value, not an optimistic flip.
+                    ioc.active = typeof data.active === 'boolean' ? data.active : !previous;
+                } else {
+                    ioc.active = previous;  // revert on failure
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to update IOC', 'error');
+                }
+            } catch (e) {
+                ioc.active = previous;  // revert on network error
+                showToast('Failed to update IOC: ' + e.message, 'error');
+            }
         },
         async bulkImport() {
             try {
@@ -499,8 +513,22 @@ function iocsManager() {
             showToast('Feed deleted', 'success');
         },
         async toggleFeed(feed) {
-            await fetch(`/admin/iocs/feeds/${feed.id}/toggle`, { method: 'PATCH' });
-            feed.enabled = !feed.enabled;
+            const previous = feed.enabled;
+            try {
+                const resp = await fetch(`/admin/iocs/feeds/${feed.id}/toggle`, { method: 'PATCH' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    // Trust the server's persisted value, not an optimistic flip.
+                    feed.enabled = typeof data.enabled === 'boolean' ? data.enabled : !previous;
+                } else {
+                    feed.enabled = previous;  // revert on failure
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to toggle feed', 'error');
+                }
+            } catch (e) {
+                feed.enabled = previous;  // revert on network error
+                showToast('Failed to toggle feed: ' + e.message, 'error');
+            }
         },
         async triggerFeed(feed) {
             showToast(`Updating ${feed.name}...`, 'info');
