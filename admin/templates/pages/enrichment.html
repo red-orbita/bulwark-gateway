@@ -176,7 +176,7 @@
         <div class="flex items-center justify-between mb-4">
             <h2 class="text-sm font-medium text-white">Recent Enrichment Entries</h2>
             <div class="flex gap-2 items-center">
-                <select x-model="entryFilter.verdict" @change="loadEntries()" class="sg-input text-xs !py-1 !px-2">
+                <select x-model="entryFilter.verdict" @change="loadEntries()" aria-label="Filter by verdict" class="sg-input text-xs !py-1 !px-2">
                     <option value="">All verdicts</option>
                     <option value="ALLOW">ALLOW</option>
                     <option value="BLOCK">BLOCK</option>

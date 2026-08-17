@@ -31,7 +31,7 @@
 
     <!-- Filters -->
     <div class="flex flex-col sm:flex-row gap-3 flex-wrap">
-        <select x-model="filters.type" @change="loadIocs()" class="sg-select">
+        <select x-model="filters.type" @change="loadIocs()" aria-label="Filter by type" class="sg-select">
             <option value="">All Types</option>
             <option value="ip">IP</option>
             <option value="domain">Domain</option>
@@ -39,18 +39,18 @@
             <option value="url">URL</option>
             <option value="email">Email</option>
         </select>
-        <select x-model="filters.severity" @change="loadIocs()" class="sg-select">
+        <select x-model="filters.severity" @change="loadIocs()" aria-label="Filter by severity" class="sg-select">
             <option value="">All Severities</option>
             <option value="critical">Critical</option>
             <option value="high">High</option>
             <option value="medium">Medium</option>
             <option value="low">Low</option>
         </select>
-        <select x-model="filters.source" @change="loadIocs()" class="sg-select">
+        <select x-model="filters.source" @change="loadIocs()" aria-label="Filter by source" class="sg-select">
             <option value="">All Sources</option>
             <template x-for="s in sources" :key="s"><option :value="s" x-text="s"></option></template>
         </select>
-        <input type="text" x-model="filters.search" @input.debounce.300ms="loadIocs()" placeholder="Search values..." class="sg-input flex-1 min-w-[200px]">
+        <input type="text" x-model="filters.search" @input.debounce.300ms="loadIocs()" placeholder="Search values..." aria-label="Search IOCs" class="sg-input flex-1 min-w-[200px]">
     </div>
 
     <!-- IOC Table -->

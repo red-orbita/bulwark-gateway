@@ -102,20 +102,20 @@
             <div class="relative flex-1">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"></i>
                 <input type="text" x-model="search" placeholder="Search patterns by description, regex, or category..."
-                       class="sg-input pl-10">
+                       aria-label="Search patterns" class="sg-input pl-10">
             </div>
             <div class="flex gap-2 flex-wrap">
-                <select x-model="filterLayer" class="sg-select w-auto">
+                <select x-model="filterLayer" aria-label="Filter by layer" class="sg-select w-auto">
                     <option value="">All Layers</option>
                     <option value="input">Input</option>
                     <option value="output">Output</option>
                     <option value="tool_policy">Tool Policy</option>
                 </select>
-                <select x-model="filterCategory" class="sg-select w-auto">
+                <select x-model="filterCategory" aria-label="Filter by category" class="sg-select w-auto">
                     <option value="">All Categories</option>
                     <template x-for="cat in categories" :key="cat"><option :value="cat" x-text="cat"></option></template>
                 </select>
-                <select x-model="filterStatus" class="sg-select w-auto">
+                <select x-model="filterStatus" aria-label="Filter by status" class="sg-select w-auto">
                     <option value="">All</option>
                     <option value="active">Active</option>
                     <option value="disabled">Disabled</option>
@@ -188,7 +188,7 @@
                     <div class="flex items-center gap-2">
                         <i data-lucide="flask-conical" class="w-3.5 h-3.5 text-brand-400 flex-shrink-0"></i>
                         <input type="text" x-model="patternTest.input" @input="runPatternTest(pattern)"
-                               class="sg-input font-mono text-xs flex-1" placeholder="Type text to test against this pattern's regex…">
+                               aria-label="Test text against pattern regex" class="sg-input font-mono text-xs flex-1" placeholder="Type text to test against this pattern's regex…">
                     </div>
                     <p x-show="patternTest.input && patternTest.error === null" x-cloak class="mt-2 text-xs flex items-center gap-1.5"
                        :class="patternTest.matched ? 'text-red-400' : 'text-emerald-400'">

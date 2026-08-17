@@ -153,7 +153,7 @@
                     <p class="text-sm text-cyan-400 font-medium" x-show="selectedFile" x-text="selectedFile?.name"></p>
                     <p class="text-[10px] text-gray-600 mt-1">Max 10MB. Formats: .zip, .tar.gz</p>
                 </div>
-                <input type="file" x-ref="fileInput" class="hidden" accept=".zip,.tar.gz,.tgz" @change="selectedFile = $event.target.files[0]">
+                <input type="file" x-ref="fileInput" aria-label="Plugin file to upload" class="hidden" accept=".zip,.tar.gz,.tgz" @change="selectedFile = $event.target.files[0]">
                 <div x-show="uploadError" class="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg p-3" x-text="uploadError"></div>
             </div>
 

@@ -98,6 +98,7 @@
             <p class="text-xs text-gray-400 mb-4">Paste skill definition content directly for analysis</p>
             <form @submit.prevent="scanContent()" class="space-y-3">
                 <textarea x-model="contentInput" rows="8"
+                          aria-label="Skill definition content"
                           class="sg-input font-mono text-xs w-full resize-none"
                           placeholder="Paste YAML or JSON skill definition here..."></textarea>
                 <button type="submit" class="sg-btn sg-btn-primary sg-btn-sm w-full" :disabled="!contentInput.trim() || scanning">
@@ -213,7 +214,7 @@
     <div class="sg-card">
         <div class="flex items-center justify-between mb-4">
             <h3 class="text-sm font-semibold text-white">Recent Scans</h3>
-            <select x-model="historyFilter" @change="loadHistory()" class="sg-select text-xs w-auto">
+            <select x-model="historyFilter" @change="loadHistory()" aria-label="Filter by verdict" class="sg-select text-xs w-auto">
                 <option value="">All Verdicts</option>
                 <option value="pass">Pass</option>
                 <option value="warn">Warn</option>

@@ -722,6 +722,50 @@ def test_profile_chip_has_single_canonical_control():
     ), "the canonical profile button must remain"
 
 
+# ─── Live-filter controls carry an accessible name (WCAG 1.3.1 / 4.1.2) ───────
+
+# Toolbar filters and search boxes reload data on change/input via a loader.
+# They sit in filter bars with no adjacent field label, so — unlike modal form
+# fields — a screen reader has nothing to announce unless the control itself
+# carries a name (aria-label) or is wired to a <label for=…>. This guard matches
+# exactly that "live filter" shape so new unlabelled filters are caught on sight.
+_LIVE_FILTER_CONTROL = re.compile(
+    r"<(?:select|input|textarea)\b[^>]*"
+    r'@(?:change|input)(?:\.[a-z0-9.]+)?="[^"]*'
+    r"(?:load\w*|applyFilters|page\s*=)\s*\("
+    r"[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def _control_is_named(tag: str, for_ids: set[str]) -> bool:
+    # A direct name wins; otherwise the control's id must be a <label for=…> target.
+    if re.search(r"(?::?aria-label|aria-labelledby|title)\s*=", tag):
+        return True
+    cid = re.search(r'\bid="([^"]+)"', tag)
+    return bool(cid and cid.group(1) in for_ids)
+
+
+def test_live_filter_controls_have_accessible_names():
+    """WCAG 1.3.1/4.1.2 — every data-reloading filter/search control across the
+    admin pages must expose an accessible name, either directly (aria-label) or
+    via a programmatically associated <label for=…>. Regression guard for the
+    sweep that named the tenant/severity/type/search filters."""
+    offenders: list[str] = []
+    for page in list(PAGES_DIR.glob("*.html")) + [BASE_HTML]:
+        src = page.read_text(encoding="utf-8")
+        for_ids = set(re.findall(r'for="([^"]+)"', src))
+        for m in _LIVE_FILTER_CONTROL.finditer(src):
+            if not _control_is_named(m.group(0), for_ids):
+                lineno = src.count("\n", 0, m.start()) + 1
+                snippet = re.sub(r"\s+", " ", m.group(0))[:100]
+                offenders.append(f"{page.name}:{lineno} {snippet}")
+    assert not offenders, (
+        "Live-filter controls missing an accessible name "
+        "(add aria-label or a <label for=…>):\n" + "\n".join(offenders)
+    )
+
+
 
 
 

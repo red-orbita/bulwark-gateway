@@ -21,9 +21,9 @@
             <div class="relative flex-1">
                 <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"></i>
                 <input type="text" x-model="search" placeholder="Search policies by name or tenant..."
-                       class="sg-input pl-10">
+                       aria-label="Search policies" class="sg-input pl-10">
             </div>
-            <select x-model="filterStatus" class="sg-select w-auto sm:w-36">
+            <select x-model="filterStatus" aria-label="Filter by status" class="sg-select w-auto sm:w-36">
                 <option value="all">All Status</option>
                 <option value="active">Active</option>
                 <option value="disabled">Disabled</option>
@@ -174,12 +174,13 @@
                     <template x-for="(ts, idx) in form.tool_schemas" :key="idx">
                         <div class="space-y-1.5 border-t border-gray-800 pt-3 first:border-t-0 first:pt-0">
                             <div class="flex items-center gap-2">
-                                <input type="text" x-model="ts.tool" @input="syncYaml()" class="sg-input font-mono text-xs flex-1" placeholder="tool name (e.g. web_search)">
+                                <input type="text" x-model="ts.tool" @input="syncYaml()" aria-label="Tool name" class="sg-input font-mono text-xs flex-1" placeholder="tool name (e.g. web_search)">
                                 <button type="button" @click="removeToolSchema(idx)" class="sg-btn sg-btn-ghost sg-btn-sm text-red-400 hover:text-red-300" title="Remove">
                                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                 </button>
                             </div>
                             <textarea x-model="ts.schema" @input="syncYaml()" rows="4"
+                                      aria-label="Tool argument JSON schema"
                                       class="sg-input font-mono text-[11px] leading-relaxed"
                                       placeholder='{"type":"object","properties":{"query":{"type":"string","maxLength":200}},"required":["query"],"additionalProperties":false}'></textarea>
                             <p x-show="ts.schema && !isValidJson(ts.schema)" class="text-[11px] text-red-400">Invalid JSON — this schema will be skipped.</p>
@@ -197,6 +198,7 @@
                         </button>
                     </div>
                     <textarea x-model="form.rawYaml" @input="yamlManual = true" spellcheck="false" rows="10"
+                              aria-label="Policy YAML source"
                               class="sg-input font-mono text-[11px] leading-relaxed"></textarea>
                     <p x-show="yamlManual" class="text-[11px] text-amber-400 mt-1">Manual edits active — field changes won't overwrite the YAML until you click Regenerate.</p>
                 </div>

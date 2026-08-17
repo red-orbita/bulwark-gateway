@@ -18,11 +18,11 @@
 
     <!-- Filters -->
     <div class="flex flex-col sm:flex-row gap-3">
-        <select x-model="filterTenant" @change="loadAgents()" class="sg-select">
+        <select x-model="filterTenant" @change="loadAgents()" aria-label="Filter by tenant" class="sg-select">
             <option value="">All Tenants</option>
             <template x-for="t in tenantList" :key="t"><option :value="t" x-text="t"></option></template>
         </select>
-        <select x-model="filterStatus" @change="loadAgents()" class="sg-select">
+        <select x-model="filterStatus" @change="loadAgents()" aria-label="Filter by status" class="sg-select">
             <option value="">All Statuses</option>
             <option value="active">Active</option>
             <option value="paused">Paused</option>

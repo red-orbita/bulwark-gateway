@@ -47,8 +47,8 @@
     <div class="sg-card !p-4">
         <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
-                <label class="sg-label text-xs">Tenant</label>
-                <select x-model="filterTenant" @change="applyFilters()" class="sg-input w-full text-sm">
+                <label class="sg-label text-xs" for="evt-filter-tenant">Tenant</label>
+                <select id="evt-filter-tenant" x-model="filterTenant" @change="applyFilters()" class="sg-input w-full text-sm">
                     <option value="">All tenants</option>
                     <template x-for="t in availableTenants" :key="t">
                         <option :value="t" x-text="t"></option>
@@ -56,8 +56,8 @@
                 </select>
             </div>
             <div>
-                <label class="sg-label text-xs">Category</label>
-                <select x-model="filterCategory" @change="applyFilters()" class="sg-input w-full text-sm">
+                <label class="sg-label text-xs" for="evt-filter-category">Category</label>
+                <select id="evt-filter-category" x-model="filterCategory" @change="applyFilters()" class="sg-input w-full text-sm">
                     <option value="">All categories</option>
                     <template x-for="c in availableCategories" :key="c">
                         <option :value="c" x-text="c"></option>
@@ -65,8 +65,8 @@
                 </select>
             </div>
             <div>
-                <label class="sg-label text-xs">Severity</label>
-                <select x-model="filterSeverity" @change="applyFilters()" class="sg-input w-full text-sm">
+                <label class="sg-label text-xs" for="evt-filter-severity">Severity</label>
+                <select id="evt-filter-severity" x-model="filterSeverity" @change="applyFilters()" class="sg-input w-full text-sm">
                     <option value="">All severities</option>
                     <option value="critical">Critical</option>
                     <option value="high">High</option>

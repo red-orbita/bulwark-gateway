@@ -205,7 +205,7 @@
                 <i data-lucide="scroll-text" class="w-4 h-4 text-cyan-400"></i>
                 <h2 class="text-sm font-medium text-white">GDPR Request Audit Trail</h2>
             </div>
-            <select x-model="requestFilter" @change="loadRequests()" class="sg-input sg-input-sm text-xs">
+            <select x-model="requestFilter" @change="loadRequests()" aria-label="Filter by request type" class="sg-input sg-input-sm text-xs">
                 <option value="">All types</option>
                 <option value="pseudonymize">Pseudonymize</option>
                 <option value="export">Export</option>
@@ -262,7 +262,7 @@
                 <div>
                     <label class="text-xs text-gray-400 block mb-1.5">Type the confirmation phrase exactly:</label>
                     <p class="text-xs font-mono text-amber-300 bg-gray-900/60 rounded px-2 py-1.5 mb-2 select-all" x-text="erase.phrase"></p>
-                    <input type="text" x-model="erase.typed" class="sg-input w-full" placeholder="Type the phrase above">
+                    <input type="text" x-model="erase.typed" aria-label="Confirmation phrase" class="sg-input w-full" placeholder="Type the phrase above">
                 </div>
             </div>
             <div class="pt-3 flex justify-end gap-2" style="border-top: 1px solid rgba(239,68,68,0.2);">

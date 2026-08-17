@@ -348,7 +348,7 @@
                 <i data-lucide="flask-conical" class="w-4 h-4 text-brand-400"></i>
                 <h3 class="text-sm font-semibold text-white">Guardrail Sandbox</h3>
             </div>
-            <textarea x-model="payload" class="sg-input font-mono text-xs" rows="3" placeholder="Enter payload to test against guardrails..."></textarea>
+            <textarea x-model="payload" aria-label="Guardrail test payload" class="sg-input font-mono text-xs" rows="3" placeholder="Enter payload to test against guardrails..."></textarea>
             <div class="flex gap-2 mt-3">
                 <button @click="test('input')" :disabled="loading || !payload.trim()" class="sg-btn sg-btn-primary sg-btn-sm flex-1">
                     <i data-lucide="shield" class="w-3.5 h-3.5"></i> Test Input

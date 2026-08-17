@@ -57,30 +57,30 @@
                         <!-- Boolean -->
                         <template x-if="typeof value === 'boolean'">
                             <label class="sg-toggle">
-                                <input type="checkbox" :checked="sectionData[key]" @change="sectionData[key] = $event.target.checked">
+                                <input type="checkbox" :checked="sectionData[key]" @change="sectionData[key] = $event.target.checked" :aria-label="key">
                                 <span class="sg-toggle-thumb"></span>
                             </label>
                         </template>
                         <!-- Number -->
                         <template x-if="typeof value === 'number'">
-                            <input type="number" :value="sectionData[key]" @input="sectionData[key] = Number($event.target.value)" class="sg-input w-full">
+                            <input type="number" :value="sectionData[key]" @input="sectionData[key] = Number($event.target.value)" :aria-label="key" class="sg-input w-full">
                         </template>
                         <!-- Array (comma-separated) -->
                         <template x-if="Array.isArray(value)">
-                            <input type="text" :value="(sectionData[key] || []).join(', ')" @input="sectionData[key] = $event.target.value.split(',').map(s=>s.trim()).filter(Boolean)" class="sg-input w-full" placeholder="comma-separated values">
+                            <input type="text" :value="(sectionData[key] || []).join(', ')" @input="sectionData[key] = $event.target.value.split(',').map(s=>s.trim()).filter(Boolean)" :aria-label="key" class="sg-input w-full" placeholder="comma-separated values">
                         </template>
                         <!-- Sensitive string -->
                         <template x-if="typeof value === 'string' && sensitiveFields.includes(key)">
                             <div class="flex gap-2">
-                                <input :type="revealed.includes(key) ? 'text' : 'password'" :value="sectionData[key]" @input="sectionData[key] = $event.target.value" class="sg-input w-full font-mono">
-                                <button @click="revealed.includes(key) ? revealed = revealed.filter(r=>r!==key) : revealed.push(key)" class="sg-btn sg-btn-ghost sg-btn-sm">
+                                <input :type="revealed.includes(key) ? 'text' : 'password'" :value="sectionData[key]" @input="sectionData[key] = $event.target.value" :aria-label="key" class="sg-input w-full font-mono">
+                                <button @click="revealed.includes(key) ? revealed = revealed.filter(r=>r!==key) : revealed.push(key)" :aria-label="(revealed.includes(key) ? 'Hide ' : 'Show ') + key" class="sg-btn sg-btn-ghost sg-btn-sm">
                                     <i :data-lucide="revealed.includes(key) ? 'eye-off' : 'eye'" class="w-4 h-4"></i>
                                 </button>
                             </div>
                         </template>
                         <!-- Regular string -->
                         <template x-if="typeof value === 'string' && !sensitiveFields.includes(key)">
-                            <input type="text" :value="sectionData[key]" @input="sectionData[key] = $event.target.value" class="sg-input w-full">
+                            <input type="text" :value="sectionData[key]" @input="sectionData[key] = $event.target.value" :aria-label="key" class="sg-input w-full">
                         </template>
                     </div>
                 </div>

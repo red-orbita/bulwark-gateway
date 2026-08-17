@@ -93,7 +93,7 @@
                         <h2 class="text-sm font-medium text-white">Keys for Tenant</h2>
                     </div>
                     <div class="flex items-center gap-2 sm:ml-auto">
-                        <input type="text" x-model.trim="listTenant" @keydown.enter="loadKeys()" class="sg-input sg-input-sm" placeholder="tenant id…">
+                        <input type="text" x-model.trim="listTenant" @keydown.enter="loadKeys()" aria-label="Tenant ID" class="sg-input sg-input-sm" placeholder="tenant id…">
                         <button @click="loadKeys()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!listTenant || loadingKeys">
                             <i data-lucide="search" class="w-3.5 h-3.5"></i>
                             <span x-text="loadingKeys ? 'Loading…' : 'List'"></span>

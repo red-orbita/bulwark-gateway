@@ -36,16 +36,17 @@
         <div class="flex items-center gap-4 mb-4">
             <div class="relative flex-1 max-w-sm">
                 <input type="text" x-model="userSearch" placeholder="Search by username..."
+                    aria-label="Search users"
                     class="w-full bg-gray-800 border border-gray-600 rounded-lg pl-9 pr-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500">
                 <svg class="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                 </svg>
             </div>
-            <select x-model="userRoleFilter" class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200">
+            <select x-model="userRoleFilter" aria-label="Filter by role" class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200">
                 <option value="">All Roles</option>
                 <template x-for="r in roles" :key="r.id"><option :value="r.id" x-text="r.label"></option></template>
             </select>
-            <select x-model="userStatusFilter" class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200">
+            <select x-model="userStatusFilter" aria-label="Filter by status" class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200">
                 <option value="">All Status</option>
                 <option value="active">Active</option>
                 <option value="inactive">Disabled</option>
