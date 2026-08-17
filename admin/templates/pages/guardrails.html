@@ -8,7 +8,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Guardrail Manager</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Manage detection patterns, modules, and parameters</p>
+            <p class="text-sm text-gray-400 mt-0.5">Enable engines, tune detection thresholds, and test regex patterns before rollout</p>
         </div>
         <div class="flex items-center gap-2">
             <button @click="exportConfig()" class="sg-btn sg-btn-ghost sg-btn-sm">
@@ -149,6 +149,7 @@
         <!-- Pattern rows -->
         <div x-show="!loading && filteredPatterns.length > 0" class="divide-y divide-gray-800 max-h-[420px] overflow-y-auto">
             <template x-for="pattern in filteredPatterns" :key="pattern.id">
+                <div>
                 <div class="px-4 py-3 hover:bg-gray-800/30 transition-colors flex items-center gap-3 group">
                     <!-- Status dot -->
                     <span class="sg-dot flex-shrink-0" :class="pattern.enabled ? 'sg-dot-success' : 'sg-dot-danger'"></span>
@@ -172,13 +173,34 @@
                         <button @click="togglePattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm" :title="pattern.enabled ? 'Disable' : 'Enable'">
                             <i :data-lucide="pattern.enabled ? 'pause' : 'play'" class="w-3.5 h-3.5"></i>
                         </button>
-                        <button @click="testPattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Test in sandbox">
+                        <button @click="testPattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm"
+                                :class="patternTest.id === pattern.id && 'text-brand-400'"
+                                :title="patternTest.id === pattern.id ? 'Close tester' : 'Test this regex'">
                             <i data-lucide="flask-conical" class="w-3.5 h-3.5"></i>
                         </button>
                         <button @click="editPattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Edit">
                             <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                         </button>
                     </div>
+                </div>
+                <!-- Inline per-pattern regex tester (real client-side match) -->
+                <div x-show="patternTest.id === pattern.id" x-cloak x-collapse class="px-4 pb-3 bg-gray-800/20">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="flask-conical" class="w-3.5 h-3.5 text-brand-400 flex-shrink-0"></i>
+                        <input type="text" x-model="patternTest.input" @input="runPatternTest(pattern)"
+                               class="sg-input font-mono text-xs flex-1" placeholder="Type text to test against this pattern's regex…">
+                    </div>
+                    <p x-show="patternTest.input && patternTest.error === null" x-cloak class="mt-2 text-xs flex items-center gap-1.5"
+                       :class="patternTest.matched ? 'text-red-400' : 'text-emerald-400'">
+                        <i :data-lucide="patternTest.matched ? 'alert-triangle' : 'check'" class="w-3.5 h-3.5"></i>
+                        <span x-text="patternTest.matched ? 'MATCHES — would trigger detection' : 'No match — would pass'"></span>
+                    </p>
+                    <p x-show="patternTest.error" x-cloak class="mt-2 text-xs text-amber-400 flex items-center gap-1.5">
+                        <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
+                        <span>Invalid regex: <span x-text="patternTest.error" class="font-mono"></span></span>
+                    </p>
+                    <p class="mt-1.5 text-[10px] text-gray-600">Client-side check using the browser regex engine — a quick approximation of live detection.</p>
+                </div>
                 </div>
             </template>
         </div>
@@ -390,6 +412,8 @@ function guardrailsManager() {
         newForm: { layer: 'input', description: '', regex: '', severity: 'high', category: 'prompt_injection' },
         regexValidation: null, editTestPayload: '', editTestResult: null,
         sandboxPayload: '', sandboxResult: null,
+        // Inline per-pattern regex tester (real client-side match, no fake seeding)
+        patternTest: { id: null, input: '', matched: null, error: null },
 
         get categories() { return [...new Set(this.patterns.map(p => p.category).filter(Boolean))].sort(); },
         get filteredPatterns() {
@@ -405,18 +429,35 @@ function guardrailsManager() {
         async init() {
             this.loading = true;
             try {
-                const [pResp, parResp] = await Promise.all([fetch('/admin/guardrails/patterns'), fetch('/admin/guardrails/params')]);
+                const [pResp, parResp, modResp] = await Promise.all([
+                    fetch('/admin/guardrails/patterns'),
+                    fetch('/admin/guardrails/params'),
+                    fetch('/admin/guardrails/modules'),
+                ]);
                 if (pResp.ok) this.patterns = await pResp.json();
                 if (parResp.ok) this.params = await parResp.json();
+                if (modResp.ok) {
+                    const m = await modResp.json();
+                    if (m.modules) this.modules = { ...this.modules, ...m.modules };
+                }
             } catch(e) { showToast('Failed to load guardrails', 'error'); }
             this.loading = false;
             this.$nextTick(() => lucide.createIcons());
         },
 
         async toggleModule(mod) {
-            this.modules[mod] = !this.modules[mod];
-            await fetch('/admin/guardrails/modules/' + mod + '/toggle', { method: 'POST' });
-            showToast(`${mod} module ${this.modules[mod] ? 'enabled' : 'disabled'}`, 'success');
+            const previous = this.modules[mod];
+            try {
+                const resp = await fetch('/admin/guardrails/modules/' + mod + '/toggle', { method: 'POST' });
+                if (!resp.ok) throw new Error('toggle failed');
+                const data = await resp.json();
+                // Trust the server's authoritative state, not an optimistic flip.
+                this.modules[mod] = data.enabled;
+                showToast(`${mod} module ${data.enabled ? 'enabled' : 'disabled'}`, 'success');
+            } catch(e) {
+                this.modules[mod] = previous;
+                showToast(`Failed to toggle ${mod} module`, 'error');
+            }
         },
         async togglePattern(pattern) {
             const resp = await fetch('/admin/guardrails/patterns/' + pattern.id + '/toggle', { method: 'POST' });
@@ -435,7 +476,25 @@ function guardrailsManager() {
             } catch(e) { this.sandboxResult = { verdict: 'error', events: [{ description: e.message }], latency_ms: 0 }; }
             this.$nextTick(() => lucide.createIcons());
         },
-        testPattern(p) { this.sandboxPayload = '// Test: ' + p.description; },
+        testPattern(p) {
+            // Toggle a real inline tester for THIS pattern's regex.
+            if (this.patternTest.id === p.id) {
+                this.patternTest = { id: null, input: '', matched: null, error: null };
+            } else {
+                this.patternTest = { id: p.id, input: '', matched: null, error: null };
+            }
+            this.$nextTick(() => lucide.createIcons());
+        },
+        runPatternTest(p) {
+            if (!this.patternTest.input) { this.patternTest.matched = null; this.patternTest.error = null; return; }
+            try {
+                this.patternTest.matched = new RegExp(p.regex, 'i').test(this.patternTest.input);
+                this.patternTest.error = null;
+            } catch(e) {
+                this.patternTest.matched = null;
+                this.patternTest.error = e.message;
+            }
+        },
         editPattern(p) {
             this.editingPattern = p;
             this.editForm = { description: p.description, regex: p.regex, severity: p.severity, category: p.category || '', enabled: p.enabled };

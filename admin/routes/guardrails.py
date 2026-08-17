@@ -313,6 +313,15 @@ async def delete_pattern(
     raise HTTPException(status_code=404, detail="Pattern not found")
 
 
+@router.get("/modules")
+async def get_modules(user: TokenPayload = Depends(require_permission("guardrails:read"))):
+    """Return the current enforcement state of the coarse guardrail modules.
+
+    Lets the UI reflect real on/off state instead of assuming everything is on.
+    """
+    return {"modules": dict(_module_state)}
+
+
 @router.post("/modules/{module}/toggle")
 async def toggle_module(
     module: str,
