@@ -36,6 +36,50 @@ REDIS_KEY_CHAIN_SEQ = "bulwark:audit:chain_sequence"
 GENESIS_HASH = "sha256:" + "0" * 64
 
 
+def build_audit_filters(q: AuditQuery) -> tuple[list[str], list]:
+    """Build a SQL WHERE condition list + bound params from an AuditQuery.
+
+    Shared by ``query`` (page fetch) and ``count`` (total for pagination) so
+    both always apply an identical filter set — this keeps the "showing X of N"
+    total honest instead of derived from the current page length.
+
+    All values are bound parameters (never interpolated), so the caller only
+    interpolates the assembled condition structure into the statement.
+    """
+    conditions: list[str] = []
+    params: list = []
+    if q.actor:
+        conditions.append("actor = ?")
+        params.append(q.actor)
+    if q.action:
+        conditions.append("action = ?")
+        params.append(q.action)
+    if q.resource_type:
+        conditions.append("resource_type = ?")
+        params.append(q.resource_type)
+    if q.tenant_id:
+        # A tenant is referenced either directly as the resource_id or mentioned
+        # inside the change details — match either, as a real SQL filter so the
+        # total count stays consistent with the returned page.
+        conditions.append("(resource_id LIKE ? OR COALESCE(details, '') LIKE ?)")
+        like = f"%{q.tenant_id}%"
+        params.extend([like, like])
+    if q.search:
+        conditions.append(
+            "(actor LIKE ? OR action LIKE ? OR resource_type LIKE ? "
+            "OR resource_id LIKE ? OR COALESCE(details, '') LIKE ?)"
+        )
+        like = f"%{q.search}%"
+        params.extend([like, like, like, like, like])
+    if q.start_date:
+        conditions.append("timestamp >= ?")
+        params.append(q.start_date.isoformat())
+    if q.end_date:
+        conditions.append("timestamp <= ?")
+        params.append(q.end_date.isoformat())
+    return conditions, params
+
+
 def compute_entry_hash(
     sequence_id: int,
     timestamp: str,
@@ -308,24 +352,7 @@ class AuditLogger:
 
     async def query(self, q: AuditQuery) -> list[AuditEntry]:
         """Query audit log with filters."""
-        conditions = []
-        params: list = []
-        if q.actor:
-            conditions.append("actor = ?")
-            params.append(q.actor)
-        if q.action:
-            conditions.append("action = ?")
-            params.append(q.action)
-        if q.resource_type:
-            conditions.append("resource_type = ?")
-            params.append(q.resource_type)
-        if q.start_date:
-            conditions.append("timestamp >= ?")
-            params.append(q.start_date.isoformat())
-        if q.end_date:
-            conditions.append("timestamp <= ?")
-            params.append(q.end_date.isoformat())
-
+        conditions, params = build_audit_filters(q)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         params.extend([q.limit, q.offset])
@@ -337,6 +364,20 @@ class AuditLogger:
                 for row in rows:
                     entries.append(self._row_to_entry(row))
         return entries
+
+    async def count(self, q: AuditQuery) -> int:
+        """Count entries matching the same filters as ``query`` (ignores paging).
+
+        Used to render an honest "showing X of N" pagination total.
+        """
+        conditions, params = build_audit_filters(q)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT COUNT(*) FROM audit_log {where}"
+        with self._lock:
+            if not self._conn:
+                return 0
+            row = self._conn.execute(sql, params).fetchone()
+            return int(row[0]) if row else 0
 
     def _row_to_entry(self, row: tuple) -> AuditEntry:
         """Convert a DB row tuple to an AuditEntry model."""
@@ -517,24 +558,7 @@ class PostgreSQLAuditLogger(AuditLogger):
             return []
 
     async def query(self, q: AuditQuery) -> list[AuditEntry]:
-        conditions = []
-        params: list = []
-        if q.actor:
-            conditions.append("actor = ?")
-            params.append(q.actor)
-        if q.action:
-            conditions.append("action = ?")
-            params.append(q.action)
-        if q.resource_type:
-            conditions.append("resource_type = ?")
-            params.append(q.resource_type)
-        if q.start_date:
-            conditions.append("timestamp >= ?")
-            params.append(q.start_date.isoformat())
-        if q.end_date:
-            conditions.append("timestamp <= ?")
-            params.append(q.end_date.isoformat())
-
+        conditions, params = build_audit_filters(q)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         params.extend([q.limit, q.offset])
@@ -545,6 +569,20 @@ class PostgreSQLAuditLogger(AuditLogger):
             return [self._dict_to_entry(dict(r)) for r in rows]
         except Exception:
             return []
+
+    async def count(self, q: AuditQuery) -> int:
+        conditions, params = build_audit_filters(q)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT COUNT(*) AS n FROM audit_log {where}"
+        try:
+            db = self._get_db()
+            row = await db.fetch_one(sql, params)
+            if not row:
+                return 0
+            d = dict(row)
+            return int(d.get("n") or next(iter(d.values()), 0) or 0)
+        except Exception:
+            return 0
 
     def _dict_to_entry(self, row: dict) -> AuditEntry:
         """Convert a dict row to AuditEntry model."""
