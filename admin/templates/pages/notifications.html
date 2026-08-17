@@ -94,7 +94,7 @@
     <!-- Create/Edit Modal -->
     <template x-if="showCreate">
         <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showCreate = false; editingId = null;">
-            <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+            <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-lg overflow-y-auto p-6" style="max-height:90vh">
                 <h2 class="text-lg font-semibold text-white mb-4" x-text="editingId ? 'Edit Notification Channel' : 'Add Notification Channel'"></h2>
 
                 <div class="space-y-4">
@@ -422,7 +422,18 @@ function notificationManager() {
             };
         },
 
-        formTypeChanged() { /* Reset type-specific fields if needed */ },
+        formTypeChanged() {
+            // Clear fields that belong to other channel types so a stale value
+            // from a previous selection is never submitted (saveChannel sends the
+            // whole form). Common routing/filter fields are intentionally kept.
+            Object.assign(this.form, {
+                url: '',
+                routing_key: '', api_key: '', bot_token: '', chat_id: '',
+                smtp_host: '', smtp_port: 587, smtp_user: '', smtp_password: '',
+                smtp_from: '', smtp_to_raw: '', smtp_tls: 'starttls',
+                auth_type: 'none', auth_value: '',
+            });
+        },
 
         typeIcon(t) {
             const icons = { slack: 'slack', teams: 'users', discord: 'message-circle', pagerduty: 'siren',

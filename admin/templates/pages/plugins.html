@@ -202,7 +202,7 @@
 
     <!-- ======== SLIDE-OVER: Security Check Results ======== -->
     <div x-show="securityResults !== null" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl max-h-[85vh] overflow-y-auto" @click.stop>
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:85vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-800 z-10">
                 <h3 class="text-lg font-semibold text-white">Security Audit</h3>
                 <button @click="securityResults = null" class="text-gray-400 hover:text-white text-xl">&times;</button>
@@ -271,7 +271,7 @@
 
     <!-- ======== MODAL: Live Test ======== -->
     <div x-show="showTest" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
-        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto" @click.stop>
+        <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-2xl shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-800 z-10">
                 <div>
                     <h3 class="text-lg font-semibold text-white">Live Test</h3>

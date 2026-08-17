@@ -102,7 +102,7 @@
          x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
          x-transition:leave="transition duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
         <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="showCreate=false; editingPolicy=null"></div>
-        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col" style="max-height:85vh"
              x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0 scale-95">
             <!-- Modal header -->
             <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700/50">
@@ -225,7 +225,7 @@
          x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
          x-transition:leave="transition duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
         <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="closeVersions()"></div>
-        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-xl max-h-[85vh] overflow-hidden flex flex-col"
+        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-xl overflow-hidden flex flex-col" style="max-height:85vh"
              x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0 scale-95">
             <!-- Header -->
             <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700/50">

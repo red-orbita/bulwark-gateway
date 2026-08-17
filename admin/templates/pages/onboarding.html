@@ -202,7 +202,7 @@
                     <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
                         <p class="text-xs text-gray-400 uppercase mb-1">Security</p>
                         <div class="flex gap-2">
-                            <span class="sg-badge sg-badge-success">Password changed</span>
+                            <span class="sg-badge" :class="passwordConfigured ? 'sg-badge-success' : 'sg-badge-neutral'" x-text="passwordConfigured ? 'Password set' : 'Password not set'"></span>
                         </div>
                     </div>
                 </div>
@@ -276,15 +276,22 @@ function onboardingWizard() {
             return s;
         },
 
+        get passwordConfigured() {
+            // Truthful admin-password state for the review badge: a strong
+            // password entered and confirmed in the wizard. The actual change is
+            // applied on Launch (apply()), so the label says "set", not "changed".
+            return this.config.admin_password.length >= 8 &&
+                   this.config.admin_password === this.config.admin_password_confirm &&
+                   this.passwordStrength >= 2;
+        },
+
         init() {
             this.$nextTick(() => lucide.createIcons());
         },
 
         canProceed() {
             if (this.currentStep === 0) {
-                return this.config.admin_password.length >= 8 &&
-                       this.config.admin_password === this.config.admin_password_confirm &&
-                       this.passwordStrength >= 2;
+                return this.passwordConfigured;
             }
             if (this.currentStep === 1) {
                 return this.config.backend_url.length > 0;
