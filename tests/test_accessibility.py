@@ -520,5 +520,19 @@ def test_notification_channel_icons_are_lucide_names():
     )
 
 
+def test_discovery_scan_tabs_have_loading_and_empty_states():
+    """A scan tool that renders a blank void after a zero-result scan reads as
+    unfinished. Each discovery tab must show a loading skeleton while scanning and
+    an empty/pre-scan state when there is nothing to display."""
+    src = (PAGES_DIR / "discovery.html").read_text(encoding="utf-8")
+    assert src.count("sg-empty") >= 3, "each discovery tab needs an empty/pre-scan state"
+    assert 'x-show="scanning"' in src and "sg-skeleton" in src, (
+        "discovery must render a loading state while a scan is in flight"
+    )
+    # Distinguishes 'not scanned yet' from 'scanned, nothing found'.
+    for flag in ("netScanned", "shadowScanned"):
+        assert flag in src, f"discovery must track {flag} to phrase its empty state"
+
+
 
 
