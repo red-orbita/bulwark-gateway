@@ -294,6 +294,39 @@ MIGRATIONS: list[Migration] = [
             ON CONFLICT (namespace) DO NOTHING;
         """,
     ),
+
+    # Version 4: Hash-chain columns for the tamper-evident audit log.
+    #
+    # v1 created audit_log with the original 11-column shape. The hash-chain
+    # fields (sequence_id / previous_hash / entry_hash) were only ever added by
+    # the SQLite AuditLogger's runtime _migrate_chain_columns() against its own
+    # separate db file — the PostgreSQL backend has no such self-migration and
+    # relies solely on this system, so on PostgreSQL every chained INSERT failed
+    # with 'column "sequence_id" of relation "audit_log" does not exist'.
+    # This migration brings the shared schema in line with what both loggers
+    # write, unbreaking audit persistence on PostgreSQL/HA deployments.
+    Migration(
+        version=4,
+        description="Add hash-chain columns to audit_log (sequence_id, previous_hash, entry_hash)",
+        sqlite_sql="""
+            -- SQLite has no ADD COLUMN IF NOT EXISTS; this migration is
+            -- version-tracked so it runs exactly once against the v1 table.
+            ALTER TABLE audit_log ADD COLUMN sequence_id INTEGER;
+            ALTER TABLE audit_log ADD COLUMN previous_hash TEXT;
+            ALTER TABLE audit_log ADD COLUMN entry_hash TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_sequence
+                ON audit_log(sequence_id) WHERE sequence_id IS NOT NULL;
+        """,
+        postgresql_sql="""
+            -- IF NOT EXISTS makes this self-healing on clusters whose audit_log
+            -- was already created (broken) at schema v3 without these columns.
+            ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS sequence_id INTEGER;
+            ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS previous_hash TEXT;
+            ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS entry_hash TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_sequence
+                ON audit_log(sequence_id) WHERE sequence_id IS NOT NULL;
+        """,
+    ),
 ]
 
 
