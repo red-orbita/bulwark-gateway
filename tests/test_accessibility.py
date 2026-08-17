@@ -534,5 +534,52 @@ def test_discovery_scan_tabs_have_loading_and_empty_states():
         assert flag in src, f"discovery must track {flag} to phrase its empty state"
 
 
+# ─── Dashboard: no dead controls, only real telemetry ────────────────────────
+
+
+def test_dashboard_has_no_dead_period_selector():
+    """A period selector (1h/24h/7d/30d) that no endpoint honours is a deceptive
+    control: it looks like a filter but changes nothing. It must be gone, replaced
+    by a status that reflects the real SSE stream."""
+    src = (PAGES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    assert "period = p.value" not in src, "dead period selector must be removed"
+    assert "periods:" not in src, "the fake period list must be removed from state"
+    # Replaced by a genuine live-connection indicator driven by the SSE stream.
+    assert "connected" in src and "Reconnecting" in src, (
+        "header must show a real SSE connection state instead of a fake filter"
+    )
+
+
+def test_dashboard_does_not_mislabel_total_as_queue_depth():
+    """The backend overwrites queue_depth_memory with total requests, so a card
+    labelled 'Queue Depth' would misreport. That card must instead surface a real,
+    correctly-named metric (detection rate)."""
+    src = (PAGES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    assert "Queue Depth" not in src, "must not label total-requests as queue depth"
+    assert 'data-metric="detection_rate"' in src, "detection rate KPI must be present"
+
+
+def test_dashboard_surfaces_verdict_distribution():
+    """Allowed/warned/blocked counters are computed server-side but were never
+    shown. The dashboard must surface the full verdict split, not just blocks."""
+    src = (PAGES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    assert "Verdict Distribution" in src
+    for kind in ("allowed", "warned", "blocked"):
+        assert f"verdicts.{kind}" in src, f"verdict distribution must show {kind}"
+    assert "verdictPct(" in src, "distribution must be proportional, not raw only"
+
+
+def test_dashboard_tenant_activity_uses_real_endpoint_with_states():
+    """Tenant Activity must consume the real per-tenant usage endpoint and cover
+    the loading / empty / error states like the other data-heavy panels."""
+    src = (PAGES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    assert "/admin/health/tenant-usage" in src, "must use the real tenant endpoint"
+    assert "tenantsLoading" in src and "sg-skeleton" in src, "needs a loading state"
+    assert "sg-empty" in src and "No tenant traffic" in src, "needs an empty state"
+    assert "tenantsError" in src and "loadTenantUsage()" in src, (
+        "needs an error state with a retry affordance"
+    )
+
+
 
 

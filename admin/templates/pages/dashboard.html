@@ -4,17 +4,21 @@
 {% block content %}
 <div x-data="dashboardPage()" x-init="init()" class="space-y-6">
 
-    <!-- Page header with period selector -->
+    <!-- Page header with live connection status -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Security Dashboard</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Real-time overview of guardrail operations</p>
+            <p class="text-sm text-gray-400 mt-0.5" x-text="postureLine"></p>
         </div>
-        <div class="flex items-center gap-2">
-            <template x-for="p in periods" :key="p.value">
-                <button @click="period = p.value" :class="period === p.value ? 'bg-brand-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
-                        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" x-text="p.label"></button>
-            </template>
+        <!-- Real connection status: reflects the live SSE stream, not a fake period filter -->
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-800/60 border border-white/5">
+                <span class="sg-dot" :class="connected ? 'sg-dot-success' : 'sg-dot-warning'"
+                      :style="connected ? 'box-shadow: 0 0 6px rgba(16,185,129,0.5);' : ''"></span>
+                <span class="text-xs font-medium" :class="connected ? 'text-emerald-300' : 'text-amber-300'"
+                      x-text="connected ? 'Live' : 'Reconnecting'"></span>
+            </div>
+            <span class="text-[11px] text-gray-500 font-mono tabular-nums" x-text="lastUpdateLabel"></span>
         </div>
     </div>
 
@@ -23,7 +27,7 @@
         <!-- Latency -->
         <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(16,185,129,0.4);">
             <div class="flex items-center justify-between mb-3">
-                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05)); box-shadow: 0 0 12px rgba(16,185,129,0.1);">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));">
                     <i data-lucide="activity" class="w-[18px] h-[18px] text-emerald-400"></i>
                 </div>
                 <span class="sg-badge sg-badge-success">
@@ -46,7 +50,7 @@
         <!-- Requests/sec -->
         <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(59,130,246,0.4);">
             <div class="flex items-center justify-between mb-3">
-                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05)); box-shadow: 0 0 12px rgba(59,130,246,0.1);">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05));">
                     <i data-lucide="bar-chart-3" class="w-[18px] h-[18px] text-blue-400"></i>
                 </div>
                 <span class="sg-badge sg-badge-brand">
@@ -68,7 +72,7 @@
         <!-- Blocked -->
         <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(239,68,68,0.4);">
             <div class="flex items-center justify-between mb-3">
-                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05)); box-shadow: 0 0 12px rgba(239,68,68,0.1);">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05));">
                     <i data-lucide="shield-off" class="w-[18px] h-[18px] text-red-400"></i>
                 </div>
                 <span class="sg-badge sg-badge-danger" x-show="blockedDelta > 0">
@@ -87,23 +91,134 @@
             </div>
         </div>
 
-        <!-- Queue Depth -->
+        <!-- Detection Rate -->
         <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(245,158,11,0.4);">
             <div class="flex items-center justify-between mb-3">
-                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(245,158,11,0.15), rgba(245,158,11,0.05)); box-shadow: 0 0 12px rgba(245,158,11,0.1);">
-                    <i data-lucide="layers" class="w-[18px] h-[18px] text-amber-400"></i>
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(245,158,11,0.15), rgba(245,158,11,0.05));">
+                    <i data-lucide="scan-search" class="w-[18px] h-[18px] text-amber-400"></i>
                 </div>
-                <span class="sg-badge" :class="queueHealthy ? 'sg-badge-success' : 'sg-badge-warning'" x-text="queueHealthy ? 'Healthy' : 'Backpressure'"></span>
+                <span class="sg-badge sg-badge-neutral">
+                    <span class="font-mono" data-metric="requests_total">—</span> total
+                </span>
             </div>
-            <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Queue Depth</p>
+            <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Detection Rate</p>
             <div class="flex items-baseline gap-2 mt-1">
-                <span class="text-2xl font-semibold font-mono text-white" data-metric="queue_depth_memory">—</span>
-                <span class="text-xs text-gray-600">events</span>
+                <span class="text-2xl font-semibold font-mono text-white" data-metric="detection_rate">—</span>
+                <span class="text-xs text-gray-600">%</span>
             </div>
-            <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-queue">
-                <template x-for="v in sparklines.queue" :key="$index">
+            <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-detection">
+                <template x-for="v in sparklines.detection" :key="$index">
                     <div class="flex-1 rounded-sm transition-all duration-300" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(245,158,11,0.5), rgba(245,158,11,0.15));`"></div>
                 </template>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-1.5">Blocked + warned / total requests</p>
+        </div>
+    </div>
+
+    <!-- Verdict Distribution + Tenant Activity (real telemetry, previously unsurfaced) -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Verdict Distribution -->
+        <div class="sg-card">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="pie-chart" class="w-4 h-4 text-brand-400"></i>
+                    <h3 class="text-sm font-semibold text-white">Verdict Distribution</h3>
+                </div>
+                <span class="text-[11px] text-gray-500 font-mono"><span data-metric="requests_total">0</span> requests</span>
+            </div>
+
+            <!-- Stacked proportion bar -->
+            <div class="flex h-3 w-full rounded-full overflow-hidden bg-gray-800" role="img"
+                 :aria-label="`Allowed ${verdicts.allowed}, warned ${verdicts.warned}, blocked ${verdicts.blocked}`">
+                <div class="h-full transition-all duration-500" :style="`width: ${verdictPct('allowed')}%; background: rgba(16,185,129,0.7);`"></div>
+                <div class="h-full transition-all duration-500" :style="`width: ${verdictPct('warned')}%; background: rgba(245,158,11,0.7);`"></div>
+                <div class="h-full transition-all duration-500" :style="`width: ${verdictPct('blocked')}%; background: rgba(239,68,68,0.7);`"></div>
+            </div>
+
+            <!-- Legend / counts -->
+            <div class="grid grid-cols-3 gap-3 mt-4">
+                <div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="sg-dot sg-dot-success"></span>
+                        <span class="text-[11px] text-gray-400 uppercase tracking-wider">Allowed</span>
+                    </div>
+                    <p class="text-lg font-semibold font-mono text-white mt-0.5" x-text="verdicts.allowed.toLocaleString()">0</p>
+                    <p class="text-[10px] text-gray-600" x-text="verdictPct('allowed') + '%'"></p>
+                </div>
+                <div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="sg-dot sg-dot-warning"></span>
+                        <span class="text-[11px] text-gray-400 uppercase tracking-wider">Warned</span>
+                    </div>
+                    <p class="text-lg font-semibold font-mono text-white mt-0.5" x-text="verdicts.warned.toLocaleString()">0</p>
+                    <p class="text-[10px] text-gray-600" x-text="verdictPct('warned') + '%'"></p>
+                </div>
+                <div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="sg-dot sg-dot-danger"></span>
+                        <span class="text-[11px] text-gray-400 uppercase tracking-wider">Blocked</span>
+                    </div>
+                    <p class="text-lg font-semibold font-mono text-white mt-0.5" x-text="verdicts.blocked.toLocaleString()">0</p>
+                    <p class="text-[10px] text-gray-600" x-text="verdictPct('blocked') + '%'"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tenant Activity -->
+        <div class="sg-card">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="users" class="w-4 h-4 text-purple-400"></i>
+                    <h3 class="text-sm font-semibold text-white">Tenant Activity</h3>
+                </div>
+                <button @click="loadTenantUsage()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+
+            <!-- Loading skeleton -->
+            <div x-show="tenantsLoading" class="space-y-2.5">
+                <div class="sg-skeleton h-8 w-full"></div>
+                <div class="sg-skeleton h-8 w-full"></div>
+                <div class="sg-skeleton h-8 w-full"></div>
+            </div>
+
+            <!-- Empty state -->
+            <div x-show="!tenantsLoading && tenants.length === 0 && !tenantsError" class="sg-empty py-8">
+                <i data-lucide="users" class="sg-empty-icon"></i>
+                <p class="sg-empty-title">No tenant traffic yet</p>
+                <p class="sg-empty-desc">Per-tenant volume appears here once requests flow through the proxy</p>
+            </div>
+
+            <!-- Tenant list -->
+            <div x-show="!tenantsLoading && tenants.length > 0" class="space-y-3 max-h-72 overflow-y-auto pr-1">
+                <template x-for="t in tenants" :key="t.name">
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs font-medium text-gray-200 truncate" x-text="t.name"></span>
+                            <span class="text-[11px] text-gray-500 font-mono">
+                                <span x-text="t.total.toLocaleString()"></span>
+                                <span class="text-red-400" x-show="t.blocked > 0">· <span x-text="t.blocked"></span> blocked</span>
+                            </span>
+                        </div>
+                        <div class="flex h-1.5 w-full rounded-full overflow-hidden bg-gray-800">
+                            <div class="h-full transition-all duration-500" :style="`width: ${tenantAllowedPct(t)}%; background: rgba(16,185,129,0.6);`"></div>
+                            <div class="h-full transition-all duration-500" :style="`width: ${tenantBlockedPct(t)}%; background: rgba(239,68,68,0.7);`"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Error state -->
+            <div x-show="tenantsError" class="sg-error py-8">
+                <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+                <p class="sg-error-title">Couldn't load tenant usage</p>
+                <p class="sg-error-desc" x-text="tenantsError"></p>
+                <div class="sg-error-action">
+                    <button @click="loadTenantUsage()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -300,30 +415,74 @@
 <script>
 function dashboardPage() {
     return {
-        period: '1h',
-        periods: [
-            { label: '1h', value: '1h' },
-            { label: '24h', value: '24h' },
-            { label: '7d', value: '7d' },
-            { label: '30d', value: '30d' },
-        ],
-        sparklines: { latency: Array(20).fill(0), rps: Array(20).fill(0), blocked: Array(20).fill(0), queue: Array(20).fill(0) },
+        sparklines: { latency: Array(20).fill(0), rps: Array(20).fill(0), blocked: Array(20).fill(0), detection: Array(20).fill(0) },
         blocks: [],
         blocksLoading: true,
         blocksError: null,
         blockedDelta: 0,
-        queueHealthy: true,
         bypassRate: 0,
         fpRate: 0,
         circuitState: 'closed',
         taskId: null,
         taskOutput: null,
+        // Live connection state (reflects the real SSE stream)
+        connected: false,
+        lastUpdate: 0,
+        lastUpdateLabel: 'connecting…',
+        postureLine: 'Establishing live telemetry stream…',
+        // Verdict distribution (real counters from SSE)
+        verdicts: { allowed: 0, warned: 0, blocked: 0 },
+        // Per-tenant usage (real /admin/health/tenant-usage endpoint)
+        tenants: [],
+        tenantsLoading: true,
+        tenantsError: null,
 
         init() {
             this.loadBlocks();
+            this.loadTenantUsage();
             this.loadPersistedBypassRate();
             this._sparkIdx = 0;
             this.connectSSE();
+            // Refresh the "updated Ns ago" label once per second
+            setInterval(() => this.tickLastUpdate(), 1000);
+        },
+
+        tickLastUpdate() {
+            if (!this.lastUpdate) return;
+            const secs = Math.max(0, Math.round((Date.now() - this.lastUpdate) / 1000));
+            this.lastUpdateLabel = secs < 2 ? 'updated just now' : `updated ${secs}s ago`;
+        },
+
+        verdictPct(kind) {
+            const total = this.verdicts.allowed + this.verdicts.warned + this.verdicts.blocked;
+            if (total <= 0) return 0;
+            return Math.round((this.verdicts[kind] / total) * 100);
+        },
+
+        tenantAllowedPct(t) {
+            if (!t.total) return 0;
+            return Math.round((t.allowed / t.total) * 100);
+        },
+
+        tenantBlockedPct(t) {
+            if (!t.total) return 0;
+            return Math.round((t.blocked / t.total) * 100);
+        },
+
+        async loadTenantUsage() {
+            this.tenantsLoading = true;
+            this.tenantsError = null;
+            try {
+                const r = await fetch('/admin/health/tenant-usage');
+                if (!r.ok) throw new Error('Failed to load');
+                const data = await r.json();
+                this.tenants = Object.entries(data)
+                    .map(([name, v]) => ({ name, total: v.total || 0, blocked: v.blocked || 0, allowed: v.allowed || 0 }))
+                    .sort((a, b) => b.total - a.total);
+            } catch(e) {
+                this.tenantsError = e.message;
+            }
+            this.tenantsLoading = false;
         },
 
         async loadPersistedBypassRate() {
@@ -351,17 +510,23 @@ function dashboardPage() {
                 es.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
+                        this.connected = true;
+                        this.lastUpdate = Date.now();
+                        this.tickLastUpdate();
                         this.updateMetrics(data);
                     } catch(e) {}
                 };
                 es.onerror = () => {
                     es.close();
+                    this.connected = false;
+                    this.lastUpdateLabel = 'reconnecting…';
                     // Reconnect after 10s
                     setTimeout(() => this.connectSSE(), 10000);
                 };
                 // Refresh SSE token every 50s (token lives 60s)
                 setTimeout(() => { es.close(); this.connectSSE(); }, 50000);
             } catch(e) {
+                this.connected = false;
                 setTimeout(() => this.connectSSE(), 10000);
             }
         },
@@ -373,9 +538,16 @@ function dashboardPage() {
                 const key = el.dataset.metric;
                 if (data[key] !== undefined) {
                     const val = data[key];
-                    el.textContent = typeof val === 'number' ? (val % 1 === 0 ? val : val.toFixed(1)) : val;
+                    el.textContent = typeof val === 'number'
+                        ? (val % 1 === 0 ? val.toLocaleString() : val.toFixed(1))
+                        : val;
                 }
             });
+
+            // Verdict distribution (real cumulative counters)
+            if (data.events_allowed !== undefined) this.verdicts.allowed = data.events_allowed;
+            if (data.events_warned !== undefined) this.verdicts.warned = data.events_warned;
+            if (data.events_blocked !== undefined) this.verdicts.blocked = data.events_blocked;
 
             // Update sparklines
             const idx = this._sparkIdx % 20;
@@ -390,16 +562,27 @@ function dashboardPage() {
             if (data.events_blocked !== undefined) {
                 this.sparklines.blocked[idx] = Math.min(100, data.events_blocked * 5);
             }
-            if (data.queue_depth_memory !== undefined) {
-                this.sparklines.queue[idx] = Math.min(100, (data.queue_depth_memory / 1000) * 100);
+            if (data.detection_rate !== undefined) {
+                this.sparklines.detection[idx] = Math.min(100, data.detection_rate);
             }
             this._sparkIdx++;
 
             // Bypass rate: only from persisted red-team reports (loaded at init).
             // Live traffic allowed/total is NOT a bypass rate.
 
-            // Update circuit state
+            // Update circuit state + operator-facing posture line (real state)
             this.circuitState = data.circuit_state || 'closed';
+            this.postureLine = this.buildPostureLine(data);
+        },
+
+        buildPostureLine(data) {
+            const total = data.requests_total || 0;
+            const blocked = data.events_blocked || 0;
+            if (total === 0) return 'No traffic observed yet — guardrails armed and waiting';
+            const p95 = data.latency_p95_ms !== undefined ? `${Number(data.latency_p95_ms).toFixed(0)}ms p95` : null;
+            const parts = [`${total.toLocaleString()} requests inspected`, `${blocked.toLocaleString()} blocked`];
+            if (p95) parts.push(p95);
+            return parts.join(' · ');
         },
 
         async loadBlocks() {
