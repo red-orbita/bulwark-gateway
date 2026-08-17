@@ -159,28 +159,28 @@
             <i data-lucide="list-tree" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
             <p class="text-sm text-gray-400">No processing activities reported</p>
         </div>
-        <div x-show="inventory.length > 0" class="overflow-x-auto">
-            <table class="w-full text-sm">
+        <div x-show="inventory.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
                 <thead>
-                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
-                        <th class="text-left py-2 px-3">Category</th>
-                        <th class="text-left py-2 px-3">Purpose</th>
-                        <th class="text-left py-2 px-3">Legal Basis</th>
-                        <th class="text-left py-2 px-3">Retention</th>
-                        <th class="text-center py-2 px-3">PII</th>
+                    <tr>
+                        <th>Category</th>
+                        <th>Purpose</th>
+                        <th>Legal Basis</th>
+                        <th>Retention</th>
+                        <th class="text-center">PII</th>
                     </tr>
                 </thead>
                 <tbody>
                     <template x-for="cat in inventory" :key="cat.category">
-                        <tr class="border-b border-gray-800 hover:bg-white/[0.02] align-top">
-                            <td class="py-2.5 px-3">
+                        <tr class="align-top">
+                            <td>
                                 <p class="font-medium text-white text-xs" x-text="cat.category"></p>
                                 <p class="text-[10px] text-gray-500 mt-0.5" x-text="cat.description"></p>
                             </td>
-                            <td class="py-2.5 px-3 text-xs text-gray-300" x-text="cat.purpose"></td>
-                            <td class="py-2.5 px-3 text-xs text-gray-300" x-text="cat.legal_basis"></td>
-                            <td class="py-2.5 px-3 text-xs text-gray-300 font-mono" x-text="cat.retention_period"></td>
-                            <td class="py-2.5 px-3 text-center">
+                            <td class="text-xs text-gray-300" x-text="cat.purpose"></td>
+                            <td class="text-xs text-gray-300" x-text="cat.legal_basis"></td>
+                            <td class="text-xs text-gray-300 font-mono" x-text="cat.retention_period"></td>
+                            <td class="text-center">
                                 <span class="text-xs px-2 py-0.5 rounded-full"
                                       :class="cat.contains_pii ? 'bg-amber-500/10 text-amber-400' : 'bg-gray-700 text-gray-400'"
                                       x-text="cat.contains_pii ? 'Yes' : 'No'"></span>
@@ -216,29 +216,29 @@
             <i data-lucide="scroll-text" class="w-10 h-10 text-gray-600 mx-auto mb-3"></i>
             <p class="text-sm text-gray-400">No GDPR requests recorded yet</p>
         </div>
-        <div x-show="requests.length > 0" class="overflow-x-auto">
-            <table class="w-full text-sm">
+        <div x-show="requests.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
                 <thead>
-                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
-                        <th class="text-left py-2 px-3">When</th>
-                        <th class="text-left py-2 px-3">Type</th>
-                        <th class="text-left py-2 px-3">Subject</th>
-                        <th class="text-left py-2 px-3">By</th>
-                        <th class="text-right py-2 px-3">Records</th>
-                        <th class="text-center py-2 px-3">Status</th>
+                    <tr>
+                        <th>When</th>
+                        <th>Type</th>
+                        <th>Subject</th>
+                        <th>By</th>
+                        <th class="sg-num">Records</th>
+                        <th class="text-center">Status</th>
                     </tr>
                 </thead>
                 <tbody>
                     <template x-for="r in requests" :key="r.id">
-                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
-                            <td class="py-2.5 px-3 text-xs text-gray-400 font-mono" x-text="r.requested_at"></td>
-                            <td class="py-2.5 px-3">
+                        <tr>
+                            <td class="text-xs text-gray-400 font-mono" x-text="r.requested_at"></td>
+                            <td>
                                 <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300" x-text="r.request_type"></span>
                             </td>
-                            <td class="py-2.5 px-3 text-xs font-mono text-gray-300" x-text="r.subject_id || '—'"></td>
-                            <td class="py-2.5 px-3 text-xs text-gray-300" x-text="r.requested_by"></td>
-                            <td class="py-2.5 px-3 text-right text-xs font-bold text-gray-200" x-text="r.records_affected"></td>
-                            <td class="py-2.5 px-3 text-center">
+                            <td class="text-xs font-mono text-gray-300" x-text="r.subject_id || '—'"></td>
+                            <td class="text-xs text-gray-300" x-text="r.requested_by"></td>
+                            <td class="sg-num text-xs font-bold text-gray-200" x-text="r.records_affected"></td>
+                            <td class="text-center">
                                 <span class="text-xs px-2 py-0.5 rounded-full"
                                       :class="r.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400' : r.status === 'failed' ? 'bg-red-500/10 text-red-400' : 'bg-gray-700 text-gray-400'"
                                       x-text="r.status"></span>

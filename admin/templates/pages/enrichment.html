@@ -79,36 +79,36 @@
             <p class="text-xs text-gray-500 mt-1">Payloads that bypass regex but get flagged by ML appear here</p>
         </div>
 
-        <div x-show="evasions.length > 0" class="overflow-x-auto">
-            <table class="w-full text-sm">
+        <div x-show="evasions.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
                 <thead>
-                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
-                        <th class="text-left py-2 px-3">Timestamp</th>
-                        <th class="text-left py-2 px-3">Category</th>
-                        <th class="text-left py-2 px-3">Confidence</th>
-                        <th class="text-left py-2 px-3">Scanner</th>
-                        <th class="text-left py-2 px-3">Payload</th>
-                        <th class="text-left py-2 px-3">Regex</th>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Category</th>
+                        <th>Confidence</th>
+                        <th>Scanner</th>
+                        <th>Payload</th>
+                        <th>Regex</th>
                     </tr>
                 </thead>
                 <tbody>
                     <template x-for="e in evasions" :key="e.id">
-                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
-                            <td class="py-2.5 px-3 text-xs text-gray-400 font-mono" x-text="e.timestamp?.slice(0, 19)"></td>
-                            <td class="py-2.5 px-3">
+                        <tr>
+                            <td class="text-xs text-gray-400 font-mono" x-text="e.timestamp?.slice(0, 19)"></td>
+                            <td>
                                 <span class="sg-badge sg-badge-danger text-[10px]" x-text="e.category || 'unknown'"></span>
                             </td>
-                            <td class="py-2.5 px-3">
+                            <td>
                                 <span class="font-mono text-xs" :class="e.enrichment_confidence > 0.9 ? 'text-red-400' : 'text-amber-400'"
                                       x-text="(e.enrichment_confidence * 100).toFixed(0) + '%'"></span>
                             </td>
-                            <td class="py-2.5 px-3 text-xs text-gray-400" x-text="e.enrichment_scanner || '-'"></td>
-                            <td class="py-2.5 px-3">
+                            <td class="text-xs text-gray-400" x-text="e.enrichment_scanner || '-'"></td>
+                            <td>
                                 <span class="font-mono text-xs text-gray-300 truncate max-w-[200px] inline-block"
                                       :title="e.payload_prefix"
                                       x-text="(e.payload_prefix || '').slice(0, 60) + '...'"></span>
                             </td>
-                            <td class="py-2.5 px-3">
+                            <td>
                                 <span x-show="e.regex_candidate" class="text-emerald-400 text-[10px]">generated</span>
                                 <span x-show="!e.regex_candidate" class="text-gray-600 text-[10px]">—</span>
                             </td>
@@ -191,35 +191,35 @@
             <p class="text-xs text-gray-500 mt-1">Enable enrichment: <code>BULWARK_ENRICHMENT_ENABLED=true</code></p>
         </div>
 
-        <div x-show="entries.length > 0" class="overflow-x-auto">
-            <table class="w-full text-sm">
+        <div x-show="entries.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
                 <thead>
-                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
-                        <th class="text-left py-2 px-3">Time</th>
-                        <th class="text-left py-2 px-3">Verdict</th>
-                        <th class="text-left py-2 px-3">Enrichment</th>
-                        <th class="text-left py-2 px-3">Confidence</th>
-                        <th class="text-left py-2 px-3">Category</th>
-                        <th class="text-left py-2 px-3">Evasion</th>
+                    <tr>
+                        <th>Time</th>
+                        <th>Verdict</th>
+                        <th>Enrichment</th>
+                        <th>Confidence</th>
+                        <th>Category</th>
+                        <th>Evasion</th>
                     </tr>
                 </thead>
                 <tbody>
                     <template x-for="e in entries" :key="e.id">
-                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
-                            <td class="py-2.5 px-3 text-xs text-gray-400 font-mono" x-text="e.timestamp?.slice(11, 19)"></td>
-                            <td class="py-2.5 px-3">
+                        <tr>
+                            <td class="text-xs text-gray-400 font-mono" x-text="e.timestamp?.slice(11, 19)"></td>
+                            <td>
                                 <span class="sg-badge text-[10px]"
                                       :class="e.verdict === 'BLOCK' ? 'sg-badge-danger' : e.verdict === 'WARN' ? 'sg-badge-warning' : 'sg-badge-success'"
                                       x-text="e.verdict"></span>
                             </td>
-                            <td class="py-2.5 px-3">
+                            <td>
                                 <span class="text-xs"
                                       :class="e.enrichment_status === 'threat' ? 'text-red-400' : e.enrichment_status === 'suspicious' ? 'text-amber-400' : 'text-gray-400'"
                                       x-text="e.enrichment_status || 'pending'"></span>
                             </td>
-                            <td class="py-2.5 px-3 font-mono text-xs" x-text="e.enrichment_confidence ? (e.enrichment_confidence * 100).toFixed(0) + '%' : '-'"></td>
-                            <td class="py-2.5 px-3 text-xs text-gray-400" x-text="e.category || '-'"></td>
-                            <td class="py-2.5 px-3">
+                            <td class="font-mono text-xs" x-text="e.enrichment_confidence ? (e.enrichment_confidence * 100).toFixed(0) + '%' : '-'"></td>
+                            <td class="text-xs text-gray-400" x-text="e.category || '-'"></td>
+                            <td>
                                 <span x-show="e.is_evasion" class="text-red-400 text-xs font-bold">YES</span>
                                 <span x-show="!e.is_evasion" class="text-gray-600 text-xs">—</span>
                             </td>

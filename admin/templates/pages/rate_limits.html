@@ -91,32 +91,32 @@
         </div>
 
         <!-- Table -->
-        <div x-show="Object.keys(tenants).length > 0" class="overflow-x-auto">
-            <table class="w-full text-sm">
+        <div x-show="Object.keys(tenants).length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
                 <thead>
-                    <tr class="border-b border-gray-700 text-gray-400 text-xs">
-                        <th class="text-left py-2 px-3">Tenant ID</th>
-                        <th class="text-right py-2 px-3">RPM Limit</th>
-                        <th class="text-right py-2 px-3">vs Global</th>
-                        <th class="text-right py-2 px-3">Actions</th>
+                    <tr>
+                        <th>Tenant ID</th>
+                        <th class="sg-num">RPM Limit</th>
+                        <th class="sg-num">vs Global</th>
+                        <th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <template x-for="[tid, rpm] in Object.entries(tenants)" :key="tid">
-                        <tr class="border-b border-gray-800 hover:bg-white/[0.02]">
-                            <td class="py-2.5 px-3">
+                        <tr>
+                            <td>
                                 <span class="font-mono text-white text-xs" x-text="tid"></span>
                             </td>
-                            <td class="py-2.5 px-3 text-right">
+                            <td class="sg-num">
                                 <span class="font-mono font-bold" :class="rpm > globalConfig.rate_limit_rpm ? 'text-emerald-400' : rpm < globalConfig.rate_limit_rpm ? 'text-red-400' : 'text-gray-300'" x-text="rpm"></span>
                                 <span class="text-xs text-gray-500 ml-1">RPM</span>
                             </td>
-                            <td class="py-2.5 px-3 text-right">
+                            <td class="sg-num">
                                 <span class="text-xs px-2 py-0.5 rounded-full"
                                       :class="rpm > globalConfig.rate_limit_rpm ? 'bg-emerald-500/10 text-emerald-400' : rpm < globalConfig.rate_limit_rpm ? 'bg-red-500/10 text-red-400' : 'bg-gray-700 text-gray-400'"
                                       x-text="rpm > globalConfig.rate_limit_rpm ? '+' + (rpm - globalConfig.rate_limit_rpm) : rpm < globalConfig.rate_limit_rpm ? (rpm - globalConfig.rate_limit_rpm) : 'same'"></span>
                             </td>
-                            <td class="py-2.5 px-3 text-right">
+                            <td class="text-right">
                                 <button @click="editTenant(tid, rpm)" class="text-gray-400 hover:text-cyan-400 p-1">
                                     <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                                 </button>

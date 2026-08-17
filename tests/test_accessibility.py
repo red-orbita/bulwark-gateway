@@ -627,5 +627,21 @@ def test_policies_restore_calls_rollback_and_is_permission_gated():
     )
 
 
+# ─── Visual consistency: all data tables share the design-system table ────────
+
+
+def test_all_data_tables_use_the_design_system_table_class():
+    """Hand-rolled `<table class="w-full text-sm">` blocks with bespoke padding
+    and border utilities were the tell of piecemeal, inconsistent styling. Every
+    table must go through the shared `.sg-table` component so density, hover,
+    borders and sticky headers stay uniform across the console."""
+    offenders = []
+    for page in PAGES_DIR.glob("*.html"):
+        for tag in re.findall(r"<table\b[^>]*>", page.read_text(encoding="utf-8")):
+            if "sg-table" not in tag:
+                offenders.append(f"{page.name}: {tag}")
+    assert not offenders, "raw tables must adopt .sg-table:\n" + "\n".join(offenders)
+
+
 
 
