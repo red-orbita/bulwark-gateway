@@ -581,5 +581,51 @@ def test_dashboard_tenant_activity_uses_real_endpoint_with_states():
     )
 
 
+# ─── Policies: version history is a real panel, not a toast ───────────────────
+
+
+def test_policies_version_history_opens_a_real_panel():
+    """The version-history control previously only fired a toast with a count
+    ('N version(s) available') — a control that implies a viewer but shows none.
+    It must now open a real modal that lists the actual versions."""
+    src = (PAGES_DIR / "policies.html").read_text(encoding="utf-8")
+    assert "version(s) available" not in src, (
+        "the deceptive count-only toast must be gone"
+    )
+    assert 'x-show="showVersions"' in src, "a real version-history modal must exist"
+    # It renders the actual version records returned by the backend.
+    assert 'x-for="(v, idx) in versions"' in src
+    for field in ("v.checksum", "formatVersionTime(v)", "formatBytes(v.size)"):
+        assert field in src, f"version rows must surface {field}"
+
+
+def test_policies_version_history_consumes_real_endpoint_with_states():
+    """The panel must fetch the real versions endpoint and cover
+    loading / empty / error states like the rest of the console."""
+    src = (PAGES_DIR / "policies.html").read_text(encoding="utf-8")
+    assert "/versions`" in src and "loadVersions(" in src, "must fetch real versions"
+    assert "versionsLoading" in src and "sg-skeleton" in src, "needs a loading state"
+    assert "versionsError" in src, "needs an error state"
+    # Distinguishes 'only current, no backups' from a failure.
+    assert "No previous versions" in src, "needs an empty (no-backups) state"
+
+
+def test_policies_restore_calls_rollback_and_is_permission_gated():
+    """Restore must hit the rollback endpoint with the version key, and the
+    control must be gated on the admin-only config:rollback permission rather
+    than presented to roles that would only ever get a 403."""
+    src = (PAGES_DIR / "policies.html").read_text(encoding="utf-8")
+    assert "restoreVersion(" in src and "/rollback?version=" in src, (
+        "restore must call the real rollback endpoint with the version key"
+    )
+    # Gated client-side (honest affordance) and still enforced server-side.
+    assert "canRollback" in src and "bulwark_role" in src, (
+        "restore button must be gated on the admin role"
+    )
+    assert 'x-if="v.version !== \'current\' && canRollback"' in src, (
+        "restore must be hidden for the current version and for non-admins"
+    )
+
+
 
 

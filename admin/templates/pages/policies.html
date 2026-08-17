@@ -219,6 +219,88 @@
             </div>
         </div>
     </div>
+
+    <!-- Version History Modal -->
+    <div x-show="showVersions" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
+         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
+         x-transition:leave="transition duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="closeVersions()"></div>
+        <div class="relative bg-surface-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-xl max-h-[85vh] overflow-hidden flex flex-col"
+             x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0 scale-95">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-700/50">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center">
+                        <i data-lucide="history" class="w-4 h-4 text-brand-400"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-semibold text-white">Version History</h3>
+                        <p class="text-[11px] text-gray-500 font-mono" x-text="versionsPolicy?.name"></p>
+                    </div>
+                </div>
+                <button @click="closeVersions()" class="p-1.5 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <!-- Body -->
+            <div class="flex-1 overflow-y-auto px-6 py-5">
+                <!-- Loading -->
+                <div x-show="versionsLoading" class="space-y-3">
+                    <div class="sg-skeleton h-16 w-full"></div>
+                    <div class="sg-skeleton h-16 w-full"></div>
+                    <div class="sg-skeleton h-16 w-full"></div>
+                </div>
+                <!-- Error -->
+                <div x-show="!versionsLoading && versionsError" class="sg-empty">
+                    <i data-lucide="alert-circle" class="sg-empty-icon text-red-400/70"></i>
+                    <p class="sg-empty-title">Failed to load versions</p>
+                    <p class="sg-empty-desc" x-text="versionsError"></p>
+                    <button @click="loadVersions(versionsPolicy)" class="sg-btn sg-btn-ghost sg-btn-sm mt-4">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Retry
+                    </button>
+                </div>
+                <!-- Empty (only current, no backups) -->
+                <div x-show="!versionsLoading && !versionsError && versions.length <= 1" class="sg-empty">
+                    <i data-lucide="history" class="sg-empty-icon"></i>
+                    <p class="sg-empty-title">No previous versions</p>
+                    <p class="sg-empty-desc">Backups are captured automatically each time this policy is edited. Only the current version exists so far.</p>
+                </div>
+                <!-- Version list -->
+                <div x-show="!versionsLoading && !versionsError && versions.length > 1" class="space-y-2">
+                    <template x-for="(v, idx) in versions" :key="v.version">
+                        <div class="flex items-center gap-3 px-4 py-3 rounded-lg border"
+                             :class="v.version === 'current' ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-gray-800/40 border-gray-700/60'">
+                            <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                                 :class="v.version === 'current' ? 'bg-emerald-500/10' : 'bg-gray-700/50'">
+                                <i :data-lucide="v.version === 'current' ? 'check-circle-2' : 'archive'" class="w-4 h-4"
+                                   :class="v.version === 'current' ? 'text-emerald-400' : 'text-gray-400'"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="sg-badge" :class="v.version === 'current' ? 'sg-badge-success' : 'sg-badge-neutral'"
+                                          x-text="v.version === 'current' ? 'Current' : 'Backup'"></span>
+                                    <span class="text-xs text-gray-300 tabular-nums" x-text="formatVersionTime(v)"></span>
+                                </div>
+                                <div class="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
+                                    <span class="flex items-center gap-1"><i data-lucide="file" class="w-3 h-3"></i> <span x-text="formatBytes(v.size)"></span></span>
+                                    <span class="flex items-center gap-1 font-mono"><i data-lucide="fingerprint" class="w-3 h-3"></i> <span x-text="v.checksum"></span></span>
+                                </div>
+                            </div>
+                            <template x-if="v.version !== 'current' && canRollback">
+                                <button @click="restoreVersion(v)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Restore this version">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Restore
+                                </button>
+                            </template>
+                        </div>
+                    </template>
+                    <p x-show="!canRollback" class="text-[11px] text-gray-600 italic pt-1 flex items-center gap-1.5">
+                        <i data-lucide="lock" class="w-3 h-3"></i>
+                        Restoring a version requires the <code>config:rollback</code> permission (admin role).
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -232,6 +314,12 @@ function policiesManager() {
         validationResult: null,
         loading: true,
         yamlManual: false,
+        showVersions: false,
+        versionsPolicy: null,
+        versions: [],
+        versionsLoading: false,
+        versionsError: '',
+        canRollback: (localStorage.getItem('bulwark_role') || '') === 'admin',
         form: {
             name: '', tenant_id: 'default', agent_id: '', sandbox_level: 'strict',
             allowed_tools_str: '', denied_tools_str: '', max_tool_calls: 20,
@@ -364,8 +452,79 @@ function policiesManager() {
         },
 
         async viewVersions(policy) {
-            const resp = await fetch(`/admin/policies/${policy.name}/versions`);
-            if (resp.ok) { const data = await resp.json(); showToast(`${data.length} version(s) available`, 'info'); }
+            this.versionsPolicy = policy;
+            this.showVersions = true;
+            await this.loadVersions(policy);
+        },
+
+        async loadVersions(policy) {
+            this.versionsLoading = true;
+            this.versionsError = '';
+            this.versions = [];
+            try {
+                const resp = await fetch(`/admin/policies/${policy.name}/versions`);
+                if (resp.ok) {
+                    this.versions = await resp.json();
+                } else {
+                    this.versionsError = resp.status === 403
+                        ? 'You do not have permission to view policy versions.'
+                        : `Server returned ${resp.status}.`;
+                }
+            } catch(e) {
+                this.versionsError = e.message || 'Network error.';
+            }
+            this.versionsLoading = false;
+            this.$nextTick(() => lucide.createIcons());
+        },
+
+        closeVersions() {
+            this.showVersions = false;
+            this.versionsPolicy = null;
+            this.versions = [];
+            this.versionsError = '';
+        },
+
+        async restoreVersion(v) {
+            if (v.version === 'current') return;
+            const when = this.formatVersionTime(v);
+            const ok = await showConfirm(
+                'Restore Policy Version',
+                `Restore "${this.versionsPolicy.name}" to the backup from ${when}? The current version is backed up first, so this is reversible.`,
+                'Restore');
+            if (!ok) return;
+            const resp = await fetch(
+                `/admin/policies/${this.versionsPolicy.name}/rollback?version=${encodeURIComponent(v.timestamp)}`,
+                { method: 'POST' });
+            if (resp.ok) {
+                showToast('Policy restored and hot-reloaded', 'success');
+                await this.loadVersions(this.versionsPolicy);
+                await this.init();
+            } else if (resp.status === 403) {
+                showToast('Insufficient permissions to restore (requires config:rollback)', 'error');
+            } else {
+                const err = await resp.json().catch(()=>({}));
+                showToast(err.detail || 'Failed to restore version', 'error');
+            }
+        },
+
+        // Backups store the raw strftime stamp (YYYYMMDD-HHMMSS, UTC); the current
+        // version stores an ISO timestamp. Normalize both to a local, readable time.
+        formatVersionTime(v) {
+            const t = v.timestamp || '';
+            const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(t);
+            let d;
+            if (m) {
+                d = new Date(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]));
+            } else {
+                d = new Date(t);
+            }
+            return isNaN(d.getTime()) ? (t || '—') : d.toLocaleString();
+        },
+
+        formatBytes(n) {
+            if (n === null || n === undefined) return '—';
+            if (n < 1024) return `${n} B`;
+            return `${(n/1024).toFixed(1)} KB`;
         },
 
         async dryRun() {
