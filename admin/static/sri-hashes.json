@@ -5,5 +5,6 @@
   "htmx-sse.js": "sha384-OZrRw8/Zvv0VFGJJF6TN3gABVZvvO60Xz7RWkQKAmoRe+t1dc5J/ySJvXbpL+N+Q",
   "lucide.min.js": "sha384-cmdVzp/LNswnLRGK6j6+cMUsn7jTxO+fX9W5jw6A+4iaSvhkiSdj8/B9nJyBgtKQ",
   "qrcode.min.js": "sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU",
-  "fonts.css": "sha384-XgeFDwW9V2hm/7UqsdbZ5oY6wnNzRAZX7gSu8Z2JfSLiG6l7lVBgff/oz9UCVn7W"
+  "fonts.css": "sha384-XgeFDwW9V2hm/7UqsdbZ5oY6wnNzRAZX7gSu8Z2JfSLiG6l7lVBgff/oz9UCVn7W",
+  "tailwind.min.css": "sha384-AI60PjNFgy34Ays331Dov9wROQwcPhX3G/CWpiOTzdQ4kIx2z2cdJZpLMExhhYv8"
 }

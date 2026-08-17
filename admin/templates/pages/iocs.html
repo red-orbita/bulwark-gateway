@@ -55,7 +55,32 @@
 
     <!-- IOC Table -->
     <div class="sg-card !p-0">
-        <div class="overflow-x-auto">
+        <!-- Loading: skeleton rows (zero layout shift) -->
+        <div x-show="loading">
+            <template x-for="i in 8" :key="i">
+                <div class="sg-skeleton-row">
+                    <div class="sg-skeleton-text" style="max-width:3.5rem"></div>
+                    <div class="sg-skeleton-text"></div>
+                    <div class="sg-skeleton-text" style="max-width:5rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:4rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:3rem"></div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Error -->
+        <div x-show="error && !loading" class="sg-error">
+            <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+            <p class="sg-error-title">Couldn't load indicators</p>
+            <p class="sg-error-desc">The IOC store didn't respond. Check the connection and try again.</p>
+            <div class="sg-error-action">
+                <button @click="loadIocs()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                </button>
+            </div>
+        </div>
+
+        <div x-show="!loading && !error && iocs.length > 0" class="sg-table-scroll">
             <table class="sg-table">
                 <thead>
                     <tr>
@@ -79,7 +104,7 @@
                             <td class="text-gray-400 text-xs" x-text="ioc.source"></td>
                             <td>
                                 <span class="sg-badge"
-                                    :class="ioc.severity === 'critical' ? 'sg-badge-danger' : ioc.severity === 'high' ? 'sg-badge-warning' : ioc.severity === 'medium' ? 'sg-badge-brand' : 'sg-badge-neutral'"
+                                    :class="'sg-badge-' + (ioc.severity || 'low')"
                                     x-text="ioc.severity"></span>
                             </td>
                             <td class="text-gray-300" x-text="ioc.confidence + '%'"></td>
@@ -106,7 +131,7 @@
             </table>
         </div>
         <!-- Empty state -->
-        <div x-show="iocs.length === 0" class="sg-empty">
+        <div x-show="!loading && !error && iocs.length === 0" class="sg-empty">
             <div class="sg-empty-icon">
                 <i data-lucide="shield-x" class="w-8 h-8"></i>
             </div>
@@ -114,7 +139,7 @@
             <p class="sg-empty-desc">Add indicators manually or configure a feed source</p>
         </div>
         <!-- Pagination -->
-        <div x-show="iocs.length > 0" class="px-5 py-3 border-t border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-gray-400">
+        <div x-show="!loading && !error && iocs.length > 0" class="px-5 py-3 border-t border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-gray-400">
             <span>Page <span x-text="page"></span> of <span x-text="totalPages"></span> (<span x-text="total"></span> total)</span>
             <div class="flex gap-2">
                 <button @click="page > 1 && (page--, loadIocs())" :disabled="page <= 1" class="sg-btn sg-btn-secondary sg-btn-sm" :class="page <= 1 && 'opacity-50'">
@@ -361,6 +386,8 @@ function iocsManager() {
         perPage: 25,
         total: 0,
         totalPages: 1,
+        loading: true,
+        error: false,
         showModal: false,
         showBulk: false,
         showFeedModal: false,
@@ -374,19 +401,26 @@ function iocsManager() {
             await this.loadFeeds();
         },
         async loadIocs() {
-            let url = `/admin/iocs?page=${this.page}&per_page=${this.perPage}`;
-            if (this.filters.type) url += `&type=${this.filters.type}`;
-            if (this.filters.severity) url += `&severity=${this.filters.severity}`;
-            if (this.filters.source) url += `&source=${this.filters.source}`;
-            if (this.filters.search) url += `&search=${encodeURIComponent(this.filters.search)}`;
-            const resp = await fetch(url);
-            if (resp.ok) {
+            this.loading = true;
+            this.error = false;
+            try {
+                let url = `/admin/iocs?page=${this.page}&per_page=${this.perPage}`;
+                if (this.filters.type) url += `&type=${this.filters.type}`;
+                if (this.filters.severity) url += `&severity=${this.filters.severity}`;
+                if (this.filters.source) url += `&source=${this.filters.source}`;
+                if (this.filters.search) url += `&search=${encodeURIComponent(this.filters.search)}`;
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error(`iocs ${resp.status}`);
                 const data = await resp.json();
                 this.iocs = data.items || data;
                 this.total = data.total || this.iocs.length;
                 this.totalPages = Math.ceil(this.total / this.perPage) || 1;
                 const s = new Set(this.iocs.map(i => i.source).filter(Boolean));
                 if (this.sources.length === 0) this.sources = [...s];
+            } catch (e) {
+                this.error = true;
+            } finally {
+                this.loading = false;
             }
         },
         async loadFeeds() {

@@ -199,17 +199,22 @@
                         <span class="sg-dot sg-dot-danger flex-shrink-0"></span>
                         <span class="text-[11px] text-gray-500 font-mono w-14 flex-shrink-0" x-text="new Date(b.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})"></span>
                         <span class="sg-badge sg-badge-neutral text-[10px]" x-text="b.tenant"></span>
-                        <span class="sg-badge text-[10px]" :class="{'sg-badge-danger': b.severity==='critical', 'sg-badge-warning': b.severity==='high', 'sg-badge-neutral': b.severity==='medium'}" x-text="b.category"></span>
+                        <span class="sg-badge text-[10px]" :class="'sg-badge-' + (b.severity || 'low')" x-text="b.category"></span>
                         <span class="text-xs text-gray-300 truncate flex-1" x-text="b.description"></span>
                     </div>
                 </template>
             </div>
 
             <!-- Error state -->
-            <div x-show="blocksError" class="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
-                <i data-lucide="alert-circle" class="w-4 h-4 text-red-400"></i>
-                <span class="text-xs text-red-300" x-text="blocksError"></span>
-                <button @click="loadBlocks()" class="ml-auto text-xs text-red-400 hover:text-red-300 underline">Retry</button>
+            <div x-show="blocksError" class="sg-error py-8">
+                <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+                <p class="sg-error-title">Couldn't load recent blocks</p>
+                <p class="sg-error-desc" x-text="blocksError"></p>
+                <div class="sg-error-action">
+                    <button @click="loadBlocks()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                    </button>
+                </div>
             </div>
         </div>
 

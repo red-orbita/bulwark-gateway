@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="/static/css/fonts.css" integrity="sha384-XgeFDwW9V2hm/7UqsdbZ5oY6wnNzRAZX7gSu8Z2JfSLiG6l7lVBgff/oz9UCVn7W" crossorigin="anonymous">
 
     <!-- Tailwind CSS (pre-built) -->
-    <link rel="stylesheet" href="/static/css/tailwind.min.css" integrity="sha384-Fv9EC4uc+frCf/yXI/LeGT6nxwFBDrHRn14eYw7SuTQMuB5n9zPN21j9Tyv0gCgK" crossorigin="anonymous">
+    <link rel="stylesheet" href="/static/css/tailwind.min.css" integrity="sha384-AI60PjNFgy34Ays331Dov9wROQwcPhX3G/CWpiOTzdQ4kIx2z2cdJZpLMExhhYv8" crossorigin="anonymous">
 
     <!-- Alpine.js (vendored) -->
     <script src="/static/js/vendor/alpine-collapse.min.js" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n" crossorigin="anonymous" defer></script>
@@ -110,8 +110,9 @@
             content: '';
             position: fixed;
             inset: 0;
-            background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(6, 182, 212, 0.03), transparent),
-                        radial-gradient(ellipse 60% 40% at 80% 50%, rgba(99, 102, 241, 0.02), transparent);
+            background: radial-gradient(ellipse 90% 55% at 50% -20%, rgba(6, 182, 212, 0.11), transparent 60%),
+                        radial-gradient(ellipse 70% 50% at 85% 8%, rgba(99, 102, 241, 0.09), transparent 55%),
+                        radial-gradient(ellipse 60% 45% at 8% 100%, rgba(6, 182, 212, 0.06), transparent 55%);
             pointer-events: none;
             z-index: 0;
         }
@@ -342,7 +343,7 @@
         </header>
 
         <!-- Page content -->
-        <main id="main-content" tabindex="-1" class="p-4 lg:p-6 max-w-[1600px] relative">
+        <main id="main-content" tabindex="-1" class="sg-page-enter p-4 lg:p-6 max-w-[1600px] relative">
             {% block content %}{% endblock %}
         </main>
     </div>

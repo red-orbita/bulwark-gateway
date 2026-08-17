@@ -228,9 +228,9 @@
                         <p class="text-sm font-semibold text-white" x-text="securityResults.plugin_name"></p>
                         <p class="text-xs text-gray-500" x-text="securityResults.findings.length + ' finding(s)'"></p>
                         <span class="sg-badge mt-1 text-[10px]" :class="{
-                            'sg-badge-success': securityResults.verdict === 'pass',
-                            'sg-badge-warning': securityResults.verdict === 'warn',
-                            'sg-badge-danger': securityResults.verdict === 'block',
+                            'sg-badge-allow': securityResults.verdict === 'pass',
+                            'sg-badge-warn': securityResults.verdict === 'warn',
+                            'sg-badge-block': securityResults.verdict === 'block',
                         }" x-text="securityResults.verdict.toUpperCase()"></span>
                     </div>
                 </div>

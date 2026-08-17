@@ -6,20 +6,54 @@
    Dark-only theme. Inspired by: Linear, Vercel, Datadog, Raycast
    ============================================================ */
 
+/* === Motion & interaction tokens ===
+   Single source of truth for easing and press feedback.
+   --sg-ease  : ease-out-expo — fast start, gentle settle (Linear/Vercel feel).
+   --sg-press : tactile scale applied on :active for physical button feedback.
+   Transitions are scoped to explicit properties (transform/opacity/box-shadow/
+   colors) — never `all` — to avoid animating layout and keep interactions on
+   the compositor (60fps). */
+:root {
+    --sg-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --sg-ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+    --sg-dur: 180ms;
+    --sg-press: 0.98;
+
+    /* === Semantic security palette ===
+       Map security MEANING → colour so every view speaks ONE language instead
+       of hand-rolling colours per page. Two orthogonal scales:
+         verdict : allow / warn / block / redact   (the proxy's decision)
+         severity: low / medium / high / critical   (an event's weight)
+       Each token is a light text tint (chosen for ≥4.5:1 contrast on the
+       #030712 canvas) plus an -rgb triplet for building tinted fills/borders. */
+    --sg-allow:      #6ee7b7;  --sg-allow-rgb:      16, 185, 129;
+    --sg-warn:       #fcd34d;  --sg-warn-rgb:       245, 158, 11;
+    --sg-block:      #fca5a5;  --sg-block-rgb:      239, 68, 68;
+    --sg-redact:     #93c5fd;  --sg-redact-rgb:     59, 130, 246;
+    --sg-sev-low:      #93c5fd;  --sg-sev-low-rgb:      59, 130, 246;
+    --sg-sev-medium:   #fcd34d;  --sg-sev-medium-rgb:   245, 158, 11;
+    --sg-sev-high:     #fdba74;  --sg-sev-high-rgb:     249, 115, 22;
+    --sg-sev-critical: #fda4af;  --sg-sev-critical-rgb: 244, 63, 94;
+}
+
 /* === Navigation === */
 .nav-item {
     display: flex;
     align-items: center;
     gap: 0.75rem;
     padding: 0.5rem 0.75rem;
+    min-height: 44px;
     margin: 2px 0.5rem;
     border-radius: 10px;
     font-size: 0.8125rem;
     font-weight: 450;
-    color: #6b7280;
-    transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+    color: #9ca3af;
+    transition-property: color, background-color, box-shadow, transform;
+    transition-duration: var(--sg-dur);
+    transition-timing-function: var(--sg-ease);
     position: relative;
 }
+.nav-item:active { transform: scale(var(--sg-press)); }
 .nav-item:hover {
     background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.06));
     color: #e5e7eb;
@@ -51,23 +85,28 @@
     justify-content: center;
     gap: 0.5rem;
     padding: 0.5rem 1rem;
+    min-height: 38px;
     border-radius: 10px;
     font-size: 0.8125rem;
     font-weight: 500;
     letter-spacing: -0.01em;
-    transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition-property: color, background-color, box-shadow, transform;
+    transition-duration: var(--sg-dur);
+    transition-timing-function: var(--sg-ease);
     outline: none;
     cursor: pointer;
     border: none;
     position: relative;
     overflow: hidden;
 }
-.sg-btn:focus-visible { box-shadow: 0 0 0 2px #030712, 0 0 0 4px #06b6d4; }
+/* Single focus indicator: buttons use their own ring, suppress the global outline. */
+.sg-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px #030712, 0 0 0 4px #06b6d4; }
 .sg-btn:disabled { opacity: 0.4; pointer-events: none; }
-.sg-btn:active { transform: scale(0.97); }
+.sg-btn:active { transform: scale(var(--sg-press)); }
 
-.sg-btn-sm { padding: 0.375rem 0.75rem; font-size: 0.75rem; border-radius: 6px; }
-.sg-btn-lg { padding: 0.75rem 1.5rem; font-size: 0.9375rem; }
+/* sg-btn-sm stays compact for dense toolbars/table rows (AA target ≥24px). */
+.sg-btn-sm { padding: 0.375rem 0.75rem; min-height: 30px; font-size: 0.75rem; border-radius: 6px; }
+.sg-btn-lg { padding: 0.75rem 1.5rem; min-height: 44px; font-size: 0.9375rem; }
 
 .sg-btn-primary {
     background: linear-gradient(135deg, #0891b2, #06b6d4);
@@ -140,10 +179,13 @@
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 10px;
     padding: 0.5rem 0.75rem;
+    min-height: 38px;
     font-size: 0.8125rem;
     color: #f3f4f6;
     outline: none;
-    transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition-property: border-color, box-shadow;
+    transition-duration: var(--sg-dur);
+    transition-timing-function: var(--sg-ease);
     box-shadow: 0 1px 2px rgba(0,0,0,0.3);
 }
 .sg-input::placeholder { color: #4b5563; }
@@ -152,7 +194,7 @@
     box-shadow: 0 1px 2px rgba(0,0,0,0.3), 0 0 0 3px rgba(6, 182, 212, 0.1);
 }
 
-.sg-input-sm { padding: 0.375rem 0.625rem; font-size: 0.75rem; border-radius: 6px; }
+.sg-input-sm { padding: 0.375rem 0.625rem; min-height: 30px; font-size: 0.75rem; border-radius: 6px; }
 
 .sg-select {
     width: 100%;
@@ -160,12 +202,15 @@
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 10px;
     padding: 0.5rem 0.75rem;
+    min-height: 38px;
     font-size: 0.8125rem;
     color: #f3f4f6;
     outline: none;
     cursor: pointer;
     box-shadow: 0 1px 2px rgba(0,0,0,0.3);
-    transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition-property: border-color, box-shadow;
+    transition-duration: var(--sg-dur);
+    transition-timing-function: var(--sg-ease);
 }
 .sg-select:focus {
     border-color: rgba(6, 182, 212, 0.5);
@@ -206,13 +251,16 @@
     box-shadow: 0 1px 2px rgba(0,0,0,0.3);
     backdrop-filter: blur(12px);
     position: relative;
-    transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition-property: border-color, box-shadow, transform;
+    transition-duration: 250ms;
+    transition-timing-function: var(--sg-ease);
 }
 .sg-card-hover:hover {
     border-color: rgba(255, 255, 255, 0.12);
     box-shadow: 0 4px 6px rgba(0,0,0,0.4), 0 0 30px rgba(6, 182, 212, 0.03);
     transform: translateY(-2px);
 }
+.sg-card-hover:active { transform: translateY(-1px) scale(0.995); }
 
 /* === Badges === */
 .sg-badge {
@@ -251,8 +299,29 @@
     box-shadow: inset 0 0 0 1px rgba(107, 114, 128, 0.15);
 }
 
-/* === Tables === */
-.sg-table { width: 100%; font-size: 0.8125rem; }
+/* === Semantic badges (security domain) ===
+   Thin, token-driven variants so views label by MEANING. Use these instead of
+   raw colour utilities: `sg-badge sg-badge-block`, `sg-badge sg-badge-high`,
+   or data-driven `:class="'sg-badge-' + verdict"`. One authoritative mapping —
+   change a token in :root and every badge/dot/chart updates in lockstep. */
+.sg-badge-allow    { background: rgba(var(--sg-allow-rgb), 0.1);      color: var(--sg-allow);      box-shadow: inset 0 0 0 1px rgba(var(--sg-allow-rgb), 0.22),      0 0 8px rgba(var(--sg-allow-rgb), 0.08); }
+.sg-badge-warn     { background: rgba(var(--sg-warn-rgb), 0.1);       color: var(--sg-warn);       box-shadow: inset 0 0 0 1px rgba(var(--sg-warn-rgb), 0.22),       0 0 8px rgba(var(--sg-warn-rgb), 0.08); }
+.sg-badge-block    { background: rgba(var(--sg-block-rgb), 0.1);      color: var(--sg-block);      box-shadow: inset 0 0 0 1px rgba(var(--sg-block-rgb), 0.22),      0 0 8px rgba(var(--sg-block-rgb), 0.08); }
+.sg-badge-redact   { background: rgba(var(--sg-redact-rgb), 0.1);     color: var(--sg-redact);     box-shadow: inset 0 0 0 1px rgba(var(--sg-redact-rgb), 0.22),     0 0 8px rgba(var(--sg-redact-rgb), 0.08); }
+.sg-badge-low      { background: rgba(var(--sg-sev-low-rgb), 0.1);      color: var(--sg-sev-low);      box-shadow: inset 0 0 0 1px rgba(var(--sg-sev-low-rgb), 0.22); }
+.sg-badge-medium   { background: rgba(var(--sg-sev-medium-rgb), 0.1);   color: var(--sg-sev-medium);   box-shadow: inset 0 0 0 1px rgba(var(--sg-sev-medium-rgb), 0.22); }
+.sg-badge-high     { background: rgba(var(--sg-sev-high-rgb), 0.1);     color: var(--sg-sev-high);     box-shadow: inset 0 0 0 1px rgba(var(--sg-sev-high-rgb), 0.22); }
+.sg-badge-critical { background: rgba(var(--sg-sev-critical-rgb), 0.12); color: var(--sg-sev-critical); box-shadow: inset 0 0 0 1px rgba(var(--sg-sev-critical-rgb), 0.3), 0 0 10px rgba(var(--sg-sev-critical-rgb), 0.12); }
+/* `info` == low-severity blue; kept as an explicit alias so existing
+   `sg-badge-info` references resolve (previously undefined → unstyled). */
+.sg-badge-info     { background: rgba(var(--sg-sev-low-rgb), 0.1);      color: var(--sg-sev-low);      box-shadow: inset 0 0 0 1px rgba(var(--sg-sev-low-rgb), 0.22); }
+
+/* === Data table === */
+/* Opaque header fill so sticky column labels never let body rows bleed through.
+   Tuned to the card's blended top edge (rgba(17,24,39,.8) over #030712). */
+:root { --sg-th-bg: #0c111b; }
+
+.sg-table { width: 100%; font-size: 0.8125rem; border-collapse: collapse; }
 .sg-table thead { border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
 .sg-table th {
     text-align: left;
@@ -262,13 +331,68 @@
     color: #6b7280;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    white-space: nowrap;
 }
 .sg-table td { padding: 0.75rem 1rem; color: #d1d5db; }
 .sg-table tbody tr {
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    transition: background-color 150ms;
+    transition: background-color 150ms var(--sg-ease);
 }
 .sg-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+.sg-table tbody tr:last-child { border-bottom: 0; }
+
+/* Sticky header — anchors column labels while the body scrolls (long triage lists).
+   Wrap the <table> in `.sg-table-scroll` to activate. */
+.sg-table-scroll { max-height: 34rem; overflow: auto; border-radius: inherit; }
+.sg-table-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--sg-th-bg);
+    /* the thead border collapses under a sticky element → redraw it as an inset line */
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Compact density — more rows per viewport for high-volume review. */
+.sg-table-compact th,
+.sg-table-compact td { padding: 0.4rem 0.75rem; }
+
+/* Sortable header: a real <button> (keyboard + SR), visual state driven by th[aria-sort]. */
+.sg-th-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    font: inherit;
+    color: inherit;
+    text-transform: inherit;
+    letter-spacing: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 4px;
+    transition: color var(--sg-dur) var(--sg-ease);
+}
+.sg-th-sort:hover { color: #9ca3af; }
+.sg-th-sort:focus-visible { outline: 2px solid var(--sg-redact); outline-offset: 3px; }
+.sg-th-sort-icon {
+    width: 0.8rem;
+    height: 0.8rem;
+    flex-shrink: 0;
+    opacity: 0.3;
+    transition: opacity var(--sg-dur) var(--sg-ease), transform var(--sg-dur) var(--sg-ease);
+}
+/* Active sort column: brighten the label and lock the indicator on-colour. */
+th[aria-sort="ascending"] .sg-th-sort,
+th[aria-sort="descending"] .sg-th-sort { color: #e5e7eb; }
+th[aria-sort="ascending"] .sg-th-sort-icon,
+th[aria-sort="descending"] .sg-th-sort-icon { opacity: 1; color: var(--sg-redact); }
+th[aria-sort="descending"] .sg-th-sort-icon { transform: rotate(180deg); }
+
+/* Tabular numeric cells align on the decimal and read as a column. */
+.sg-table .sg-num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* === Toggle switch === */
 .sg-toggle {
@@ -278,7 +402,9 @@
     width: 2.5rem;
     align-items: center;
     border-radius: 9999px;
-    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition-property: background-color, box-shadow;
+    transition-duration: 200ms;
+    transition-timing-function: var(--sg-ease);
     cursor: pointer;
     box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
@@ -294,7 +420,7 @@
     border-radius: 9999px;
     background: #fff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
-    transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 200ms var(--sg-ease);
 }
 .sg-toggle[data-state="on"] .sg-toggle-thumb { transform: translateX(1.125rem); }
 .sg-toggle[data-state="off"] .sg-toggle-thumb { transform: translateX(0.1875rem); }
@@ -306,21 +432,52 @@
 .sg-dot-warning { background: #fbbf24; box-shadow: 0 0 6px rgba(251, 191, 36, 0.6), 0 0 12px rgba(251, 191, 36, 0.3); }
 .sg-dot-neutral { background: #6b7280; }
 
+/* Semantic status dots — same token source as the badges above. */
+.sg-dot-allow    { background: var(--sg-allow);        box-shadow: 0 0 6px rgba(var(--sg-allow-rgb), 0.6),        0 0 12px rgba(var(--sg-allow-rgb), 0.3); }
+.sg-dot-warn     { background: var(--sg-warn);         box-shadow: 0 0 6px rgba(var(--sg-warn-rgb), 0.6),         0 0 12px rgba(var(--sg-warn-rgb), 0.3); }
+.sg-dot-block    { background: var(--sg-block);        box-shadow: 0 0 6px rgba(var(--sg-block-rgb), 0.6),        0 0 12px rgba(var(--sg-block-rgb), 0.3); }
+.sg-dot-redact   { background: var(--sg-redact);       box-shadow: 0 0 6px rgba(var(--sg-redact-rgb), 0.6),       0 0 12px rgba(var(--sg-redact-rgb), 0.3); }
+.sg-dot-critical { background: var(--sg-sev-critical); box-shadow: 0 0 6px rgba(var(--sg-sev-critical-rgb), 0.6), 0 0 12px rgba(var(--sg-sev-critical-rgb), 0.3); }
+
 /* === Empty state === */
 .sg-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3rem 0; text-align: center; }
 .sg-empty-icon { width: 3rem; height: 3rem; color: #374151; margin-bottom: 0.75rem; }
 .sg-empty-title { font-size: 0.875rem; font-weight: 500; color: #9ca3af; margin-bottom: 0.25rem; }
-.sg-empty-desc { font-size: 0.75rem; color: #6b7280; max-width: 20rem; }
+.sg-empty-desc { font-size: 0.75rem; color: #9ca3af; max-width: 20rem; }
+.sg-empty-action { margin-top: 1rem; }
+
+/* === Error state ===
+   The fourth data state. Every async region should degrade to this instead of
+   a silent blank — an error-tinted icon, a human message, and a retry affordance
+   (wire a `sg-btn` inside `.sg-error-action`). Colour derives from the shared
+   verdict token so it matches block/critical signalling across the product. */
+.sg-error { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3rem 0; text-align: center; }
+.sg-error-icon {
+    width: 2.75rem; height: 2.75rem; margin-bottom: 0.75rem;
+    color: var(--sg-block);
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 9999px;
+    background: rgba(var(--sg-block-rgb), 0.08);
+    box-shadow: inset 0 0 0 1px rgba(var(--sg-block-rgb), 0.2);
+}
+.sg-error-title { font-size: 0.875rem; font-weight: 600; color: #e5e7eb; margin-bottom: 0.25rem; }
+.sg-error-desc { font-size: 0.75rem; color: #9ca3af; max-width: 22rem; }
+.sg-error-action { margin-top: 1rem; }
 
 /* === Skeleton === */
 .sg-skeleton { height: 1rem; border-radius: 6px; }
 .sg-skeleton-lg { height: 2rem; border-radius: 10px; }
 .sg-skeleton-circle { width: 2rem; height: 2rem; border-radius: 9999px; }
-.sg-skeleton, .sg-skeleton-lg, .sg-skeleton-circle {
+.sg-skeleton-text { height: 0.75rem; border-radius: 4px; }
+.sg-skeleton, .sg-skeleton-lg, .sg-skeleton-circle, .sg-skeleton-text {
     background: linear-gradient(90deg, rgba(30,41,59,0.8) 25%, rgba(51,65,85,0.6) 50%, rgba(30,41,59,0.8) 75%);
     background-size: 200% 100%;
     animation: shimmer 1.5s infinite;
 }
+/* A skeleton table row keeps the loading placeholder on the SAME grid as real
+   rows so there is zero layout shift when data resolves (CLS = 0). */
+.sg-skeleton-row { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.sg-skeleton-row > * { flex: 1; }
 @keyframes shimmer {
     0% { background-position: -200% 0; }
     100% { background-position: 200% 0; }
@@ -367,4 +524,70 @@
 *:focus-visible {
     outline: 2px solid rgba(6, 182, 212, 0.5);
     outline-offset: 2px;
+}
+
+/* === Entrance choreography ===
+   Reusable staggered reveal (fade + rise + de-blur) — the signature Bulwark
+   load motion, promoted from the login pilot so any view can adopt it.
+   One-shot, compositor-only (opacity/transform/filter). Apply `.reveal` plus an
+   optional `.reveal-N` delay class to sequence elements. */
+@keyframes sg-reveal {
+    from { opacity: 0; transform: translateY(12px); filter: blur(6px); }
+    to   { opacity: 1; transform: translateY(0);    filter: blur(0); }
+}
+.reveal   { opacity: 0; animation: sg-reveal 0.72s var(--sg-ease) both; }
+.reveal-1 { animation-delay: 0.06s; }
+.reveal-2 { animation-delay: 0.13s; }
+.reveal-3 { animation-delay: 0.20s; }
+.reveal-4 { animation-delay: 0.27s; }
+.reveal-5 { animation-delay: 0.34s; }
+.reveal-6 { animation-delay: 0.41s; }
+
+/* Container settle for the main content region. IMPORTANT: this must NOT
+   animate opacity — a whole-subtree opacity fade masks the per-card cascade
+   below (children are invisible while the parent fades 0→1, so the stagger is
+   never perceived). We keep only a tiny, fast transform settle so the page
+   feels anchored while the CARDS deliver the visible sequential entrance. */
+@keyframes sg-page-settle {
+    from { transform: translateY(4px); }
+    to   { transform: translateY(0); }
+}
+.sg-page-enter { animation: sg-page-settle 0.3s var(--sg-ease) both; }
+
+/* === App-wide card cascade ===
+   Cards are the primary content unit on nearly every view. Staggering their
+   entrance turns a flat page-load into a crafted, sequenced reveal (Linear/
+   Vercel feel) with zero per-view markup. Scoped to #main-content so the shell
+   modals / command palette (which reuse .sg-card) are never animated on load.
+   Delays reset per container via :nth-child, so each grid cascades on its own. */
+@keyframes sg-card-in {
+    from { opacity: 0; transform: translateY(16px) scale(0.975); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+#main-content .sg-card,
+#main-content .sg-card-hover {
+    animation: sg-card-in 0.55s var(--sg-ease) both;
+}
+#main-content .sg-card:nth-child(1),  #main-content .sg-card-hover:nth-child(1)  { animation-delay: 0.03s; }
+#main-content .sg-card:nth-child(2),  #main-content .sg-card-hover:nth-child(2)  { animation-delay: 0.08s; }
+#main-content .sg-card:nth-child(3),  #main-content .sg-card-hover:nth-child(3)  { animation-delay: 0.13s; }
+#main-content .sg-card:nth-child(4),  #main-content .sg-card-hover:nth-child(4)  { animation-delay: 0.18s; }
+#main-content .sg-card:nth-child(5),  #main-content .sg-card-hover:nth-child(5)  { animation-delay: 0.23s; }
+#main-content .sg-card:nth-child(6),  #main-content .sg-card-hover:nth-child(6)  { animation-delay: 0.28s; }
+#main-content .sg-card:nth-child(7),  #main-content .sg-card-hover:nth-child(7)  { animation-delay: 0.33s; }
+#main-content .sg-card:nth-child(8),  #main-content .sg-card-hover:nth-child(8)  { animation-delay: 0.38s; }
+
+/* === Global reduced-motion guard (WCAG 2.3.3) ===
+   Single authoritative place that neutralizes ALL app motion for users who
+   request it. Covers reveal/page-enter plus the pre-existing shell animations
+   (pulse-live, shimmer, toast, sidebar/margin transitions, card hover lifts). */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+    .reveal, .sg-page-enter { opacity: 1 !important; transform: none !important; filter: none !important; }
+    .sg-card-hover:hover { transform: none !important; }
 }

@@ -121,9 +121,9 @@
                 <div class="flex items-center gap-3">
                     <span class="text-xs text-gray-500 font-mono" x-text="lastResult.scan_id"></span>
                     <span class="sg-badge" :class="{
-                        'sg-badge-success': lastResult.verdict === 'pass',
-                        'sg-badge-warning': lastResult.verdict === 'warn',
-                        'sg-badge-danger': lastResult.verdict === 'block',
+                        'sg-badge-allow': lastResult.verdict === 'pass',
+                        'sg-badge-warn': lastResult.verdict === 'warn',
+                        'sg-badge-block': lastResult.verdict === 'block',
                         'sg-badge-neutral': lastResult.verdict === 'error',
                     }" x-text="lastResult.verdict.toUpperCase()"></span>
                 </div>
@@ -248,9 +248,9 @@
                             </td>
                             <td>
                                 <span class="sg-badge" :class="{
-                                    'sg-badge-success': h.verdict === 'pass',
-                                    'sg-badge-warning': h.verdict === 'warn',
-                                    'sg-badge-danger': h.verdict === 'block',
+                                    'sg-badge-allow': h.verdict === 'pass',
+                                    'sg-badge-warn': h.verdict === 'warn',
+                                    'sg-badge-block': h.verdict === 'block',
                                     'sg-badge-neutral': h.verdict === 'error',
                                 }" x-text="h.verdict"></span>
                             </td>

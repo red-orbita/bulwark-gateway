@@ -13,60 +13,123 @@
     <script src="/static/js/vendor/lucide.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
-        @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+
+        :root {
+            /* ease-out-expo — the signature Bulwark motion curve (matches design system) */
+            --sg-ease: cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* ── Premium aurora backdrop (static base + slow drifting glow) ───────── */
+        .gradient-bg {
+            background:
+                radial-gradient(1200px 620px at 12% -12%, rgba(8, 145, 178, 0.18), transparent 60%),
+                radial-gradient(1000px 700px at 104% 112%, rgba(79, 70, 229, 0.16), transparent 55%),
+                linear-gradient(160deg, #0b1220 0%, #0d1526 46%, #0b1220 100%);
+        }
+        .aurora-blob {
+            position: absolute;
+            border-radius: 9999px;
+            filter: blur(90px);
+            will-change: transform;
+            animation: sg-drift 24s var(--sg-ease) infinite alternate;
+        }
+        @keyframes sg-drift {
+            from { transform: translate3d(0, 0, 0) scale(1); }
+            to   { transform: translate3d(26px, -22px, 0) scale(1.09); }
+        }
+
+        /* ── Logo float (refined amplitude) ──────────────────────────────────── */
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
         .float-animation { animation: float 6s ease-in-out infinite; }
-        @keyframes gradient-shift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-        .gradient-bg { background: linear-gradient(-45deg, #0f172a, #164e63, #0f172a, #1e1b4b); background-size: 400% 400%; animation: gradient-shift 15s ease infinite; }
+
+        /* ── Entrance choreography — staggered fade + rise + de-blur ──────────── */
+        @keyframes sg-reveal {
+            from { opacity: 0; transform: translateY(12px); filter: blur(6px); }
+            to   { opacity: 1; transform: translateY(0);    filter: blur(0); }
+        }
+        .reveal { opacity: 0; animation: sg-reveal 0.72s var(--sg-ease) both; }
+        .reveal-1 { animation-delay: 0.06s; }
+        .reveal-2 { animation-delay: 0.13s; }
+        .reveal-3 { animation-delay: 0.20s; }
+        .reveal-4 { animation-delay: 0.27s; }
+        .reveal-5 { animation-delay: 0.34s; }
+        .reveal-6 { animation-delay: 0.41s; }
+
+        /* ── Auth card — layered surface with hairline highlight (vibrancy) ───── */
+        .sg-auth-card {
+            position: relative;
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 42%),
+                rgba(15, 23, 42, 0.72);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            box-shadow:
+                0 1px 0 0 rgba(255, 255, 255, 0.05) inset,
+                0 28px 64px -28px rgba(0, 0, 0, 0.72),
+                0 10px 28px -14px rgba(0, 0, 0, 0.5);
+        }
+        .sg-auth-card::before {
+            content: "";
+            position: absolute; inset: 0;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 32%);
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+                    mask-composite: exclude;
+            pointer-events: none;
+        }
+
+        /* ── Primary CTA — explicit transitions + tactile press ──────────────── */
+        .sg-cta {
+            transition: transform 0.18s var(--sg-ease),
+                        background-color 0.18s var(--sg-ease),
+                        box-shadow 0.18s var(--sg-ease);
+        }
+        .sg-cta:hover:not(:disabled) { box-shadow: 0 10px 28px -10px rgba(8, 145, 178, 0.55); }
+        .sg-cta:active:not(:disabled) { transform: scale(0.97); }
+
+        /* ── Fields — explicit focus transition (no `all`) ───────────────────── */
+        .sg-field {
+            transition: border-color 0.18s var(--sg-ease),
+                        box-shadow 0.18s var(--sg-ease),
+                        background-color 0.18s var(--sg-ease);
+        }
+
+        /* ── Respect reduced-motion preference (WCAG 2.3.3) ──────────────────── */
+        @media (prefers-reduced-motion: reduce) {
+            .reveal, .float-animation, .aurora-blob { animation: none !important; }
+            .reveal { opacity: 1; transform: none; filter: none; }
+        }
     </style>
 </head>
 <body class="font-sans antialiased gradient-bg min-h-screen flex" x-data="loginForm()" x-cloak x-init="$nextTick(() => lucide.createIcons())">
 
-    <!-- Left panel - Branding (hidden on mobile) -->
-    <div class="hidden lg:flex lg:w-1/2 flex-col items-center justify-center p-12 relative overflow-hidden">
-        <!-- Abstract decorative elements -->
-        <div class="absolute top-20 left-20 w-72 h-72 bg-cyan-500/5 rounded-full blur-3xl"></div>
-        <div class="absolute bottom-20 right-20 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl"></div>
+    <!-- Global aurora backdrop — full viewport, behind all panels (no mid-screen clip) -->
+    <div class="fixed inset-0 overflow-hidden pointer-events-none z-0">
+        <div class="aurora-blob" style="top: 8%; left: 6%; width: 30rem; height: 30rem; background: rgba(8, 145, 178, 0.14); animation-delay: -6s;"></div>
+        <div class="aurora-blob" style="bottom: 8%; right: 6%; width: 34rem; height: 34rem; background: rgba(79, 70, 229, 0.12);"></div>
+    </div>
 
+    <!-- Left panel - Branding (hidden on mobile) -->
+    <div class="hidden lg:flex lg:w-1/2 flex-col items-center justify-center p-12 relative">
         <div class="relative z-10 text-center max-w-md">
             <!-- Logo -->
-            <div class="float-animation mb-8 inline-flex">
-                <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-cyan-500 to-cyan-700 flex items-center justify-center shadow-2xl shadow-cyan-500/20">
+            <div class="reveal reveal-1 mb-8 inline-flex">
+                <div class="float-animation w-20 h-20 rounded-2xl bg-gradient-to-br from-cyan-500 to-cyan-700 flex items-center justify-center shadow-2xl shadow-cyan-500/20">
                     <i data-lucide="shield-check" class="w-10 h-10 text-white"></i>
                 </div>
             </div>
 
-            <h1 class="text-3xl font-bold text-white mb-3">Bulwark Gateway</h1>
-            <p class="text-gray-400 text-base leading-relaxed mb-8">Enterprise-grade security guardrails for AI agents. Protect your LLM integrations from prompt injection, data exfiltration, and tool abuse.</p>
-
-            <!-- Feature highlights -->
-            <div class="space-y-3 text-left">
-                <div class="flex items-center gap-3 text-sm text-gray-300">
-                    <div class="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
-                        <i data-lucide="zap" class="w-4 h-4 text-emerald-400"></i>
-                    </div>
-                    <span>Sub-50ms inspection latency on every request</span>
-                </div>
-                <div class="flex items-center gap-3 text-sm text-gray-300">
-                    <div class="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center flex-shrink-0">
-                        <i data-lucide="shield-alert" class="w-4 h-4 text-amber-400"></i>
-                    </div>
-                    <span>100+ guardrail patterns across 10 attack categories</span>
-                </div>
-                <div class="flex items-center gap-3 text-sm text-gray-300">
-                    <div class="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center flex-shrink-0">
-                        <i data-lucide="building-2" class="w-4 h-4 text-cyan-400"></i>
-                    </div>
-                    <span>Multi-tenant RBAC with per-agent tool policies</span>
-                </div>
-            </div>
+            <h1 class="reveal reveal-2 text-3xl font-bold text-white mb-3">Bulwark Gateway</h1>
+            <p class="reveal reveal-3 text-gray-400 text-base leading-relaxed">Security gateway for AI agents.</p>
         </div>
 
         <!-- Version -->
-        <p class="absolute bottom-6 text-[11px] text-gray-600">v0.2.0 — Security Guardrail Proxy</p>
+        <p class="reveal reveal-6 absolute bottom-6 text-[11px] text-gray-600">v0.4.3 — Security Guardrail Proxy</p>
     </div>
 
     <!-- Right panel - Login form -->
-    <div class="flex-1 flex items-center justify-center p-6 lg:p-12">
+    <div class="flex-1 flex items-center justify-center p-6 lg:p-12 relative z-10">
         <div class="w-full max-w-sm">
             <!-- Mobile logo -->
             <div class="lg:hidden text-center mb-8">
@@ -77,7 +140,7 @@
             </div>
 
             <!-- Card -->
-            <div class="bg-gray-900/80 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-8 shadow-2xl">
+            <div class="sg-auth-card reveal reveal-2 backdrop-blur-xl rounded-2xl p-8">
                 <!-- Login header -->
                 <div x-show="!showChangePassword && !showMfa && !showForgotPassword" class="mb-6">
                     <h2 class="text-lg font-semibold text-white">Welcome back</h2>
@@ -92,7 +155,7 @@
                             <div class="relative">
                                 <i data-lucide="user" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" aria-hidden="true"></i>
                                 <input id="login-username" x-model="username" type="text" autocomplete="username"
-                                       class="w-full pl-10 pr-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
+                                       class="sg-field w-full pl-10 pr-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none"
                                        placeholder="Enter username" required autofocus>
                             </div>
                         </div>
@@ -101,7 +164,7 @@
                             <div class="relative">
                                 <i data-lucide="lock" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" aria-hidden="true"></i>
                                 <input id="login-password" x-model="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
-                                       class="w-full pl-10 pr-10 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none transition-colors"
+                                       class="sg-field w-full pl-10 pr-10 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/50 outline-none"
                                        placeholder="Enter password" required>
                                 <button type="button" @click="showPass = !showPass" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300" :aria-label="showPass ? 'Hide password' : 'Show password'" :aria-pressed="showPass ? 'true' : 'false'">
                                     <i x-show="!showPass" data-lucide="eye" class="w-4 h-4" aria-hidden="true"></i>
@@ -117,7 +180,7 @@
                         </div>
 
                         <button type="submit" :disabled="loading"
-                                class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                                class="sg-cta w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                             <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                             <span x-show="!loading">Sign In</span>
                             <span x-show="loading">Authenticating...</span>
@@ -168,7 +231,7 @@
                             <span class="text-xs text-red-300" x-text="error"></span>
                         </div>
                         <button type="submit" :disabled="loading || mfaCode.length !== 6"
-                                class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                                class="sg-cta w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 disabled:opacity-50 flex items-center justify-center gap-2">
                             <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                             <span x-show="!loading">Verify Code</span>
                             <span x-show="loading">Verifying...</span>
@@ -223,7 +286,7 @@
                             <span class="text-xs text-red-300" x-text="error"></span>
                         </div>
                         <button type="submit" :disabled="loading"
-                                class="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                                class="sg-cta w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium text-sm shadow-sm shadow-cyan-600/20 disabled:opacity-50 flex items-center justify-center gap-2">
                             <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                             <span x-show="!loading">Set Password & Continue</span>
                             <span x-show="loading">Updating...</span>
@@ -233,7 +296,7 @@
             </div>
 
             <!-- Footer -->
-            <p class="text-center text-[11px] text-gray-600 mt-6">Protected by Bulwark Gateway security controls</p>
+            <p class="text-center text-[11px] text-gray-600 mt-6">Authorized access only</p>
         </div>
     </div>
 

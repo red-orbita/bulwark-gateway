@@ -59,9 +59,23 @@
         </div>
     </div>
 
+    <!-- Error -->
+    <div x-show="error && !loading" class="sg-card">
+        <div class="sg-error">
+            <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+            <p class="sg-error-title">Couldn't load the audit log</p>
+            <p class="sg-error-desc">The audit store didn't respond. Check the connection and try again.</p>
+            <div class="sg-error-action">
+                <button @click="loadEntries()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Entries Table -->
-    <div x-show="!loading" class="sg-card !p-0">
-        <div class="overflow-x-auto">
+    <div x-show="!loading && !error" class="sg-card !p-0">
+        <div class="sg-table-scroll">
             <table class="sg-table">
                 <thead>
                     <tr>
@@ -124,16 +138,19 @@ function auditManager() {
         total: 0,
         page: 1,
         loading: false,
+        error: false,
         filters: { search: '', action: '', user: '', tenant_id: '', date_from: '' },
         async init() { await this.loadEntries(); },
         async loadEntries() {
             this.loading = true;
-            const params = new URLSearchParams({ limit: 50, offset: (this.page - 1) * 50 });
-            if (this.filters.action) params.set('action', this.filters.action);
-            if (this.filters.user) params.set('actor', this.filters.user);
-            if (this.filters.tenant_id) params.set('tenant_id', this.filters.tenant_id);
-            const resp = await fetch('/admin/audit?' + params);
-            if (resp.ok) {
+            this.error = false;
+            try {
+                const params = new URLSearchParams({ limit: 50, offset: (this.page - 1) * 50 });
+                if (this.filters.action) params.set('action', this.filters.action);
+                if (this.filters.user) params.set('actor', this.filters.user);
+                if (this.filters.tenant_id) params.set('tenant_id', this.filters.tenant_id);
+                const resp = await fetch('/admin/audit?' + params);
+                if (!resp.ok) throw new Error(`audit ${resp.status}`);
                 const data = await resp.json();
                 this.entries = (data || []).map(e => ({
                     id: e.id,
@@ -145,8 +162,11 @@ function auditManager() {
                     details: e.details || ''
                 }));
                 this.total = this.entries.length;
+            } catch (e) {
+                this.error = true;
+            } finally {
+                this.loading = false;
             }
-            this.loading = false;
         },
         async exportCSV() { window.open('/admin/audit/export?format=csv'); },
         async exportJSON() { window.open('/admin/audit/export?format=json'); }

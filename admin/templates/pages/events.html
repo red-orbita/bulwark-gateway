@@ -10,6 +10,12 @@
             <p class="text-sm text-gray-400 mt-0.5">Real-time view of blocked and warned requests per tenant</p>
         </div>
         <div class="flex items-center gap-2">
+            <button @click="toggleDensity()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                    :aria-pressed="compact ? 'true' : 'false'"
+                    :title="compact ? 'Switch to comfortable rows' : 'Switch to compact rows'">
+                <i data-lucide="rows-3" class="w-4 h-4"></i>
+                <span x-text="compact ? 'Comfortable' : 'Compact'"></span>
+            </button>
             <button @click="refresh()" class="sg-btn sg-btn-secondary sg-btn-sm">
                 <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
                 Refresh
@@ -76,19 +82,65 @@
 
     <!-- Events Table -->
     <div class="sg-card !p-0">
-        <div class="overflow-x-auto">
-            <table class="sg-table">
+        <!-- Loading: skeleton rows on the same grid → zero layout shift -->
+        <div x-show="loading">
+            <template x-for="i in 6" :key="i">
+                <div class="sg-skeleton-row">
+                    <div class="sg-skeleton-text" style="max-width:5rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:6rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:4rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:7rem"></div>
+                    <div class="sg-skeleton-text"></div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Error: never a silent blank — explain + offer retry -->
+        <div x-show="error && !loading" class="sg-error">
+            <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+            <p class="sg-error-title">Couldn't load security events</p>
+            <p class="sg-error-desc">The request failed. Check the proxy connection and try again.</p>
+            <div class="sg-error-action">
+                <button @click="refresh()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                </button>
+            </div>
+        </div>
+
+        <!-- Data -->
+        <div x-show="!loading && !error && events.length > 0" class="sg-table-scroll">
+            <table class="sg-table" :class="{ 'sg-table-compact': compact }">
                 <thead>
                     <tr>
-                        <th>Time</th>
-                        <th>Tenant</th>
-                        <th>Severity</th>
-                        <th>Category</th>
+                        <th :aria-sort="ariaSort('ts')">
+                            <button class="sg-th-sort" @click="sortBy('ts')">
+                                Time
+                                <svg class="sg-th-sort-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+                            </button>
+                        </th>
+                        <th :aria-sort="ariaSort('tenant')">
+                            <button class="sg-th-sort" @click="sortBy('tenant')">
+                                Tenant
+                                <svg class="sg-th-sort-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+                            </button>
+                        </th>
+                        <th :aria-sort="ariaSort('severity')">
+                            <button class="sg-th-sort" @click="sortBy('severity')">
+                                Severity
+                                <svg class="sg-th-sort-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+                            </button>
+                        </th>
+                        <th :aria-sort="ariaSort('category')">
+                            <button class="sg-th-sort" @click="sortBy('category')">
+                                Category
+                                <svg class="sg-th-sort-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+                            </button>
+                        </th>
                         <th>Description</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <template x-for="evt in events" :key="evt.ts + evt.tenant + evt.description">
+                    <template x-for="evt in displayEvents()" :key="evt.ts + evt.tenant + evt.description">
                         <tr>
                             <td class="text-xs text-gray-400 whitespace-nowrap" x-text="formatTime(evt.ts)"></td>
                             <td>
@@ -96,11 +148,7 @@
                             </td>
                             <td>
                                 <span class="sg-badge text-[10px]"
-                                    :class="{
-                                        'sg-badge-danger': evt.severity === 'critical' || evt.severity === 'high',
-                                        'sg-badge-warning': evt.severity === 'medium',
-                                        'sg-badge-info': evt.severity === 'low'
-                                    }"
+                                    :class="'sg-badge-' + (evt.severity || 'low')"
                                     x-text="evt.severity"></span>
                             </td>
                             <td class="text-xs text-gray-300" x-text="evt.category"></td>
@@ -110,11 +158,12 @@
                 </tbody>
             </table>
         </div>
-        <div x-show="events.length === 0 && !loading" class="sg-empty">
+
+        <!-- Empty -->
+        <div x-show="!loading && !error && events.length === 0" class="sg-empty">
             <p class="sg-empty-title">No security events</p>
             <p class="sg-empty-desc">Events appear here when the proxy blocks or warns on requests</p>
         </div>
-        <div x-show="loading" class="p-6 text-center text-gray-500 text-sm">Loading events...</div>
     </div>
 
     <!-- Breakdown by Category (horizontal bar chart) -->
@@ -142,19 +191,70 @@ function eventsManager() {
         events: [],
         summary: {},
         loading: false,
+        error: false,
         filterTenant: '',
         filterCategory: '',
         filterSeverity: '',
         availableTenants: [],
         availableCategories: [],
+        sortKey: 'ts',
+        sortDir: 'desc',
+        compact: false,
 
         async init() {
+            this.compact = localStorage.getItem('sg-events-density') === 'compact';
             await this.refresh();
+        },
+
+        toggleDensity() {
+            this.compact = !this.compact;
+            localStorage.setItem('sg-events-density', this.compact ? 'compact' : 'comfortable');
+        },
+
+        // Client-side sort of the loaded window (single fetch of 100 — no server paging,
+        // so sorting here is honest: it orders the full result set, not one page.)
+        sortBy(key) {
+            if (this.sortKey === key) {
+                this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                this.sortKey = key;
+                this.sortDir = 'asc';
+            }
+        },
+
+        ariaSort(key) {
+            if (this.sortKey !== key) return 'none';
+            return this.sortDir === 'asc' ? 'ascending' : 'descending';
+        },
+
+        displayEvents() {
+            const rank = { critical: 4, high: 3, medium: 2, low: 1 };
+            const key = this.sortKey;
+            const dir = this.sortDir === 'asc' ? 1 : -1;
+            return [...this.events].sort((a, b) => {
+                let av, bv;
+                if (key === 'severity') {
+                    av = rank[a.severity] || 0; bv = rank[b.severity] || 0;
+                } else if (key === 'ts') {
+                    av = new Date(a.ts || 0).getTime(); bv = new Date(b.ts || 0).getTime();
+                } else {
+                    av = (a[key] || '').toString().toLowerCase();
+                    bv = (b[key] || '').toString().toLowerCase();
+                }
+                if (av < bv) return -1 * dir;
+                if (av > bv) return 1 * dir;
+                return 0;
+            });
         },
 
         async refresh() {
             this.loading = true;
-            await Promise.all([this.loadEvents(), this.loadSummary()]);
+            this.error = false;
+            try {
+                await Promise.all([this.loadEvents(), this.loadSummary()]);
+            } catch (e) {
+                this.error = true;
+            }
             this.loading = false;
         },
 
@@ -164,7 +264,8 @@ function eventsManager() {
             if (this.filterCategory) url += `&category=${encodeURIComponent(this.filterCategory)}`;
             if (this.filterSeverity) url += `&severity=${encodeURIComponent(this.filterSeverity)}`;
             const resp = await fetch(url);
-            if (resp.ok) this.events = await resp.json();
+            if (!resp.ok) throw new Error(`events ${resp.status}`);
+            this.events = await resp.json();
         },
 
         async loadSummary() {
@@ -177,14 +278,14 @@ function eventsManager() {
         },
 
         async applyFilters() {
-            await this.loadEvents();
+            await this.refresh();
         },
 
         clearFilters() {
             this.filterTenant = '';
             this.filterCategory = '';
             this.filterSeverity = '';
-            this.loadEvents();
+            this.refresh();
         },
 
         formatTime(ts) {
