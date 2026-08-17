@@ -10,8 +10,8 @@
             <p class="text-sm text-gray-400 mt-0.5">Configure proxy, security, and logging parameters</p>
         </div>
         <div class="flex items-center gap-2">
-            <button @click="validateAll()" class="sg-btn sg-btn-warning sg-btn-sm">
-                <i data-lucide="check-circle" class="w-4 h-4"></i> Validate Config
+            <button @click="validateSection()" class="sg-btn sg-btn-warning sg-btn-sm">
+                <i data-lucide="check-circle" class="w-4 h-4"></i> Validate <span x-text="activeTab.charAt(0).toUpperCase() + activeTab.slice(1)"></span>
             </button>
         </div>
     </div>
@@ -21,7 +21,7 @@
         :class="validationResult?.valid ? '!border-green-700 bg-green-900/10' : '!border-red-700 bg-red-900/10'">
         <div class="flex items-center gap-2">
             <i :data-lucide="validationResult?.valid ? 'check-circle' : 'x-circle'" class="w-4 h-4" :class="validationResult?.valid ? 'text-green-400' : 'text-red-400'"></i>
-            <span class="text-sm" :class="validationResult?.valid ? 'text-green-300' : 'text-red-300'" x-text="validationResult?.valid ? 'Configuration valid' : (validationResult?.errors || []).join(', ')"></span>
+            <span class="text-sm" :class="validationResult?.valid ? 'text-green-300' : 'text-red-300'" x-text="validationResult?.valid ? ('Configuration valid' + ((validationResult?.warnings || []).length ? ' — ' + validationResult.warnings.join(', ') : '')) : (validationResult?.errors || []).join(', ')"></span>
         </div>
     </div>
 
@@ -127,6 +127,7 @@ function settingsManager() {
         async loadSection(section) {
             this.loading = true;
             this.saveResult = null;
+            this.validationResult = null;
             try {
                 const resp = await fetch(`/admin/config/${section}`);
                 if (resp.ok) {
@@ -152,10 +153,23 @@ function settingsManager() {
             if (resp.ok) this.saveResult = 'ok';
             else { const err = await resp.json(); this.saveResult = err.detail || JSON.stringify(err); }
         },
-        async validateAll() {
+        async validateSection() {
             this.validationResult = null;
-            const resp = await fetch('/admin/config/validate', { method: 'POST' });
-            this.validationResult = resp.ok ? await resp.json() : { valid: false, errors: ['Request failed'] };
+            try {
+                const resp = await fetch('/admin/config/validate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ section: this.activeTab, data: this.sectionData })
+                });
+                if (resp.ok) {
+                    this.validationResult = await resp.json();
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    this.validationResult = { valid: false, errors: [err.detail ? JSON.stringify(err.detail) : `Request failed (${resp.status})`] };
+                }
+            } catch (e) {
+                this.validationResult = { valid: false, errors: ['Network error: ' + e.message] };
+            }
         }
     };
 }
