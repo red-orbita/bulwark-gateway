@@ -148,3 +148,52 @@ def test_reload_after_post_toggles_error_toast_on_failure():
         )
         assert "'error'" in body, f"{page}:{handler} must error-toast on failure"
 
+
+# --- mutating handlers must gate on resp.ok AND surface failure ---------------
+
+# Handlers that previously either ignored the HTTP status entirely (deceptive
+# success) or gated on resp.ok but stayed silent on failure. Each must now both
+# check the response status and error-toast when the server rejects the request.
+_MUST_GATE_AND_TOAST = [
+    ("iocs.html", "deleteIoc"),
+    ("iocs.html", "deleteFeed"),
+    ("rbac.html", "revokeSession"),
+    ("rbac.html", "resetRole"),
+    ("dashboard.html", "triggerTask"),
+    ("notifications.html", "reloadChannels"),
+    ("tenants.html", "deleteTenant"),
+    ("tenants.html", "pauseAgent"),
+    ("tenants.html", "deleteAgent"),
+]
+
+
+def test_mutating_handlers_gate_on_status_and_error_toast():
+    for page, handler in _MUST_GATE_AND_TOAST:
+        body = _handler(_read(page), handler)
+        assert re.search(r"\b(?:resp|res|r)\.ok\b", body), (
+            f"{page}:{handler} must check the HTTP response status (resp.ok) before "
+            f"treating the mutation as successful"
+        )
+        assert "'error'" in body, f"{page}:{handler} must surface an error toast on failure"
+
+
+def test_toggle_mfa_disable_branch_gates_and_toasts():
+    # toggleMfa has two branches; the disable (DELETE) branch previously ignored
+    # the response and always claimed success on a security-sensitive action.
+    body = _handler(_read("rbac.html"), "toggleMfa")
+    disable_branch = body.split("} else {", 1)[0]
+    assert "resp.ok" in disable_branch, "MFA disable branch must check resp.ok"
+    assert "'error'" in disable_branch, "MFA disable branch must error-toast on failure"
+
+
+def test_no_fire_and_forget_delete_in_iocs_and_rbac():
+    # A bare `await fetch(..., { method: 'DELETE' });` followed immediately by a
+    # success toast is the deceptive pattern we removed. Guard against its return.
+    for page in ("iocs.html", "rbac.html"):
+        src = _read(page)
+        assert not re.search(
+            r"await fetch\([^;]*method:\s*'DELETE'[^;]*\);\s*\n\s*await[^\n]*\n\s*showToast\([^,]*,\s*'success'",
+            src,
+        ), f"{page}: found fire-and-forget DELETE that toasts success without checking status"
+
+

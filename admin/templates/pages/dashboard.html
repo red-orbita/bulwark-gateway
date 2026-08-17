@@ -624,6 +624,11 @@ function dashboardPage() {
         async triggerTask(task) {
             try {
                 const r = await fetch(`/admin/validate/trigger/${task}`, { method: 'POST' });
+                if (!r.ok) {
+                    const err = await r.json().catch(() => ({}));
+                    showToast(err.detail || `Failed to start task ${task}`, 'error');
+                    return;
+                }
                 const d = await r.json();
                 this.taskId = d.task_id;
                 this.taskOutput = null;

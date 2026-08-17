@@ -449,9 +449,18 @@ function iocsManager() {
         async deleteIoc(ioc) {
             const ok = await showConfirm('Delete IOC', `Delete IOC "${ioc.value}"?`, 'Delete');
             if (!ok) return;
-            await fetch(`/admin/iocs/${ioc.id}`, { method: 'DELETE' });
-            await this.loadIocs();
-            showToast('IOC deleted', 'success');
+            try {
+                const resp = await fetch(`/admin/iocs/${ioc.id}`, { method: 'DELETE' });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to delete IOC', 'error');
+                    return;
+                }
+                await this.loadIocs();
+                showToast('IOC deleted', 'success');
+            } catch (e) {
+                showToast('Failed to delete IOC: ' + e.message, 'error');
+            }
         },
         async toggleActive(ioc) {
             const previous = ioc.active;
@@ -508,9 +517,18 @@ function iocsManager() {
         async deleteFeed(feed) {
             const ok = await showConfirm('Delete Feed', `Delete feed "${feed.name}"? This will not remove already imported IOCs.`, 'Delete');
             if (!ok) return;
-            await fetch(`/admin/iocs/feeds/${feed.id}`, { method: 'DELETE' });
-            await this.loadFeeds();
-            showToast('Feed deleted', 'success');
+            try {
+                const resp = await fetch(`/admin/iocs/feeds/${feed.id}`, { method: 'DELETE' });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to delete feed', 'error');
+                    return;
+                }
+                await this.loadFeeds();
+                showToast('Feed deleted', 'success');
+            } catch (e) {
+                showToast('Failed to delete feed: ' + e.message, 'error');
+            }
         },
         async toggleFeed(feed) {
             const previous = feed.enabled;

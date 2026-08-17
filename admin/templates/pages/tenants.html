@@ -360,6 +360,7 @@ function tenantsManager() {
             if (!ok) return;
             const resp = await fetch(`/admin/tenants/${t.id}`, { method: 'DELETE' });
             if (resp.ok) { await this.init(); showToast('Tenant deleted', 'success'); }
+            else { const err = await resp.json().catch(() => ({})); showToast(err.detail || 'Failed to delete tenant', 'error'); }
         },
 
         // --- Agent CRUD ---
@@ -424,12 +425,14 @@ function tenantsManager() {
         async pauseAgent(a) {
             const resp = await fetch(`/admin/agents/${this.configTenantId}/${a.agent_id}/pause`, { method: 'PATCH' });
             if (resp.ok) { await this.loadConfigAgents(); showToast(`Agent ${a.status === 'paused' ? 'resumed' : 'paused'}`, 'success'); }
+            else { const err = await resp.json().catch(() => ({})); showToast(err.detail || 'Failed to update agent', 'error'); }
         },
         async deleteAgent(a) {
             const ok = await showConfirm('Delete Agent', `Delete "${a.agent_id}"?`, 'Delete');
             if (!ok) return;
             const resp = await fetch(`/admin/agents/${this.configTenantId}/${a.agent_id}`, { method: 'DELETE' });
             if (resp.ok) { await this.loadConfigAgents(); await this.init(); showToast('Agent deleted', 'success'); }
+            else { const err = await resp.json().catch(() => ({})); showToast(err.detail || 'Failed to delete agent', 'error'); }
         },
         async healthCheckAgent(a) {
             showToast('Checking...', 'info');

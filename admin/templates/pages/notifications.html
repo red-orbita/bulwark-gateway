@@ -336,10 +336,20 @@ function notificationManager() {
         },
 
         async reloadChannels() {
-            await fetch('/admin/notifications/reload', {
-                method: 'POST',
-            });
-            await this.loadChannels();
+            try {
+                const resp = await fetch('/admin/notifications/reload', {
+                    method: 'POST',
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to reload channels', 'error');
+                    return;
+                }
+                await this.loadChannels();
+                showToast('Channels reloaded', 'success');
+            } catch (e) {
+                showToast('Failed to reload channels: ' + e.message, 'error');
+            }
         },
 
         editChannel(ch) {

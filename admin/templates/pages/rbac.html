@@ -665,9 +665,18 @@ function accessControlManager() {
             if (u.mfa_enabled) {
                 const ok = await showConfirm('Disable MFA', `Disable MFA for ${u.username}? This reduces account security.`, 'Disable');
                 if (!ok) return;
-                await fetch(`/admin/users/${u.id}/mfa`, { method: 'DELETE' });
-                await this.loadUsers();
-                showToast('MFA disabled', 'success');
+                try {
+                    const resp = await fetch(`/admin/users/${u.id}/mfa`, { method: 'DELETE' });
+                    if (!resp.ok) {
+                        const err = await resp.json().catch(() => ({}));
+                        showToast(err.detail || 'Failed to disable MFA', 'error');
+                        return;
+                    }
+                    await this.loadUsers();
+                    showToast('MFA disabled', 'success');
+                } catch (e) {
+                    showToast('Failed to disable MFA: ' + e.message, 'error');
+                }
             } else {
                 const resp = await fetch(`/admin/users/${u.id}/mfa/setup`, { method: 'POST' });
                 if (resp.ok) {
@@ -690,9 +699,18 @@ function accessControlManager() {
             this.sessions = resp.ok ? await resp.json() : [];
         },
         async revokeSession(s) {
-            await fetch(`/admin/users/${this.sessionsUser.id}/sessions/${s.id}`, { method: 'DELETE' });
-            await this.viewSessions(this.sessionsUser);
-            showToast('Session revoked', 'success');
+            try {
+                const resp = await fetch(`/admin/users/${this.sessionsUser.id}/sessions/${s.id}`, { method: 'DELETE' });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to revoke session', 'error');
+                    return;
+                }
+                await this.viewSessions(this.sessionsUser);
+                showToast('Session revoked', 'success');
+            } catch (e) {
+                showToast('Failed to revoke session: ' + e.message, 'error');
+            }
         },
 
         // === Roles Methods ===
@@ -758,6 +776,9 @@ function accessControlManager() {
             if (resp.ok) {
                 showToast(`${this.getRoleLabel(role)} reset to defaults`, 'success');
                 await this.loadMatrix();
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to reset role', 'error');
             }
         },
 
