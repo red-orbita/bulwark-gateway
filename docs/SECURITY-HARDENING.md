@@ -193,7 +193,7 @@ Layer 7: Monitoring & Response
 
 ### Before Each Release
 
-1. Run full test suite (`pytest -v`) — 185+ tests
+1. Run full test suite (`pytest -v`) — 1,300+ tests
 2. Run `ruff check src/ tests/` — zero warnings
 3. Run `mypy src/` — type safety
 4. Review any changes to `src/middleware/auth.py` or `src/models.py`

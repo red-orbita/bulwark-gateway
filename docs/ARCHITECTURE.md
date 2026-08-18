@@ -44,7 +44,7 @@ User/Agent ───────▶│  [Auth] → [Input Guardrail] → [Tool P
 | Tool Policy | `src/guardrails/tool_policy.py` | Enforce per-tenant tool allowlists/blocklists |
 | Agent Registry | `src/services/agent_registry.py` | Resolve tenant → backend mapping, auth config |
 | Auth Middleware | `src/middleware/auth.py` | JWT/API key validation, fail-closed |
-| Rate Limiter | `src/middleware/rate_limiter.py` | Per-tenant rate limiting via Redis |
+| Rate Limiter | `src/middleware/rate_limit.py` | Per-tenant rate limiting via Redis |
 | Telemetry | `src/telemetry/` | SIEM export, notifications, metrics |
 
 ### Control Plane (Admin)

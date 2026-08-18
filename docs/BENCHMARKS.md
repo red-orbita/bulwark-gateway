@@ -204,7 +204,7 @@ python scripts/run-benchmarks.py || exit 1
 
 ## Test Coverage
 
-In addition to benchmarks, the project has ~431 unit/integration tests:
+In addition to benchmarks, the project has ~1,300 unit/integration tests:
 
 ```bash
 pytest tests/ -q --tb=short
