@@ -521,12 +521,13 @@ async def recent_blocks(
     """Get recent blocked attacks from Redis."""
     def _fetch(lim: int) -> list:
         try:
-            from ..services.redis_sync import get_redis_client
+            from ..services.redis_sync import fetch_recent_blocks, get_redis_client
             r = get_redis_client(timeout=1.0)
             if r is None:
                 return []
-            raw = r.lrange("bulwark:recent_blocks", 0, lim - 1)
-            return [json.loads(item) for item in raw]
+            # Recent blocks are stored per tenant (bulwark:recent_blocks:<tenant>);
+            # aggregate newest-first across all tenants.
+            return fetch_recent_blocks(r, max_items=lim)
         except Exception:
             return []
 

@@ -25,6 +25,58 @@ KEY_DISABLED = "bulwark:guardrails:disabled"
 KEY_CUSTOM = "bulwark:guardrails:custom"
 KEY_VERSION = "bulwark:guardrails:version"
 
+# Per-tenant recent-blocks lists. The proxy writes one capped list per tenant
+# (bulwark:recent_blocks:<tenant_id>, SGW-XT-002) so block metadata never leaks
+# across tenant boundaries. Readers MUST aggregate across these keys — there is
+# no single shared list.
+RECENT_BLOCKS_PREFIX = "bulwark:recent_blocks:"
+
+
+def iter_recent_block_keys(r: "redis.Redis") -> list[str]:
+    """Return all per-tenant recent-block list keys.
+
+    Uses SCAN (not KEYS) to avoid blocking Redis on large keyspaces.
+    """
+    keys: list[str] = []
+    try:
+        for k in r.scan_iter(match=f"{RECENT_BLOCKS_PREFIX}*", count=200):
+            keys.append(k)
+    except Exception as exc:
+        logger.warning("recent_blocks_scan_failed: %s", exc)
+    return keys
+
+
+def fetch_recent_blocks(
+    r: "redis.Redis", max_items: int = 200, tenant: Optional[str] = None
+) -> list[dict]:
+    """Merge per-tenant recent-block lists into one newest-first list.
+
+    Each stored entry is a JSON object with a numeric ``ts`` field; the merged
+    result is sorted by ``ts`` descending and truncated to ``max_items``. When
+    ``tenant`` is provided, only that tenant's list is read (fast path).
+    """
+    events: list[dict] = []
+    try:
+        if tenant:
+            keys = [f"{RECENT_BLOCKS_PREFIX}{tenant}"]
+        else:
+            keys = iter_recent_block_keys(r)
+        if not keys:
+            return []
+        pipe = r.pipeline(transaction=False)
+        for k in keys:
+            pipe.lrange(k, 0, max_items - 1)
+        for raw in pipe.execute():
+            for item in raw or []:
+                try:
+                    events.append(json.loads(item))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+    except Exception:
+        return events
+    events.sort(key=lambda e: e.get("ts", 0), reverse=True)
+    return events[:max_items]
+
 # ─── Connection Pool Singleton ────────────────────────────────────────
 # Avoids creating a new TCP connection + PING on every call.
 # Thread-safe via lock.

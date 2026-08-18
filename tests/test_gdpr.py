@@ -100,7 +100,13 @@ async def gdpr_service(gdpr_tmp_dirs, audit_logger_with_data):
 
 @pytest.fixture
 def mock_redis():
-    """Provide a mock Redis client."""
+    """Provide a mock Redis client.
+
+    Recent-block reads use per-tenant lists (bulwark:recent_blocks:<tenant>)
+    aggregated via SCAN + pipeline, so the mock exposes ``scan_iter`` (one
+    tenant key) and a pipeline whose queued ``lrange`` calls resolve to the
+    same ``client.lrange.return_value`` data configured by each test.
+    """
     client = MagicMock()
     client.get.return_value = None
     client.set.return_value = True
@@ -110,6 +116,21 @@ def mock_redis():
     client.lrem.return_value = 0
     client.sismember.return_value = False
     client.zrangebyscore.return_value = []
+    client.scan_iter.return_value = ["bulwark:recent_blocks:user-123"]
+
+    def _make_pipeline(*args, **kwargs):
+        pipe = MagicMock()
+        queued: list = []
+
+        def _lrange(key, start, end):
+            queued.append(key)
+            return pipe
+
+        pipe.lrange.side_effect = _lrange
+        pipe.execute.side_effect = lambda: [client.lrange.return_value for _ in queued]
+        return pipe
+
+    client.pipeline.side_effect = _make_pipeline
     return client
 
 

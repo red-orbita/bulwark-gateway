@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -25,26 +24,20 @@ async def list_security_events(
     """Get security events from Redis, optionally filtered by tenant/category/severity."""
     def _fetch() -> list:
         try:
-            from ..services.redis_sync import get_redis_client
+            from ..services.redis_sync import fetch_recent_blocks, get_redis_client
             r = get_redis_client(timeout=2.0)
             if r is None:
                 return []
-            # Fetch from recent_blocks (up to 200 items to allow client-side post-filter)
-            raw = r.lrange("bulwark:recent_blocks", 0, 199)
+            # Aggregate across per-tenant recent_blocks lists (newest-first).
+            # If a tenant filter is set, only that tenant's list is read.
+            candidates = fetch_recent_blocks(r, max_items=200, tenant=tenant)
             events = []
-            for item in raw:
-                try:
-                    evt = json.loads(item)
-                    # Apply filters
-                    if tenant and evt.get("tenant") != tenant:
-                        continue
-                    if category and evt.get("category") != category:
-                        continue
-                    if severity and evt.get("severity") != severity:
-                        continue
-                    events.append(evt)
-                except (json.JSONDecodeError, TypeError):
+            for evt in candidates:
+                if category and evt.get("category") != category:
                     continue
+                if severity and evt.get("severity") != severity:
+                    continue
+                events.append(evt)
             return events[:limit]
         except Exception:
             return []
@@ -59,30 +52,26 @@ async def event_summary(
     """Get aggregated summary: events by category, severity, and tenant."""
     def _fetch() -> dict:
         try:
-            from ..services.redis_sync import get_redis_client
+            from ..services.redis_sync import fetch_recent_blocks, get_redis_client
             r = get_redis_client(timeout=2.0)
             if r is None:
                 return {"by_tenant": {}, "by_category": {}, "by_severity": {}, "total": 0}
-            raw = r.lrange("bulwark:recent_blocks", 0, 499)
+            events = fetch_recent_blocks(r, max_items=500)
             by_tenant: dict = {}
             by_category: dict = {}
             by_severity: dict = {}
-            for item in raw:
-                try:
-                    evt = json.loads(item)
-                    t = evt.get("tenant", "unknown")
-                    c = evt.get("category", "unknown")
-                    s = evt.get("severity", "unknown")
-                    by_tenant[t] = by_tenant.get(t, 0) + 1
-                    by_category[c] = by_category.get(c, 0) + 1
-                    by_severity[s] = by_severity.get(s, 0) + 1
-                except (json.JSONDecodeError, TypeError):
-                    continue
+            for evt in events:
+                t = evt.get("tenant", "unknown")
+                c = evt.get("category", "unknown")
+                s = evt.get("severity", "unknown")
+                by_tenant[t] = by_tenant.get(t, 0) + 1
+                by_category[c] = by_category.get(c, 0) + 1
+                by_severity[s] = by_severity.get(s, 0) + 1
             return {
                 "by_tenant": by_tenant,
                 "by_category": by_category,
                 "by_severity": by_severity,
-                "total": len(raw),
+                "total": len(events),
             }
         except Exception:
             return {"by_tenant": {}, "by_category": {}, "by_severity": {}, "total": 0}
@@ -97,7 +86,7 @@ async def tenant_analytics(
     """Get combined per-tenant analytics: usage counters + recent event breakdown."""
     def _fetch() -> dict:
         try:
-            from ..services.redis_sync import get_redis_client
+            from ..services.redis_sync import fetch_recent_blocks, get_redis_client
             r = get_redis_client(timeout=2.0)
             if r is None:
                 return {"tenants": {}}
@@ -106,8 +95,9 @@ async def tenant_analytics(
             pipe.hgetall("bulwark:usage:total")
             pipe.hgetall("bulwark:usage:block")
             pipe.hgetall("bulwark:usage:allow")
-            pipe.lrange("bulwark:recent_blocks", 0, 499)
-            total, blocked, allowed, recent_raw = pipe.execute()
+            total, blocked, allowed = pipe.execute()
+            # Recent blocks live in per-tenant lists — aggregate separately.
+            recent = fetch_recent_blocks(r, max_items=500)
 
             total = total or {}
             blocked = blocked or {}
@@ -131,19 +121,15 @@ async def tenant_analytics(
                     )
 
             # Enrich with category breakdown from recent blocks
-            for item in (recent_raw or []):
-                try:
-                    evt = json.loads(item)
-                    tid = evt.get("tenant", "unknown")
-                    cat = evt.get("category", "unknown")
-                    if tid not in tenants:
-                        tenants[tid] = {
-                            "total": 0, "blocked": 0, "allowed": 0,
-                            "block_rate": 0.0, "categories": {},
-                        }
-                    tenants[tid]["categories"][cat] = tenants[tid]["categories"].get(cat, 0) + 1
-                except (json.JSONDecodeError, TypeError):
-                    continue
+            for evt in recent:
+                tid = evt.get("tenant", "unknown")
+                cat = evt.get("category", "unknown")
+                if tid not in tenants:
+                    tenants[tid] = {
+                        "total": 0, "blocked": 0, "allowed": 0,
+                        "block_rate": 0.0, "categories": {},
+                    }
+                tenants[tid]["categories"][cat] = tenants[tid]["categories"].get(cat, 0) + 1
 
             return {"tenants": tenants}
         except Exception:

@@ -712,11 +712,12 @@ class GDPRService:
             return events
 
         try:
-            # Check recent blocks list
-            recent = client.lrange("bulwark:recent_blocks", 0, -1)
-            for item in (recent or []):
+            # Recent blocks are stored per tenant (bulwark:recent_blocks:<tenant>);
+            # aggregate across all tenant lists, then match on subject.
+            from .redis_sync import fetch_recent_blocks
+            recent = fetch_recent_blocks(client, max_items=10000)
+            for event in recent:
                 try:
-                    event = json.loads(item) if isinstance(item, str) else item
                     # Match on tenant_id, source IP, or any field containing subject
                     if self._event_matches_subject(event, subject_id):
                         events.append(event)
@@ -879,10 +880,14 @@ class GDPRService:
                     client.delete(*keys)
                     erased += len(keys)
 
-            # 2. Remove entries in recent_blocks list that contain subject_id
-            recent_key = "bulwark:recent_blocks"
-            recent_blocks = client.lrange(recent_key, 0, -1)
-            if recent_blocks:
+            # 2. Remove entries in per-tenant recent_blocks lists that contain
+            # subject_id. Blocks are stored one capped list per tenant
+            # (bulwark:recent_blocks:<tenant>), so scan and clean every list.
+            from .redis_sync import iter_recent_block_keys
+            for recent_key in iter_recent_block_keys(client):
+                recent_blocks = client.lrange(recent_key, 0, -1)
+                if not recent_blocks:
+                    continue
                 for entry in recent_blocks:
                     entry_str = entry if isinstance(entry, str) else entry.decode("utf-8", errors="ignore")
                     if subject_id in entry_str:
