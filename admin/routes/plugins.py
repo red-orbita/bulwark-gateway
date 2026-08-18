@@ -177,21 +177,44 @@ def _compute_security_findings(warnings: list[str]) -> tuple[list[SecurityFindin
     return findings, score, verdict
 
 
+def _is_within_directory(base: Path, target: Path) -> bool:
+    """Return True only if `target` resolves inside `base` (defeats path traversal)."""
+    try:
+        base_resolved = base.resolve()
+        target_resolved = target.resolve()
+    except (OSError, ValueError):
+        return False
+    return base_resolved == target_resolved or base_resolved in target_resolved.parents
+
+
 def _extract_archive(file_path: Path, dest_dir: Path) -> Path:
-    """Extract .zip or .tar.gz to dest_dir. Returns plugin root dir."""
+    """Extract .zip or .tar.gz to dest_dir. Returns plugin root dir.
+
+    Security: every member is validated for absolute paths, ``..`` traversal,
+    and a resolved-path containment check BEFORE writing to disk. Symlink/hardlink
+    members in tarballs are rejected outright (defense against CVE-2007-4559-class
+    extraction escapes). We deliberately do not use ``extractall``.
+    """
+    dest_dir = Path(dest_dir)
     if zipfile.is_zipfile(file_path):
         with zipfile.ZipFile(file_path, 'r') as zf:
-            # Security: reject entries with absolute paths or ..
             for name in zf.namelist():
-                if name.startswith('/') or '..' in name:
+                if name.startswith('/') or '..' in Path(name).parts:
                     raise ValueError(f"Unsafe path in archive: {name}")
-            zf.extractall(dest_dir)
+                if not _is_within_directory(dest_dir, dest_dir / name):
+                    raise ValueError(f"Path traversal blocked: {name}")
+            for name in zf.namelist():
+                zf.extract(name, dest_dir)
     elif tarfile.is_tarfile(file_path):
         with tarfile.open(file_path, 'r:*') as tf:
             for member in tf.getmembers():
-                if member.name.startswith('/') or '..' in member.name:
+                if member.issym() or member.islnk():
+                    raise ValueError(f"Link members are not allowed: {member.name}")
+                if member.name.startswith('/') or '..' in Path(member.name).parts:
                     raise ValueError(f"Unsafe path in archive: {member.name}")
-            tf.extractall(dest_dir, filter='data')
+                if not _is_within_directory(dest_dir, dest_dir / member.name):
+                    raise ValueError(f"Path traversal blocked: {member.name}")
+                tf.extract(member, dest_dir, filter='data')
     else:
         raise ValueError("Unsupported archive format. Use .zip or .tar.gz")
 

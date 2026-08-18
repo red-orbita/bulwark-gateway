@@ -1,0 +1,25 @@
+# Admin portal direct dependencies (source of truth for requirements-admin.lock)
+# Reconstructed from lock; pinned exact to guarantee reproducible re-compile.
+# Regenerate: pip-compile --generate-hashes --output-file=requirements-admin.lock docker/requirements-admin.in
+
+aiofiles==25.1.0
+bcrypt==5.0.0
+cachetools==7.1.4
+cryptography==50.0.0
+fastapi==0.136.3
+httpx==0.28.1
+jinja2==3.1.6
+pydantic==2.13.4
+pydantic-settings==2.14.2
+pyotp==2.9.0
+pysqlcipher3==1.2.0
+python-multipart==0.0.31
+pyyaml==6.0.3
+structlog==25.5.0
+uvicorn==0.49.0
+
+# Admin-only runtime deps previously installed outside the lock (drift fix):
+redis==8.0.0
+PyJWT==2.13.0
+asyncpg==0.31.0
+aiosqlite==0.22.1

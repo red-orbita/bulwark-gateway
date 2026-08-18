@@ -15,6 +15,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+# Placeholder used in CEF/LEEF `src` fields when the originating IP is unknown.
+# These formats require a syntactically valid IP; "0.0.0.0" is the conventional
+# "unspecified address" sentinel. This is a log-record value, NOT a socket bind.
+_UNKNOWN_SRC_IP = "0.0.0.0"  # nosec B104
+
 
 class TelemetryEventCategory(str, Enum):
     """ECS event.category values relevant to Bulwark Gateway."""
@@ -137,7 +142,7 @@ class SecurityTelemetryEvent(BaseModel):
         # CEF severity is 0-10
         name = self.bulwark.rule_description or self.bulwark.threat_category or "SecurityEvent"
         extension = (
-            f"src={self.source.ip or '0.0.0.0'} "
+            f"src={self.source.ip or _UNKNOWN_SRC_IP} "
             f"act={self.bulwark.verdict} "
             f"cat={self.event.category.value} "
             f"cs1={self.tenant.id} cs1Label=TenantID "
@@ -157,7 +162,7 @@ class SecurityTelemetryEvent(BaseModel):
             f"LEEF:2.0|BulwarkGateway|Guardrail|{self.observer.version}|SecurityEvent|"
             f"cat={self.event.category.value}\t"
             f"sev={self.event.severity.value}\t"
-            f"src={self.source.ip or '0.0.0.0'}\t"
+            f"src={self.source.ip or _UNKNOWN_SRC_IP}\t"
             f"action={self.bulwark.verdict}\t"
             f"tenantId={self.tenant.id}\t"
             f"ruleId={self.bulwark.rule_id or 'none'}\t"

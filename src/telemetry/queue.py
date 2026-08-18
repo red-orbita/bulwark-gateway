@@ -83,8 +83,9 @@ class DiskFallback:
             if db_size > self._MAX_DB_SIZE_BYTES:
                 # Delete oldest N events
                 self._conn.execute(
-                    f"DELETE FROM events WHERE id IN "
-                    f"(SELECT id FROM events ORDER BY created_at ASC LIMIT {self._ROTATION_BATCH})"
+                    "DELETE FROM events WHERE id IN "
+                    "(SELECT id FROM events ORDER BY created_at ASC LIMIT ?)",
+                    (self._ROTATION_BATCH,),
                 )
                 # Reclaim space
                 self._conn.execute("PRAGMA incremental_vacuum(100)")
@@ -94,8 +95,9 @@ class DiskFallback:
             count = cursor.fetchone()[0]
             if count > self._MAX_EVENTS:
                 self._conn.execute(
-                    f"DELETE FROM events WHERE id IN "
-                    f"(SELECT id FROM events ORDER BY created_at ASC LIMIT {self._ROTATION_BATCH})"
+                    "DELETE FROM events WHERE id IN "
+                    "(SELECT id FROM events ORDER BY created_at ASC LIMIT ?)",
+                    (self._ROTATION_BATCH,),
                 )
                 self._conn.execute("PRAGMA incremental_vacuum(100)")
         except Exception:
@@ -119,7 +121,12 @@ class DiskFallback:
                     events.append(SecurityTelemetryEvent.model_validate(data))
                 except Exception:
                     pass  # Skip corrupted entries
-            self._conn.execute(f"DELETE FROM events WHERE id IN ({','.join('?' * len(ids))})", ids)
+            # nosec B608: only "?" placeholders are interpolated into the SQL;
+            # the actual id values are bound as parameters (never string-formatted).
+            placeholders = ",".join("?" * len(ids))
+            self._conn.execute(
+                f"DELETE FROM events WHERE id IN ({placeholders})", ids  # nosec B608
+            )
         return events
 
     @property

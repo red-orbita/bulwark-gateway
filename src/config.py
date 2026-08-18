@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     """
 
     # Server
-    host: str = "0.0.0.0"
+    # nosec B104: binding all interfaces is required so the proxy is reachable
+    # inside its container/pod network namespace. External exposure is controlled
+    # by Kubernetes Services/NetworkPolicies and the ingress layer, not this bind.
+    host: str = "0.0.0.0"  # nosec B104
     port: int = 8080
     workers: int = 4
     debug: bool = False

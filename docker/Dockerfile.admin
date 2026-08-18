@@ -3,7 +3,7 @@
 # Separate service, zero impact on proxy hot path
 # H-08 fix: Pin base image to SHA256 digest (prevents supply chain poisoning)
 # ============================================================
-FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS builder
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS builder
 
 WORKDIR /build
 
@@ -15,9 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml .
 COPY requirements-admin.lock .
-RUN pip install --no-cache-dir --require-hashes -r requirements-admin.lock && \
-    pip install --no-cache-dir PyJWT==2.13.0 redis==8.0.0 python-multipart>=0.0.9 && \
-    pip install --no-cache-dir asyncpg==0.31.0 aiosqlite==0.22.1
+# All admin dependencies (including redis, PyJWT, asyncpg, aiosqlite,
+# python-multipart) are now hash-pinned in requirements-admin.lock — see
+# docker/requirements-admin.in for the source-of-truth direct deps. A single
+# --require-hashes install guarantees a reproducible, tamper-evident build.
+RUN pip install --no-cache-dir --require-hashes -r requirements-admin.lock
 
 # Install NVIDIA SkillSpector from GitHub (Apache 2.0)
 # Provides 64 vulnerability patterns, AST analysis, taint tracking, YARA signatures, OSV.dev CVE lookups
@@ -33,7 +35,7 @@ RUN if [ -n "$SKILLSPECTOR_COMMIT" ]; then \
     fi
 
 # ============================================================
-FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS runtime
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS runtime
 
 LABEL org.opencontainers.image.title="bulwark-gateway-admin"
 LABEL org.opencontainers.image.description="Admin portal for Bulwark Gateway"
@@ -44,16 +46,17 @@ LABEL org.opencontainers.image.version="0.4.3"
 # no dev tools) to reduce attack surface.
 # Debian bumped the SONAME package name libsqlcipher0 -> libsqlcipher1, so try
 # the newer name first and fall back for older bases (keeps the build portable).
-# SECURITY: also upgrade the util-linux family (CVE-2026-53615) to
-# 2.41.5-0+deb13u1 and liblzma5 (CVE-2026-34743) to 5.8.1-1+deb13u1 —
-# fixable OS CVEs not yet baked into the pinned base digest. Folded into this
-# single apt layer to avoid an extra image layer.
+# SECURITY: also upgrade ALL installed OS packages to the latest security-patched
+# versions in the pinned base's Debian (trixie) apt snapshot. This clears the
+# fixable Trivy findings across perl(-base), openssl, ncurses, glibc (libc6),
+# libsqlite3, tar, gzip, bzip2, zlib1g, libacl1, libattr1, libpam*, util-linux
+# and systemd libraries. Folded into a single apt layer. CVEs with no released
+# Debian fix remain until upstream ships one (expected).
 RUN apt-get update && \
     (apt-get install -y --no-install-recommends libsqlcipher1 || \
      apt-get install -y --no-install-recommends libsqlcipher0) && \
-    apt-get install -y --only-upgrade --no-install-recommends \
-      util-linux mount bsdutils login libblkid1 libmount1 \
-      libsmartcols1 libuuid1 liblastlog2-2 liblzma5 && \
+    apt-get upgrade -y --no-install-recommends && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark

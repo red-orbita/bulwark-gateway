@@ -340,10 +340,15 @@ class UserStore:
         if not updates:
             return self.get_user_by_id(user_id)
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # Column names come exclusively from the fixed `allowed` allow-list above,
+        # so the SET clause cannot carry attacker-controlled identifiers. All
+        # values are bound as parameters.
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [user_id]
         with self._lock:
-            self._conn.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
+            self._conn.execute(
+                f"UPDATE users SET {set_clause} WHERE id = ?", values  # nosec B608
+            )
             self._conn.commit()
         return self.get_user_by_id(user_id)
 
@@ -735,10 +740,12 @@ class PostgreSQLUserStore(UserStore):
         if not updates:
             return self.get_user_by_id(user_id)
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # Column names come exclusively from the fixed `allowed` allow-list above;
+        # values are bound as parameters (no attacker-controlled identifiers).
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [user_id]
         db = self._get_db()
-        db.sync_execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
+        db.sync_execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)  # nosec B608
         return self.get_user_by_id(user_id)
 
     def delete_user(self, user_id: str) -> bool:

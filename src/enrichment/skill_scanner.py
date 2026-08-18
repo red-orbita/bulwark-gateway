@@ -131,7 +131,7 @@ class SkillEnrichmentScanner(BaseEnrichmentScanner):
         suffix = f"_skill_{content_hash}.json"
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=suffix, delete=False, dir="/tmp"
+            mode="w", suffix=suffix, delete=False
         ) as f:
             # Wrap content as a skill-like structure for SkillSpector
             skill_doc = {

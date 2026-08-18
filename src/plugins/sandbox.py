@@ -826,9 +826,11 @@ class FilesystemBlocker:
             )
 
         # Block sensitive paths
+        # nosec B108: these are DENY-list entries (paths the sandbox forbids
+        # access to), not locations where a temp file is created.
         _BLOCKED_PATHS = {
             "/proc", "/sys", "/dev", "/run", "/etc",
-            "/var", "/tmp", "/root", "/home",
+            "/var", "/tmp", "/root", "/home",  # nosec B108
         }
         for blocked in _BLOCKED_PATHS:
             if str(target).startswith(blocked):

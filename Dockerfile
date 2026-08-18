@@ -3,7 +3,7 @@
 # Multi-stage build for minimal attack surface
 # H-08 fix: Pin base image to SHA256 digest (prevents supply chain poisoning)
 # ============================================================
-FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS builder
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS builder
 
 WORKDIR /build
 
@@ -28,22 +28,25 @@ RUN if [ "$INSTALL_EMBEDDINGS" = "true" ] || [ "$INSTALL_ML" = "true" ]; then \
     fi
 
 # ============================================================
-FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS runtime
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS runtime
 
 LABEL org.opencontainers.image.title="bulwark-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"
 LABEL org.opencontainers.image.version="0.4.3"
 
 # SECURITY: patch fixable OS CVEs not yet baked into the pinned base digest.
-# util-linux family (CVE-2026-53615, integer overflow) fixed in
-# 2.41.5-0+deb13u1; liblzma5 (CVE-2026-34743) fixed in 5.8.1-1+deb13u1.
+# We upgrade ALL installed OS packages to the latest security-patched versions
+# available in the pinned base's Debian (trixie) apt snapshot. This clears the
+# fixable Trivy findings across perl(-base), openssl, ncurses, glibc (libc6),
+# libsqlite3, tar, gzip, bzip2, zlib1g, libacl1, libattr1, libpam*, util-linux
+# and systemd libraries in one deterministic layer. CVEs with no released
+# Debian fix remain until upstream ships one (expected).
 # Runtime stage only — the builder layer is discarded, and the final image is
 # what SCA/Trivy scans. Non-root + read-only rootfs still hold at runtime
 # (apt cannot write once the container starts).
 RUN apt-get update && \
-    apt-get install -y --only-upgrade --no-install-recommends \
-      util-linux mount bsdutils login libblkid1 libmount1 \
-      libsmartcols1 libuuid1 liblastlog2-2 liblzma5 && \
+    apt-get upgrade -y --no-install-recommends && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Security: non-root user

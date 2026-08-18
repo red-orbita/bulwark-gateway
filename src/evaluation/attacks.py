@@ -505,8 +505,10 @@ class AttackGenerator:
             # Derive per-category seed for consistent results regardless of which
             # categories are included in this run
             if self._seed is not None:
-                # Use deterministic hash (hashlib, not Python's hash() which is randomized)
-                cat_hash = hashlib.md5(f"{self._seed}:{category.value}".encode()).digest()
+                # Derive a stable per-category seed. SHA-256 is used purely as a
+                # deterministic mixing function (NOT for security) so category
+                # runs stay reproducible regardless of Python's randomized hash().
+                cat_hash = hashlib.sha256(f"{self._seed}:{category.value}".encode()).digest()
                 cat_seed = int.from_bytes(cat_hash[:4], "big")
                 self._rng = random.Random(cat_seed)
             # else: unseeded — non-deterministic (uses shared RNG)
