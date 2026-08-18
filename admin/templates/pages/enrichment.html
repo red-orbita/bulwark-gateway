@@ -125,11 +125,11 @@
             <h2 class="text-sm font-medium text-white">Regex Candidates for Review</h2>
             <div class="flex gap-2">
                 <button @click="regexFilter = 'pending'; loadCandidates()" class="text-xs px-2 py-1 rounded"
-                        :class="regexFilter === 'pending' ? 'bg-amber-500/20 text-amber-400' : 'text-gray-400 hover:text-white'"">Pending</button>
+                        :class="regexFilter === 'pending' ? 'bg-amber-500/20 text-amber-400' : 'text-gray-400 hover:text-white'">Pending</button>
                 <button @click="regexFilter = 'approved'; loadCandidates()" class="text-xs px-2 py-1 rounded"
-                        :class="regexFilter === 'approved' ? 'bg-emerald-500/20 text-emerald-400' : 'text-gray-400 hover:text-white'"">Approved</button>
+                        :class="regexFilter === 'approved' ? 'bg-emerald-500/20 text-emerald-400' : 'text-gray-400 hover:text-white'">Approved</button>
                 <button @click="regexFilter = 'rejected'; loadCandidates()" class="text-xs px-2 py-1 rounded"
-                        :class="regexFilter === 'rejected' ? 'bg-red-500/20 text-red-400' : 'text-gray-400 hover:text-white'"">Rejected</button>
+                        :class="regexFilter === 'rejected' ? 'bg-red-500/20 text-red-400' : 'text-gray-400 hover:text-white'">Rejected</button>
             </div>
         </div>
 

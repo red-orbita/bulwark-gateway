@@ -262,3 +262,35 @@ def test_rendered_inline_script_nonce_matches_header():
     assert f'<script nonce="{header_nonce}">' in body, (
         "rendered inline <script> nonce does not match the CSP header nonce"
     )
+
+
+# Signature of a malformed bound attribute: a single-quoted value that is
+# immediately followed by a stray double-quote, e.g.
+#   :class="cond ? 'a' : 'b'"">   (the extra " terminates into an empty attr)
+# This is distinct from a legitimate empty attribute (value="").
+_MALFORMED_ATTR_RE = re.compile(r"'\"\"")
+
+
+def test_no_malformed_double_quote_attributes():
+    """Regression guard: no template may contain a stray doubled closing quote on
+    a single-quoted (Alpine/Vue) bound attribute. Regression for the enrichment.html
+    filter buttons which rendered `...hover:text-white'"">` (empty spurious attr)."""
+    offenders = []
+    for tpl in _template_files():
+        text = tpl.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if _MALFORMED_ATTR_RE.search(line):
+                offenders.append(f"{tpl.relative_to(_ROOT).as_posix()}:{lineno}")
+    assert offenders == [], f"malformed doubled-quote attributes found: {offenders}"
+
+
+def test_enrichment_filter_buttons_are_well_formed():
+    """Positive check: the three enrichment regex-filter buttons keep exactly one
+    closing quote on their :class binding and remain wired to loadCandidates()."""
+    text = (_TEMPLATES / "pages" / "enrichment.html").read_text(encoding="utf-8")
+    for verdict in ("pending", "approved", "rejected"):
+        assert f"regexFilter = '{verdict}'; loadCandidates()" in text, (
+            f"enrichment {verdict} filter button lost its click handler"
+        )
+    assert "hover:text-white'\">" in text, "expected well-formed single closing quote"
+    assert "hover:text-white'\"\">" not in text, "stray doubled closing quote present"
