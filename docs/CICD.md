@@ -33,7 +33,9 @@ Test → Build → Deploy Staging → Deploy Production
 | Deploy Production | Tag `v*.*.*` | Manual approval |
 
 **Versioning:**
-- Branch pushes: `sha-<8-char-commit-hash>` (e.g., `sha-a1b2c3d4`)
+- Branch pushes: `sha-<commit-hash>` — GitHub Actions, GitLab, and Jenkins use the
+  8-char short SHA (e.g., `sha-a1b2c3d4`); Azure DevOps uses the full commit SHA
+  (`sha-$(Build.SourceVersion)`).
 - Tags: semantic version without `v` prefix (e.g., `1.0.0`)
 
 ---
@@ -55,6 +57,13 @@ Test → Build → Deploy Staging → Deploy Production
                    └─────────────┘    └────────────────┘    │    failure       │
                                                             └──────────────────┘
 ```
+
+> The diagram shows the full set of steps across platforms; individual pipelines
+> differ. **Post-deploy validation** (`kubectl wait` for proxy/admin readiness)
+> runs in every pipeline. The **security smoke test** (`scripts/security-smoke-test.py`)
+> runs only in GitHub Actions (staging + production). **Automatic rollback on
+> failure** is built into Jenkins and Azure DevOps only — see
+> [Rollback Strategy](#rollback-strategy).
 
 ---
 
@@ -281,7 +290,7 @@ The `ci/` directory contains template values files:
 
 | File | Purpose |
 |------|---------|
-| `ci/values-staging.yaml` | Staging overrides (2 replicas, internal Redis, debug logging) |
+| `ci/values-staging.yaml` | Staging overrides (2 replicas, internal Redis, `INFO` logging) |
 | `ci/values-production.yaml` | Production overrides (3+ replicas, external Redis, minimal logging) |
 
 Copy and customize these for your environment. Sensitive values (passwords, keys) should be injected via `--set` from CI/CD secrets — never committed to the repository.
@@ -326,7 +335,8 @@ These must always be passed via CI/CD pipeline secrets:
 
 ## Rollback Strategy
 
-All pipelines support automatic rollback on deployment failure:
+Helm keeps a revision history for every release, so a rollback is always available
+manually regardless of which pipeline performed the deploy:
 
 ```bash
 # Manual rollback (any platform)
@@ -341,10 +351,20 @@ helm history bulwark-gateway --namespace bulwark-gateway
 
 ### Automatic Rollback
 
-- **Jenkins**: Configured in `post { failure { } }` block — runs `helm rollback` on deploy failure
-- **Azure DevOps**: Configured in `on: failure:` strategy step
-- **GitHub Actions / GitLab**: Add rollback step in job failure condition
-- **Tekton**: Add a `finally` task to the pipeline
+Automatic rollback on deploy failure is **built into Jenkins and Azure DevOps only**.
+The other pipelines deploy with `helm upgrade --install --wait`, which fails the job
+on a bad rollout but leaves the previous revision in place for a manual `helm rollback`:
+
+- **Jenkins**: implemented — `post { failure { ... } }` runs `helm rollback` on the
+  staging and production deploy stages (`ci/Jenkinsfile`).
+- **Azure DevOps**: implemented — the production deployment job has an
+  `on: failure:` step that runs `helm rollback` (`ci/azure-pipelines.yml`).
+- **GitHub Actions**: not implemented — add a step with `if: failure()` calling
+  `helm rollback` if you want automatic rollback.
+- **GitLab**: not implemented — add a job/step with `when: on_failure` calling
+  `helm rollback`.
+- **Tekton**: not implemented — add a `finally` task to the pipeline that runs
+  `helm rollback`.
 
 ### Canary / Blue-Green
 
