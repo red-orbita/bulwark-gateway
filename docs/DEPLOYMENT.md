@@ -203,10 +203,12 @@ backend:
   type: externalName
   externalName: "your-openai-instance.openai.azure.com"
   port: 443
-  tls: true
 ```
 
 This creates a Kubernetes ExternalName service that resolves to the cloud endpoint.
+Upstream TLS is determined by the backend URL scheme in `config/agents.yaml`
+(use an `https://` `backend_url`), not by a chart value — there is no `backend.tls`
+setting.
 
 #### Multiple Backends (Per-Agent Routing)
 
@@ -363,7 +365,7 @@ Security features in K8s deployment:
 - **Secrets**: Stored in K8s Secrets (encrypted at rest in etcd)
 - **NetworkPolicies**: Default-deny with explicit per-pod allow rules
 - **Pod Security**: Restricted mode (non-root, read-only fs, no privilege escalation)
-- **HPA**: Auto-scaling proxy from 1 to 10 replicas based on CPU/memory
+- **HPA**: Auto-scaling proxy from 2 to 10 replicas based on CPU/memory
 - **PDB**: Ensures minimum availability during node maintenance
 - **ServiceAccounts**: Dedicated accounts with no token auto-mount
 
@@ -2044,7 +2046,7 @@ No application code changes needed — Bulwark Gateway reads from K8s Secrets re
 | Component | Min Replicas | Max Replicas | Scale Metric |
 |-----------|-------------|-------------|--------------|
 | Proxy | 2 | 10 | CPU 70% / Memory 80% |
-| Admin | 2 | 3 | CPU 70% |
+| Admin | 1 | 1 | Fixed (stateful — no HPA) |
 | Redis | 3 (Bulwark) | 3 | Fixed (quorum) |
 
 ### HPA Configuration
@@ -2083,7 +2085,9 @@ PDBs ensure minimum availability during node maintenance and cluster upgrades. T
 
 ### Redis High Availability
 
-For production, deploy Redis with Bulwark for automatic failover:
+The default `redis.mode` is `standalone` (single node). For production HA, set
+`redis.mode: "bulwark"` (Redis Bulwark — quorum-based failover) or
+`redis.mode: "cluster"`. With Bulwark mode:
 - 3 Redis nodes (1 master + 2 replicas)
 - 3 Bulwark processes for quorum-based leader election
 - Automatic failover within seconds
@@ -2107,7 +2111,7 @@ For internal-only deployments, use split-horizon DNS or private hosted zones.
 | Component | CPU Request | CPU Limit | Memory Request | Memory Limit | Notes |
 |-----------|-------------|-----------|----------------|--------------|-------|
 | Proxy | 100m | 500m | 128Mi | 512Mi | Scales horizontally via HPA |
-| Admin | 100m | 250m | 128Mi | 256Mi | Low traffic, 2-3 replicas |
+| Admin | 100m | 250m | 128Mi | 256Mi | Low traffic, single replica (stateful) |
 | Redis | 100m | 250m | 128Mi | 256Mi | Persistence enabled |
 | Prometheus | 100m | 500m | 256Mi | 1Gi | Retention-dependent |
 | Grafana | 50m | 200m | 64Mi | 256Mi | Dashboard rendering |
