@@ -236,7 +236,7 @@
                 </thead>
                 <tbody>
                     <template x-for="h in history" :key="h.scan_id">
-                        <tr class="cursor-pointer hover:bg-gray-800/50" @click="viewScan(h.scan_id)">
+                        <tr class="cursor-pointer hover:bg-gray-800/50" role="button" tabindex="0" @click="viewScan(h.scan_id)" @keydown.enter="viewScan(h.scan_id)" @keydown.space.prevent="viewScan(h.scan_id)" :aria-label="'View scan ' + h.scan_id">
                             <td class="font-mono text-cyan-400" x-text="h.scan_id"></td>
                             <td class="text-gray-400" x-text="new Date(h.timestamp).toLocaleString()"></td>
                             <td class="text-gray-300 max-w-[200px] truncate" x-text="h.input_path || '-'"></td>

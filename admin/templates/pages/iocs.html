@@ -225,7 +225,7 @@
              x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white" x-text="editingFeed ? 'Edit Feed' : 'Add Feed Source'"></h3>
-                <button @click="showFeedModal = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+                <button @click="showFeedModal = false" aria-label="Close dialog" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -299,7 +299,7 @@
              x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white" x-text="editingIoc ? 'Edit IOC' : 'Add IOC'"></h3>
-                <button @click="showModal = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+                <button @click="showModal = false" aria-label="Close dialog" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -359,7 +359,7 @@
              x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Bulk Import IOCs</h3>
-                <button @click="showBulk = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+                <button @click="showBulk = false" aria-label="Close dialog" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
             </div>
             <div class="p-6">
                 <label for="iocs-json-array-of-iocs" class="sg-label">JSON Array of IOCs</label>

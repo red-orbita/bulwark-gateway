@@ -19,8 +19,14 @@
         </div>
     </div>
 
+    <!-- Loading skeleton -->
+    <div x-show="loading" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="sg-card"><div class="sg-skeleton h-16 w-full rounded"></div></div>
+        <div class="sg-card"><div class="sg-skeleton h-16 w-full rounded"></div></div>
+    </div>
+
     <!-- Channel Cards -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div x-show="!loading && !loadError" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <template x-for="ch in channels" :key="ch.id">
             <div class="sg-card">
                 <div class="flex items-start justify-between">
@@ -80,13 +86,25 @@
     </div>
 
     <!-- Empty state -->
-    <template x-if="channels.length === 0 && !loading">
+    <template x-if="channels.length === 0 && !loading && !loadError">
         <div class="sg-card text-center py-12">
             <i data-lucide="bell-off" class="w-12 h-12 mx-auto text-gray-600"></i>
             <h3 class="mt-4 text-sm font-semibold text-white">No notification channels configured</h3>
             <p class="text-sm text-gray-400 mt-1">Add a channel to receive alerts when security events occur.</p>
             <button @click="showCreate = true" class="sg-btn sg-btn-primary sg-btn-sm mt-4">
                 <i data-lucide="plus" class="w-4 h-4"></i> Add Channel
+            </button>
+        </div>
+    </template>
+
+    <!-- Error state (distinct from empty — a failed load must not read as "none configured") -->
+    <template x-if="loadError && !loading">
+        <div class="sg-card text-center py-12">
+            <i data-lucide="alert-triangle" class="w-12 h-12 mx-auto text-red-400"></i>
+            <h3 class="mt-4 text-sm font-semibold text-white">Couldn't load notification channels</h3>
+            <p class="text-sm text-gray-400 mt-1" x-text="loadError"></p>
+            <button @click="loadChannels()" class="sg-btn sg-btn-secondary sg-btn-sm mt-4">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
             </button>
         </div>
     </template>
@@ -274,6 +292,7 @@ function notificationManager() {
     return {
         channels: [],
         loading: true,
+        loadError: null,
         showCreate: false,
         saving: false,
         editingId: null,
@@ -293,11 +312,16 @@ function notificationManager() {
 
         async loadChannels() {
             this.loading = true;
+            this.loadError = null;
             try {
                 const res = await fetch('/admin/notifications/channels');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 this.channels = data.channels || [];
-            } catch (e) { console.error(e); }
+            } catch (e) {
+                this.loadError = 'Could not load notification channels — the admin API may be unavailable';
+                this.channels = [];
+            }
             this.loading = false;
         },
 

@@ -78,12 +78,23 @@
             </template>
         </div>
         <!-- Empty state -->
-        <div x-show="transports.length === 0" class="sg-empty">
+        <div x-show="transports.length === 0 && !loadError" class="sg-empty">
             <div class="sg-empty-icon">
                 <i data-lucide="radio-tower" class="w-8 h-8"></i>
             </div>
             <p class="sg-empty-title">No transports configured</p>
             <p class="sg-empty-desc">Click "Add Transport" to configure your first SIEM export</p>
+        </div>
+        <!-- Error state (distinct from empty — a failed load must not read as "none configured") -->
+        <div x-show="loadError" x-cloak class="sg-empty">
+            <div class="sg-empty-icon text-red-400">
+                <i data-lucide="alert-triangle" class="w-8 h-8"></i>
+            </div>
+            <p class="sg-empty-title">Couldn't load SIEM configuration</p>
+            <p class="sg-empty-desc" x-text="loadError"></p>
+            <button @click="init()" class="sg-btn sg-btn-secondary sg-btn-sm mt-4">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+            </button>
         </div>
     </div>
 
@@ -107,7 +118,7 @@
              x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100">
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white" x-text="editingTransport ? 'Edit Transport' : 'Add Transport'"></h3>
-                <button @click="showCreate=false; editingTransport=null" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
+                <button @click="showCreate=false; editingTransport=null" aria-label="Close dialog" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -236,6 +247,7 @@ function siemManager() {
     return {
         transports: [],
         stats: {},
+        loadError: null,
         showCreate: false,
         editingTransport: null,
         pageTestResult: null,
@@ -254,10 +266,17 @@ function siemManager() {
             }
         },
         async init() {
-            const resp = await fetch('/admin/siem/config');
-            if (resp.ok) this.transports = (await resp.json()).transports || [];
-            const sr = await fetch('/admin/siem/status');
-            if (sr.ok) this.stats = await sr.json();
+            this.loadError = null;
+            try {
+                const resp = await fetch('/admin/siem/config');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                this.transports = (await resp.json()).transports || [];
+                const sr = await fetch('/admin/siem/status');
+                if (sr.ok) this.stats = await sr.json();
+            } catch (e) {
+                this.loadError = 'Could not load SIEM configuration — the admin API may be unavailable';
+                this.transports = [];
+            }
         },
         async toggleTransport(t) {
             const previous = t.enabled;

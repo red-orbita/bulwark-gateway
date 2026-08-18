@@ -55,7 +55,7 @@
         </div>
 
         <!-- Table -->
-        <div x-show="!loading" class="sg-table-scroll">
+        <div x-show="!loading && !loadError" class="sg-table-scroll">
             <table class="sg-table">
                 <thead>
                     <tr>
@@ -108,11 +108,23 @@
         </div>
 
         <!-- Empty State -->
-        <div x-show="!loading && plugins.length === 0" class="sg-empty py-12">
+        <div x-show="!loading && !loadError && plugins.length === 0" class="sg-empty py-12">
             <svg class="w-10 h-10 text-gray-600 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 7.5v9l-4 2.25M20 7.5L12 2 4 7.5m16 0-8 4.5m-8-4.5v9l4 2.25M4 7.5l8 4.5m0 0v9l4-2.25M12 12l-4 2.25"/></svg>
             <p class="text-gray-400 font-medium">No plugins installed</p>
             <p class="text-xs text-gray-500 mt-1">Upload a .zip file, clone from Git, or create a template</p>
             <button @click="showInstall = true" class="sg-btn sg-btn-primary sg-btn-sm mt-4">Install First Plugin</button>
+        </div>
+
+        <!-- Error State (distinct from empty — a failed load must not read as "none installed") -->
+        <div x-show="!loading && loadError" x-cloak class="sg-empty py-12">
+            <div class="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
+                <i data-lucide="alert-triangle" class="w-5 h-5 text-red-400"></i>
+            </div>
+            <p class="text-gray-300 font-medium">Couldn't load plugins</p>
+            <p class="text-xs text-gray-500 mt-1" x-text="loadError"></p>
+            <button @click="loadPlugins()" class="sg-btn sg-btn-secondary sg-btn-sm mt-4">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+            </button>
         </div>
     </div>
 
@@ -121,7 +133,7 @@
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Install Plugin</h3>
-                <button @click="showInstall = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="showInstall = false" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
 
             <!-- Tab selector -->
@@ -186,7 +198,7 @@
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Create Plugin Template</h3>
-                <button @click="showScaffold = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="showScaffold = false" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <p class="text-xs text-gray-400">Generate a boilerplate plugin structure with <code class="text-cyan-400">bulwark-plugin.yaml</code>, <code class="text-cyan-400">scanner.py</code>, tests, and README.</p>
@@ -208,7 +220,7 @@
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:85vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-800 z-10">
                 <h3 class="text-lg font-semibold text-white">Security Audit</h3>
-                <button @click="securityResults = null" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="securityResults = null" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
 
             <!-- Score -->
@@ -280,7 +292,7 @@
                     <h3 class="text-lg font-semibold text-white">Live Test</h3>
                     <p class="text-xs text-gray-500">Plugin: <span class="text-cyan-400 font-mono" x-text="testPluginName"></span></p>
                 </div>
-                <button @click="showTest = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="showTest = false" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
 
             <div class="p-6 space-y-4">
@@ -383,6 +395,7 @@ function pluginsPage() {
     return {
         plugins: [],
         loading: true,
+        loadError: null,
         // Install modal
         showInstall: false,
         installTab: 'upload',
@@ -411,6 +424,7 @@ function pluginsPage() {
 
         async loadPlugins() {
             this.loading = true;
+            this.loadError = null;
             try {
                 const resp = await fetch('/admin/plugins/', { credentials: 'include' });
                 if (resp.ok) {
@@ -419,9 +433,14 @@ function pluginsPage() {
                     const err = await resp.json().catch(() => ({}));
                     showToast(err.detail || 'Plugin system unavailable', 'warn');
                     this.plugins = [];
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    this.loadError = err.detail || `Failed to load plugins (HTTP ${resp.status})`;
+                    this.plugins = [];
                 }
             } catch (e) {
-                showToast('Failed to load plugins', 'error');
+                this.loadError = 'Failed to load plugins';
+                this.plugins = [];
             } finally {
                 this.loading = false;
             }

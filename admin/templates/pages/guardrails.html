@@ -32,7 +32,7 @@
                     <p class="text-[11px] text-gray-500">Prompt injection, jailbreak</p>
                 </div>
             </div>
-            <button @click="toggleModule('input')" class="sg-toggle" :data-state="modules.input ? 'on' : 'off'">
+            <button @click="toggleModule('input')" class="sg-toggle" role="switch" :aria-checked="modules.input" aria-label="Toggle Input Guardrail" :data-state="modules.input ? 'on' : 'off'">
                 <span class="sg-toggle-thumb"></span>
             </button>
         </div>
@@ -46,7 +46,7 @@
                     <p class="text-[11px] text-gray-500">Tool call validation & RBAC</p>
                 </div>
             </div>
-            <button @click="toggleModule('tool_policy')" class="sg-toggle" :data-state="modules.tool_policy ? 'on' : 'off'">
+            <button @click="toggleModule('tool_policy')" class="sg-toggle" role="switch" :aria-checked="modules.tool_policy" aria-label="Toggle Tool Policy Engine" :data-state="modules.tool_policy ? 'on' : 'off'">
                 <span class="sg-toggle-thumb"></span>
             </button>
         </div>
@@ -60,7 +60,7 @@
                     <p class="text-[11px] text-gray-500">Secret/PII redaction</p>
                 </div>
             </div>
-            <button @click="toggleModule('output')" class="sg-toggle" :data-state="modules.output ? 'on' : 'off'">
+            <button @click="toggleModule('output')" class="sg-toggle" role="switch" :aria-checked="modules.output" aria-label="Toggle Output Filter" :data-state="modules.output ? 'on' : 'off'">
                 <span class="sg-toggle-thumb"></span>
             </button>
         </div>
@@ -168,8 +168,8 @@
                         </div>
                         <p class="text-[11px] text-gray-500 font-mono truncate mt-0.5" x-text="pattern.regex"></p>
                     </div>
-                    <!-- Actions (visible on hover) -->
-                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <!-- Actions (revealed on hover or keyboard focus) -->
+                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                         <button @click="togglePattern(pattern)" class="sg-btn sg-btn-ghost sg-btn-sm" :title="pattern.enabled ? 'Disable' : 'Enable'">
                             <i :data-lucide="pattern.enabled ? 'pause' : 'play'" class="w-3.5 h-3.5"></i>
                         </button>
@@ -309,7 +309,7 @@
                         <input id="guardrails-category" type="text" x-model="editForm.category" class="sg-input">
                     </div>
                     <div class="flex items-end">
-                        <button @click="editForm.enabled = !editForm.enabled" class="sg-toggle" :data-state="editForm.enabled ? 'on' : 'off'">
+                        <button @click="editForm.enabled = !editForm.enabled" class="sg-toggle" role="switch" :aria-checked="editForm.enabled" aria-label="Toggle pattern enabled" :data-state="editForm.enabled ? 'on' : 'off'">
                             <span class="sg-toggle-thumb"></span>
                         </button>
                         <span class="ml-2 text-xs text-gray-400" x-text="editForm.enabled ? 'Enabled' : 'Disabled'"></span>

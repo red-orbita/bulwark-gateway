@@ -562,6 +562,10 @@ function dashboardPage() {
             if (data.events_warned !== undefined) this.verdicts.warned = data.events_warned;
             if (data.events_blocked !== undefined) this.verdicts.blocked = data.events_blocked;
 
+            // False-positive rate drives the meter bar (width + colour), not just
+            // the data-metric text span above.
+            if (data.false_positive_rate !== undefined) this.fpRate = data.false_positive_rate;
+
             // Update sparklines
             const idx = this._sparkIdx % 20;
             if (data.latency_p95_ms !== undefined) {

@@ -151,7 +151,19 @@
                             </td>
                         </tr>
                     </template>
-                    <template x-if="paginatedUsers.length === 0">
+                    <template x-if="usersLoading">
+                        <tr><td colspan="7" class="px-4 py-12 text-center text-gray-500">
+                            <span class="inline-flex items-center gap-2"><i data-lucide="loader" class="w-4 h-4 animate-spin"></i> Loading users…</span>
+                        </td></tr>
+                    </template>
+                    <template x-if="!usersLoading && usersError">
+                        <tr><td colspan="7" class="px-4 py-12 text-center">
+                            <p class="text-gray-300 font-medium"><i data-lucide="alert-triangle" class="w-4 h-4 inline text-red-400"></i> Couldn't load users</p>
+                            <p class="text-xs text-gray-500 mt-1" x-text="usersError"></p>
+                            <button @click="loadUsers()" class="sg-btn sg-btn-secondary sg-btn-sm mt-3">Retry</button>
+                        </td></tr>
+                    </template>
+                    <template x-if="!usersLoading && !usersError && paginatedUsers.length === 0">
                         <tr><td colspan="7" class="px-4 py-12 text-center text-gray-500">No users match your filters</td></tr>
                     </template>
                 </tbody>
@@ -184,7 +196,7 @@
                     Active Sessions
                     <span class="text-cyan-400 ml-1" x-text="sessionsUser?.username"></span>
                 </h4>
-                <button @click="sessionsUser = null" class="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-700">&times; Close</button>
+                <button @click="sessionsUser = null" aria-label="Close dialog" class="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-700">&times; Close</button>
             </div>
             <div class="sg-table-scroll">
             <table class="sg-table sg-table-compact">
@@ -497,6 +509,8 @@ function accessControlManager() {
         activeTab: 'users',
         // === Users ===
         users: [],
+        usersLoading: true,
+        usersError: null,
         userSearch: '',
         userRoleFilter: '',
         userStatusFilter: '',
@@ -572,8 +586,18 @@ function accessControlManager() {
 
         // === Users Methods ===
         async loadUsers() {
-            const resp = await fetch('/admin/users');
-            if (resp.ok) this.users = await resp.json();
+            this.usersLoading = true;
+            this.usersError = null;
+            try {
+                const resp = await fetch('/admin/users');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                this.users = await resp.json();
+            } catch (e) {
+                this.usersError = 'Could not load users — the admin API may be unavailable';
+                this.users = [];
+            } finally {
+                this.usersLoading = false;
+            }
         },
 
         get filteredUsers() {

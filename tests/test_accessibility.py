@@ -1297,3 +1297,93 @@ def test_evaluation_log_filter_actually_filters():
     )
 
 
+# ─── Load/error states — failures must not masquerade as empty (Fase 3) ──────
+#
+# When an async fetch fails, a page that silently shows its empty state tells the
+# operator "nothing here" when the truth is "the API is down". Each data page
+# must distinguish a genuine empty result from a load failure and offer a retry.
+
+@pytest.mark.parametrize(
+    "page,error_var,retry_call",
+    [
+        ("tenants.html", "loadError", "init()"),
+        ("siem.html", "loadError", "init()"),
+        ("notifications.html", "loadError", "loadChannels()"),
+        ("plugins.html", "loadError", "loadPlugins()"),
+        ("rbac.html", "usersError", "loadUsers()"),
+    ],
+)
+def test_async_pages_distinguish_error_from_empty(page, error_var, retry_call):
+    src = (PAGES_DIR / page).read_text(encoding="utf-8")
+    # A dedicated error flag must exist and be reset/populated in the loader.
+    assert error_var in src, f"{page} must track a load-error flag ({error_var})"
+    # There must be a retry affordance wired to re-run the fetch.
+    assert f'@click="{retry_call}"' in src, (
+        f"{page} error state must offer a Retry that calls {retry_call}"
+    )
+    # The empty state must be suppressed while an error is showing, otherwise the
+    # failure still reads as "nothing configured".
+    assert re.search(rf"!\s*{error_var}", src), (
+        f"{page} empty state must be gated on !{error_var}"
+    )
+
+
+def test_icon_only_times_close_buttons_have_accessible_name():
+    """Every bare `×` close button must carry an accessible name; an unnamed
+    icon-only control is invisible to assistive tech (WCAG 4.1.2)."""
+    offenders: list[str] = []
+    for page in PAGES_DIR.glob("*.html"):
+        src = page.read_text(encoding="utf-8")
+        for m in re.finditer(r"<button\b([^>]*)>\s*&times;", src):
+            attrs = m.group(1)
+            if "aria-label=" not in attrs:
+                offenders.append(f"{page.name}: <button{attrs}>&times;")
+    assert not offenders, (
+        "bare × close buttons without aria-label:\n" + "\n".join(offenders)
+    )
+
+
+def test_guardrail_module_toggles_expose_switch_semantics():
+    """The guardrail on/off switches are icon-only buttons; without ARIA switch
+    semantics a screen reader announces an empty, stateless button."""
+    src = (PAGES_DIR / "guardrails.html").read_text(encoding="utf-8")
+    toggles = re.findall(r'<button[^>]*class="sg-toggle"[^>]*>', src)
+    assert toggles, "no sg-toggle buttons found — structure changed"
+    for t in toggles:
+        assert 'role="switch"' in t, f"toggle missing role=switch: {t}"
+        assert ":aria-checked=" in t, f"toggle missing :aria-checked: {t}"
+        assert "aria-label=" in t, f"toggle missing aria-label: {t}"
+
+
+def test_guardrail_row_actions_reveal_on_keyboard_focus():
+    """Row actions hidden with group-hover must also reveal on keyboard focus,
+    or they are unreachable without a mouse."""
+    src = (PAGES_DIR / "guardrails.html").read_text(encoding="utf-8")
+    assert "group-hover:opacity-100" in src
+    assert "group-focus-within:opacity-100" in src, (
+        "hover-revealed row actions must also reveal on group-focus-within"
+    )
+
+
+def test_skills_history_row_is_keyboard_operable():
+    """A clickable table row must be reachable and activatable by keyboard."""
+    src = (PAGES_DIR / "skills.html").read_text(encoding="utf-8")
+    row = re.search(r'<tr class="cursor-pointer[^>]*@click="viewScan[^>]*>', src)
+    assert row, "clickable scan-history row not found"
+    tag = row.group(0)
+    assert 'tabindex="0"' in tag, "clickable row must be focusable (tabindex=0)"
+    assert 'role="button"' in tag, "clickable row must expose role=button"
+    assert "@keydown.enter" in tag and "@keydown.space" in tag, (
+        "clickable row must activate on Enter/Space"
+    )
+
+
+def test_dashboard_fp_rate_meter_is_data_bound():
+    """The False-Positive-Rate meter bar binds to `fpRate`; that variable must be
+    assigned from the live SSE payload, otherwise the bar is permanently 0."""
+    src = (PAGES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    assert "this.fpRate = data.false_positive_rate" in src, (
+        "fpRate must be assigned from data.false_positive_rate in updateMetrics"
+    )
+
+

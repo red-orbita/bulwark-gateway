@@ -31,7 +31,7 @@
     </div>
 
     <!-- Tenant Table -->
-    <div x-show="!loading" class="sg-card !p-0">
+    <div x-show="!loading && !loadError" class="sg-card !p-0">
         <div class="sg-table-scroll">
             <table class="sg-table">
                 <thead>
@@ -70,9 +70,23 @@
                 </tbody>
             </table>
         </div>
-        <div x-show="tenants.length === 0 && !loading" class="sg-empty">
+        <div x-show="tenants.length === 0 && !loading && !loadError" class="sg-empty">
             <p class="sg-empty-title">No tenants found</p>
             <p class="sg-empty-desc">Create your first tenant to start managing agents</p>
+        </div>
+    </div>
+
+    <!-- Error State (distinct from empty — a failed fetch must not read as "no tenants") -->
+    <div x-show="!loading && loadError" x-cloak class="sg-card">
+        <div class="sg-empty">
+            <div class="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
+                <i data-lucide="alert-triangle" class="w-5 h-5 text-red-400"></i>
+            </div>
+            <p class="sg-empty-title">Couldn't load tenants</p>
+            <p class="sg-empty-desc" x-text="loadError"></p>
+            <button @click="init()" class="sg-btn sg-btn-secondary sg-btn-sm mt-4">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+            </button>
         </div>
     </div>
 
@@ -81,7 +95,7 @@
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">New Tenant</h3>
-                <button @click="showCreate = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="showCreate = false" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <div>
@@ -111,7 +125,7 @@
             <!-- Header -->
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Configure: <span class="text-cyan-400 font-mono" x-text="configTenantId"></span></h3>
-                <button @click="showConfig = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="showConfig = false" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
 
             <div class="p-6 space-y-6">
@@ -195,7 +209,7 @@
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:85vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center sticky top-0 bg-gray-800">
                 <h3 class="text-lg font-semibold text-white" x-text="editingAgent ? 'Edit Agent' : 'New Agent'"></h3>
-                <button @click="showAgentModal = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="showAgentModal = false" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <div>
@@ -250,7 +264,7 @@
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
             <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-white">Global Agent Defaults</h3>
-                <button @click="showDefaultsModal = false" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                <button @click="showDefaultsModal = false" aria-label="Close dialog" class="text-gray-400 hover:text-white text-xl">&times;</button>
             </div>
             <div class="p-6 space-y-4">
                 <p class="text-xs text-gray-400">Inherited by all agents that don't override them. Equivalent to <code class="text-cyan-400">defaults:</code> in agents.yaml.</p>
@@ -285,6 +299,7 @@ function tenantsManager() {
     return {
         tenants: [],
         loading: false,
+        loadError: null,
 
         // Create tenant
         showCreate: false,
@@ -307,9 +322,17 @@ function tenantsManager() {
 
         async init() {
             this.loading = true;
-            const resp = await fetch('/admin/tenants');
-            if (resp.ok) this.tenants = await resp.json();
-            this.loading = false;
+            this.loadError = null;
+            try {
+                const resp = await fetch('/admin/tenants');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                this.tenants = await resp.json();
+            } catch (e) {
+                this.loadError = 'Could not load tenants — the admin API may be unavailable';
+                this.tenants = [];
+            } finally {
+                this.loading = false;
+            }
         },
 
         // --- Create Tenant ---
