@@ -73,7 +73,7 @@ If any layer detects a threat, the request is **blocked immediately** (fail-clos
 
 - **Multi-tenant, multi-agent** — Route requests to different backends per tenant/agent
 - **Zero-LLM hot path** — Only regex + Pydantic + cache; p95 < 40ms overhead
-- **78+ detection patterns** — Prompt injection, jailbreak, encoding evasion, multilingual (ES/ZH/AR)
+- **400+ detection patterns** — Prompt injection, jailbreak, encoding evasion, multilingual (ES/ZH/AR)
 - **4 threat intel feeds** — URLhaus, ThreatFox, AlienVault OTX, AbuseIPDB (+ MISP, OpenCTI, VirusTotal, Shodan)
 - **Streaming tool call buffering** — Tool calls validated BEFORE yielding to client
 - **Self-protection** — Blocks agents from modifying gateway config
@@ -189,11 +189,12 @@ kubectl port-forward svc/admin 8090:8090 -n bulwark-gateway
 # Health check
 curl http://localhost:8080/health
 
-# Send a request (replace with your API key)
+# Send a request (API keys are passed as a Bearer token)
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
+  -H "Authorization: Bearer your-api-key" \
   -H "X-Tenant-ID: default" \
+  -H "X-Agent-ID: support-bot" \
   -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
@@ -327,7 +328,7 @@ bulwark-gateway/
 │   ├── main.py                 # FastAPI app entry point
 │   ├── models.py               # Core data models (SecurityEvent, Verdict)
 │   ├── guardrails/             # Detection engines
-│   │   ├── input_guardrail.py  # Input analysis (78+ patterns)
+│   │   ├── input_guardrail.py  # Input analysis (400+ patterns)
 │   │   ├── output_filter.py    # Output redaction
 │   │   └── tool_policy.py      # RBAC enforcement
 │   ├── routes/                 # API routes

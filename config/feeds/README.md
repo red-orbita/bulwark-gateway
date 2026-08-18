@@ -2,9 +2,12 @@
 
 Place YAML feed configuration files in this directory.
 
-See the main README.md section "Threat Intelligence Feeds" for configuration details.
+For threat-intel feed configuration details, see `docs/DEPLOYMENT.md` and the
+Features overview in the project `README.md`.
 
 ## Examples
+
+No example YAML files ship in this directory by default. Filenames you can create:
 
 - `misp.yaml` — MISP threat sharing platform
 - `custom-internal.yaml` — Custom internal threat intel API
