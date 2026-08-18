@@ -1387,3 +1387,55 @@ def test_dashboard_fp_rate_meter_is_data_bound():
     )
 
 
+# ─── No double component initialisation (Fase 3, LOW) ────────────────────────
+#
+# The vendored Alpine build auto-invokes an x-data component's init() method
+# during the `x-data` directive (`s.init && evaluate(el, s.init)`). Pairing that
+# with an explicit `x-init="init()"` runs init() twice, firing every on-load
+# fetch a second time. The correct pattern (used by rbac.html) is to rely on the
+# auto-init alone.
+
+def test_no_page_double_invokes_init():
+    offenders = [
+        p.name
+        for p in PAGES_DIR.glob("*.html")
+        if 'x-init="init()"' in p.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        "these pages double-invoke init() (Alpine already auto-calls the "
+        "component init() method); drop the redundant x-init:\n  "
+        + "\n  ".join(sorted(offenders))
+    )
+
+
+def test_mount_fetch_pages_keep_a_single_init_path():
+    """Dropping x-init is only safe when the component still exposes init() for
+    Alpine's auto-init to call. Guard the data pages that render async-populated
+    lists (x-for) so a future refactor can't strip their only initialiser."""
+    import re as _re
+
+    missing: list[str] = []
+    for p in PAGES_DIR.glob("*.html"):
+        src = p.read_text(encoding="utf-8")
+        if not _re.search(r'x-data="(\w+)\(\)"', src):
+            continue
+        # Only pages that call their own init() (state-loading components) are in
+        # scope; inert forms like login drive fetches from event handlers.
+        calls_init = _re.search(r"\bthis\.init\s*\(", src) or _re.search(
+            r"async\s+init\s*\(", src
+        )
+        if not calls_init:
+            continue
+        has_init_def = (
+            _re.search(r"\binit\s*\(\s*\)\s*{", src)
+            or _re.search(r"\binit\s*:\s*(async\s*)?function", src)
+            or _re.search(r"\basync\s+init\s*\(", src)
+        )
+        if not has_init_def:
+            missing.append(p.name)
+    assert not missing, (
+        "these components reference init() but no longer define it:\n  "
+        + "\n  ".join(sorted(missing))
+    )
+
+
