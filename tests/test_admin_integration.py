@@ -22,7 +22,13 @@ async def client():
 
 @pytest.fixture
 async def auth_client(client):
-    """Client with admin auth token."""
+    """Client with admin auth token and CSRF token.
+
+    The login response (a CSRF-exempt path) sets the ``_csrf_token`` cookie via
+    the P9-04 CSRF middleware. State-changing requests (POST/PUT/DELETE/PATCH)
+    require that cookie to be echoed back in the ``x-csrf-token`` header, so we
+    wire it up here for the whole session.
+    """
     resp = await client.post(
         "/admin/auth/login",
         json={"username": "admin", "password": _ADMIN_PW},
@@ -30,6 +36,9 @@ async def auth_client(client):
     assert resp.status_code == 200
     token = resp.json()["access_token"]
     client.headers["Authorization"] = f"Bearer {token}"
+    csrf_token = client.cookies.get("_csrf_token")
+    assert csrf_token, "CSRF cookie not set by login response"
+    client.headers["x-csrf-token"] = csrf_token
     yield client
 
 
