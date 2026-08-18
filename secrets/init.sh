@@ -36,7 +36,9 @@ echo ""
 generate_if_missing "jwt_secret.txt"           "openssl rand -base64 32"
 generate_if_missing "admin_jwt_secret.txt"     "openssl rand -base64 32"
 generate_if_missing "redis_password.txt"       "openssl rand -base64 24"
-generate_if_missing "db_encryption_key.txt"    "openssl rand -base64 32"
+# db_encryption_key MUST be 64 hex chars (32 bytes) — SQLCipher raw-key mode
+# (PRAGMA key = "x'...'"). Non-hex values fail with "file is not a database".
+generate_if_missing "db_encryption_key.txt"    "openssl rand -hex 32"
 generate_if_missing "key_encryption_key.txt"   "openssl rand -base64 32"
 generate_if_missing "grafana_password.txt"     "openssl rand -base64 24"
 
