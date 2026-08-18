@@ -50,9 +50,10 @@ ALL: Do NOT restart services or delete logs until evidence is preserved.
 # Additional: Capture output filter state
 kubectl logs deploy/proxy -n bulwark-gateway --since=2h > /tmp/proxy-logs-full.jsonl
 
-# Capture Redis state (recent blocks contain the events)
-kubectl exec deploy/redis -n bulwark-gateway -- redis-cli --no-auth-warning \
-  LRANGE bulwark:recent_blocks 0 -1 > /tmp/redis-recent-blocks.json
+# Capture Redis state (recent blocks are stored per tenant; dump every key)
+kubectl exec deploy/redis -n bulwark-gateway -- sh -c \
+  'for k in $(redis-cli --no-auth-warning --scan --pattern "bulwark:recent_blocks:*"); do \
+     redis-cli --no-auth-warning LRANGE "$k" 0 -1; done' > /tmp/redis-recent-blocks.json
 
 # Capture admin audit log
 kubectl logs deploy/admin -n bulwark-gateway --since=2h > /tmp/admin-audit-full.jsonl
@@ -71,7 +72,7 @@ Determine the following:
 
 | Question | How to Check |
 |----------|-------------|
-| What data was exposed? | Check output filter logs, `bulwark:recent_blocks` |
+| What data was exposed? | Check output filter logs, `bulwark:recent_blocks:*` |
 | Which tenant(s) affected? | `jq '.tenant_id' proxy-logs-full.jsonl \| sort -u` |
 | How many data subjects? | Count unique users in affected tenant's requests |
 | Was data sent externally? | Check for exfiltration verdicts, IOC matches |

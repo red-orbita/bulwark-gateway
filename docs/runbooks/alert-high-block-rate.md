@@ -29,9 +29,12 @@
 1. **Acknowledge the alert** in PagerDuty
 2. **Check if this is a targeted or global event**:
    ```bash
-   # Per-tenant block rate breakdown
+   # Per-tenant block rate breakdown (recent blocks are stored per tenant)
    kubectl exec deploy/redis -n bulwark-gateway -- \
-     redis-cli LRANGE bulwark:recent_blocks 0 20
+     redis-cli --scan --pattern 'bulwark:recent_blocks:*'
+   # Inspect a specific tenant's recent blocks:
+   kubectl exec deploy/redis -n bulwark-gateway -- \
+     redis-cli LRANGE bulwark:recent_blocks:<tenant_id> 0 20
    ```
 3. **Identify the blocking pattern(s)**:
    ```bash
@@ -52,7 +55,7 @@
 **Indicators of real attack**:
 - Blocks concentrated in `prompt_injection`, `jailbreak`, or `exfiltration` categories
 - Single source tenant/IP generating most blocks
-- Payloads in `bulwark:recent_blocks` contain known attack patterns
+- Payloads in `bulwark:recent_blocks:<tenant_id>` contain known attack patterns
 - Correlated with IOC matches (`BulwarkIOCMatchesElevated`)
 
 **Indicators of false positive**:

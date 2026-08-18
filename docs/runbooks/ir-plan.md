@@ -126,8 +126,9 @@ Alert fires
 # Current block rate
 kubectl exec deploy/redis -n bulwark-gateway -- redis-cli GET bulwark:global:block
 
-# Recent blocks (last 10)
-kubectl exec deploy/redis -n bulwark-gateway -- redis-cli LRANGE bulwark:recent_blocks 0 9
+# Recent blocks (last 10) — stored per tenant; list keys first
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli --scan --pattern 'bulwark:recent_blocks:*'
+kubectl exec deploy/redis -n bulwark-gateway -- redis-cli LRANGE bulwark:recent_blocks:<tenant_id> 0 9
 
 # Per-tenant breakdown (Prometheus)
 # sum by (tenant_id)(rate(bulwark_verdicts_total{verdict="block"}[5m]))
