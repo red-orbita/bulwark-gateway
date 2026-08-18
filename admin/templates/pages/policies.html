@@ -120,22 +120,22 @@
             <div class="flex-1 overflow-y-auto px-6 py-5 space-y-5">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Policy Name</label>
-                        <input type="text" x-model="form.name" class="sg-input font-mono" :disabled="editingPolicy" placeholder="corp-prod">
+                        <label for="policies-policy-name" class="sg-label">Policy Name</label>
+                        <input id="policies-policy-name" type="text" x-model="form.name" class="sg-input font-mono" :disabled="editingPolicy" placeholder="corp-prod">
                     </div>
                     <div>
-                        <label class="sg-label">Tenant ID</label>
-                        <input type="text" x-model="form.tenant_id" @input="syncYaml()" class="sg-input" placeholder="example-corp">
+                        <label for="policies-tenant-id" class="sg-label">Tenant ID</label>
+                        <input id="policies-tenant-id" type="text" x-model="form.tenant_id" @input="syncYaml()" class="sg-input" placeholder="example-corp">
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Agent ID <span class="text-gray-600">(optional)</span></label>
-                        <input type="text" x-model="form.agent_id" @input="syncYaml()" class="sg-input" placeholder="support-bot">
+                        <label for="policies-agent-id" class="sg-label">Agent ID <span class="text-gray-600">(optional)</span></label>
+                        <input id="policies-agent-id" type="text" x-model="form.agent_id" @input="syncYaml()" class="sg-input" placeholder="support-bot">
                     </div>
                     <div>
-                        <label class="sg-label">Sandbox Level</label>
-                        <select x-model="form.sandbox_level" @change="syncYaml()" class="sg-select">
+                        <label for="policies-sandbox-level" class="sg-label">Sandbox Level</label>
+                        <select id="policies-sandbox-level" x-model="form.sandbox_level" @change="syncYaml()" class="sg-select">
                             <option value="strict">Strict — Block all unknown tools</option>
                             <option value="moderate">Moderate — Allow read tools</option>
                             <option value="permissive">Permissive — Allow most tools</option>
@@ -143,17 +143,17 @@
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Allowed Tools <span class="text-gray-600">(comma-separated)</span></label>
-                    <input type="text" x-model="form.allowed_tools_str" @input="syncYaml()" class="sg-input font-mono text-xs" placeholder="read_file, list_dir, search_code">
+                    <label for="policies-allowed-tools" class="sg-label">Allowed Tools <span class="text-gray-600">(comma-separated)</span></label>
+                    <input id="policies-allowed-tools" type="text" x-model="form.allowed_tools_str" @input="syncYaml()" class="sg-input font-mono text-xs" placeholder="read_file, list_dir, search_code">
                 </div>
                 <div>
-                    <label class="sg-label">Denied Tools <span class="text-gray-600">(comma-separated)</span></label>
-                    <input type="text" x-model="form.denied_tools_str" @input="syncYaml()" class="sg-input font-mono text-xs" placeholder="execute_command, delete_file, write_file">
+                    <label for="policies-denied-tools" class="sg-label">Denied Tools <span class="text-gray-600">(comma-separated)</span></label>
+                    <input id="policies-denied-tools" type="text" x-model="form.denied_tools_str" @input="syncYaml()" class="sg-input font-mono text-xs" placeholder="execute_command, delete_file, write_file">
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Max Tool Calls</label>
-                        <input type="number" x-model="form.max_tool_calls" @input="syncYaml()" class="sg-input">
+                        <label for="policies-max-tool-calls" class="sg-label">Max Tool Calls</label>
+                        <input id="policies-max-tool-calls" type="number" x-model="form.max_tool_calls" @input="syncYaml()" class="sg-input">
                     </div>
                 </div>
 

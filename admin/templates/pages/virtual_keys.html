@@ -48,35 +48,35 @@
                 </div>
                 <div class="space-y-3">
                     <div>
-                        <label class="text-xs text-gray-400 block mb-1.5">Tenant ID</label>
-                        <input type="text" x-model.trim="form.tenant_id" class="sg-input w-full" placeholder="acme-corp">
+                        <label for="virtual_keys-tenant-id" class="text-xs text-gray-400 block mb-1.5">Tenant ID</label>
+                        <input id="virtual_keys-tenant-id" type="text" x-model.trim="form.tenant_id" class="sg-input w-full" placeholder="acme-corp">
                     </div>
                     <div>
-                        <label class="text-xs text-gray-400 block mb-1.5">Provider</label>
-                        <select x-model="form.provider" class="sg-input w-full">
+                        <label for="virtual_keys-provider" class="text-xs text-gray-400 block mb-1.5">Provider</label>
+                        <select id="virtual_keys-provider" x-model="form.provider" class="sg-input w-full">
                             <template x-for="p in providers" :key="p">
                                 <option :value="p" x-text="p"></option>
                             </template>
                         </select>
                     </div>
                     <div x-show="form.provider === 'custom'">
-                        <label class="text-xs text-gray-400 block mb-1.5">Custom Provider Name</label>
-                        <input type="text" x-model.trim="form.customProvider" class="sg-input w-full" placeholder="my-llm">
+                        <label for="virtual_keys-custom-provider-name" class="text-xs text-gray-400 block mb-1.5">Custom Provider Name</label>
+                        <input id="virtual_keys-custom-provider-name" type="text" x-model.trim="form.customProvider" class="sg-input w-full" placeholder="my-llm">
                     </div>
                     <div>
-                        <label class="text-xs text-gray-400 block mb-1.5">Backend API Key</label>
-                        <input :type="form.reveal ? 'text' : 'password'" x-model="form.backend_api_key" class="sg-input w-full font-mono" placeholder="sk-...">
+                        <label for="virtual_keys-backend-api-key" class="text-xs text-gray-400 block mb-1.5">Backend API Key</label>
+                        <input id="virtual_keys-backend-api-key" :type="form.reveal ? 'text' : 'password'" x-model="form.backend_api_key" class="sg-input w-full font-mono" placeholder="sk-...">
                         <label class="flex items-center gap-1.5 text-[10px] text-gray-500 mt-1 cursor-pointer">
                             <input type="checkbox" x-model="form.reveal" class="accent-cyan-500"> Reveal
                         </label>
                     </div>
                     <div>
-                        <label class="text-xs text-gray-400 block mb-1.5">Description <span class="text-gray-600">(optional)</span></label>
-                        <input type="text" x-model.trim="form.description" class="sg-input w-full" placeholder="Production OpenAI key">
+                        <label for="virtual_keys-description" class="text-xs text-gray-400 block mb-1.5">Description <span class="text-gray-600">(optional)</span></label>
+                        <input id="virtual_keys-description" type="text" x-model.trim="form.description" class="sg-input w-full" placeholder="Production OpenAI key">
                     </div>
                     <div>
-                        <label class="text-xs text-gray-400 block mb-1.5">Expires in days <span class="text-gray-600">(optional)</span></label>
-                        <input type="number" min="1" max="3650" x-model.number="form.expires_in_days" class="sg-input w-full" placeholder="never">
+                        <label for="virtual_keys-expires-in-days" class="text-xs text-gray-400 block mb-1.5">Expires in days <span class="text-gray-600">(optional)</span></label>
+                        <input id="virtual_keys-expires-in-days" type="number" min="1" max="3650" x-model.number="form.expires_in_days" class="sg-input w-full" placeholder="never">
                     </div>
                     <button @click="createKey()" class="sg-btn sg-btn-primary sg-btn-sm w-full" :disabled="creating">
                         <i data-lucide="plus" class="w-4 h-4"></i>
@@ -208,8 +208,8 @@
             <div class="py-4 space-y-4">
                 <p class="text-sm text-gray-300">Provide a new backend key for provider <span class="font-mono text-cyan-300" x-text="rotate.provider"></span> (tenant <span class="font-mono text-cyan-300" x-text="rotate.tenant"></span>). The current key is deactivated.</p>
                 <div>
-                    <label class="text-xs text-gray-400 block mb-1.5">New Backend API Key</label>
-                    <input :type="rotate.reveal ? 'text' : 'password'" x-model="rotate.new_backend_key" class="sg-input w-full font-mono" placeholder="sk-...">
+                    <label for="virtual_keys-new-backend-api-key" class="text-xs text-gray-400 block mb-1.5">New Backend API Key</label>
+                    <input id="virtual_keys-new-backend-api-key" :type="rotate.reveal ? 'text' : 'password'" x-model="rotate.new_backend_key" class="sg-input w-full font-mono" placeholder="sk-...">
                     <label class="flex items-center gap-1.5 text-[10px] text-gray-500 mt-1 cursor-pointer">
                         <input type="checkbox" x-model="rotate.reveal" class="accent-cyan-500"> Reveal
                     </label>

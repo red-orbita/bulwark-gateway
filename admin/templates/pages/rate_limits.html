@@ -39,14 +39,14 @@
                 <p class="text-[10px] text-gray-500 mt-1" x-text="globalConfig.rate_limit_enabled ? 'Active — requests are throttled' : 'Disabled — no throttling'"></p>
             </div>
             <div>
-                <label class="text-xs text-gray-400 block mb-1.5">Default RPM</label>
-                <input type="number" x-model.number="globalConfig.rate_limit_rpm" @input="globalDirty = true" min="1" max="10000"
+                <label for="rate_limits-default-rpm" class="text-xs text-gray-400 block mb-1.5">Default RPM</label>
+                <input id="rate_limits-default-rpm" type="number" x-model.number="globalConfig.rate_limit_rpm" @input="globalDirty = true" min="1" max="10000"
                        class="sg-input w-full">
                 <p class="text-[10px] text-gray-500 mt-1">Requests per minute (all tenants without override)</p>
             </div>
             <div>
-                <label class="text-xs text-gray-400 block mb-1.5">Burst Size</label>
-                <input type="number" x-model.number="globalConfig.rate_limit_rpm_burst" @input="globalDirty = true" min="0" max="1000"
+                <label for="rate_limits-burst-size" class="text-xs text-gray-400 block mb-1.5">Burst Size</label>
+                <input id="rate_limits-burst-size" type="number" x-model.number="globalConfig.rate_limit_rpm_burst" @input="globalDirty = true" min="0" max="1000"
                        class="sg-input w-full">
                 <p class="text-[10px] text-gray-500 mt-1">Extra requests allowed in burst window</p>
             </div>
@@ -137,14 +137,14 @@
             <h3 class="text-lg font-medium text-white mb-4" x-text="editMode ? 'Edit Rate Limit' : 'Add Tenant Override'"></h3>
             <div class="space-y-4">
                 <div>
-                    <label class="text-xs text-gray-400 block mb-1">Tenant ID</label>
-                    <input type="text" x-model="form.tenant_id" :disabled="editMode"
+                    <label for="rate_limits-tenant-id" class="text-xs text-gray-400 block mb-1">Tenant ID</label>
+                    <input id="rate_limits-tenant-id" type="text" x-model="form.tenant_id" :disabled="editMode"
                            class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
                            placeholder="e.g., acme-corp">
                 </div>
                 <div>
-                    <label class="text-xs text-gray-400 block mb-1">Requests Per Minute (RPM)</label>
-                    <input type="number" x-model.number="form.rpm" min="1" max="10000"
+                    <label for="rate_limits-requests-per-minute" class="text-xs text-gray-400 block mb-1">Requests Per Minute (RPM)</label>
+                    <input id="rate_limits-requests-per-minute" type="number" x-model.number="form.rpm" min="1" max="10000"
                            class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
                            placeholder="60">
                     <p class="text-[10px] text-gray-500 mt-1">Global default: <span x-text="globalConfig.rate_limit_rpm"></span> RPM. Range: 1-10000.</p>

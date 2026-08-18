@@ -77,20 +77,20 @@
         </button>
         <div x-show="paramsOpen" x-collapse x-cloak class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
-                <label class="sg-label">Entropy Threshold</label>
-                <input type="number" step="0.1" x-model="params.entropy_threshold" @change="updateParams()" class="sg-input">
+                <label for="guardrails-entropy-threshold" class="sg-label">Entropy Threshold</label>
+                <input id="guardrails-entropy-threshold" type="number" step="0.1" x-model="params.entropy_threshold" @change="updateParams()" class="sg-input">
             </div>
             <div>
-                <label class="sg-label">Max Input Size (bytes)</label>
-                <input type="number" x-model="params.max_input_size" @change="updateParams()" class="sg-input">
+                <label for="guardrails-max-input-size" class="sg-label">Max Input Size (bytes)</label>
+                <input id="guardrails-max-input-size" type="number" x-model="params.max_input_size" @change="updateParams()" class="sg-input">
             </div>
             <div>
-                <label class="sg-label">Max Nesting Depth</label>
-                <input type="number" x-model="params.max_nesting_depth" @change="updateParams()" class="sg-input">
+                <label for="guardrails-max-nesting-depth" class="sg-label">Max Nesting Depth</label>
+                <input id="guardrails-max-nesting-depth" type="number" x-model="params.max_nesting_depth" @change="updateParams()" class="sg-input">
             </div>
             <div>
-                <label class="sg-label">Chunk Window</label>
-                <input type="number" x-model="params.chunk_window" @change="updateParams()" class="sg-input">
+                <label for="guardrails-chunk-window" class="sg-label">Chunk Window</label>
+                <input id="guardrails-chunk-window" type="number" x-model="params.chunk_window" @change="updateParams()" class="sg-input">
             </div>
         </div>
     </div>
@@ -214,8 +214,8 @@
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div>
-                <label class="sg-label">Test Payload</label>
-                <textarea x-model="sandboxPayload" class="sg-input font-mono text-xs h-32" placeholder="Enter payload to test against all active patterns..."></textarea>
+                <label for="guardrails-test-payload" class="sg-label">Test Payload</label>
+                <textarea id="guardrails-test-payload" x-model="sandboxPayload" class="sg-input font-mono text-xs h-32" placeholder="Enter payload to test against all active patterns..."></textarea>
                 <div class="flex gap-2 mt-3">
                     <button @click="runSandbox('input')" :disabled="!sandboxPayload.trim()" class="sg-btn sg-btn-primary sg-btn-sm flex-1">
                         <i data-lucide="shield" class="w-3.5 h-3.5"></i> Test Input
@@ -277,26 +277,26 @@
             <div class="flex-1 overflow-y-auto px-6 py-5 space-y-4">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Pattern ID</label>
-                        <input type="text" :value="editingPattern?.id" disabled class="sg-input text-gray-500">
+                        <label for="guardrails-pattern-id" class="sg-label">Pattern ID</label>
+                        <input id="guardrails-pattern-id" type="text" :value="editingPattern?.id" disabled class="sg-input text-gray-500">
                     </div>
                     <div>
-                        <label class="sg-label">Layer</label>
-                        <input type="text" :value="editingPattern?.layer" disabled class="sg-input text-gray-500">
+                        <label for="guardrails-layer" class="sg-label">Layer</label>
+                        <input id="guardrails-layer" type="text" :value="editingPattern?.layer" disabled class="sg-input text-gray-500">
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Description</label>
-                    <input type="text" x-model="editForm.description" class="sg-input">
+                    <label for="guardrails-description" class="sg-label">Description</label>
+                    <input id="guardrails-description" type="text" x-model="editForm.description" class="sg-input">
                 </div>
                 <div>
-                    <label class="sg-label">Regex Pattern</label>
-                    <textarea x-model="editForm.regex" class="sg-input font-mono text-xs h-24"></textarea>
+                    <label for="guardrails-regex-pattern" class="sg-label">Regex Pattern</label>
+                    <textarea id="guardrails-regex-pattern" x-model="editForm.regex" class="sg-input font-mono text-xs h-24"></textarea>
                 </div>
                 <div class="grid grid-cols-3 gap-4">
                     <div>
-                        <label class="sg-label">Severity</label>
-                        <select x-model="editForm.severity" class="sg-select">
+                        <label for="guardrails-severity" class="sg-label">Severity</label>
+                        <select id="guardrails-severity" x-model="editForm.severity" class="sg-select">
                             <option value="critical">Critical</option>
                             <option value="high">High</option>
                             <option value="medium">Medium</option>
@@ -304,8 +304,8 @@
                         </select>
                     </div>
                     <div>
-                        <label class="sg-label">Category</label>
-                        <input type="text" x-model="editForm.category" class="sg-input">
+                        <label for="guardrails-category" class="sg-label">Category</label>
+                        <input id="guardrails-category" type="text" x-model="editForm.category" class="sg-input">
                     </div>
                     <div class="flex items-end">
                         <button @click="editForm.enabled = !editForm.enabled" class="sg-toggle" :data-state="editForm.enabled ? 'on' : 'off'">
@@ -360,16 +360,16 @@
             <div class="flex-1 overflow-y-auto px-6 py-5 space-y-4">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Layer</label>
-                        <select x-model="newForm.layer" class="sg-select">
+                        <label for="guardrails-layer-2" class="sg-label">Layer</label>
+                        <select id="guardrails-layer-2" x-model="newForm.layer" class="sg-select">
                             <option value="input">Input</option>
                             <option value="output">Output</option>
                             <option value="tool_policy">Tool Policy</option>
                         </select>
                     </div>
                     <div>
-                        <label class="sg-label">Severity</label>
-                        <select x-model="newForm.severity" class="sg-select">
+                        <label for="guardrails-severity-2" class="sg-label">Severity</label>
+                        <select id="guardrails-severity-2" x-model="newForm.severity" class="sg-select">
                             <option value="critical">Critical</option>
                             <option value="high">High</option>
                             <option value="medium">Medium</option>
@@ -378,16 +378,16 @@
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Description</label>
-                    <input type="text" x-model="newForm.description" class="sg-input" placeholder="What does this pattern detect?">
+                    <label for="guardrails-description-2" class="sg-label">Description</label>
+                    <input id="guardrails-description-2" type="text" x-model="newForm.description" class="sg-input" placeholder="What does this pattern detect?">
                 </div>
                 <div>
-                    <label class="sg-label">Regex Pattern</label>
-                    <textarea x-model="newForm.regex" class="sg-input font-mono text-xs h-24" placeholder="(?i)malicious\s+pattern"></textarea>
+                    <label for="guardrails-regex-pattern-2" class="sg-label">Regex Pattern</label>
+                    <textarea id="guardrails-regex-pattern-2" x-model="newForm.regex" class="sg-input font-mono text-xs h-24" placeholder="(?i)malicious\s+pattern"></textarea>
                 </div>
                 <div>
-                    <label class="sg-label">Category</label>
-                    <input type="text" x-model="newForm.category" class="sg-input" placeholder="prompt_injection, data_exfiltration, jailbreak...">
+                    <label for="guardrails-category-2" class="sg-label">Category</label>
+                    <input id="guardrails-category-2" type="text" x-model="newForm.category" class="sg-input" placeholder="prompt_injection, data_exfiltration, jailbreak...">
                 </div>
             </div>
             <div class="px-6 py-4 border-t border-gray-700/50 flex justify-end gap-2">

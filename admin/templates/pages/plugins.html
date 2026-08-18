@@ -161,12 +161,12 @@
             <div x-show="installTab === 'git'" class="p-6 space-y-4">
                 <p class="text-xs text-gray-400">Clone a plugin from a public Git repository. The repo must contain <code class="text-cyan-400">bulwark-plugin.yaml</code> at root or one level deep.</p>
                 <div>
-                    <label class="sg-label">Repository URL</label>
-                    <input type="url" x-model="gitUrl" class="sg-input w-full" placeholder="https://github.com/user/bulwark-plugin-example">
+                    <label for="plugins-repository-url" class="sg-label">Repository URL</label>
+                    <input id="plugins-repository-url" type="url" x-model="gitUrl" class="sg-input w-full" placeholder="https://github.com/user/bulwark-plugin-example">
                 </div>
                 <div>
-                    <label class="sg-label">Branch</label>
-                    <input type="text" x-model="gitBranch" class="sg-input w-full" placeholder="main">
+                    <label for="plugins-branch" class="sg-label">Branch</label>
+                    <input id="plugins-branch" type="text" x-model="gitBranch" class="sg-input w-full" placeholder="main">
                 </div>
                 <div x-show="gitError" class="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg p-3" x-text="gitError"></div>
             </div>
@@ -191,8 +191,8 @@
             <div class="p-6 space-y-4">
                 <p class="text-xs text-gray-400">Generate a boilerplate plugin structure with <code class="text-cyan-400">bulwark-plugin.yaml</code>, <code class="text-cyan-400">scanner.py</code>, tests, and README.</p>
                 <div>
-                    <label class="sg-label">Plugin Name</label>
-                    <input type="text" x-model="scaffoldName" class="sg-input w-full" placeholder="my-custom-scanner" pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">
+                    <label for="plugins-plugin-name" class="sg-label">Plugin Name</label>
+                    <input id="plugins-plugin-name" type="text" x-model="scaffoldName" class="sg-input w-full" placeholder="my-custom-scanner" pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">
                     <p class="text-[10px] text-gray-500 mt-1">Lowercase + hyphens (3-64 chars). Will be installed directly.</p>
                 </div>
             </div>
@@ -286,8 +286,8 @@
             <div class="p-6 space-y-4">
                 <!-- Input area -->
                 <div>
-                    <label class="sg-label">Test Input</label>
-                    <textarea x-model="testContent" class="sg-input w-full font-mono text-sm" rows="5"
+                    <label for="plugins-test-input" class="sg-label">Test Input</label>
+                    <textarea id="plugins-test-input" x-model="testContent" class="sg-input w-full font-mono text-sm" rows="5"
                               placeholder="Type or paste text here to test the plugin detection..."></textarea>
                 </div>
 

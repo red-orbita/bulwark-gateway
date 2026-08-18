@@ -41,15 +41,15 @@
             <p class="text-xs text-gray-400 mb-4">Discover AI agents and LLM endpoints on your network</p>
             <form @submit.prevent="scanNetwork()" class="space-y-4">
                 <div>
-                    <label class="block text-xs text-gray-400 mb-1.5">Targets (one per line)</label>
-                    <textarea x-model="targets" rows="4" class="sg-input font-mono text-xs w-full resize-none"
+                    <label for="discovery-targets" class="block text-xs text-gray-400 mb-1.5">Targets (one per line)</label>
+                    <textarea id="discovery-targets" x-model="targets" rows="4" class="sg-input font-mono text-xs w-full resize-none"
                               placeholder="192.168.1.0/24&#10;10.0.0.1:8080&#10;llm-backend.internal:11434"></textarea>
                     <p class="text-[10px] text-gray-600 mt-1">IP addresses, CIDR ranges, or host:port combinations</p>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-xs text-gray-400 mb-1.5">Timeout (seconds)</label>
-                        <input type="number" x-model.number="timeout" min="1" max="60" step="0.5"
+                        <label for="discovery-timeout" class="block text-xs text-gray-400 mb-1.5">Timeout (seconds)</label>
+                        <input id="discovery-timeout" type="number" x-model.number="timeout" min="1" max="60" step="0.5"
                                class="sg-input w-full text-sm" placeholder="5.0">
                     </div>
                     <div class="flex items-end">
@@ -131,8 +131,8 @@
             <p class="text-xs text-gray-400 mb-4">Analyze network traffic logs to identify unauthorized AI/LLM usage</p>
             <form @submit.prevent="analyzeTraffic()" class="space-y-4">
                 <div>
-                    <label class="block text-xs text-gray-400 mb-1.5">Traffic Log Entries (JSON, one per line)</label>
-                    <textarea x-model="trafficLog" rows="8" class="sg-input font-mono text-xs w-full resize-none"
+                    <label for="discovery-traffic-log-entries" class="block text-xs text-gray-400 mb-1.5">Traffic Log Entries (JSON, one per line)</label>
+                    <textarea id="discovery-traffic-log-entries" x-model="trafficLog" rows="8" class="sg-input font-mono text-xs w-full resize-none"
                               placeholder='{"src":"10.0.1.50","dst":"api.openai.com","port":443,"bytes":15234}&#10;{"src":"10.0.1.22","dst":"ollama.internal","port":11434,"bytes":8192}'></textarea>
                     <p class="text-[10px] text-gray-600 mt-1">Paste network flow logs in JSON format for analysis</p>
                 </div>
@@ -205,13 +205,13 @@
             <form @submit.prevent="assessRisk()" class="space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-xs text-gray-400 mb-1.5">Tool Name</label>
-                        <input type="text" x-model="mcpTool.name" class="sg-input w-full text-sm"
+                        <label for="discovery-tool-name" class="block text-xs text-gray-400 mb-1.5">Tool Name</label>
+                        <input id="discovery-tool-name" type="text" x-model="mcpTool.name" class="sg-input w-full text-sm"
                                placeholder="file_manager" required>
                     </div>
                     <div>
-                        <label class="block text-xs text-gray-400 mb-1.5">Description</label>
-                        <input type="text" x-model="mcpTool.description" class="sg-input w-full text-sm"
+                        <label for="discovery-description" class="block text-xs text-gray-400 mb-1.5">Description</label>
+                        <input id="discovery-description" type="text" x-model="mcpTool.description" class="sg-input w-full text-sm"
                                placeholder="Manages local filesystem operations">
                     </div>
                 </div>

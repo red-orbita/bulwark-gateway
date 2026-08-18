@@ -99,13 +99,13 @@
 
                 <div class="space-y-4">
                     <div>
-                        <label class="sg-label">Name</label>
-                        <input x-model="form.name" class="sg-input" placeholder="e.g. #security-alerts">
+                        <label for="notifications-name" class="sg-label">Name</label>
+                        <input id="notifications-name" x-model="form.name" class="sg-input" placeholder="e.g. #security-alerts">
                     </div>
 
                     <div>
-                        <label class="sg-label">Type</label>
-                        <select x-model="form.type" @change="formTypeChanged()" class="sg-input">
+                        <label for="notifications-type" class="sg-label">Type</label>
+                        <select id="notifications-type" x-model="form.type" @change="formTypeChanged()" class="sg-input">
                             <option value="slack">Slack</option>
                             <option value="teams">Microsoft Teams</option>
                             <option value="discord">Discord</option>
@@ -121,24 +121,24 @@
                     <!-- URL-based channels -->
                     <template x-if="['slack','teams','discord','google_chat','generic'].includes(form.type)">
                         <div>
-                            <label class="sg-label">Webhook URL</label>
-                            <input x-model="form.url" class="sg-input" placeholder="https://...">
+                            <label for="notifications-webhook-url" class="sg-label">Webhook URL</label>
+                            <input id="notifications-webhook-url" x-model="form.url" class="sg-input" placeholder="https://...">
                         </div>
                     </template>
 
                     <!-- PagerDuty -->
                     <template x-if="form.type === 'pagerduty'">
                         <div>
-                            <label class="sg-label">Integration/Routing Key</label>
-                            <input x-model="form.routing_key" class="sg-input" placeholder="Your PagerDuty integration key">
+                            <label for="notifications-integration-routing-key" class="sg-label">Integration/Routing Key</label>
+                            <input id="notifications-integration-routing-key" x-model="form.routing_key" class="sg-input" placeholder="Your PagerDuty integration key">
                         </div>
                     </template>
 
                     <!-- Opsgenie -->
                     <template x-if="form.type === 'opsgenie'">
                         <div>
-                            <label class="sg-label">API Key</label>
-                            <input x-model="form.api_key" class="sg-input" placeholder="Opsgenie API key">
+                            <label for="notifications-api-key" class="sg-label">API Key</label>
+                            <input id="notifications-api-key" x-model="form.api_key" class="sg-input" placeholder="Opsgenie API key">
                         </div>
                     </template>
 
@@ -146,12 +146,12 @@
                     <template x-if="form.type === 'telegram'">
                         <div class="space-y-3">
                             <div>
-                                <label class="sg-label">Bot Token</label>
-                                <input x-model="form.bot_token" class="sg-input" placeholder="123456789:ABC...">
+                                <label for="notifications-bot-token" class="sg-label">Bot Token</label>
+                                <input id="notifications-bot-token" x-model="form.bot_token" class="sg-input" placeholder="123456789:ABC...">
                             </div>
                             <div>
-                                <label class="sg-label">Chat ID</label>
-                                <input x-model="form.chat_id" class="sg-input" placeholder="-1001234567890">
+                                <label for="notifications-chat-id" class="sg-label">Chat ID</label>
+                                <input id="notifications-chat-id" x-model="form.chat_id" class="sg-input" placeholder="-1001234567890">
                             </div>
                         </div>
                     </template>
@@ -161,35 +161,35 @@
                         <div class="space-y-3">
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label class="sg-label">SMTP Host</label>
-                                    <input x-model="form.smtp_host" class="sg-input" placeholder="smtp.gmail.com">
+                                    <label for="notifications-smtp-host" class="sg-label">SMTP Host</label>
+                                    <input id="notifications-smtp-host" x-model="form.smtp_host" class="sg-input" placeholder="smtp.gmail.com">
                                 </div>
                                 <div>
-                                    <label class="sg-label">Port</label>
-                                    <input x-model.number="form.smtp_port" type="number" class="sg-input" placeholder="587">
+                                    <label for="notifications-port" class="sg-label">Port</label>
+                                    <input id="notifications-port" x-model.number="form.smtp_port" type="number" class="sg-input" placeholder="587">
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label class="sg-label">Username</label>
-                                    <input x-model="form.smtp_user" class="sg-input" placeholder="user@company.com">
+                                    <label for="notifications-username" class="sg-label">Username</label>
+                                    <input id="notifications-username" x-model="form.smtp_user" class="sg-input" placeholder="user@company.com">
                                 </div>
                                 <div>
-                                    <label class="sg-label">Password</label>
-                                    <input x-model="form.smtp_password" type="password" class="sg-input">
+                                    <label for="notifications-password" class="sg-label">Password</label>
+                                    <input id="notifications-password" x-model="form.smtp_password" type="password" class="sg-input">
                                 </div>
                             </div>
                             <div>
-                                <label class="sg-label">From Address</label>
-                                <input x-model="form.smtp_from" class="sg-input" placeholder="alerts@company.com">
+                                <label for="notifications-from-address" class="sg-label">From Address</label>
+                                <input id="notifications-from-address" x-model="form.smtp_from" class="sg-input" placeholder="alerts@company.com">
                             </div>
                             <div>
-                                <label class="sg-label">To (comma-separated)</label>
-                                <input x-model="form.smtp_to_raw" class="sg-input" placeholder="soc@company.com, lead@company.com">
+                                <label for="notifications-to" class="sg-label">To (comma-separated)</label>
+                                <input id="notifications-to" x-model="form.smtp_to_raw" class="sg-input" placeholder="soc@company.com, lead@company.com">
                             </div>
                             <div>
-                                <label class="sg-label">TLS Mode</label>
-                                <select x-model="form.smtp_tls" class="sg-input">
+                                <label for="notifications-tls-mode" class="sg-label">TLS Mode</label>
+                                <select id="notifications-tls-mode" x-model="form.smtp_tls" class="sg-input">
                                     <option value="starttls">STARTTLS (port 587)</option>
                                     <option value="ssl">SSL (port 465)</option>
                                     <option value="none">None (port 25)</option>
@@ -202,8 +202,8 @@
                     <template x-if="form.type === 'generic'">
                         <div class="space-y-3">
                             <div>
-                                <label class="sg-label">Auth Type</label>
-                                <select x-model="form.auth_type" class="sg-input">
+                                <label for="notifications-auth-type" class="sg-label">Auth Type</label>
+                                <select id="notifications-auth-type" x-model="form.auth_type" class="sg-input">
                                     <option value="none">None</option>
                                     <option value="bearer">Bearer Token</option>
                                     <option value="api_key">API Key (X-API-Key header)</option>
@@ -211,8 +211,8 @@
                             </div>
                             <template x-if="form.auth_type !== 'none'">
                                 <div>
-                                    <label class="sg-label">Auth Value</label>
-                                    <input x-model="form.auth_value" class="sg-input" placeholder="Token or API key">
+                                    <label for="notifications-auth-value" class="sg-label">Auth Value</label>
+                                    <input id="notifications-auth-value" x-model="form.auth_value" class="sg-input" placeholder="Token or API key">
                                 </div>
                             </template>
                         </div>
@@ -223,8 +223,8 @@
                         <h4 class="text-sm font-semibold text-white mb-3">Routing & Filters</h4>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="sg-label">Min Severity</label>
-                                <select x-model="form.min_severity" class="sg-input">
+                                <label for="notifications-min-severity" class="sg-label">Min Severity</label>
+                                <select id="notifications-min-severity" x-model="form.min_severity" class="sg-input">
                                     <option value="low">Low</option>
                                     <option value="medium">Medium</option>
                                     <option value="high">High</option>
@@ -232,8 +232,8 @@
                                 </select>
                             </div>
                             <div>
-                                <label class="sg-label">Dedup (seconds)</label>
-                                <input x-model.number="form.dedup_window_seconds" type="number" class="sg-input">
+                                <label for="notifications-dedup" class="sg-label">Dedup (seconds)</label>
+                                <input id="notifications-dedup" x-model.number="form.dedup_window_seconds" type="number" class="sg-input">
                             </div>
                         </div>
                         <div class="mt-3">
@@ -251,8 +251,8 @@
                             </div>
                         </div>
                         <div class="mt-3">
-                            <label class="sg-label">Tenants (comma-separated, empty = all)</label>
-                            <input x-model="form.tenants_raw" class="sg-input" placeholder="tenant-a, tenant-b">
+                            <label for="notifications-tenants" class="sg-label">Tenants (comma-separated, empty = all)</label>
+                            <input id="notifications-tenants" x-model="form.tenants_raw" class="sg-input" placeholder="tenant-a, tenant-b">
                         </div>
                     </div>
                 </div>

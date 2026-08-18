@@ -434,25 +434,25 @@
                     <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Personal Information</h3>
                     <div class="grid grid-cols-2 gap-3">
                         <div>
-                            <label class="block text-xs text-gray-400 mb-1">First Name</label>
-                            <input type="text" x-model="profile.first_name" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="John">
+                            <label for="base-first-name" class="block text-xs text-gray-400 mb-1">First Name</label>
+                            <input id="base-first-name" type="text" x-model="profile.first_name" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="John">
                         </div>
                         <div>
-                            <label class="block text-xs text-gray-400 mb-1">Last Name</label>
-                            <input type="text" x-model="profile.last_name" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="Doe">
+                            <label for="base-last-name" class="block text-xs text-gray-400 mb-1">Last Name</label>
+                            <input id="base-last-name" type="text" x-model="profile.last_name" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="Doe">
                         </div>
                     </div>
                 </div>
                 <div class="space-y-4">
                     <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Contact</h3>
                     <div>
-                        <label class="block text-xs text-gray-400 mb-1">Email</label>
-                        <input type="email" x-model="profile.email" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="user@company.com">
+                        <label for="base-email" class="block text-xs text-gray-400 mb-1">Email</label>
+                        <input id="base-email" type="email" x-model="profile.email" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="user@company.com">
                         <p class="text-[10px] text-gray-600 mt-1">Used for password reset notifications</p>
                     </div>
                     <div>
-                        <label class="block text-xs text-gray-400 mb-1">Phone</label>
-                        <input type="tel" x-model="profile.phone" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="+1 555-123-4567">
+                        <label for="base-phone" class="block text-xs text-gray-400 mb-1">Phone</label>
+                        <input id="base-phone" type="tel" x-model="profile.phone" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/20 outline-none transition" placeholder="+1 555-123-4567">
                         <p class="text-[10px] text-gray-600 mt-1">For future SMS-based MFA verification</p>
                     </div>
                 </div>

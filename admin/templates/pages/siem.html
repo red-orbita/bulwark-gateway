@@ -112,8 +112,8 @@
             <div class="p-6 space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Platform</label>
-                        <select x-model="form.platform" @change="onPlatformChange()" class="sg-select w-full">
+                        <label for="siem-platform" class="sg-label">Platform</label>
+                        <select id="siem-platform" x-model="form.platform" @change="onPlatformChange()" class="sg-select w-full">
                             <option value="splunk">Splunk</option>
                             <option value="elastic">Elastic/ELK</option>
                             <option value="datadog">Datadog</option>
@@ -126,8 +126,8 @@
                         </select>
                     </div>
                     <div>
-                        <label class="sg-label">Transport Type</label>
-                        <select x-model="form.transport_type" class="sg-select w-full">
+                        <label for="siem-transport-type" class="sg-label">Transport Type</label>
+                        <select id="siem-transport-type" x-model="form.transport_type" class="sg-select w-full">
                             <option value="http_rest">HTTP REST</option>
                             <option value="syslog_udp">Syslog UDP</option>
                             <option value="syslog_tcp">Syslog TCP</option>
@@ -139,12 +139,12 @@
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label" x-text="form.platform === 'wazuh' ? 'Log File Path' : 'Endpoint'"></label>
-                        <input type="text" x-model="form.endpoint" class="sg-input w-full" :placeholder="form.platform === 'wazuh' ? '/var/log/bulwark-gateway/events.ndjson' : 'siem.company.com'">
+                        <label for="siem-field" class="sg-label" x-text="form.platform === 'wazuh' ? 'Log File Path' : 'Endpoint'"></label>
+                        <input id="siem-field" type="text" x-model="form.endpoint" class="sg-input w-full" :placeholder="form.platform === 'wazuh' ? '/var/log/bulwark-gateway/events.ndjson' : 'siem.company.com'">
                     </div>
                     <div x-show="form.platform !== 'wazuh'">
-                        <label class="sg-label">Port</label>
-                        <input type="number" x-model="form.port" class="sg-input w-full" placeholder="514">
+                        <label for="siem-port" class="sg-label">Port</label>
+                        <input id="siem-port" type="number" x-model="form.port" class="sg-input w-full" placeholder="514">
                     </div>
                 </div>
                 <!-- Wazuh-specific: API URL for connection test -->
@@ -155,17 +155,17 @@
                     </div>
                     <div class="space-y-3">
                         <div>
-                            <label class="sg-label">Wazuh API URL</label>
-                            <input type="text" x-model="form.wazuh_api_url" class="sg-input w-full" placeholder="https://wazuh-manager:55000">
+                            <label for="siem-wazuh-api-url" class="sg-label">Wazuh API URL</label>
+                            <input id="siem-wazuh-api-url" type="text" x-model="form.wazuh_api_url" class="sg-input w-full" placeholder="https://wazuh-manager:55000">
                         </div>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="sg-label">API User</label>
-                                <input type="text" x-model="form.wazuh_user" class="sg-input w-full" placeholder="wazuh-wui">
+                                <label for="siem-api-user" class="sg-label">API User</label>
+                                <input id="siem-api-user" type="text" x-model="form.wazuh_user" class="sg-input w-full" placeholder="wazuh-wui">
                             </div>
                             <div>
-                                <label class="sg-label">API Password</label>
-                                <input type="password" x-model="form.wazuh_password" class="sg-input w-full" placeholder="wazuh-wui">
+                                <label for="siem-api-password" class="sg-label">API Password</label>
+                                <input id="siem-api-password" type="password" x-model="form.wazuh_password" class="sg-input w-full" placeholder="wazuh-wui">
                             </div>
                         </div>
                         <p class="text-[11px] text-gray-500">
@@ -176,8 +176,8 @@
                 </div>
                 <div x-show="form.platform !== 'wazuh'" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Auth Type</label>
-                        <select x-model="form.auth_type" class="sg-select w-full">
+                        <label for="siem-auth-type" class="sg-label">Auth Type</label>
+                        <select id="siem-auth-type" x-model="form.auth_type" class="sg-select w-full">
                             <option value="none">None</option>
                             <option value="api_key">API Key</option>
                             <option value="hmac">HMAC</option>
@@ -186,22 +186,22 @@
                         </select>
                     </div>
                     <div>
-                        <label class="sg-label">Auth Value / Key</label>
-                        <input type="password" x-model="form.auth_value" class="sg-input w-full" placeholder="API key or token">
+                        <label for="siem-auth-value-key" class="sg-label">Auth Value / Key</label>
+                        <input id="siem-auth-value-key" type="password" x-model="form.auth_value" class="sg-input w-full" placeholder="API key or token">
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                        <label class="sg-label">Batch Size</label>
-                        <input type="number" x-model="form.batch_size" class="sg-input w-full">
+                        <label for="siem-batch-size" class="sg-label">Batch Size</label>
+                        <input id="siem-batch-size" type="number" x-model="form.batch_size" class="sg-input w-full">
                     </div>
                     <div>
-                        <label class="sg-label">Flush Interval (s)</label>
-                        <input type="number" step="0.1" x-model="form.flush_interval" class="sg-input w-full">
+                        <label for="siem-flush-interval" class="sg-label">Flush Interval (s)</label>
+                        <input id="siem-flush-interval" type="number" step="0.1" x-model="form.flush_interval" class="sg-input w-full">
                     </div>
                     <div>
-                        <label class="sg-label">Format</label>
-                        <select x-model="form.format" class="sg-select w-full">
+                        <label for="siem-format" class="sg-label">Format</label>
+                        <select id="siem-format" x-model="form.format" class="sg-select w-full">
                             <option value="ecs_json">ECS JSON</option>
                             <option value="cef">CEF</option>
                             <option value="leef">LEEF</option>

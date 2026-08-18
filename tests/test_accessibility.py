@@ -766,6 +766,58 @@ def test_live_filter_controls_have_accessible_names():
     )
 
 
+# ─── Visible field labels are programmatically associated (WCAG 1.3.1) ────────
+
+# A modal form field whose label is a plain <label>TEXT</label> sitting next to
+# the control is a visual-only association: screen readers do not connect them
+# unless the label carries for=… pointing at the control's id (or the control
+# carries its own aria-label). This guard matches every "label then bare
+# control" pair across all pages + the shell and asserts the pairing is real.
+_LABEL_RE = re.compile(r"<label\b(?P<attrs>[^>]*)>(?P<body>.*?)</label>", re.DOTALL)
+_LEAD_SKIP = re.compile(r"\s*(?:<!--.*?-->\s*)*", re.DOTALL)
+_CTRL_OPEN = re.compile(r"<(?P<tag>input|select|textarea)\b(?P<attrs>[^>]*?)>", re.DOTALL)
+
+
+def test_field_labels_are_programmatically_associated():
+    """WCAG 1.3.1 — every visible <label> immediately followed by a form control
+    must be wired to it (for=… ↔ id, or a dynamic :for, or the control owns an
+    aria-label). Regression guard for the sweep that associated ~146 modal
+    fields across the admin UI."""
+    offenders: list[str] = []
+    for page in list(PAGES_DIR.glob("*.html")) + [BASE_HTML]:
+        src = page.read_text(encoding="utf-8")
+        ids = set(re.findall(r'\bid="([^"]+)"', src))
+        for m in _LABEL_RE.finditer(src):
+            attrs, body = m.group("attrs"), m.group("body")
+            # dynamic labels wire themselves with :for / x-text bound ids
+            if "x-text" in attrs or ":for" in attrs:
+                continue
+            if not re.sub(r"<[^>]+>", " ", body).strip():
+                continue  # empty/icon-only label, nothing to associate
+            j = _LEAD_SKIP.match(src, m.end()).end()
+            cm = _CTRL_OPEN.match(src, j)
+            if not cm:
+                continue  # label is a section heading, not a field label
+            catt = cm.group("attrs")
+            typ = (re.search(r'type="([^"]+)"', catt) or [None, "text"])[1]
+            if typ in ("checkbox", "radio", "hidden"):
+                continue  # wrapping-label / toggle patterns handled elsewhere
+            form = re.search(r'\bfor="([^"]+)"', attrs)
+            named = (
+                (form and form.group(1) in ids)
+                or "aria-label" in catt
+                or ":id" in catt
+            )
+            if not named:
+                lineno = src.count("\n", 0, m.start()) + 1
+                label_txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+                offenders.append(f"{page.name}:{lineno} label={label_txt!r}")
+    assert not offenders, (
+        "Visible field labels not associated with their control "
+        "(add for=…/id or aria-label):\n" + "\n".join(offenders)
+    )
+
+
 
 
 

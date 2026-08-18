@@ -64,8 +64,8 @@
                     <div class="grid grid-cols-3 gap-3">
                         <template x-for="f in fields5m" :key="f.key">
                             <div>
-                                <label class="text-xs text-gray-400 block mb-1.5" x-text="f.label"></label>
-                                <input type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
+                                <label class="text-xs text-gray-400 block mb-1.5" :for="'sess5m-'+f.key" x-text="f.label"></label>
+                                <input :id="'sess5m-'+f.key" type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
                                 <p class="text-[10px] text-gray-600 mt-1">default <span class="font-mono" x-text="status.defaults[f.key]"></span></p>
                             </div>
                         </template>
@@ -76,8 +76,8 @@
                     <div class="grid grid-cols-3 gap-3">
                         <template x-for="f in fields30m" :key="f.key">
                             <div>
-                                <label class="text-xs text-gray-400 block mb-1.5" x-text="f.label"></label>
-                                <input type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
+                                <label class="text-xs text-gray-400 block mb-1.5" :for="'sess30m-'+f.key" x-text="f.label"></label>
+                                <input :id="'sess30m-'+f.key" type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
                                 <p class="text-[10px] text-gray-600 mt-1">default <span class="font-mono" x-text="status.defaults[f.key]"></span></p>
                             </div>
                         </template>

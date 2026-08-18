@@ -114,36 +114,36 @@
             <div class="p-6 space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Agent ID</label>
-                        <input type="text" x-model="form.agent_id" class="sg-input w-full" :disabled="editing">
+                        <label for="agents-agent-id" class="sg-label">Agent ID</label>
+                        <input id="agents-agent-id" type="text" x-model="form.agent_id" class="sg-input w-full" :disabled="editing">
                     </div>
                     <div>
-                        <label class="sg-label">Tenant ID</label>
-                        <input type="text" x-model="form.tenant_id" class="sg-input w-full" :disabled="editing">
+                        <label for="agents-tenant-id" class="sg-label">Tenant ID</label>
+                        <input id="agents-tenant-id" type="text" x-model="form.tenant_id" class="sg-input w-full" :disabled="editing">
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Backend URL</label>
-                    <input type="text" x-model="form.backend_url" class="sg-input w-full font-mono" placeholder="https://api.openai.com/v1">
+                    <label for="agents-backend-url" class="sg-label">Backend URL</label>
+                    <input id="agents-backend-url" type="text" x-model="form.backend_url" class="sg-input w-full font-mono" placeholder="https://api.openai.com/v1">
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Model</label>
-                        <input type="text" x-model="form.model" class="sg-input w-full">
+                        <label for="agents-model" class="sg-label">Model</label>
+                        <input id="agents-model" type="text" x-model="form.model" class="sg-input w-full">
                     </div>
                     <div>
-                        <label class="sg-label">Timeout (s)</label>
-                        <input type="number" x-model="form.timeout" class="sg-input w-full">
+                        <label for="agents-timeout" class="sg-label">Timeout (s)</label>
+                        <input id="agents-timeout" type="number" x-model="form.timeout" class="sg-input w-full">
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Health Endpoint</label>
-                        <input type="text" x-model="form.health_endpoint" class="sg-input w-full" placeholder="/health">
+                        <label for="agents-health-endpoint" class="sg-label">Health Endpoint</label>
+                        <input id="agents-health-endpoint" type="text" x-model="form.health_endpoint" class="sg-input w-full" placeholder="/health">
                     </div>
                     <div>
-                        <label class="sg-label">Path Prefix</label>
-                        <input type="text" x-model="form.path_prefix" class="sg-input w-full" placeholder="/v1">
+                        <label for="agents-path-prefix" class="sg-label">Path Prefix</label>
+                        <input id="agents-path-prefix" type="text" x-model="form.path_prefix" class="sg-input w-full" placeholder="/v1">
                     </div>
                 </div>
             </div>

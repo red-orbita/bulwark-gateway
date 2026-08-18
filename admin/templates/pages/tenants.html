@@ -85,17 +85,17 @@
             </div>
             <div class="p-6 space-y-4">
                 <div>
-                    <label class="sg-label">Tenant ID</label>
-                    <input type="text" x-model="createForm.id" class="sg-input w-full" placeholder="my-company">
+                    <label for="tenants-tenant-id" class="sg-label">Tenant ID</label>
+                    <input id="tenants-tenant-id" type="text" x-model="createForm.id" class="sg-input w-full" placeholder="my-company">
                     <p class="text-xs text-gray-500 mt-1">Lowercase, hyphens allowed (3-64 chars)</p>
                 </div>
                 <div>
-                    <label class="sg-label">Name</label>
-                    <input type="text" x-model="createForm.name" class="sg-input w-full" placeholder="My Company">
+                    <label for="tenants-name" class="sg-label">Name</label>
+                    <input id="tenants-name" type="text" x-model="createForm.name" class="sg-input w-full" placeholder="My Company">
                 </div>
                 <div>
-                    <label class="sg-label">Contact Email</label>
-                    <input type="email" x-model="createForm.contact_email" class="sg-input w-full" placeholder="admin@company.com">
+                    <label for="tenants-contact-email" class="sg-label">Contact Email</label>
+                    <input id="tenants-contact-email" type="email" x-model="createForm.contact_email" class="sg-input w-full" placeholder="admin@company.com">
                 </div>
             </div>
             <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
@@ -120,16 +120,16 @@
                     <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Tenant Information</h4>
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div>
-                            <label class="sg-label">Name</label>
-                            <input type="text" x-model="configForm.name" class="sg-input w-full">
+                            <label for="tenants-name-2" class="sg-label">Name</label>
+                            <input id="tenants-name-2" type="text" x-model="configForm.name" class="sg-input w-full">
                         </div>
                         <div>
-                            <label class="sg-label">Contact Email</label>
-                            <input type="email" x-model="configForm.contact_email" class="sg-input w-full">
+                            <label for="tenants-contact-email-2" class="sg-label">Contact Email</label>
+                            <input id="tenants-contact-email-2" type="email" x-model="configForm.contact_email" class="sg-input w-full">
                         </div>
                         <div>
-                            <label class="sg-label">Status</label>
-                            <select x-model="configForm.status" class="sg-input w-full">
+                            <label for="tenants-status" class="sg-label">Status</label>
+                            <select id="tenants-status" x-model="configForm.status" class="sg-input w-full">
                                 <option value="active">Active</option>
                                 <option value="paused">Paused</option>
                                 <option value="disabled">Disabled</option>
@@ -199,43 +199,43 @@
             </div>
             <div class="p-6 space-y-4">
                 <div>
-                    <label class="sg-label">Agent ID</label>
-                    <input type="text" x-model="agentForm.agent_id" class="sg-input w-full" :disabled="editingAgent" placeholder="support-bot">
+                    <label for="tenants-agent-id" class="sg-label">Agent ID</label>
+                    <input id="tenants-agent-id" type="text" x-model="agentForm.agent_id" class="sg-input w-full" :disabled="editingAgent" placeholder="support-bot">
                     <p x-show="!editingAgent" class="text-xs text-gray-500 mt-1">Lowercase + hyphens (3-64 chars)</p>
                 </div>
                 <div>
-                    <label class="sg-label">Backend URL</label>
-                    <input type="text" x-model="agentForm.backend_url" class="sg-input w-full" placeholder="http://ollama:11434">
+                    <label for="tenants-backend-url" class="sg-label">Backend URL</label>
+                    <input id="tenants-backend-url" type="text" x-model="agentForm.backend_url" class="sg-input w-full" placeholder="http://ollama:11434">
                     <p class="text-xs text-gray-500 mt-1">Leave empty to use global default. Supports ${VAR:-default}.</p>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Model</label>
-                        <input type="text" x-model="agentForm.model" class="sg-input w-full" placeholder="tinyllama">
+                        <label for="tenants-model" class="sg-label">Model</label>
+                        <input id="tenants-model" type="text" x-model="agentForm.model" class="sg-input w-full" placeholder="tinyllama">
                     </div>
                     <div>
-                        <label class="sg-label">Timeout (sec)</label>
-                        <input type="number" x-model.number="agentForm.timeout" class="sg-input w-full" min="1" max="600">
+                        <label for="tenants-timeout" class="sg-label">Timeout (sec)</label>
+                        <input id="tenants-timeout" type="number" x-model.number="agentForm.timeout" class="sg-input w-full" min="1" max="600">
                     </div>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Path Prefix</label>
-                        <input type="text" x-model="agentForm.path_prefix" class="sg-input w-full" placeholder="/v1">
+                        <label for="tenants-path-prefix" class="sg-label">Path Prefix</label>
+                        <input id="tenants-path-prefix" type="text" x-model="agentForm.path_prefix" class="sg-input w-full" placeholder="/v1">
                     </div>
                     <div>
-                        <label class="sg-label">Health Endpoint</label>
-                        <input type="text" x-model="agentForm.health_endpoint" class="sg-input w-full" placeholder="/health">
+                        <label for="tenants-health-endpoint" class="sg-label">Health Endpoint</label>
+                        <input id="tenants-health-endpoint" type="text" x-model="agentForm.health_endpoint" class="sg-input w-full" placeholder="/health">
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Auth Header</label>
-                    <input type="text" x-model="agentForm.auth_header" class="sg-input w-full" placeholder="Bearer sk-...">
+                    <label for="tenants-auth-header" class="sg-label">Auth Header</label>
+                    <input id="tenants-auth-header" type="text" x-model="agentForm.auth_header" class="sg-input w-full" placeholder="Bearer sk-...">
                     <p class="text-xs text-gray-500 mt-1">Sent to the LLM backend (optional)</p>
                 </div>
                 <div>
-                    <label class="sg-label">Description</label>
-                    <textarea x-model="agentForm.description" class="sg-input w-full" rows="2" placeholder="What this agent does..."></textarea>
+                    <label for="tenants-description" class="sg-label">Description</label>
+                    <textarea id="tenants-description" x-model="agentForm.description" class="sg-input w-full" rows="2" placeholder="What this agent does..."></textarea>
                 </div>
             </div>
             <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3 sticky bottom-0 bg-gray-800">
@@ -255,21 +255,21 @@
             <div class="p-6 space-y-4">
                 <p class="text-xs text-gray-400">Inherited by all agents that don't override them. Equivalent to <code class="text-cyan-400">defaults:</code> in agents.yaml.</p>
                 <div>
-                    <label class="sg-label">Backend URL</label>
-                    <input type="text" x-model="defaultsForm.backend_url" class="sg-input w-full" placeholder="http://ollama:11434">
+                    <label for="tenants-backend-url-2" class="sg-label">Backend URL</label>
+                    <input id="tenants-backend-url-2" type="text" x-model="defaultsForm.backend_url" class="sg-input w-full" placeholder="http://ollama:11434">
                     <p class="text-xs text-gray-500 mt-1">Supports ${VAR:-default} syntax</p>
                 </div>
                 <div>
-                    <label class="sg-label">Timeout (sec)</label>
-                    <input type="number" x-model.number="defaultsForm.timeout" class="sg-input w-full" min="1" max="600">
+                    <label for="tenants-timeout-2" class="sg-label">Timeout (sec)</label>
+                    <input id="tenants-timeout-2" type="number" x-model.number="defaultsForm.timeout" class="sg-input w-full" min="1" max="600">
                 </div>
                 <div>
-                    <label class="sg-label">Health Endpoint</label>
-                    <input type="text" x-model="defaultsForm.health_endpoint" class="sg-input w-full" placeholder="/health">
+                    <label for="tenants-health-endpoint-2" class="sg-label">Health Endpoint</label>
+                    <input id="tenants-health-endpoint-2" type="text" x-model="defaultsForm.health_endpoint" class="sg-input w-full" placeholder="/health">
                 </div>
                 <div>
-                    <label class="sg-label">Auth Header</label>
-                    <input type="text" x-model="defaultsForm.auth_header" class="sg-input w-full" placeholder="Bearer sk-... (optional)">
+                    <label for="tenants-auth-header-2" class="sg-label">Auth Header</label>
+                    <input id="tenants-auth-header-2" type="text" x-model="defaultsForm.auth_header" class="sg-input w-full" placeholder="Bearer sk-... (optional)">
                 </div>
             </div>
             <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">

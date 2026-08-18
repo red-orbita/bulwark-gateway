@@ -58,8 +58,8 @@
                     </div>
 
                     <div>
-                        <label class="sg-label">Confirm Password</label>
-                        <input type="password" x-model="config.admin_password_confirm" class="sg-input" placeholder="Confirm password">
+                        <label for="onboarding-confirm-password" class="sg-label">Confirm Password</label>
+                        <input id="onboarding-confirm-password" type="password" x-model="config.admin_password_confirm" class="sg-input" placeholder="Confirm password">
                         <p class="text-xs text-red-400 mt-1" x-show="config.admin_password_confirm && config.admin_password !== config.admin_password_confirm">Passwords do not match</p>
                     </div>
                 </div>
@@ -74,14 +74,14 @@
 
                 <div class="space-y-4">
                     <div>
-                        <label class="sg-label">Backend URL</label>
-                        <input type="url" x-model="config.backend_url" class="sg-input" placeholder="http://localhost:8000">
+                        <label for="onboarding-backend-url" class="sg-label">Backend URL</label>
+                        <input id="onboarding-backend-url" type="url" x-model="config.backend_url" class="sg-input" placeholder="http://localhost:8000">
                         <p class="text-xs text-gray-500 mt-1">The upstream API endpoint your agents connect to.</p>
                     </div>
 
                     <div>
-                        <label class="sg-label">Fail Mode</label>
-                        <select x-model="config.fail_mode" class="sg-select">
+                        <label for="onboarding-fail-mode" class="sg-label">Fail Mode</label>
+                        <select id="onboarding-fail-mode" x-model="config.fail_mode" class="sg-select">
                             <option value="closed">Closed (Block on failure — recommended)</option>
                             <option value="open">Open (Allow on failure — less secure)</option>
                         </select>
@@ -89,8 +89,8 @@
                     </div>
 
                     <div>
-                        <label class="sg-label">Rate Limit (requests/min)</label>
-                        <input type="number" x-model.number="config.rate_limit" class="sg-input" min="1" max="10000">
+                        <label for="onboarding-rate-limit" class="sg-label">Rate Limit (requests/min)</label>
+                        <input id="onboarding-rate-limit" type="number" x-model.number="config.rate_limit" class="sg-input" min="1" max="10000">
                     </div>
                 </div>
             </div>
@@ -131,8 +131,8 @@
 
                 <div class="space-y-4">
                     <div>
-                        <label class="sg-label">Transport</label>
-                        <select x-model="config.siem_transport" class="sg-select">
+                        <label for="onboarding-transport" class="sg-label">Transport</label>
+                        <select id="onboarding-transport" x-model="config.siem_transport" class="sg-select">
                             <option value="none">None (skip)</option>
                             <option value="syslog">Syslog (TCP/UDP)</option>
                             <option value="webhook">Webhook (HTTP POST)</option>
@@ -142,25 +142,25 @@
 
                     <div x-show="config.siem_transport === 'syslog'" class="space-y-3">
                         <div>
-                            <label class="sg-label">Syslog Host</label>
-                            <input type="text" x-model="config.siem_host" class="sg-input" placeholder="siem.company.com">
+                            <label for="onboarding-syslog-host" class="sg-label">Syslog Host</label>
+                            <input id="onboarding-syslog-host" type="text" x-model="config.siem_host" class="sg-input" placeholder="siem.company.com">
                         </div>
                         <div>
-                            <label class="sg-label">Syslog Port</label>
-                            <input type="number" x-model.number="config.siem_port" class="sg-input" placeholder="514">
+                            <label for="onboarding-syslog-port" class="sg-label">Syslog Port</label>
+                            <input id="onboarding-syslog-port" type="number" x-model.number="config.siem_port" class="sg-input" placeholder="514">
                         </div>
                     </div>
 
                     <div x-show="config.siem_transport === 'webhook'" class="space-y-3">
                         <div>
-                            <label class="sg-label">Webhook URL</label>
-                            <input type="url" x-model="config.siem_webhook_url" class="sg-input" placeholder="https://hooks.slack.com/...">
+                            <label for="onboarding-webhook-url" class="sg-label">Webhook URL</label>
+                            <input id="onboarding-webhook-url" type="url" x-model="config.siem_webhook_url" class="sg-input" placeholder="https://hooks.slack.com/...">
                         </div>
                     </div>
 
                     <div x-show="config.siem_transport === 'file'">
-                        <label class="sg-label">Output Path</label>
-                        <input type="text" x-model="config.siem_file_path" class="sg-input" placeholder="/var/log/bulwark/events.jsonl">
+                        <label for="onboarding-output-path" class="sg-label">Output Path</label>
+                        <input id="onboarding-output-path" type="text" x-model="config.siem_file_path" class="sg-input" placeholder="/var/log/bulwark/events.jsonl">
                     </div>
                 </div>
             </div>

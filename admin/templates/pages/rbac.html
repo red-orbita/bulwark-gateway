@@ -331,27 +331,27 @@
             </div>
             <div class="p-5 space-y-4">
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
-                    <input type="text" x-model="form.username"
+                    <label for="rbac-username" class="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+                    <input id="rbac-username" type="text" x-model="form.username"
                         class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                         :disabled="editing" placeholder="e.g. john.smith">
                 </div>
                 <div x-show="!editing">
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
-                    <input type="password" x-model="form.password"
+                    <label for="rbac-password" class="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
+                    <input id="rbac-password" type="password" x-model="form.password"
                         class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                         placeholder="Min 8 characters">
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-xs font-medium text-gray-400 mb-1.5">Role</label>
-                        <select x-model="form.role" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500">
+                        <label for="rbac-role" class="block text-xs font-medium text-gray-400 mb-1.5">Role</label>
+                        <select id="rbac-role" x-model="form.role" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500">
                             <template x-for="r in roles" :key="r.id"><option :value="r.id" x-text="r.label"></option></template>
                         </select>
                     </div>
                     <div>
-                        <label class="block text-xs font-medium text-gray-400 mb-1.5">Tenant Scope</label>
-                        <input type="text" x-model="form.tenant_scope"
+                        <label for="rbac-tenant-scope" class="block text-xs font-medium text-gray-400 mb-1.5">Tenant Scope</label>
+                        <input id="rbac-tenant-scope" type="text" x-model="form.tenant_scope"
                             class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                             placeholder="Leave empty for all">
                     </div>
@@ -383,12 +383,12 @@
             </div>
             <div class="p-5 space-y-4">
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">New Password</label>
-                    <input type="password" x-model="resetPwValue" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500" placeholder="Minimum 8 characters">
+                    <label for="rbac-new-password" class="block text-xs font-medium text-gray-400 mb-1.5">New Password</label>
+                    <input id="rbac-new-password" type="password" x-model="resetPwValue" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500" placeholder="Minimum 8 characters">
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Confirm Password</label>
-                    <input type="password" x-model="resetPwConfirm" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500" placeholder="Re-enter password">
+                    <label for="rbac-confirm-password" class="block text-xs font-medium text-gray-400 mb-1.5">Confirm Password</label>
+                    <input id="rbac-confirm-password" type="password" x-model="resetPwConfirm" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500" placeholder="Re-enter password">
                 </div>
                 <p x-show="resetPwError" class="text-red-400 text-xs bg-red-900/20 rounded px-3 py-2" x-text="resetPwError"></p>
             </div>
@@ -447,27 +447,27 @@
             </div>
             <div class="p-5 space-y-4">
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Role ID</label>
-                    <input type="text" x-model="newRoleForm.name"
+                    <label for="rbac-role-id" class="block text-xs font-medium text-gray-400 mb-1.5">Role ID</label>
+                    <input id="rbac-role-id" type="text" x-model="newRoleForm.name"
                         class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 font-mono focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                         placeholder="e.g. soc_analyst">
                     <p class="text-[11px] text-gray-500 mt-1">Lowercase, no spaces. Used as identifier.</p>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Display Name</label>
-                    <input type="text" x-model="newRoleForm.label"
+                    <label for="rbac-display-name" class="block text-xs font-medium text-gray-400 mb-1.5">Display Name</label>
+                    <input id="rbac-display-name" type="text" x-model="newRoleForm.label"
                         class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                         placeholder="e.g. SOC Analyst">
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Description</label>
-                    <input type="text" x-model="newRoleForm.description"
+                    <label for="rbac-description" class="block text-xs font-medium text-gray-400 mb-1.5">Description</label>
+                    <input id="rbac-description" type="text" x-model="newRoleForm.description"
                         class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
                         placeholder="Brief description of this role's purpose">
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5">Clone permissions from</label>
-                    <select x-model="newRoleForm.clone_from" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500">
+                    <label for="rbac-clone-permissions-from" class="block text-xs font-medium text-gray-400 mb-1.5">Clone permissions from</label>
+                    <select id="rbac-clone-permissions-from" x-model="newRoleForm.clone_from" class="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-gray-200 focus:border-cyan-500">
                         <option value="">Start with no permissions</option>
                         <template x-for="r in roles" :key="r.id">
                             <option :value="r.id" x-text="r.label"></option>

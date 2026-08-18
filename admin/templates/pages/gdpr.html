@@ -48,8 +48,8 @@
             </div>
             <div class="space-y-4">
                 <div>
-                    <label class="text-xs text-gray-400 block mb-1.5">Subject Identifier</label>
-                    <input type="text" x-model.trim="subject.id" @keydown.enter="lookup()"
+                    <label for="gdpr-subject-identifier" class="text-xs text-gray-400 block mb-1.5">Subject Identifier</label>
+                    <input id="gdpr-subject-identifier" type="text" x-model.trim="subject.id" @keydown.enter="lookup()"
                            class="sg-input w-full" placeholder="tenant_id, username, email or IP">
                     <p class="text-[10px] text-gray-500 mt-1">Look up how many records reference this subject before exporting or erasing.</p>
                 </div>
@@ -101,12 +101,12 @@
                     <span>Pseudonymization is <strong>irreversible</strong>. Identifiable fields are replaced with one-way HMAC-SHA256 hashes and cannot be recovered.</span>
                 </div>
                 <div>
-                    <label class="text-xs text-gray-400 block mb-1.5">Subject Identifier</label>
-                    <input type="text" x-model.trim="erase.id" class="sg-input w-full" placeholder="Same as lookup — required">
+                    <label for="gdpr-subject-identifier-2" class="text-xs text-gray-400 block mb-1.5">Subject Identifier</label>
+                    <input id="gdpr-subject-identifier-2" type="text" x-model.trim="erase.id" class="sg-input w-full" placeholder="Same as lookup — required">
                 </div>
                 <div>
-                    <label class="text-xs text-gray-400 block mb-1.5">Reason (legal basis)</label>
-                    <input type="text" x-model="erase.reason" class="sg-input w-full" placeholder="GDPR Art.17 right to erasure">
+                    <label for="gdpr-reason" class="text-xs text-gray-400 block mb-1.5">Reason (legal basis)</label>
+                    <input id="gdpr-reason" type="text" x-model="erase.reason" class="sg-input w-full" placeholder="GDPR Art.17 right to erasure">
                 </div>
                 <button @click="startErasure()" class="sg-btn sg-btn-danger sg-btn-sm" :disabled="!erase.id">
                     <i data-lucide="shield-x" class="w-4 h-4"></i>

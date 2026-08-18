@@ -230,12 +230,12 @@
             <div class="p-6 space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Name</label>
-                        <input type="text" x-model="feedForm.name" class="sg-input w-full" placeholder="My MISP Instance">
+                        <label for="iocs-name" class="sg-label">Name</label>
+                        <input id="iocs-name" type="text" x-model="feedForm.name" class="sg-input w-full" placeholder="My MISP Instance">
                     </div>
                     <div>
-                        <label class="sg-label">Provider Type</label>
-                        <select x-model="feedForm.feed_type" class="sg-select w-full">
+                        <label for="iocs-provider-type" class="sg-label">Provider Type</label>
+                        <select id="iocs-provider-type" x-model="feedForm.feed_type" class="sg-select w-full">
                             <option value="urlhaus">URLhaus</option>
                             <option value="threatfox">ThreatFox</option>
                             <option value="otx">AlienVault OTX</option>
@@ -250,31 +250,31 @@
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Feed URL</label>
-                    <input type="url" x-model="feedForm.url" class="sg-input w-full font-mono" placeholder="https://...">
+                    <label for="iocs-feed-url" class="sg-label">Feed URL</label>
+                    <input id="iocs-feed-url" type="url" x-model="feedForm.url" class="sg-input w-full font-mono" placeholder="https://...">
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">API Key</label>
-                        <input type="password" x-model="feedForm.api_key" class="sg-input w-full" :placeholder="editingFeed ? '(unchanged if empty)' : 'Optional'">
+                        <label for="iocs-api-key" class="sg-label">API Key</label>
+                        <input id="iocs-api-key" type="password" x-model="feedForm.api_key" class="sg-input w-full" :placeholder="editingFeed ? '(unchanged if empty)' : 'Optional'">
                     </div>
                     <div>
-                        <label class="sg-label">Auth Header Name</label>
-                        <input type="text" x-model="feedForm.auth_header" class="sg-input w-full" placeholder="Authorization">
+                        <label for="iocs-auth-header-name" class="sg-label">Auth Header Name</label>
+                        <input id="iocs-auth-header-name" type="text" x-model="feedForm.auth_header" class="sg-input w-full" placeholder="Authorization">
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                        <label class="sg-label">Interval (minutes)</label>
-                        <input type="number" x-model.number="feedForm.interval_minutes" min="5" max="44640" class="sg-input w-full">
+                        <label for="iocs-interval" class="sg-label">Interval (minutes)</label>
+                        <input id="iocs-interval" type="number" x-model.number="feedForm.interval_minutes" min="5" max="44640" class="sg-input w-full">
                     </div>
                     <div>
-                        <label class="sg-label">Min Confidence</label>
-                        <input type="number" x-model.number="feedForm.min_confidence" min="0" max="1" step="0.1" class="sg-input w-full">
+                        <label for="iocs-min-confidence" class="sg-label">Min Confidence</label>
+                        <input id="iocs-min-confidence" type="number" x-model.number="feedForm.min_confidence" min="0" max="1" step="0.1" class="sg-input w-full">
                     </div>
                     <div>
-                        <label class="sg-label">Enabled</label>
-                        <select x-model="feedForm.enabled" class="sg-select w-full">
+                        <label for="iocs-enabled" class="sg-label">Enabled</label>
+                        <select id="iocs-enabled" x-model="feedForm.enabled" class="sg-select w-full">
                             <option :value="true">Yes</option>
                             <option :value="false">No</option>
                         </select>
@@ -304,8 +304,8 @@
             <div class="p-6 space-y-4">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Type</label>
-                        <select x-model="form.type" class="sg-select w-full">
+                        <label for="iocs-type" class="sg-label">Type</label>
+                        <select id="iocs-type" x-model="form.type" class="sg-select w-full">
                             <option value="ip">IP</option>
                             <option value="domain">Domain</option>
                             <option value="hash">Hash</option>
@@ -314,8 +314,8 @@
                         </select>
                     </div>
                     <div>
-                        <label class="sg-label">Severity</label>
-                        <select x-model="form.severity" class="sg-select w-full">
+                        <label for="iocs-severity" class="sg-label">Severity</label>
+                        <select id="iocs-severity" x-model="form.severity" class="sg-select w-full">
                             <option value="critical">Critical</option>
                             <option value="high">High</option>
                             <option value="medium">Medium</option>
@@ -324,22 +324,22 @@
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Value</label>
-                    <input type="text" x-model="form.value" class="sg-input w-full font-mono">
+                    <label for="iocs-value" class="sg-label">Value</label>
+                    <input id="iocs-value" type="text" x-model="form.value" class="sg-input w-full font-mono">
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label class="sg-label">Confidence (%)</label>
-                        <input type="number" x-model="form.confidence" min="0" max="100" class="sg-input w-full">
+                        <label for="iocs-confidence" class="sg-label">Confidence (%)</label>
+                        <input id="iocs-confidence" type="number" x-model="form.confidence" min="0" max="100" class="sg-input w-full">
                     </div>
                     <div>
-                        <label class="sg-label">Tags (comma-sep)</label>
-                        <input type="text" x-model="form.tags_str" class="sg-input w-full">
+                        <label for="iocs-tags" class="sg-label">Tags (comma-sep)</label>
+                        <input id="iocs-tags" type="text" x-model="form.tags_str" class="sg-input w-full">
                     </div>
                 </div>
                 <div>
-                    <label class="sg-label">Notes</label>
-                    <textarea x-model="form.notes" rows="2" class="sg-input w-full"></textarea>
+                    <label for="iocs-notes" class="sg-label">Notes</label>
+                    <textarea id="iocs-notes" x-model="form.notes" rows="2" class="sg-input w-full"></textarea>
                 </div>
             </div>
             <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
@@ -362,8 +362,8 @@
                 <button @click="showBulk = false" class="sg-btn sg-btn-ghost sg-btn-sm">&times;</button>
             </div>
             <div class="p-6">
-                <label class="sg-label">JSON Array of IOCs</label>
-                <textarea x-model="bulkJson" rows="10" class="sg-input w-full font-mono" placeholder='[{"type":"ip","value":"1.2.3.4","severity":"high","confidence":90}]'></textarea>
+                <label for="iocs-json-array-of-iocs" class="sg-label">JSON Array of IOCs</label>
+                <textarea id="iocs-json-array-of-iocs" x-model="bulkJson" rows="10" class="sg-input w-full font-mono" placeholder='[{"type":"ip","value":"1.2.3.4","severity":"high","confidence":90}]'></textarea>
             </div>
             <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
                 <button @click="showBulk = false" class="sg-btn sg-btn-secondary sg-btn-sm">Cancel</button>
