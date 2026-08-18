@@ -258,7 +258,20 @@
                             <td class="text-gray-400" x-text="h.finding_count"></td>
                         </tr>
                     </template>
-                    <template x-if="history.length === 0">
+                    <template x-if="historyLoading">
+                        <tr><td colspan="6" class="text-center text-gray-500 py-8">
+                            <span class="inline-flex items-center gap-2"><i data-lucide="loader" class="w-4 h-4 animate-spin"></i> Loading scan history…</span>
+                        </td></tr>
+                    </template>
+                    <template x-if="historyError && !historyLoading">
+                        <tr><td colspan="6" class="text-center py-8">
+                            <span class="text-red-400">Couldn't load scan history.</span>
+                            <button @click="loadHistory()" class="sg-btn sg-btn-ghost sg-btn-sm ml-2">
+                                <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                            </button>
+                        </td></tr>
+                    </template>
+                    <template x-if="!historyLoading && !historyError && history.length === 0">
                         <tr><td colspan="6" class="text-center text-gray-500 py-8">No scan history yet</td></tr>
                     </template>
                 </tbody>
@@ -277,6 +290,8 @@ function skillScanner() {
         lastResult: null,
         history: [],
         historyFilter: '',
+        historyLoading: true,
+        historyError: false,
         dragOver: false,
 
         async init() {
@@ -292,12 +307,19 @@ function skillScanner() {
         },
 
         async loadHistory() {
+            this.historyLoading = true;
+            this.historyError = false;
             try {
                 let url = '/admin/skills/history?limit=20';
                 if (this.historyFilter) url += '&verdict=' + this.historyFilter;
                 const resp = await fetch(url, { credentials: 'include' });
-                if (resp.ok) this.history = await resp.json();
-            } catch (e) { console.error('Failed to load scan history:', e); }
+                if (!resp.ok) throw new Error(`history ${resp.status}`);
+                this.history = await resp.json();
+            } catch (e) {
+                this.historyError = true;
+            } finally {
+                this.historyLoading = false;
+            }
         },
 
         fileSelected(event) {

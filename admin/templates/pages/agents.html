@@ -31,7 +31,32 @@
 
     <!-- Agent Table -->
     <div class="sg-card !p-0">
-        <div class="overflow-x-auto">
+        <!-- Loading: skeleton rows (zero layout shift) -->
+        <div x-show="loading">
+            <template x-for="i in 6" :key="i">
+                <div class="sg-skeleton-row">
+                    <div class="sg-skeleton-text" style="max-width:6rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:5rem"></div>
+                    <div class="sg-skeleton-text"></div>
+                    <div class="sg-skeleton-text" style="max-width:4rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:3rem"></div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Error -->
+        <div x-show="error && !loading" class="sg-error">
+            <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+            <p class="sg-error-title">Couldn't load agents</p>
+            <p class="sg-error-desc">The agent registry didn't respond. Check the connection and try again.</p>
+            <div class="sg-error-action">
+                <button @click="loadAgents()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                </button>
+            </div>
+        </div>
+
+        <div x-show="!loading && !error && agents.length > 0" class="overflow-x-auto">
             <table class="sg-table">
                 <thead>
                     <tr>
@@ -92,7 +117,7 @@
             </table>
         </div>
         <!-- Empty state -->
-        <div x-show="agents.length === 0" class="sg-empty">
+        <div x-show="!loading && !error && agents.length === 0" class="sg-empty">
             <div class="sg-empty-icon">
                 <i data-lucide="bot" class="w-8 h-8"></i>
             </div>
@@ -192,6 +217,8 @@ function agentsManager() {
         tenantList: [],
         filterTenant: '',
         filterStatus: '',
+        loading: true,
+        error: false,
         showModal: false,
         showDeleteConfirm: false,
         pendingDelete: null,
@@ -203,11 +230,20 @@ function agentsManager() {
             if (tr.ok) this.tenantList = (await tr.json()).map(t => t.id);
         },
         async loadAgents() {
-            let url = '/admin/agents?';
-            if (this.filterTenant) url += `tenant_id=${this.filterTenant}&`;
-            if (this.filterStatus) url += `status=${this.filterStatus}&`;
-            const resp = await fetch(url);
-            if (resp.ok) this.agents = await resp.json();
+            this.loading = true;
+            this.error = false;
+            try {
+                let url = '/admin/agents?';
+                if (this.filterTenant) url += `tenant_id=${this.filterTenant}&`;
+                if (this.filterStatus) url += `status=${this.filterStatus}&`;
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error(`agents ${resp.status}`);
+                this.agents = await resp.json();
+            } catch (e) {
+                this.error = true;
+            } finally {
+                this.loading = false;
+            }
         },
         openCreate() {
             this.editing = false;

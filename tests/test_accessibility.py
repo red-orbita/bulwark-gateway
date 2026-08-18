@@ -1311,6 +1311,9 @@ def test_evaluation_log_filter_actually_filters():
         ("notifications.html", "loadError", "loadChannels()"),
         ("plugins.html", "loadError", "loadPlugins()"),
         ("rbac.html", "usersError", "loadUsers()"),
+        ("agents.html", "error", "loadAgents()"),
+        ("iocs.html", "feedsError", "loadFeeds()"),
+        ("skills.html", "historyError", "loadHistory()"),
     ],
 )
 def test_async_pages_distinguish_error_from_empty(page, error_var, retry_call):
@@ -1325,6 +1328,30 @@ def test_async_pages_distinguish_error_from_empty(page, error_var, retry_call):
     # failure still reads as "nothing configured".
     assert re.search(rf"!\s*{error_var}", src), (
         f"{page} empty state must be gated on !{error_var}"
+    )
+
+
+@pytest.mark.parametrize(
+    "page,loader,error_var",
+    [
+        ("agents.html", "loadAgents", "error"),
+        ("iocs.html", "loadFeeds", "feedsError"),
+        ("skills.html", "loadHistory", "historyError"),
+    ],
+)
+def test_secondary_loaders_flip_error_flag_on_failure(page, loader, error_var):
+    """A loader that swallows failures with a bare console.error leaves the view
+    on its empty state. These loaders must raise on !resp.ok and set their error
+    flag in a catch so the UI can show a real error."""
+    src = (PAGES_DIR / page).read_text(encoding="utf-8")
+    body = re.search(rf"async {loader}\(\)\s*{{.*?\n        }}", src, re.DOTALL)
+    assert body, f"{page}: could not locate {loader}() body"
+    fn = body.group(0)
+    assert "!resp.ok" in fn and "throw" in fn, (
+        f"{page}: {loader}() must throw on a non-ok response"
+    )
+    assert re.search(rf"catch[^{{]*{{[^}}]*this\.{error_var}\s*=\s*true", fn), (
+        f"{page}: {loader}() must set this.{error_var} = true in its catch"
     )
 
 

@@ -167,7 +167,31 @@
                 </button>
             </div>
         </div>
-        <div class="overflow-x-auto">
+        <!-- Loading: skeleton rows (zero layout shift) -->
+        <div x-show="feedsLoading">
+            <template x-for="i in 3" :key="i">
+                <div class="sg-skeleton-row">
+                    <div class="sg-skeleton-text"></div>
+                    <div class="sg-skeleton-text" style="max-width:5rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:4rem"></div>
+                    <div class="sg-skeleton-text" style="max-width:3rem"></div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Error -->
+        <div x-show="feedsError && !feedsLoading" class="sg-error">
+            <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+            <p class="sg-error-title">Couldn't load feed sources</p>
+            <p class="sg-error-desc">The feed registry didn't respond. Check the connection and try again.</p>
+            <div class="sg-error-action">
+                <button @click="loadFeeds()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                </button>
+            </div>
+        </div>
+
+        <div x-show="!feedsLoading && !feedsError && feeds.length > 0" class="overflow-x-auto">
             <table class="sg-table">
                 <thead>
                     <tr>
@@ -208,7 +232,7 @@
                 </tbody>
             </table>
         </div>
-        <div x-show="feeds.length === 0" class="sg-empty">
+        <div x-show="!feedsLoading && !feedsError && feeds.length === 0" class="sg-empty">
             <div class="sg-empty-icon">
                 <i data-lucide="rss" class="w-8 h-8"></i>
             </div>
@@ -388,6 +412,8 @@ function iocsManager() {
         totalPages: 1,
         loading: true,
         error: false,
+        feedsLoading: true,
+        feedsError: false,
         showModal: false,
         showBulk: false,
         showFeedModal: false,
@@ -424,8 +450,17 @@ function iocsManager() {
             }
         },
         async loadFeeds() {
-            const resp = await fetch('/admin/iocs/feeds');
-            if (resp.ok) this.feeds = await resp.json();
+            this.feedsLoading = true;
+            this.feedsError = false;
+            try {
+                const resp = await fetch('/admin/iocs/feeds');
+                if (!resp.ok) throw new Error(`feeds ${resp.status}`);
+                this.feeds = await resp.json();
+            } catch (e) {
+                this.feedsError = true;
+            } finally {
+                this.feedsLoading = false;
+            }
         },
         openCreate() {
             this.editingIoc = null;
