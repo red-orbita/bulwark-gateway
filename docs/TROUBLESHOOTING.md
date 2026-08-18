@@ -127,7 +127,9 @@ kubectl exec deploy/admin -n bulwark-gateway -- nslookup redis.bulwark-gateway.s
 kubectl exec deploy/redis -n bulwark-gateway -- redis-cli INFO memory
 
 # Flush non-essential caches (rate limit counters)
-kubectl exec deploy/redis -n bulwark-gateway -- redis-cli DEL bulwark:rate_limits
+kubectl exec deploy/redis -n bulwark-gateway -- \
+  redis-cli --scan --pattern 'bulwark:ratelimit:*' | \
+  xargs -r kubectl exec deploy/redis -n bulwark-gateway -- redis-cli DEL
 ```
 
 ---
@@ -467,14 +469,14 @@ This requires running the security smoke test (`python scripts/security-smoke-te
 **Symptom**: No Telegram alerts received, no errors visible in admin logs.
 
 **Causes**:
-1. `channels.json` is empty or has no Telegram channel configured
+1. `notifications_channels.json` is empty or has no Telegram channel configured
 2. Bot token is invalid or bot was removed from the chat
-3. `parse_mode` incompatibility (Markdown vs MarkdownV2)
+3. Bot lacks permission to post to the target `chat_id`
 
 **Diagnosis**:
 ```bash
 # Check channel config
-kubectl exec deploy/admin -n bulwark-gateway -- cat /app/data/channels.json
+kubectl exec deploy/admin -n bulwark-gateway -- cat /app/data/notifications_channels.json
 
 # Test Telegram API directly
 BOT_TOKEN="<your-token>"
@@ -507,7 +509,7 @@ kubectl exec deploy/admin -n bulwark-gateway -- python -c "
 import redis, os
 r = redis.Redis(host='redis', port=6379, password=open('/run/secrets/redis-password').read().strip())
 print('PING:', r.ping())
-print('Keys:', r.keys('bulwark:metrics:*'))
+print('Keys:', r.keys('bulwark:global:*'))
 "
 ```
 

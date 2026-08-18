@@ -112,7 +112,7 @@ Downloads and vendors all CDN dependencies (JS/CSS) for the admin dashboard with
 ```
 
 **What it does**:
-- Downloads Alpine.js, Chart.js, and CSS dependencies
+- Downloads Alpine.js, HTMX, Lucide icons, qrcodejs, and Google Fonts (with SRI verification)
 - Stores them in `admin/static/js/vendor/` and `admin/static/css/`
 - Verifies SHA-384 integrity hashes
 
@@ -175,19 +175,29 @@ kubectl rollout restart deploy/admin -n bulwark-gateway
 
 ### JWT Secret Rotation
 
-**Impact**: Invalidates ALL active sessions (users must re-login).
+The proxy and admin use **distinct** JWT secrets by design (a leaked proxy token
+must not be able to forge an admin session):
+
+- `bulwark-proxy-secrets/jwt-secret` — signs data-plane (proxy) JWTs
+- `bulwark-admin-secrets/admin-jwt-secret` — signs admin dashboard sessions
+
+Rotate whichever is affected. Rotating the proxy secret invalidates issued proxy
+JWTs; rotating the admin secret forces all admin users to re-login.
 
 ```bash
-# Generate new secret
+# --- Proxy JWT secret ---
 NEW_JWT=$(openssl rand -base64 32)
-
-# Update K8s secret
 kubectl create secret generic bulwark-proxy-secrets \
   --from-literal=jwt-secret="$NEW_JWT" \
   --dry-run=client -o yaml | kubectl apply -f -
+kubectl rollout restart deploy/proxy -n bulwark-gateway
 
-# Restart both proxy and admin
-kubectl rollout restart deploy/proxy deploy/admin -n bulwark-gateway
+# --- Admin session secret (invalidates all admin logins) ---
+NEW_ADMIN_JWT=$(openssl rand -base64 32)
+kubectl create secret generic bulwark-admin-secrets \
+  --from-literal=admin-jwt-secret="$NEW_ADMIN_JWT" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl rollout restart deploy/admin -n bulwark-gateway
 ```
 
 ### Redis Password Rotation

@@ -33,7 +33,7 @@ Bulwark Gateway fires real-time notifications when security events occur (input 
 | Discord | `discord` | `url` (Webhook URL) | Embeds |
 | PagerDuty | `pagerduty` | `routing_key` (Integration Key) | Events API v2 |
 | Opsgenie | `opsgenie` | `api_key` | Alert API |
-| Telegram | `telegram` | `bot_token`, `chat_id` | Markdown |
+| Telegram | `telegram` | `bot_token`, `chat_id` | HTML |
 | Google Chat | `google_chat` | `url` (Webhook URL) | Cards |
 | Email (SMTP) | `email` | `smtp_host`, `smtp_to` | HTML |
 | Generic Webhook | `generic` | `url` | JSON payload |
