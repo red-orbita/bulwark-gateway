@@ -23,7 +23,7 @@ spec:
         - name: API_KEY
           valueFrom:
             secretKeyRef:
-              name: bulwark-secrets
+              name: bulwark-proxy-secrets
               key: api-keys
       command:
         - /bin/sh
