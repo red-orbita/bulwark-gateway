@@ -14,12 +14,14 @@ Complete API documentation for Bulwark Gateway proxy and admin services.
 
 ### Proxy API
 
-All proxy requests require one of:
-- **JWT Bearer token**: `Authorization: Bearer <token>`
-- **API Key**: `X-API-Key: <key>`
+All proxy requests require a bearer credential in the `Authorization` header —
+either a JWT or an API key (both use the `Bearer` scheme):
+- **JWT**: `Authorization: Bearer <token>`
+- **API Key**: `Authorization: Bearer <api-key>`
 
-Additionally, tenant identification:
-- **Header**: `X-Tenant-ID: <tenant-id>`
+Additionally, tenant/agent identification:
+- **Header**: `X-Tenant-ID: <tenant-id>` (required)
+- **Header**: `X-Agent-ID: <agent-id>` (optional; defaults to `default`)
 
 ### Admin API
 
@@ -86,13 +88,14 @@ Detailed statistics (requires authentication + tenant ID).
 }
 ```
 
-### POST /v1/embeddings
+### POST /v1/tool/validate
 
-Proxied embeddings request (same auth/guardrail chain).
+Pre-execution tool-call validation (sidecar mode). Validates a proposed tool call
+against the agent's RBAC/tool policy without proxying to a backend. Requires the
+same auth + `X-Tenant-ID`/`X-Agent-ID` headers as `/v1/chat/completions`.
 
-### POST /v1/completions
-
-Proxied legacy completions request.
+**Response**: a `GuardrailResult` — `verdict` (`allow`/`block`), `events`, and
+`blocked_tools`.
 
 ---
 
@@ -117,9 +120,9 @@ Base URL: `https://admin.bulwark.corp.com` (port 8090)
 }
 ```
 
-#### POST /admin/auth/refresh
+#### POST /admin/auth/logout
 
-Refresh an expiring token.
+Invalidate the current session/token.
 
 #### GET /admin/auth/me
 
@@ -130,6 +133,9 @@ Get current user info.
 ```json
 {"current_password": "old", "new_password": "new"}
 ```
+
+> A `POST /admin/auth/force-change-password` variant is also available for the
+> first-login forced password rotation flow.
 
 ---
 
@@ -175,21 +181,26 @@ Prometheus exposition format.
 
 List all policies.
 
-#### GET /admin/policies/{tenant_id}
+#### GET /admin/policies/{name}
 
-Get policy for specific tenant.
+Get a specific policy by its file name.
 
 #### POST /admin/policies
 
 Create/update a policy.
 
-#### DELETE /admin/policies/{tenant_id}
+#### DELETE /admin/policies/{name}
 
-Delete a tenant policy.
+Delete a policy by name.
 
-#### POST /admin/policies/reload
+#### POST /admin/policies/{name}/rollback
 
-Hot-reload policies from disk (no restart needed).
+Roll a policy back to a previous version (`GET /admin/policies/{name}/versions`
+lists available versions).
+
+> **Note:** The live hot-reload endpoint `POST /admin/policies/reload` is served
+> by the **proxy** (port 8080, internal), not the admin API. Editing a policy via
+> the admin API triggers the proxy reload automatically.
 
 ---
 
@@ -247,9 +258,9 @@ Update transport configuration.
 
 Remove a transport.
 
-#### POST /admin/siem/transport/{id}/test
+#### POST /admin/siem/test
 
-Test transport connectivity.
+Test SIEM export connectivity.
 
 #### GET /admin/siem/status
 
@@ -332,15 +343,15 @@ Reload channels from disk (YAML + JSON).
 
 #### GET /admin/iocs
 
-List current IOC database stats.
+List the current IOC entries. (Use `GET /admin/iocs/stats` for database statistics.)
 
-#### POST /admin/iocs/upload
+#### POST /admin/iocs
 
-Upload new IOC indicators.
+Add a single IOC indicator. Use `POST /admin/iocs/bulk` to add many at once.
 
-#### POST /admin/iocs/feeds/sync
+#### POST /admin/iocs/feeds/update
 
-Trigger feed synchronization.
+Trigger threat-intel feed synchronization.
 
 ---
 
@@ -368,11 +379,11 @@ List all users.
 
 Create a new user.
 
-#### PUT /admin/users/{username}
+#### PUT /admin/users/{user_id}
 
 Update user (role, active status).
 
-#### DELETE /admin/users/{username}
+#### DELETE /admin/users/{user_id}
 
 Delete a user.
 
@@ -380,7 +391,7 @@ Delete a user.
 
 Get full RBAC permission matrix.
 
-#### PUT /admin/rbac/roles/{role}
+#### PUT /admin/rbac/role/{role_name}
 
 Update permissions for a role.
 
@@ -388,13 +399,9 @@ Update permissions for a role.
 
 ### Configuration
 
-#### GET /admin/config/validate
+#### POST /admin/config/validate
 
-Validate current configuration.
-
-#### POST /admin/config/rollback
-
-Rollback to previous configuration version.
+Validate a submitted configuration payload.
 
 ---
 
