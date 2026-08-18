@@ -642,7 +642,7 @@ python -m uvicorn src.main:app --reload --port 8080
 # Run admin server locally
 python -m uvicorn admin.main:app --reload --port 8090
 
-# Run full test suite (~411 tests)
+# Run full test suite (~1,300 tests)
 pytest tests/ -q --tb=short
 
 # Run tests excluding container-only tests
@@ -882,7 +882,7 @@ chore: <description>    — Maintenance, dependencies
 - All new guardrail patterns MUST have tests
 - Tests cover both positive (should block) and negative (should allow) cases
 - Run `pytest` before every commit
-- Current: ~411 tests, all passing
+- Current: ~1,300 tests, all passing
 - Container-only tests: `test_admin_integration.py`, `test_security_hardening.py` (require `/app` path)
 
 ### File Ownership

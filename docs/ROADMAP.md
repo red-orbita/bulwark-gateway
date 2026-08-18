@@ -2,7 +2,7 @@
 
 Competitive feature parity plan. Organized by phases with dependencies, effort estimates, and architectural decisions.
 
-**Status: ALL 9 PHASES COMPLETE** (370 tests passing)
+**Status: ALL 9 PHASES COMPLETE** (~1,300 tests passing)
 
 **Principle**: Never sacrifice the zero-latency hot path. ML features are additive layers, not replacements for regex.
 
@@ -398,7 +398,7 @@ ml-gpu = [
 
 ### 3.1 Language Detection
 
-Create `src/scanners/ml/language_detector.py`:
+Create `src/scanners/multilingual/language_detector.py`:
 
 ```python
 class LanguageDetector(InputScanner):
@@ -695,6 +695,11 @@ class RetrievalScanner(InputScanner):
 
 ### 5.2 RAG Sidecar API
 
+> **Note**: This standalone endpoint remained a design sketch. The shipped
+> implementation validates RAG chunks inline via the scanner pipeline
+> (`src/scanners/rag/retrieval_scanner.py`), not a dedicated `/v1/rag/validate`
+> route.
+
 New endpoint at `/v1/rag/validate`:
 
 ```python
@@ -757,7 +762,7 @@ class DialogEngine:
 
 ### 5.4 Conversation Memory Guard
 
-Create `src/scanners/dialog/memory_guard.py`:
+Create `src/scanners/rag/memory_guard.py`:
 
 ```python
 class MemoryGuard(InputScanner):
@@ -775,13 +780,13 @@ class MemoryGuard(InputScanner):
 
 ### 5.5 Deliverables
 
-- [ ] Retrieval scanner for indirect prompt injection in RAG chunks
-- [ ] `/v1/rag/validate` sidecar endpoint
-- [ ] YAML-based dialog flow engine (simplified Colang alternative)
-- [ ] Memory guard for multi-turn manipulation
+- [x] Retrieval scanner for indirect prompt injection in RAG chunks (`src/scanners/rag/retrieval_scanner.py`)
+- [~] RAG chunk validation — shipped as an in-pipeline scanner, not the standalone `/v1/rag/validate` route originally sketched below
+- [x] YAML-based dialog flow engine (simplified Colang alternative) (`src/dialog/engine.py`)
+- [x] Memory guard for multi-turn manipulation (`src/scanners/rag/memory_guard.py`)
 - [ ] Session state management (Redis-backed)
-- [ ] LangChain/LlamaIndex integration example
-- [ ] Tests: RAG poisoning scenarios, dialog flow compliance
+- [x] LangChain/LlamaIndex integration example (`src/sdk/integrations/`)
+- [x] Tests: RAG poisoning scenarios, dialog flow compliance (`tests/test_phase5_phase6.py`)
 
 ---
 

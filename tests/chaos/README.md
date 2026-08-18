@@ -26,7 +26,8 @@ helm install bulwark ./helm/bulwark-gateway --namespace bulwark-gateway
 kubectl get crds | grep chaos
 
 # 4. RBAC for chaos experiments
-kubectl apply -f tests/chaos/rbac.yaml
+# No separate rbac.yaml is needed: run-chaos-suite.sh auto-creates the
+# 'litmus-chaos-sa' ServiceAccount + Role/RoleBinding on first run if missing.
 ```
 
 ## Experiment Matrix
