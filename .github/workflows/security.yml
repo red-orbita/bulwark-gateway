@@ -165,6 +165,9 @@ jobs:
             --desc \
             --output pip-audit-proxy.txt \
             || true
+          # pip-audit does not create the output file when no vulnerabilities are
+          # found, so guarantee it exists before we cat it into the step summary.
+          [ -f pip-audit-proxy.txt ] || echo "No known vulnerabilities found" > pip-audit-proxy.txt
           cat pip-audit-proxy.txt >> $GITHUB_STEP_SUMMARY
 
       - name: Audit proxy dependencies (SARIF)
@@ -184,6 +187,9 @@ jobs:
             --desc \
             --output pip-audit-admin.txt \
             || true
+          # pip-audit does not create the output file when no vulnerabilities are
+          # found, so guarantee it exists before we cat it into the step summary.
+          [ -f pip-audit-admin.txt ] || echo "No known vulnerabilities found" > pip-audit-admin.txt
           cat pip-audit-admin.txt >> $GITHUB_STEP_SUMMARY
 
       - name: Audit admin dependencies (SARIF)

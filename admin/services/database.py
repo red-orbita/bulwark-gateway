@@ -189,8 +189,11 @@ class QueryTranslator:
             pk_col = col_list[0]
             update_cols = [c for c in col_list[1:]]
             set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+            # SQLi-safe (B608): internal SQLite→PostgreSQL statement translator. Inputs
+            # (table/columns/values) are extracted from trusted, developer-authored
+            # SQL already present in this codebase, never from request data.
             translated = (
-                f"INSERT INTO {table} ({columns}) VALUES ({values}) "
+                f"INSERT INTO {table} ({columns}) VALUES ({values}) "  # nosec B608
                 f"ON CONFLICT ({pk_col}) DO UPDATE SET {set_clause}"
             )
 

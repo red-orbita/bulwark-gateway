@@ -510,7 +510,9 @@ class GDPRService:
             params.append(request_type)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"
+        # SQLi-safe (B608): `where` is built only from the fixed "request_type = ?"
+        # fragment above; all values (incl. LIMIT/OFFSET) are bound params.
+        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"  # nosec B608
         params.extend([limit, offset])
 
         records = []
@@ -1134,7 +1136,9 @@ class PostgreSQLGDPRService(GDPRService):
             params.append(request_type)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"
+        # SQLi-safe (B608): `where` is built only from the fixed "request_type = ?"
+        # fragment above; all values (incl. LIMIT/OFFSET) are bound params.
+        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"  # nosec B608
         params.extend([limit, offset])
 
         try:

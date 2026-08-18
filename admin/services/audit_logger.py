@@ -354,7 +354,10 @@ class AuditLogger:
         """Query audit log with filters."""
         conditions, params = build_audit_filters(q)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        # SQLi-safe (B608): `where` is assembled only from the fixed condition fragments
+        # in build_audit_filters (all values bound as `?` params); LIMIT/OFFSET
+        # are bound below. No user-controlled identifiers reach the SQL string.
+        sql = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"  # nosec B608
         params.extend([q.limit, q.offset])
 
         entries = []
@@ -372,7 +375,9 @@ class AuditLogger:
         """
         conditions, params = build_audit_filters(q)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT COUNT(*) FROM audit_log {where}"
+        # SQLi-safe (B608): `where` is built only from fixed fragments in
+        # build_audit_filters; all values are bound as `?` params.
+        sql = f"SELECT COUNT(*) FROM audit_log {where}"  # nosec B608
         with self._lock:
             if not self._conn:
                 return 0
@@ -560,7 +565,9 @@ class PostgreSQLAuditLogger(AuditLogger):
     async def query(self, q: AuditQuery) -> list[AuditEntry]:
         conditions, params = build_audit_filters(q)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        # SQLi-safe (B608): `where` is built only from fixed fragments in
+        # build_audit_filters; all values (incl. LIMIT/OFFSET) are bound params.
+        sql = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT ? OFFSET ?"  # nosec B608
         params.extend([q.limit, q.offset])
 
         try:
@@ -573,7 +580,9 @@ class PostgreSQLAuditLogger(AuditLogger):
     async def count(self, q: AuditQuery) -> int:
         conditions, params = build_audit_filters(q)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT COUNT(*) AS n FROM audit_log {where}"
+        # SQLi-safe (B608): `where` is built only from fixed fragments in
+        # build_audit_filters; all values are bound as params.
+        sql = f"SELECT COUNT(*) AS n FROM audit_log {where}"  # nosec B608
         try:
             db = self._get_db()
             row = await db.fetch_one(sql, params)
