@@ -153,6 +153,25 @@ kubectl create configmap bulwark-static-config \
     --dry-run=client -o yaml | kubectl apply $DRY_RUN -f -
 
 # --- 6. Apply all manifests via Kustomize ---
+# When IMAGE_REGISTRY is set, the kustomize images must resolve to the pushed
+# registry path — otherwise managed clusters (AKS/EKS/GKE) pull from Docker Hub
+# and fail with ImagePullBackOff. We rewrite the image newName in a snapshot of
+# kustomization.yaml (restored via trap) so the tracked file is never mutated.
+KUSTOMIZATION="$SCRIPT_DIR/kustomization.yaml"
+if [ -n "$IMAGE_REGISTRY" ]; then
+    step "Injecting registry prefix into Kustomize images ($IMAGE_REGISTRY)..."
+    KUSTOMIZE_BACKUP="$(mktemp)"
+    cp "$KUSTOMIZATION" "$KUSTOMIZE_BACKUP"
+    # shellcheck disable=SC2064
+    trap "mv '$KUSTOMIZE_BACKUP' '$KUSTOMIZATION'" EXIT
+    # IMAGE_REGISTRY already includes a trailing slash (e.g. "myregistry.io/").
+    sed -i \
+        -e "s#newName: bulwark-gateway-proxy#newName: ${IMAGE_REGISTRY}bulwark-gateway-proxy#" \
+        -e "s#newName: bulwark-gateway-admin#newName: ${IMAGE_REGISTRY}bulwark-gateway-admin#" \
+        "$KUSTOMIZATION"
+    log "Kustomize images: $PROXY_IMAGE, $ADMIN_IMAGE"
+fi
+
 step "Applying Kustomize manifests..."
 kubectl apply -k "$SCRIPT_DIR" $DRY_RUN
 

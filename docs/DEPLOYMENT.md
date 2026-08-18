@@ -65,6 +65,14 @@ docker tag bulwark-gateway-admin:latest your-registry/bulwark-gateway-admin:v1.0
 docker push your-registry/bulwark-gateway-admin:v1.0.0
 ```
 
+When deploying via `k8s/deploy.sh` with a remote registry, set `IMAGE_REGISTRY`
+(with a trailing slash). The script pushes the built images and rewrites the
+Kustomize image references so pods pull from your registry instead of Docker Hub:
+
+```bash
+IMAGE_REGISTRY=your-registry/ ./k8s/deploy.sh --backend-ip <YOUR_LLM_BACKEND_IP>
+```
+
 For minikube (local testing):
 
 ```bash
