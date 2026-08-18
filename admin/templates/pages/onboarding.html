@@ -9,7 +9,7 @@
             <div class="flex items-center justify-between mb-2">
                 <template x-for="(step, idx) in steps" :key="idx">
                     <div class="flex items-center" :class="idx < steps.length - 1 ? 'flex-1' : ''">
-                        <div class="flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold transition-all duration-300"
+                        <div class="flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold sg-interactive"
                              :class="idx < currentStep ? 'bg-brand-500 text-white' : idx === currentStep ? 'bg-brand-500/20 text-brand-400 ring-2 ring-brand-500' : 'bg-gray-700 text-gray-400'">
                             <template x-if="idx < currentStep">
                                 <i data-lucide="check" class="w-4 h-4"></i>
@@ -18,7 +18,7 @@
                                 <span x-text="idx + 1"></span>
                             </template>
                         </div>
-                        <div x-show="idx < steps.length - 1" class="flex-1 h-0.5 mx-2 transition-all duration-300"
+                        <div x-show="idx < steps.length - 1" class="flex-1 h-0.5 mx-2 sg-interactive"
                              :class="idx < currentStep ? 'bg-brand-500' : 'bg-gray-700'"></div>
                     </div>
                 </template>

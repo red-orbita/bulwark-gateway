@@ -927,3 +927,73 @@ def test_isolated_modal_close_buttons_adopt_icon_button():
             )
 
 
+# ─── Motion consistency: no catch-all `transition-all` in templates ───────────
+
+# `transition-all` is a double footgun: it animates *every* property that ever
+# changes (including geometry → reflow, and any property added later) on
+# Tailwind's default curve instead of the design easing token. Every prior use
+# was replaced by one of two intent-revealing helpers — `.sg-interactive`
+# (paint-only hover/selection) or `.sg-meter-fill` (data-bound bar geometry on
+# the poll cadence). These guards keep the anti-pattern from creeping back.
+
+_CATCHALL_CLASS = re.compile(r"\btransition-all\b")
+_CATCHALL_STYLE = re.compile(r"transition:\s*all\b")
+
+
+def test_no_page_template_uses_catchall_transition():
+    """No admin page or the shell may use `transition-all` / `transition: all`.
+    Regression guard for the sweep that moved 21 uses onto explicit helpers."""
+    offenders: list[str] = []
+    for page in list(PAGES_DIR.glob("*.html")) + [BASE_HTML]:
+        src = page.read_text(encoding="utf-8")
+        for pat in (_CATCHALL_CLASS, _CATCHALL_STYLE):
+            for m in pat.finditer(src):
+                lineno = src.count("\n", 0, m.start()) + 1
+                offenders.append(f"{page.name}:{lineno}")
+    assert not offenders, (
+        "Catch-all transitions found (use .sg-interactive or .sg-meter-fill):\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_motion_helpers_are_token_driven(input_css):
+    """Both replacement helpers must exist, animate an EXPLICIT property list
+    (never `all`), and use the shared easing token — so motion stays uniform."""
+    for cls in ("sg-interactive", "sg-meter-fill"):
+        m = re.search(rf"\.{cls}\s*{{([^}}]*)}}", input_css)
+        assert m, f".{cls} must be defined in the design system"
+        body = m.group(1)
+        assert "transition-property:" in body, f".{cls} must list its properties"
+        assert "all" not in re.search(
+            r"transition-property:\s*([^;]+)", body
+        ).group(1), f".{cls} must not animate the catch-all `all`"
+        assert "var(--sg-ease)" in body, f".{cls} must use the --sg-ease token"
+
+
+def test_meter_fill_uses_dedicated_duration_token(input_css):
+    """The data-viz cadence is its own named token (defined in :root), distinct
+    from the 180ms pointer-feedback duration — not a magic number."""
+    assert re.search(r"--sg-dur-slow:\s*\d+", input_css), (
+        ":root must define the --sg-dur-slow data-viz duration token"
+    )
+    fill = re.search(r"\.sg-meter-fill\s*{([^}]*)}", input_css)
+    assert fill and "var(--sg-dur-slow)" in fill.group(1), (
+        ".sg-meter-fill must consume the --sg-dur-slow token"
+    )
+    props = re.search(r"transition-property:\s*([^;]+)", fill.group(1)).group(1)
+    assert "width" in props and "height" in props, (
+        ".sg-meter-fill must transition its data-bound geometry"
+    )
+
+
+def test_served_css_mirrors_motion_helpers(served_css):
+    """The helpers must ship in the SRI-guarded minified stylesheet, including
+    the new duration token — otherwise the templates reference dead classes."""
+    assert "--sg-dur-slow:" in served_css, "served CSS missing --sg-dur-slow token"
+    for cls in (".sg-interactive", ".sg-meter-fill"):
+        assert re.search(
+            re.escape(cls) + r"\{[^}]*transition-property[^}]*var\(--sg-ease\)",
+            served_css,
+        ), f"served tailwind.min.css missing {cls} — rebuild the CSS"
+
+

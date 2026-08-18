@@ -17,17 +17,17 @@
 
     <!-- Tabs -->
     <div class="flex items-center gap-1 p-1 rounded-lg" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
-        <button @click="activeTab = 'network'" class="px-4 py-2 rounded-md text-xs font-medium transition-all"
+        <button @click="activeTab = 'network'" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
                 :class="activeTab === 'network' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
             <i data-lucide="wifi" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
             Network Scan
         </button>
-        <button @click="activeTab = 'shadow'" class="px-4 py-2 rounded-md text-xs font-medium transition-all"
+        <button @click="activeTab = 'shadow'" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
                 :class="activeTab === 'shadow' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
             <i data-lucide="ghost" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
             Shadow AI
         </button>
-        <button @click="activeTab = 'mcp'" class="px-4 py-2 rounded-md text-xs font-medium transition-all"
+        <button @click="activeTab = 'mcp'" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
                 :class="activeTab === 'mcp' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
             <i data-lucide="gauge" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
             MCP Risk

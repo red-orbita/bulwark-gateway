@@ -17,6 +17,9 @@
     --sg-ease: cubic-bezier(0.16, 1, 0.3, 1);
     --sg-ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
     --sg-dur: 180ms;
+    /* Slower cadence for data-viz fills (meters/bars) that grow into place;
+       distinct from the snappy 180ms used for pointer feedback. */
+    --sg-dur-slow: 500ms;
     --sg-press: 0.98;
 
     /* === Semantic security palette ===
@@ -134,6 +137,31 @@
 .sg-icon-btn:active { transform: scale(var(--sg-press)); }
 .sg-icon-btn::after { content: ''; position: absolute; inset: -8px; }
 .sg-icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px #030712, 0 0 0 4px #06b6d4; }
+
+/* ── Motion helpers ───────────────────────────────────────────────────────
+   Two named replacements for the `transition-all` anti-pattern. `all` animates
+   every property that ever changes — including unrelated/future ones — on a
+   non-token curve, and silently opts geometry changes into animated reflow.
+   Both helpers below use an explicit property list + the shared easing token,
+   and both are neutralised by the global reduced-motion guard. */
+
+/* Interactive surface (tabs, selectable cards, step markers): transitions only
+   its themeable *paint* properties on hover/selection — no geometry, no reflow. */
+.sg-interactive {
+    transition-property: color, background-color, border-color, box-shadow, opacity;
+    transition-duration: var(--sg-dur);
+    transition-timing-function: var(--sg-ease);
+}
+
+/* Data-meter fill: its length is data-bound inline (width/height %). We animate
+   that geometry (plus threshold colour/glow) deliberately, but only on the
+   metrics-poll cadence — never on pointer interaction — so it never competes
+   with hover/scroll for a frame. Explicit list avoids animating anything else. */
+.sg-meter-fill {
+    transition-property: width, height, background-color, box-shadow;
+    transition-duration: var(--sg-dur-slow);
+    transition-timing-function: var(--sg-ease);
+}
 
 .sg-btn-primary {
     background: linear-gradient(135deg, #0891b2, #06b6d4);

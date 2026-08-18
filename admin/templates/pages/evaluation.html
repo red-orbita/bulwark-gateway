@@ -159,7 +159,7 @@
                                         <td>
                                             <div class="flex items-center gap-2">
                                                 <div class="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                                                    <div class="h-full rounded-full transition-all" :class="detectionRateColor(cat.rate).replace('text-', 'bg-')"
+                                                    <div class="h-full rounded-full sg-meter-fill" :class="detectionRateColor(cat.rate).replace('text-', 'bg-')"
                                                          :style="'width:' + (cat.rate * 100) + '%'"></div>
                                                 </div>
                                                 <span class="text-xs font-mono" :class="detectionRateColor(cat.rate)"

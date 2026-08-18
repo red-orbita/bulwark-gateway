@@ -220,7 +220,7 @@
                 <template x-for="role in roles" :key="role.id">
                     <div class="relative group/role">
                         <button @click="selectedRole = role.id"
-                            class="w-full text-left p-4 rounded-lg border transition-all"
+                            class="w-full text-left p-4 rounded-lg border sg-interactive"
                             :class="selectedRole === role.id
                                 ? 'bg-gray-800 border-cyan-500/70 shadow-lg shadow-cyan-900/10'
                                 : 'bg-gray-800/40 border-gray-700 hover:border-gray-500 hover:bg-gray-800/70'">
@@ -240,7 +240,7 @@
                         </button>
                         <!-- Delete button for custom roles -->
                         <button x-show="!role.builtin" @click.stop="deleteRole(role)"
-                            class="absolute top-2 right-2 p-1 rounded opacity-0 group-hover/role:opacity-100 hover:bg-red-800/50 text-gray-500 hover:text-red-400 transition-all"
+                            class="absolute top-2 right-2 p-1 rounded opacity-0 group-hover/role:opacity-100 hover:bg-red-800/50 text-gray-500 hover:text-red-400 sg-interactive"
                             title="Delete role">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                         </button>
