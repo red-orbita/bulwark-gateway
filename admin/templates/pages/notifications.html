@@ -287,7 +287,7 @@
     </template>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 function notificationManager() {
     return {
         channels: [],

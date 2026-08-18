@@ -515,7 +515,7 @@
 </div>
 
 <script src="/static/js/vendor/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
-<script>
+<script nonce="{{ csp_nonce() }}">
 function accessControlManager() {
     return {
         activeTab: 'users',

@@ -165,3 +165,100 @@ def test_qrcode_referenced_with_integrity():
         r"qrcode\.min\.js[^>]*integrity=['\"](sha384-[^'\"]+)['\"]", rbac
     )
     assert m, "qrcode script tag must carry an SRI integrity attribute"
+
+
+# ── H-1: nonce-based script-src CSP hardening ────────────────────────────────
+
+_SCRIPT_OPEN_RE = re.compile(r"<script\b[^>]*>", re.IGNORECASE)
+
+
+def _script_src_directive(csp: str) -> str:
+    """Extract the script-src directive body from a CSP header string."""
+    for part in csp.split(";"):
+        part = part.strip()
+        if part.startswith("script-src"):
+            return part
+    return ""
+
+
+def _boot_admin_app():
+    import os
+
+    os.environ.setdefault("ADMIN_DEBUG", "true")
+    os.environ.setdefault("ADMIN_JWT_SECRET", "airgap-test-secret-32-characters-minimum!!")
+    os.environ.setdefault("BULWARK_JWT_SECRET", "airgap-test-secret-32-characters-minimum!!")
+    os.environ.setdefault("BULWARK_KEY_ENCRYPTION_KEY", "airgap-test-encryption-32-chars-minimum!")
+
+    from fastapi.testclient import TestClient
+
+    from admin.main import app
+
+    return TestClient(app)
+
+
+def test_every_inline_script_block_carries_a_nonce():
+    """A bare inline <script> (no src) that lacks a nonce would be BLOCKED once
+    'unsafe-inline' is dropped from script-src — the page's Alpine component
+    function would never register and the screen would break. Lock every inline
+    block to the per-request nonce so this can never regress silently."""
+    offenders: list[str] = []
+    for path in _template_files():
+        text = path.read_text(encoding="utf-8")
+        for tag in _SCRIPT_OPEN_RE.findall(text):
+            if "src=" in tag:
+                continue  # external/self-hosted script, covered by 'self'
+            if 'nonce="{{ csp_nonce() }}"' not in tag:
+                offenders.append(f"{path.relative_to(_ROOT)}: {tag}")
+    assert not offenders, (
+        "inline <script> blocks missing the CSP nonce (would be blocked by CSP):\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_csp_script_src_is_nonce_based_and_drops_unsafe_inline():
+    """script-src must authenticate inline scripts via a per-request nonce and
+    must NOT contain 'unsafe-inline' (which would defeat the nonce). 'unsafe-eval'
+    is the documented, honest residual required by the Alpine.js runtime."""
+    with _boot_admin_app() as client:
+        resp = client.get("/login")
+    csp = resp.headers.get("Content-Security-Policy", "")
+    assert csp, "no CSP header served"
+
+    script_src = _script_src_directive(csp)
+    assert script_src, f"no script-src directive in CSP: {csp}"
+    assert "'nonce-" in script_src, f"script-src is not nonce-based: {script_src}"
+    assert "'unsafe-inline'" not in script_src, (
+        f"script-src still allows 'unsafe-inline' — nonce is defeated: {script_src}"
+    )
+    # unsafe-eval is intentionally retained for Alpine (documented in main.py).
+    assert "'unsafe-eval'" in script_src
+
+
+def test_csp_nonce_rotates_per_request():
+    """A static/reused nonce is worthless. Two requests must mint distinct
+    nonce values."""
+    with _boot_admin_app() as client:
+        n1 = _script_src_directive(client.get("/login").headers.get("Content-Security-Policy", ""))
+        n2 = _script_src_directive(client.get("/login").headers.get("Content-Security-Policy", ""))
+    m1 = re.search(r"'nonce-([^']+)'", n1)
+    m2 = re.search(r"'nonce-([^']+)'", n2)
+    assert m1 and m2, "nonce missing from script-src"
+    assert m1.group(1) != m2.group(1), "CSP nonce did not rotate between requests"
+
+
+def test_rendered_inline_script_nonce_matches_header():
+    """End-to-end wiring: the nonce emitted by the Jinja csp_nonce() global into
+    the rendered HTML must equal the nonce advertised in the CSP header, or the
+    browser rejects the script."""
+    with _boot_admin_app() as client:
+        resp = client.get("/login")
+    csp = resp.headers.get("Content-Security-Policy", "")
+    header_m = re.search(r"'nonce-([^']+)'", _script_src_directive(csp))
+    assert header_m, "no nonce in CSP header"
+    header_nonce = header_m.group(1)
+
+    body = resp.text
+    # The login page ships an inline <script>; it must carry the header's nonce.
+    assert f'<script nonce="{header_nonce}">' in body, (
+        "rendered inline <script> nonce does not match the CSP header nonce"
+    )

@@ -15,6 +15,7 @@ Features:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import secrets
@@ -39,6 +40,15 @@ from .routes import (
 )
 
 logger = logging.getLogger("bulwark.admin")
+
+# H-1: per-request CSP nonce. Generated fresh in the security-headers middleware
+# and read back both by the response header and by the Jinja `csp_nonce()` global
+# so every inline <script> block can authenticate itself. Because a nonce is
+# present, browsers ignore 'unsafe-inline' for script-src, so injected inline
+# scripts (reflected/stored XSS) can no longer execute.
+_csp_nonce_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "csp_nonce", default=""
+)
 
 
 @asynccontextmanager
@@ -122,7 +132,15 @@ if _cors_origins:
 # Security headers middleware
 @app.middleware("http")
 async def security_headers(request, call_next):
-    response = await call_next(request)
+    # H-1: mint a fresh CSP nonce for this request BEFORE rendering so the
+    # Jinja `csp_nonce()` global (see below) emits the matching value on every
+    # inline <script>. The same nonce is echoed in the response header.
+    nonce = secrets.token_urlsafe(16)
+    token = _csp_nonce_var.set(nonce)
+    try:
+        response = await call_next(request)
+    finally:
+        _csp_nonce_var.reset(token)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     # H-4: X-XSS-Protection is deprecated; its legacy auditor introduced
@@ -132,16 +150,20 @@ async def security_headers(request, call_next):
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    # H-1: 'unsafe-inline'/'unsafe-eval' remain REQUIRED (Alpine.js evaluates
-    # expressions via new Function() and the UI uses inline <script>/style
-    # attributes). All third-party origins have been eliminated: qrcodejs and
-    # the Inter/JetBrains Mono fonts are now vendored under /static, so the
-    # policy is fully self-contained and air-gap safe (no CDN, no Google Fonts).
-    # Follow-up hardening: switch to the Alpine CSP build + per-request nonces
-    # to drop the remaining 'unsafe-*'.
+    # H-1: script-src is now nonce-based — 'unsafe-inline' is GONE, so an
+    # attacker who injects <script> cannot execute it (the nonce is unguessable
+    # and rotates per request). Two 'unsafe-*' remain, honestly scoped:
+    #   • script-src 'unsafe-eval' — Alpine.js (non-CSP build) evaluates every
+    #     x-data/@click/:class/x-show expression via new Function(). Removing it
+    #     requires the Alpine CSP build + rewriting all template expressions.
+    #   • style-src 'unsafe-inline' — the UI carries static style="" attributes,
+    #     which CSP nonces cannot cover (nonces apply to <style> elements, not
+    #     attributes). Removing it requires migrating those to utility classes.
+    # All third-party origins are already eliminated (qrcodejs + fonts vendored
+    # under /static), so the policy is fully self-contained and air-gap safe.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        f"script-src 'self' 'nonce-{nonce}' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; "
         "font-src 'self'; "
         "img-src 'self' data:; "
@@ -274,6 +296,11 @@ async def csrf_protection(request: Request, call_next):
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+# H-1: expose the per-request CSP nonce to every template. Inline <script>
+# blocks emit nonce="{{ csp_nonce() }}" so they authenticate against the
+# script-src nonce set by the security-headers middleware.
+templates.env.globals["csp_nonce"] = lambda: _csp_nonce_var.get("")
 
 # Include routers
 app.include_router(auth.router, prefix="/admin/auth", tags=["auth"])

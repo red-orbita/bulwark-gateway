@@ -34,7 +34,7 @@
       so the token is attached automatically for same-origin mutations.
       Loaded synchronously (no defer) so it runs before Alpine/page scripts.
     -->
-    <script>
+    <script nonce="{{ csp_nonce() }}">
     (function () {
         function getCsrfToken() {
             var m = document.cookie.match(/(?:^|;)\s*_csrf_token\s*=\s*([^;]+)/);
@@ -530,7 +530,7 @@
 
     <!-- Component Styles now in compiled tailwind.min.css -->
 
-    <script>
+    <script nonce="{{ csp_nonce() }}">
         // === App Shell ===
         function appShell() {
             return {

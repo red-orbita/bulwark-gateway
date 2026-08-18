@@ -175,7 +175,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 function rateLimitsPage() {
     return {
         globalConfig: { rate_limit_enabled: true, rate_limit_rpm: 60, rate_limit_rpm_burst: 10 },

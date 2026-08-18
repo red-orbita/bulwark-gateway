@@ -255,13 +255,28 @@ class TestSecurityHeaders:
         assert "frame-ancestors 'none'" in csp
 
     async def test_csp_still_allows_required_ui_sources(self, client):
-        # Alpine.js needs 'unsafe-eval'; inline scripts/styles need 'unsafe-inline';
-        # MFA QR codes load qrcodejs from jsdelivr; fonts load from Google.
-        # These MUST remain until those deps are vendored (documented follow-up).
+        # H-1: script-src is nonce-based (inline <script> blocks authenticate via
+        # a per-request nonce), so 'unsafe-inline' is GONE from script-src. Two
+        # 'unsafe-*' remain, honestly scoped and documented in admin/main.py:
+        #   • script-src 'unsafe-eval' — Alpine.js evaluates expressions via
+        #     new Function(); removal needs the Alpine CSP build.
+        #   • style-src 'unsafe-inline' — static style="" attributes; CSP nonces
+        #     cannot cover attributes, so removal needs a class migration.
+        # All third-party origins are vendored (no CDN, air-gap safe).
         resp = await client.get("/admin/health")
         csp = resp.headers["Content-Security-Policy"]
-        assert "'unsafe-eval'" in csp
-        assert "https://cdn.jsdelivr.net" in csp
+        script_src = next(
+            (p.strip() for p in csp.split(";") if p.strip().startswith("script-src")),
+            "",
+        )
+        assert "'nonce-" in script_src, f"script-src is not nonce-based: {script_src}"
+        assert "'unsafe-inline'" not in script_src, (
+            f"script-src still allows 'unsafe-inline': {script_src}"
+        )
+        assert "'unsafe-eval'" in script_src
+        assert "style-src 'self' 'unsafe-inline'" in csp
+        # No remote origin may appear (air-gap posture).
+        assert "https://" not in csp
 
 
 class TestAdminJwtSecretValidation:

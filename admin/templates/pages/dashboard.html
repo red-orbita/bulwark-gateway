@@ -421,7 +421,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 function dashboardPage() {
     return {
         sparklines: { latency: Array(20).fill(0), rps: Array(20).fill(0), blocked: Array(20).fill(0), detection: Array(20).fill(0) },

@@ -300,7 +300,7 @@
         </div>
     </div>
 
-    <script>
+    <script nonce="{{ csp_nonce() }}">
     // Auto-redirect if user already has a valid session
     (function() {
         const token = localStorage.getItem('bulwark_token');
