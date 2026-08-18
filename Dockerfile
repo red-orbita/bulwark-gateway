@@ -34,6 +34,18 @@ LABEL org.opencontainers.image.title="bulwark-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"
 LABEL org.opencontainers.image.version="0.4.3"
 
+# SECURITY: patch fixable OS CVEs not yet baked into the pinned base digest.
+# util-linux family (CVE-2026-53615, integer overflow) fixed in
+# 2.41.5-0+deb13u1; liblzma5 (CVE-2026-34743) fixed in 5.8.1-1+deb13u1.
+# Runtime stage only — the builder layer is discarded, and the final image is
+# what SCA/Trivy scans. Non-root + read-only rootfs still hold at runtime
+# (apt cannot write once the container starts).
+RUN apt-get update && \
+    apt-get install -y --only-upgrade --no-install-recommends \
+      util-linux mount bsdutils login libblkid1 libmount1 \
+      libsmartcols1 libuuid1 liblastlog2-2 liblzma5 && \
+    rm -rf /var/lib/apt/lists/*
+
 # Security: non-root user
 RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark
 
@@ -51,7 +63,9 @@ COPY docker/entrypoint-proxy.sh /app/docker/entrypoint-proxy.sh
 RUN mkdir -p data reports models shared/enrichment shared/siem && \
     chmod 0555 /app/docker/entrypoint-proxy.sh && \
     chown -R bulwark:bulwark /app && \
-    rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
+    rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 && \
+    rm -rf /usr/local/lib/python3.12/site-packages/pip \
+           /usr/local/lib/python3.12/site-packages/pip-*.dist-info
 
 USER bulwark
 

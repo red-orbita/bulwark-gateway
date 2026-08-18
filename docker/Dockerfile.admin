@@ -44,9 +44,16 @@ LABEL org.opencontainers.image.version="0.4.3"
 # no dev tools) to reduce attack surface.
 # Debian bumped the SONAME package name libsqlcipher0 -> libsqlcipher1, so try
 # the newer name first and fall back for older bases (keeps the build portable).
+# SECURITY: also upgrade the util-linux family (CVE-2026-53615) to
+# 2.41.5-0+deb13u1 and liblzma5 (CVE-2026-34743) to 5.8.1-1+deb13u1 —
+# fixable OS CVEs not yet baked into the pinned base digest. Folded into this
+# single apt layer to avoid an extra image layer.
 RUN apt-get update && \
     (apt-get install -y --no-install-recommends libsqlcipher1 || \
      apt-get install -y --no-install-recommends libsqlcipher0) && \
+    apt-get install -y --only-upgrade --no-install-recommends \
+      util-linux mount bsdutils login libblkid1 libmount1 \
+      libsmartcols1 libuuid1 liblastlog2-2 liblzma5 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark
@@ -65,7 +72,9 @@ COPY config/ config/
 # Remove pip to reduce post-exploitation surface
 RUN mkdir -p data reports config/policies/.backup && \
     chown -R bulwark:bulwark /app && \
-    rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12
+    rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 && \
+    rm -rf /usr/local/lib/python3.12/site-packages/pip \
+           /usr/local/lib/python3.12/site-packages/pip-*.dist-info
 
 USER bulwark
 
