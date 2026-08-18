@@ -527,6 +527,9 @@ monitoring:
 secrets:
   # -- JWT secret for proxy authentication
   jwtSecret: ""
+  # -- JWT secret for the admin API. Auto-generated if empty; kept distinct from
+  # jwtSecret so a leaked proxy token cannot be replayed against the admin API.
+  adminJwtSecret: ""
   # -- Admin dashboard password
   adminPassword: ""
   # -- Security role password
