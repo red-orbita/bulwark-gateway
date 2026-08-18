@@ -62,6 +62,7 @@ class ScannerStatusResponse(BaseModel):
     cache_size: int
     skillspector_installed: bool = False
     skillspector_version: str = "unavailable"
+    skillspector_patterns: int = 0
     bulwark_rules_count: int = 0
     mcp_security_patterns: int = 0
     total_patterns: int = 0

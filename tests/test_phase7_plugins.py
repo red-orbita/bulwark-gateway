@@ -519,3 +519,25 @@ instructions: |
         assert result.verdict == ScanVerdict.BLOCK
         rule_ids = {f.rule_id for f in result.findings}
         assert "BWK-DF-003" in rule_ids
+
+    def test_status_exposes_skillspector_pattern_count(self):
+        """The SkillSpector pattern count must be a real status field, not a
+        magic number hard-coded in the UI, and total_patterns must be the honest
+        sum of its parts."""
+        from admin.services.skill_scanner import get_skill_scanner
+
+        status = get_skill_scanner().status()
+
+        assert "skillspector_patterns" in status, (
+            "status() must expose skillspector_patterns for the UI to bind to"
+        )
+        # When SkillSpector is not installed the contributed count is zero.
+        if not status["skillspector_installed"]:
+            assert status["skillspector_patterns"] == 0
+        # total_patterns is the sum of the three engine contributions — no drift.
+        assert status["total_patterns"] == (
+            status["skillspector_patterns"]
+            + status["bulwark_rules_count"]
+            + status["mcp_security_patterns"]
+        )
+

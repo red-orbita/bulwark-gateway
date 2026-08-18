@@ -79,6 +79,11 @@ SKILLSPECTOR_TIMEOUT = int(os.getenv("BULWARK_SKILLSPECTOR_TIMEOUT", "60"))
 
 _VERSION = "2.1.0-bulwark"
 
+# Number of detection patterns contributed by the upstream NVIDIA SkillSpector
+# engine (Stage 1), counted only when the package is importable. Exposed via the
+# status API so the UI never hard-codes this figure.
+_SKILLSPECTOR_PATTERN_COUNT = 64
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Data models
@@ -549,6 +554,9 @@ class SkillScanner:
 
     def status(self) -> dict:
         mcp_patterns = MCP_POISONING_PATTERNS + MCP_PRIVILEGE_PATTERNS
+        skillspector_patterns = (
+            _SKILLSPECTOR_PATTERN_COUNT if _SKILLSPECTOR_AVAILABLE else 0
+        )
         return {
             "enabled": SKILLSPECTOR_ENABLED,
             "available": self.available,
@@ -559,10 +567,11 @@ class SkillScanner:
             "cache_size": len(self._cache),
             "skillspector_installed": _SKILLSPECTOR_AVAILABLE,
             "skillspector_version": _SKILLSPECTOR_VERSION,
+            "skillspector_patterns": skillspector_patterns,
             "bulwark_rules_count": len(_BULWARK_RULES),
             "mcp_security_patterns": mcp_patterns,
             "total_patterns": (
-                (64 if _SKILLSPECTOR_AVAILABLE else 0)
+                skillspector_patterns
                 + len(_BULWARK_RULES)
                 + mcp_patterns
             ),

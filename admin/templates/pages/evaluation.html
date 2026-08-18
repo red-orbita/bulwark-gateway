@@ -17,16 +17,16 @@
 
     <!-- Tabs -->
     <div class="border-b border-gray-700">
-        <nav class="flex gap-4 -mb-px">
-            <button @click="activeTab = 'redteam'" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
+        <nav class="flex gap-4 -mb-px" role="tablist" aria-label="Evaluation modes">
+            <button @click="activeTab = 'redteam'" role="tab" :aria-selected="activeTab === 'redteam'" :tabindex="activeTab === 'redteam' ? 0 : -1" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
                     :class="activeTab === 'redteam' ? 'text-cyan-400 border-cyan-400' : 'text-gray-400 border-transparent hover:text-gray-200'">
                 <i data-lucide="swords" class="w-4 h-4 inline-block mr-1"></i>Red Team
             </button>
-            <button @click="activeTab = 'qa'" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
+            <button @click="activeTab = 'qa'" role="tab" :aria-selected="activeTab === 'qa'" :tabindex="activeTab === 'qa' ? 0 : -1" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
                     :class="activeTab === 'qa' ? 'text-emerald-400 border-emerald-400' : 'text-gray-400 border-transparent hover:text-gray-200'">
                 <i data-lucide="shield-check" class="w-4 h-4 inline-block mr-1"></i>QA Validation
             </button>
-            <button @click="activeTab = 'benchmark'" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
+            <button @click="activeTab = 'benchmark'" role="tab" :aria-selected="activeTab === 'benchmark'" :tabindex="activeTab === 'benchmark' ? 0 : -1" class="px-3 py-2 text-sm font-medium transition-colors border-b-2"
                     :class="activeTab === 'benchmark' ? 'text-blue-400 border-blue-400' : 'text-gray-400 border-transparent hover:text-gray-200'">
                 <i data-lucide="gauge" class="w-4 h-4 inline-block mr-1"></i>Benchmark
             </button>
@@ -34,7 +34,7 @@
     </div>
 
     <!-- ========== RED TEAM TAB ========== -->
-    <div x-show="activeTab === 'redteam'" class="space-y-6">
+    <div x-show="activeTab === 'redteam'" role="tabpanel" class="space-y-6">
         <!-- Configuration -->
         <div class="sg-card">
             <h2 class="text-sm font-semibold text-white mb-4">Evaluation Configuration</h2>
@@ -276,7 +276,7 @@
     </div>
 
     <!-- ========== QA VALIDATION TAB ========== -->
-    <div x-show="activeTab === 'qa'" class="space-y-6">
+    <div x-show="activeTab === 'qa'" role="tabpanel" class="space-y-6">
         <div class="sg-card">
             <div class="flex items-center justify-between mb-4">
                 <div>
@@ -334,7 +334,7 @@
     </div>
 
     <!-- ========== BENCHMARK TAB ========== -->
-    <div x-show="activeTab === 'benchmark'" class="space-y-6">
+    <div x-show="activeTab === 'benchmark'" role="tabpanel" class="space-y-6">
         <div class="sg-card">
             <div class="flex items-center justify-between mb-4">
                 <div>

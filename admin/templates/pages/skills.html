@@ -48,7 +48,7 @@
                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono"
                       :class="status.skillspector_installed ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 'bg-gray-800 text-gray-500 border border-gray-700'">
                     <span class="w-1.5 h-1.5 rounded-full" :class="status.skillspector_installed ? 'bg-purple-400' : 'bg-gray-600'"></span>
-                    SkillSpector <span x-text="status.skillspector_installed ? '(64)' : '(off)'"></span>
+                    SkillSpector <span x-text="status.skillspector_installed ? '(' + (status.skillspector_patterns || 0) + ')' : '(off)'"></span>
                 </span>
                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
                     <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>

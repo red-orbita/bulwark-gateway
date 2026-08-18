@@ -16,18 +16,18 @@
     </div>
 
     <!-- Tabs -->
-    <div class="flex items-center gap-1 p-1 rounded-lg" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
-        <button @click="activeTab = 'network'" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
+    <div class="flex items-center gap-1 p-1 rounded-lg" role="tablist" aria-label="Discovery modules" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <button @click="activeTab = 'network'" role="tab" :aria-selected="activeTab === 'network'" :tabindex="activeTab === 'network' ? 0 : -1" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
                 :class="activeTab === 'network' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
             <i data-lucide="wifi" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
             Network Scan
         </button>
-        <button @click="activeTab = 'shadow'" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
+        <button @click="activeTab = 'shadow'" role="tab" :aria-selected="activeTab === 'shadow'" :tabindex="activeTab === 'shadow' ? 0 : -1" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
                 :class="activeTab === 'shadow' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
             <i data-lucide="ghost" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
             Shadow AI
         </button>
-        <button @click="activeTab = 'mcp'" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
+        <button @click="activeTab = 'mcp'" role="tab" :aria-selected="activeTab === 'mcp'" :tabindex="activeTab === 'mcp' ? 0 : -1" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive"
                 :class="activeTab === 'mcp' ? 'bg-cyan-500/10 text-cyan-300 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
             <i data-lucide="gauge" class="w-3.5 h-3.5 inline-block mr-1.5"></i>
             MCP Risk
@@ -35,7 +35,7 @@
     </div>
 
     <!-- Tab 1: Network Scan -->
-    <div x-show="activeTab === 'network'" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
+    <div x-show="activeTab === 'network'" role="tabpanel" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
         <div class="sg-card">
             <h3 class="text-sm font-semibold text-white mb-3">Network Agent Scan</h3>
             <p class="text-xs text-gray-400 mb-4">Discover AI agents and LLM endpoints on your network</p>
@@ -122,7 +122,7 @@
     </div>
 
     <!-- Tab 2: Shadow AI -->
-    <div x-show="activeTab === 'shadow'" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
+    <div x-show="activeTab === 'shadow'" role="tabpanel" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
         <div class="sg-card">
             <div class="flex items-center justify-between mb-3">
                 <h3 class="text-sm font-semibold text-white">Shadow AI Detection</h3>
@@ -198,7 +198,7 @@
         </div>
     </div>
     <!-- Tab 3: MCP Risk -->
-    <div x-show="activeTab === 'mcp'" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
+    <div x-show="activeTab === 'mcp'" role="tabpanel" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
         <div class="sg-card">
             <h3 class="text-sm font-semibold text-white mb-3">MCP Tool Risk Assessment</h3>
             <p class="text-xs text-gray-400 mb-4">Evaluate the security risk of an MCP tool before deployment</p>

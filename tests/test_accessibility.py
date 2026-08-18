@@ -1439,3 +1439,58 @@ def test_mount_fetch_pages_keep_a_single_init_path():
     )
 
 
+# ─── Tab widgets expose ARIA roles (Fase 3, LOW) ─────────────────────────────
+#
+# The discovery and evaluation pages implement tab strips with plain buttons.
+# Without role=tablist/tab/tabpanel + aria-selected a screen reader announces a
+# row of unrelated buttons and never conveys which view is active (WCAG 4.1.2).
+
+@pytest.mark.parametrize("page,tab_ids", [
+    ("discovery.html", ["network", "shadow", "mcp"]),
+    ("evaluation.html", ["redteam", "qa", "benchmark"]),
+])
+def test_tab_widgets_expose_aria_roles(page, tab_ids):
+    src = (PAGES_DIR / page).read_text(encoding="utf-8")
+    assert 'role="tablist"' in src, f"{page} tab strip must be a role=tablist"
+    # Each tab button must carry role=tab and a data-bound aria-selected.
+    for tid in tab_ids:
+        btn = re.search(
+            rf"<button[^>]*activeTab\s*=\s*'{tid}'[^>]*>", src
+        )
+        assert btn, f"{page}: tab button for '{tid}' not found"
+        tag = btn.group(0)
+        assert 'role="tab"' in tag, f"{page}: '{tid}' tab missing role=tab"
+        assert ":aria-selected=" in tag, (
+            f"{page}: '{tid}' tab missing :aria-selected binding"
+        )
+    # Each panel must be a role=tabpanel.
+    for tid in tab_ids:
+        panel = re.search(
+            rf'x-show="activeTab === \'{tid}\'"[^>]*role="tabpanel"'
+            rf'|role="tabpanel"[^>]*x-show="activeTab === \'{tid}\'"',
+            src,
+        )
+        assert panel, f"{page}: panel for '{tid}' missing role=tabpanel"
+
+
+def test_skillspector_pattern_count_is_data_driven():
+    """The SkillSpector badge must bind to a status field, never a hard-coded
+    literal that silently lies when the engine's pattern set changes."""
+    src = (PAGES_DIR / "skills.html").read_text(encoding="utf-8")
+    assert "status.skillspector_patterns" in src, (
+        "SkillSpector badge must bind status.skillspector_patterns"
+    )
+    assert "'(64)'" not in src and '"(64)"' not in src, (
+        "SkillSpector pattern count must not be hard-coded as (64)"
+    )
+
+
+def test_rbac_page_title_matches_the_standard_heading():
+    """Every page titles itself with a single <h1> in the shared style; rbac
+    previously used an <h2>, breaking heading order and visual consistency."""
+    src = (PAGES_DIR / "rbac.html").read_text(encoding="utf-8")
+    assert '<h1 class="text-xl font-semibold text-white">Access Control</h1>' in src, (
+        "rbac page title must be an <h1> matching the shared header style"
+    )
+
+
