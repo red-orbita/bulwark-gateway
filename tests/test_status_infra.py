@@ -214,3 +214,53 @@ class TestInfraRBAC:
         # Status/infra is a read-only view — every role may read it.
         for role in (UserRole.ADMIN, UserRole.SECURITY, UserRole.AUDITOR, UserRole.VIEWER):
             assert "admin:read" in ROLE_PERMISSIONS[role]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# _extract_bare_key / _load_proxy_api_key
+# Regression: the admin health probe must send the *bare* key the proxy
+# accepts, not the full "key:tenant" binding from the shared api-keys secret.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestExtractBareKey:
+    def test_strips_tenant_binding(self):
+        from admin.routes.health import _extract_bare_key
+
+        key = "b5c9394614651c2692cbe37fae5c7000fa828c68d261d2a3"
+        assert _extract_bare_key(f"{key}:default-corp") == key
+
+    def test_plain_key_without_binding_is_unchanged(self):
+        from admin.routes.health import _extract_bare_key
+
+        key = "b5c9394614651c2692cbe37fae5c7000fa828c68d261d2a3"
+        assert _extract_bare_key(key) == key
+
+    def test_comma_separated_uses_first_entry_bare(self):
+        from admin.routes.health import _extract_bare_key
+
+        raw = "key1aaaaaaaaaaaaaaaa:tenant-a,key2bbbbbbbbbbbbbbbb:tenant-b"
+        assert _extract_bare_key(raw) == "key1aaaaaaaaaaaaaaaa"
+
+    def test_negative_full_binding_would_be_rejected(self):
+        # The whole "key:tenant" string must NOT be what we send — it hashes
+        # differently on the proxy and yields 401. Guard that we never return it.
+        from admin.routes.health import _extract_bare_key
+
+        full = "abc123def456ghi789jk:default-corp"
+        assert _extract_bare_key(full) != full
+        assert ":default-corp" not in _extract_bare_key(full)
+
+    def test_empty_input_is_safe(self):
+        from admin.routes.health import _extract_bare_key
+
+        assert _extract_bare_key("") == ""
+
+    def test_load_reads_and_strips_from_file(self, tmp_path, monkeypatch):
+        from admin.routes import health
+
+        key = "0123456789abcdef0123456789abcdef01234567"
+        key_file = tmp_path / "api-keys"
+        key_file.write_text(f"# comment line\n{key}:default-corp\n")
+        monkeypatch.setenv("BULWARK_PROXY_API_KEY_FILE", str(key_file))
+        assert health._load_proxy_api_key() == key

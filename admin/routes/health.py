@@ -42,8 +42,25 @@ PROXY_URL = _raw_proxy_url
 # SSE interval — how often to push updates (seconds)
 SSE_INTERVAL = float(os.getenv("BULWARK_SSE_INTERVAL", "5"))
 
+def _extract_bare_key(raw: str) -> str:
+    """Return the bare API key the proxy will accept.
+
+    The shared ``api-keys`` secret stores entries in the proxy's
+    ``BULWARK_API_KEYS`` format — ``key:tenant`` (optionally comma-separated:
+    ``key1:tenant1,key2:tenant2``). The proxy binds ``sha256(key)`` where
+    ``key = entry[:entry.rfind(":")]`` and expects the client to send only that
+    bare ``key`` as the bearer token. Sending the full ``key:tenant`` string
+    hashes to a different value and is rejected with 401. Mirror the proxy's
+    parsing here so the admin health probe authenticates successfully.
+    """
+    entry = raw.split(",", 1)[0].strip()
+    if ":" in entry:
+        entry = entry[: entry.rfind(":")]
+    return entry
+
+
 def _load_proxy_api_key() -> str:
-    """Load proxy API key from file or env."""
+    """Load proxy API key from file or env (bare key, proxy-compatible)."""
     key_file = os.getenv("BULWARK_PROXY_API_KEY_FILE", "")
     if key_file and os.path.isfile(key_file):
         with open(key_file) as f:
@@ -51,8 +68,8 @@ def _load_proxy_api_key() -> str:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
-                    return line
-    return os.getenv("BULWARK_PROXY_API_KEY", "")
+                    return _extract_bare_key(line)
+    return _extract_bare_key(os.getenv("BULWARK_PROXY_API_KEY", ""))
 
 
 @router.get("")
