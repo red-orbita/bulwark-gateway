@@ -1233,3 +1233,67 @@ def test_base_html_inline_transitions_are_tokenized(base_src):
         assert needle in base_src, f"shell transition lost its tokens: {needle!r}"
 
 
+# ─── Functional integrity — no dead/deceptive controls (Fase 3) ──────────────
+#
+# A control that *looks* interactive but does nothing is a deceptive UI tell the
+# product forbids. These guards pin the two functional defects fixed in Fase 3.
+
+EVAL_HTML = PAGES_DIR / "evaluation.html"
+
+
+def test_notification_bell_is_wired_to_a_handler(base_src):
+    """The top-bar notification bell must invoke a real handler (not be a dead
+    button). Previously it had an aria-label but no @click and a badge that was
+    permanently `hidden` with no data source."""
+    # The button must carry a click handler.
+    btn = re.search(r'<button[^>]*id="notification-btn"[^>]*>', base_src)
+    assert btn, "notification-btn button missing"
+    assert "@click" in btn.group(0), (
+        "notification bell must have an @click handler — it was a dead control"
+    )
+    # The appShell component must define the wiring.
+    for token in ("toggleNotifications", "loadNotifications", "notifBlocks"):
+        assert token in base_src, f"notification wiring missing: {token}"
+
+
+def test_notification_badge_is_data_driven_not_permanently_hidden(base_src):
+    """The red badge must be bound to real data (recent-blocks count), not a
+    static `class=\"hidden\"` that nothing ever toggles."""
+    assert 'id="notification-badge"' in base_src, "notification-badge missing"
+    assert 'x-show="notifBlocks.length > 0"' in base_src, (
+        "badge visibility must be driven by notifBlocks length"
+    )
+    # It must no longer ship the dead permanent `hidden` utility class.
+    assert "hidden absolute top-1.5" not in base_src, (
+        "badge must not be permanently hidden with no data source"
+    )
+
+
+def test_notifications_use_real_recent_blocks_endpoint(base_src):
+    """The dropdown must pull from the real Redis-backed endpoint, not fabricate
+    entries."""
+    assert "/admin/health/recent-blocks" in base_src, (
+        "notifications must fetch real data from /admin/health/recent-blocks"
+    )
+
+
+def test_evaluation_log_filter_actually_filters():
+    """The Execution-Log filter must resolve `logFilter` from the scope that owns
+    it. `filteredLog` previously read `this.logFilter` from the OUTER component
+    while `logFilter` lived in a NESTED x-data, so it was always undefined and
+    the Blocked/Missed buttons never filtered. The method must take the filter as
+    an argument and the template must pass the in-scope `logFilter`."""
+    src = EVAL_HTML.read_text(encoding="utf-8")
+    assert "filteredLog(logFilter)" in src, (
+        "template must pass the in-scope logFilter into filteredLog()"
+    )
+    # Negative: the method must not read logFilter off the wrong (outer) `this`.
+    assert "this.logFilter" not in src, (
+        "filteredLog must not read this.logFilter (wrong scope) — take a param"
+    )
+    # The parameter-driven branches must exist.
+    assert re.search(r"filteredLog\(\s*filter\s*\)", src), (
+        "filteredLog must accept a `filter` parameter"
+    )
+
+

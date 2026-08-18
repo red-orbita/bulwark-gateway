@@ -196,7 +196,7 @@
                     </div>
 
                     <div x-show="showLog" x-transition class="space-y-1 max-h-[600px] overflow-y-auto">
-                        <template x-for="(entry, idx) in filteredLog()" :key="idx">
+                        <template x-for="(entry, idx) in filteredLog(logFilter)" :key="idx">
                             <div class="border border-gray-800 rounded-lg overflow-hidden">
                                 <!-- Row header (clickable) -->
                                 <div @click="expandedRow = expandedRow === idx ? null : idx"
@@ -530,11 +530,11 @@ function evaluationPage() {
             return 'text-red-400';
         },
 
-        filteredLog() {
+        filteredLog(filter) {
             const log = this.report?.attack_log || [];
-            if (this.logFilter === 'all') return log;
-            if (this.logFilter === 'blocked') return log.filter(e => e.detected);
-            if (this.logFilter === 'missed') return log.filter(e => !e.detected);
+            if (!filter || filter === 'all') return log;
+            if (filter === 'blocked') return log.filter(e => e.detected);
+            if (filter === 'missed') return log.filter(e => !e.detected);
             return log;
         },
     };
