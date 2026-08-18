@@ -62,7 +62,7 @@ Proxied chat completion request. Applies input guardrails, tool policy, and outp
 Basic health check (unauthenticated).
 
 ```json
-{"status": "healthy", "version": "0.2.0"}
+{"status": "ok", "service": "bulwark-gateway"}
 ```
 
 ### GET /health/stats
@@ -71,11 +71,18 @@ Detailed statistics (requires authentication + tenant ID).
 
 ```json
 {
+  "scope": "global",
+  "uptime_seconds": 3600.0,
   "requests_total": 1500,
+  "requests_per_second": 0.42,
   "blocked": 23,
   "warned": 45,
+  "allowed": 1420,
   "redacted": 12,
-  "avg_latency_ms": 8.3
+  "errors": 0,
+  "latency_p50_ms": 3.1,
+  "latency_p95_ms": 8.3,
+  "latency_p99_ms": 14.7
 }
 ```
 
@@ -565,6 +572,43 @@ Assess risk of an MCP tool based on its capabilities.
 Enumerate tools on an MCP server via JSON-RPC.
 
 **Body**: `{"server_url": "http://localhost:3000"}`
+
+---
+
+### Enrichment (Attack Replay & Regex Candidates)
+
+The enrichment surface exposes blocked-attack telemetry (attack replay DB,
+evasion metrics) and the review queue for auto-derived regex candidates. All
+endpoints require RBAC permissions (added in v1.0.0 — previously this router was
+unauthenticated). Read endpoints require `guardrails:read`; the review action
+requires `guardrails:write`.
+
+#### GET /admin/enrichment/status
+
+Enrichment pipeline status (enabled scanners, DB availability). Requires `guardrails:read`.
+
+#### GET /admin/enrichment/stats
+
+Aggregate enrichment counters. Requires `guardrails:read`.
+
+#### GET /admin/enrichment/evasions
+
+Evasion / decode telemetry (encoded-payload attempts observed). Requires `guardrails:read`.
+
+#### GET /admin/enrichment/entries
+
+Recent stored blocked-attack entries from the replay DB. Requires `guardrails:read`.
+
+#### GET /admin/enrichment/regex-candidates
+
+Auto-derived regex candidates pending review. Requires `guardrails:read`.
+
+#### POST /admin/enrichment/regex-candidates/review
+
+Approve or reject a candidate. The reviewer is recorded from the authenticated
+session (`sub`), not a fixed value. Requires `guardrails:write`.
+
+**Body**: `{"candidate_id": "...", "action": "approve" | "reject"}`
 
 ---
 

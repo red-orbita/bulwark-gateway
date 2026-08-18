@@ -105,6 +105,25 @@ Covered various hardening: CSP headers, cookie security, log injection preventio
 
 ---
 
+## Audit 3: 1.0.0 Release Hardening
+
+Findings closed as part of the 1.0.0 stable release. See `CHANGELOG.md` for the
+full release entry.
+
+| ID | Finding | Remediation | File |
+|----|---------|-------------|------|
+| R-01 | `/admin/enrichment` router shipped with no auth dependency — unauthenticated read access to captured attack-payload telemetry and an unauthenticated regex-candidate approval (state-changing) endpoint (broken access control, OWASP A01) | RBAC enforced on all six endpoints: reads require `guardrails:read`, the review action requires `guardrails:write` | `admin/routes/enrichment.py` |
+| R-02 | Regex-candidate reviews recorded a hardcoded placeholder as the approver, breaking the audit trail | `reviewed_by` now sourced from the authenticated session (`user.sub`) | `admin/routes/enrichment.py` |
+| R-03 | Admin CSP allowed `'unsafe-inline'` in `script-src` | Per-request nonce-based `script-src`; `'unsafe-inline'` removed | `admin/main.py`, `admin/templates/base.html` |
+| R-04 | Admin and proxy shared a single JWT signing secret — compromise of one could forge tokens for the other | Separate admin JWT secret in the Helm chart; existing deployments preserve their current secret on upgrade | `helm/bulwark-gateway/templates/secrets.yaml` |
+| R-05 | Admin Status page reported the proxy engine unhealthy / scanner degraded even with both proxy pods ready: the health probe forwarded the full `key:tenant` line from the shared api-keys secret instead of the bare key the proxy binds, yielding 401 on `/health/stats` and `/internal/scanners/status` | Admin now extracts and sends the exact bare key | `admin/routes/health.py` |
+
+End-to-end RBAC enforcement tests were added that drive the real ASGI dependency
+graph, proving under-privileged callers are rejected at the HTTP boundary
+(`tests/test_rbac_enforcement.py`).
+
+---
+
 ## Threat Coverage (OWASP LLM Top 10)
 
 | # | Threat | Coverage | Detection |

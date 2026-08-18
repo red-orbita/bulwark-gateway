@@ -193,7 +193,7 @@ bulwark-gateway/
 │       └── wazuh_graylog_security_onion.yaml
 │
 ├── helm/bulwark-gateway/        # Helm chart (recommended deployment)
-│   ├── Chart.yaml                # v0.5.0, appVersion 0.4.3
+│   ├── Chart.yaml                # v1.0.0, appVersion 1.0.0
 │   ├── values.yaml               # 337 lines of configurable parameters
 │   ├── .helmignore
 │   └── templates/
@@ -216,7 +216,7 @@ bulwark-gateway/
 │           └── test-security.yaml   # Guardrail smoke test
 │
 ├── k8s/                          # Kustomize manifests (alternative)
-│   ├── kustomization.yaml        # Version 0.4.3
+│   ├── kustomization.yaml        # Version 1.0.0
 │   ├── namespace.yaml
 │   ├── deploy.sh                 # Deployment script
 │   ├── base/                     # Core: proxy, admin, redis, ingress, netpol, pdb
@@ -660,8 +660,8 @@ mypy src/ --ignore-missing-imports
 # ─── Docker ──────────────────────────────────────────────────────────────────
 
 # Build images
-docker build -t bulwark-gateway-proxy:0.4.3 -f Dockerfile .
-docker build -t bulwark-gateway-admin:0.4.2 -f docker/Dockerfile.admin .
+docker build -t bulwark-gateway-proxy:1.0.0 -f Dockerfile .
+docker build -t bulwark-gateway-admin:1.0.0 -f docker/Dockerfile.admin .
 
 # Run full stack locally (proxy + admin + redis)
 docker-compose up -d
@@ -690,8 +690,8 @@ helm install bulwark ./helm/bulwark-gateway \
 
 # Upgrade existing deployment
 helm upgrade bulwark ./helm/bulwark-gateway \
-  --set proxy.image.tag=0.4.3 \
-  --set admin.image.tag=0.4.2
+  --set proxy.image.tag=1.0.0 \
+  --set admin.image.tag=1.0.0
 
 # Run post-deploy Helm tests
 helm test bulwark -n bulwark-gateway
@@ -989,11 +989,11 @@ Exporter features: batch flush (100 events or 1s), circuit breaker, exponential 
 
 | Component | Version | Image Tag |
 |-----------|---------|-----------|
-| Proxy | 0.4.3 | `bulwark-gateway-proxy:0.4.3` |
-| Admin | 0.4.3-sp2 | `bulwark-gateway-admin:0.4.3-sp2` |
+| Proxy | 1.0.0 | `bulwark-gateway-proxy:1.0.0` |
+| Admin | 1.0.0 | `bulwark-gateway-admin:1.0.0` |
 | SkillSpector Engine | 2.1.0-bulwark | — |
-| Helm Chart | 0.5.0 | — |
-| Kustomize | 0.4.3 | — |
+| Helm Chart | 1.0.0 | — |
+| Kustomize | 1.0.0 | — |
 
 ### What Gets Deployed
 

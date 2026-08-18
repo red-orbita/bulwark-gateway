@@ -244,7 +244,12 @@ Web-based management interface at `/` (port 8090).
 | Tenants | Tenant registration and config |
 | Agents | Backend health monitoring |
 | Access Control | RBAC roles and permissions |
-| Status | System health (Redis, proxy, telemetry) |
+| Enrichment | Attack replay browser, evasion telemetry, regex-candidate review |
+| Skills | Pre-deployment skill/MCP security scanner (SkillSpector) |
+| Plugins | Plugin hub — install, enable, security audit |
+| Evaluation | Red-team adversarial evaluation runner |
+| Discovery | Agent / shadow-AI / MCP discovery and risk assessment |
+| Status | System health (Redis, proxy, scanner, telemetry) |
 
 ### Default Credentials
 
@@ -310,7 +315,7 @@ bulwark-gateway/
 │   ├── base/                   # Core resources (deployments, services)
 │   ├── secrets/                # Secret generation scripts
 │   └── monitoring/             # Prometheus + Grafana
-├── tests/                      # Test suite (pytest, 185+ tests)
+├── tests/                      # Test suite (pytest, 1290+ tests)
 ├── Dockerfile                  # Proxy image
 ├── docker-compose.yml          # Development environment
 └── pyproject.toml              # Python project metadata

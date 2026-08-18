@@ -58,11 +58,11 @@ docker build -t bulwark-gateway-admin:latest -f docker/Dockerfile.admin .
 If using a remote registry (ECR, GCR, Docker Hub):
 
 ```bash
-docker tag bulwark-gateway-proxy:latest your-registry/bulwark-gateway-proxy:v0.2.0
-docker push your-registry/bulwark-gateway-proxy:v0.2.0
+docker tag bulwark-gateway-proxy:latest your-registry/bulwark-gateway-proxy:v1.0.0
+docker push your-registry/bulwark-gateway-proxy:v1.0.0
 
-docker tag bulwark-gateway-admin:latest your-registry/bulwark-gateway-admin:v0.2.0
-docker push your-registry/bulwark-gateway-admin:v0.2.0
+docker tag bulwark-gateway-admin:latest your-registry/bulwark-gateway-admin:v1.0.0
+docker push your-registry/bulwark-gateway-admin:v1.0.0
 ```
 
 For minikube (local testing):

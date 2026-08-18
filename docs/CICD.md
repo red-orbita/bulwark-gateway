@@ -34,7 +34,7 @@ Test → Build → Deploy Staging → Deploy Production
 
 **Versioning:**
 - Branch pushes: `sha-<8-char-commit-hash>` (e.g., `sha-a1b2c3d4`)
-- Tags: semantic version without `v` prefix (e.g., `0.4.3`)
+- Tags: semantic version without `v` prefix (e.g., `1.0.0`)
 
 ---
 
@@ -93,8 +93,8 @@ cat ci/values-production.yaml | base64 -w0  # → paste as HELM_VALUES_PROD
 git push origin main
 
 # Deploy to production
-git tag v0.4.3
-git push origin v0.4.3
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 ---
@@ -196,8 +196,8 @@ Pipeline triggers automatically on push to `main` or tag creation.
 git push origin main
 
 # Deploy to production (creates tag, then manual click in UI)
-git tag v0.4.3
-git push origin v0.4.3
+git tag v1.0.0
+git push origin v1.0.0
 # → Go to CI/CD > Pipelines > click "Deploy Production" play button
 ```
 
@@ -263,7 +263,7 @@ tkn pipeline start bulwark-gateway-deploy \
   --param git-revision=main \
   --param image-registry=myregistry.azurecr.io \
   --param target-environment=staging \
-  --param version=0.4.3 \
+  --param version=1.0.0 \
   --workspace name=source,claimName=tekton-source-pvc \
   --workspace name=docker-credentials,secret=registry-credentials \
   --workspace name=helm-values,config=bulwark-gateway-helm-values
