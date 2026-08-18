@@ -92,8 +92,8 @@
     </template>
 
     <!-- Create/Edit Modal -->
-    <template x-if="showCreate">
-        <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showCreate = false; editingId = null;">
+    <template x-teleport="body">
+        <div x-show="showCreate" x-cloak class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" @click.self="showCreate = false; editingId = null;">
             <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-lg overflow-y-auto p-6" style="max-height:90vh">
                 <h2 class="text-lg font-semibold text-white mb-4" x-text="editingId ? 'Edit Notification Channel' : 'Add Notification Channel'"></h2>
 

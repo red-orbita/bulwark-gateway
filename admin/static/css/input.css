@@ -588,7 +588,13 @@ th[aria-sort="descending"] .sg-th-sort-icon { transform: rotate(180deg); }
    optional `.reveal-N` delay class to sequence elements. */
 @keyframes sg-reveal {
     from { opacity: 0; transform: translateY(12px); filter: blur(6px); }
-    to   { opacity: 1; transform: translateY(0);    filter: blur(0); }
+    /* Rest MUST be `none` (transform + filter), never translateY(0)/blur(0):
+       a non-`none` transform OR filter turns the element into the containing
+       block for `position: fixed` descendants. If a modal is ever nested under
+       a `.reveal` element, translateY(0)/blur(0) held by fill-mode `both` would
+       anchor its `fixed inset-0` overlay to this element instead of the viewport
+       (same trap documented on sg-page-settle). Visually identical to before. */
+    to   { opacity: 1; transform: none; filter: none; }
 }
 .reveal   { opacity: 0; animation: sg-reveal 0.72s var(--sg-ease) both; }
 .reveal-1 { animation-delay: 0.06s; }
@@ -626,7 +632,11 @@ th[aria-sort="descending"] .sg-th-sort-icon { transform: rotate(180deg); }
    Delays reset per container via :nth-child, so each grid cascades on its own. */
 @keyframes sg-card-in {
     from { opacity: 0; transform: translateY(16px) scale(0.975); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
+    /* Rest MUST be `none`, never translateY(0) scale(1): a non-`none` transform
+       held by fill-mode `both` makes every `#main-content .sg-card` a containing
+       block for `position: fixed`, trapping any modal nested inside a card.
+       `none` is visually identical to `translateY(0) scale(1)`. */
+    to   { opacity: 1; transform: none; }
 }
 #main-content .sg-card,
 #main-content .sg-card-hover {

@@ -997,3 +997,133 @@ def test_served_css_mirrors_motion_helpers(served_css):
         ), f"served tailwind.min.css missing {cls} — rebuild the CSS"
 
 
+# ─── Modal viewport anchoring: teleport to <body> (containing-block safety) ───
+
+# A `position: fixed` overlay only anchors to the viewport if no ancestor
+# establishes a containing block (transform / filter / contain / will-change /
+# perspective). Rather than police every possible ancestor of every page
+# forever, page-level modals are teleported to <body> so they escape the page
+# subtree entirely — the same reason the shell modals (command palette, profile
+# drawer) never suffered the mis-position bug. These guards keep new modals from
+# regressing to in-tree overlays.
+
+_MODAL_PAGES = {"policies": 2, "guardrails": 2, "notifications": 1}
+_TELEPORT = '<template x-teleport="body">'
+# Outer modal overlay: a fixed full-bleed layer that owns the z-50 stacking
+# context (the separate `bg-black/60` backdrop divs carry no z-50 → excluded).
+_MODAL_OVERLAY = re.compile(
+    r'<div[^>]*\bclass="[^"]*\bfixed inset-0\b[^"]*\bz-50\b[^"]*"[^>]*>'
+)
+
+
+def test_page_modals_are_teleported_to_body():
+    """Every page-level modal overlay must sit inside a
+    `<template x-teleport="body">` so its `fixed inset-0` layer anchors to the
+    viewport regardless of any transformed/contained ancestor in the page."""
+    for name, expected in _MODAL_PAGES.items():
+        src = (PAGES_DIR / f"{name}.html").read_text(encoding="utf-8")
+        assert src.count(_TELEPORT) == expected, (
+            f"{name}.html should teleport exactly {expected} modal(s) to <body>, "
+            f"found {src.count(_TELEPORT)}"
+        )
+        overlays = list(_MODAL_OVERLAY.finditer(src))
+        assert len(overlays) == expected, (
+            f"{name}.html expected {expected} z-50 modal overlay(s), "
+            f"found {len(overlays)}"
+        )
+        for m in overlays:
+            head = src[: m.start()].rstrip()
+            assert head.endswith(_TELEPORT), (
+                f"{name}.html modal overlay is not wrapped in x-teleport=body: "
+                f"...{head[-80:]!r}"
+            )
+
+
+def test_no_page_modal_relies_on_removed_x_if_wrapper():
+    """Negative guard — the notifications modal was converted from an in-tree
+    `<template x-if>` to a teleported `x-show`; no page modal overlay may sit
+    directly inside an `x-if` template (which keeps it in the page subtree)."""
+    for name in _MODAL_PAGES:
+        src = (PAGES_DIR / f"{name}.html").read_text(encoding="utf-8")
+        # An x-if template immediately wrapping a fixed inset-0 z-50 overlay is
+        # the in-tree pattern we replaced.
+        assert not re.search(
+            r'<template\s+x-if="[^"]*"\s*>\s*<div[^>]*\bfixed inset-0\b[^>]*\bz-50\b',
+            src,
+        ), f"{name}.html still wraps a modal overlay in an in-tree x-if template"
+
+
+# ─── Entrance keyframes must rest at `none` (fixed containing-block safety) ────
+
+# A resting keyframe that holds a non-`none` transform (translateY(0), scale(1))
+# OR a non-`none` filter (blur(0)) — pinned by animation-fill-mode: both —
+# permanently turns the element into the containing block for `position: fixed`
+# descendants. The author documented this on sg-page-settle; sg-reveal and
+# sg-card-in must obey the same rule so a modal nested under `.reveal`/`.sg-card`
+# can never be trapped. `none` is visually identical to translateY(0)/scale(1).
+
+
+def _keyframe_rest(css: str, name: str) -> str | None:
+    """Return the `to`/`100%` resting block of a named @keyframes. Isolates the
+    keyframe body by brace-matching first, so it works on both pretty (with
+    comments) and minified CSS and never bleeds into an adjacent keyframe."""
+    idx = css.find("@keyframes " + name)
+    if idx < 0:
+        return None
+    open_brace = css.find("{", idx)
+    if open_brace < 0:
+        return None
+    depth = 0
+    end = None
+    for i in range(open_brace, len(css)):
+        if css[i] == "{":
+            depth += 1
+        elif css[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end is None:
+        return None
+    body = css[open_brace : end + 1]
+    m = re.search(r"\b(?:to|100%)\s*{([^}]*)}", body)
+    return m.group(1) if m else None
+
+
+def test_entrance_keyframes_are_containing_block_safe(input_css):
+    """sg-reveal and sg-card-in must rest at `transform: none` (never
+    translateY(0)/scale(1)) so they never establish a fixed containing block."""
+    for name in ("sg-reveal", "sg-card-in"):
+        rest = _keyframe_rest(input_css, name)
+        assert rest is not None, f"{name} keyframe missing a resting frame"
+        assert "transform: none" in rest, (
+            f"{name} must rest at `transform: none` (input.css)"
+        )
+        assert "translateY(0)" not in rest and "scale(1)" not in rest, (
+            f"{name} resting frame must not hold a non-none transform"
+        )
+    reveal = _keyframe_rest(input_css, "sg-reveal")
+    assert "filter: none" in reveal and "blur(" not in reveal, (
+        "sg-reveal must rest at `filter: none` — a non-none filter also "
+        "creates a containing block for fixed descendants"
+    )
+
+
+def test_served_css_entrance_keyframes_are_containing_block_safe(served_css):
+    """The containing-block-safe keyframes must ship in the SRI-guarded minified
+    stylesheet, not just the source input.css."""
+    for name in ("sg-reveal", "sg-card-in"):
+        rest = _keyframe_rest(served_css, name)
+        assert rest is not None, f"served CSS missing {name} keyframe — rebuild"
+        assert "transform:none" in rest, (
+            f"{name} must rest at `transform:none` in served CSS"
+        )
+        assert "translateY(0)" not in rest and "scale(1)" not in rest, (
+            f"{name} served resting frame must not hold a non-none transform"
+        )
+    reveal = _keyframe_rest(served_css, "sg-reveal")
+    assert "filter:none" in reveal and "blur(" not in reveal, (
+        "served sg-reveal must rest at `filter:none`"
+    )
+
+

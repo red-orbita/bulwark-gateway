@@ -98,6 +98,7 @@
     </div>
 
     <!-- Create/Edit Modal -->
+    <template x-teleport="body">
     <div x-show="showCreate || editingPolicy" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
          x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
          x-transition:leave="transition duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
@@ -221,8 +222,10 @@
             </div>
         </div>
     </div>
+    </template>
 
     <!-- Version History Modal -->
+    <template x-teleport="body">
     <div x-show="showVersions" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
          x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
          x-transition:leave="transition duration-150" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
@@ -303,6 +306,7 @@
             </div>
         </div>
     </div>
+    </template>
 </div>
 
 <script>

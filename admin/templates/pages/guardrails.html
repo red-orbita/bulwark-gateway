@@ -266,6 +266,7 @@
     </div>
 
     <!-- Edit Pattern Modal -->
+    <template x-teleport="body">
     <div x-show="editingPattern" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
          x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0">
         <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="editingPattern = null"></div>
@@ -347,8 +348,10 @@
             </div>
         </div>
     </div>
+    </template>
 
     <!-- Create Pattern Modal -->
+    <template x-teleport="body">
     <div x-show="showCreate" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
          x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0">
         <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="showCreate = false"></div>
@@ -398,6 +401,7 @@
             </div>
         </div>
     </div>
+    </template>
 </div>
 
 <script>
