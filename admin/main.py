@@ -108,7 +108,7 @@ _admin_debug = os.getenv("ADMIN_DEBUG", "false").lower() in ("true", "1")
 
 app = FastAPI(
     title="Bulwark Gateway Admin Portal",
-    version="0.2.0",
+    version="1.0.0",
     description="Administration interface for Bulwark Gateway security proxy",
     lifespan=lifespan,
     docs_url="/docs" if _admin_debug else None,

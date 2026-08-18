@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     init_tracing()
 
     logger = structlog.get_logger()
-    await logger.ainfo("bulwark-gateway starting", version="0.2.0", mode=settings.mode)
+    await logger.ainfo("bulwark-gateway starting", version="1.0.0", mode=settings.mode)
 
     # Load policies on startup
     from src.policies.loader import PolicyLoader
@@ -230,7 +230,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Bulwark Gateway",
         description="Security guardrail proxy for AI agents",
-        version="0.2.0",
+        version="1.0.0",
         lifespan=lifespan,
         docs_url="/docs" if settings.debug else None,
         redoc_url=None,

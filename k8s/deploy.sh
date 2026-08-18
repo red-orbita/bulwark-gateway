@@ -32,8 +32,8 @@ err() { echo -e "${RED}[✗]${NC} $1" >&2; }
 step() { echo -e "${CYAN}[→]${NC} $1"; }
 
 # --- Version (single source of truth) ---
-PROXY_VERSION="0.2.0"
-ADMIN_VERSION="0.2.0"
+PROXY_VERSION="1.0.0"
+ADMIN_VERSION="1.0.0"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
 
 PROXY_IMAGE="${IMAGE_REGISTRY}bulwark-gateway-proxy:${PROXY_VERSION}"

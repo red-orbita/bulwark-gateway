@@ -63,7 +63,7 @@ class ECSObserver(BaseModel):
 
     type: str = "bulwark-gateway"
     name: str = "bulwark-gateway"
-    version: str = "0.2.0"
+    version: str = "1.0.0"
     hostname: Optional[str] = None
 
 

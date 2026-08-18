@@ -131,7 +131,7 @@ def init_tracing() -> None:
     resource = Resource.create(
         {
             "service.name": settings.tracing_service_name,
-            "service.version": "0.2.0",
+            "service.version": "1.0.0",
             "deployment.environment": "production" if not settings.debug else "development",
             "service.namespace": "bulwark-gateway",
         }
@@ -170,7 +170,7 @@ def init_tracing() -> None:
     trace.set_tracer_provider(provider)
 
     # Create module-level tracer singleton
-    _tracer = trace.get_tracer("bulwark-gateway", "0.2.0")
+    _tracer = trace.get_tracer("bulwark-gateway", "1.0.0")
     _enabled = True
 
     import logging
