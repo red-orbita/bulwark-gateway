@@ -1521,3 +1521,39 @@ def test_rbac_page_title_matches_the_standard_heading():
     )
 
 
+def test_rbac_fixed_overlays_are_teleported_to_body():
+    """RBAC modals live inside #main-content, whose page-enter animation
+    establishes a containing block for position:fixed. Without teleporting to
+    <body>, the overlays resolve against the content column and render pinned to
+    the top instead of centered in the viewport (the "New User stuck at top"
+    bug). Every fixed overlay on the page must be wrapped in x-teleport."""
+    import re
+
+    src = (PAGES_DIR / "rbac.html").read_text(encoding="utf-8")
+
+    # Five modals + the saving toast must each be teleported.
+    assert src.count('<template x-teleport="body">') >= 6, (
+        'all fixed-position RBAC overlays must be wrapped in x-teleport="body"'
+    )
+
+    # Every fixed overlay must be immediately preceded by a teleport wrapper.
+    lines = src.splitlines()
+    overlay_lines = [
+        i for i, line in enumerate(lines)
+        if re.search(r'class="fixed (inset-0|bottom-)', line)
+    ]
+    teleport_lines = [
+        i for i, line in enumerate(lines)
+        if '<template x-teleport="body">' in line
+    ]
+    for oi in overlay_lines:
+        assert any(0 < oi - ti <= 2 for ti in teleport_lines), (
+            f'fixed overlay on line {oi + 1} is not wrapped in x-teleport="body"'
+        )
+
+    # Guard against a stray open/close introduced by the wrapping edit.
+    assert len(re.findall(r"<template\b", src)) == src.count("</template>"), (
+        "unbalanced <template> tags in rbac.html"
+    )
+
+

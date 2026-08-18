@@ -335,6 +335,7 @@
     <!-- ==================== MODALS ==================== -->
 
     <!-- Create/Edit User Modal -->
+    <template x-teleport="body">
     <div x-show="showModal" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showModal = false">
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:90vh" @click.away="showModal = false">
             <div class="p-5 border-b border-gray-700">
@@ -385,8 +386,10 @@
             </div>
         </div>
     </div>
+    </template>
 
     <!-- Reset Password Modal -->
+    <template x-teleport="body">
     <div x-show="showResetPw" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showResetPw = false">
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl overflow-y-auto" style="max-height:90vh">
             <div class="p-5 border-b border-gray-700">
@@ -410,8 +413,10 @@
             </div>
         </div>
     </div>
+    </template>
 
     <!-- Delete Confirm Modal -->
+    <template x-teleport="body">
     <div x-show="showDeleteConfirm" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showDeleteConfirm = false">
         <div class="bg-gray-800 rounded-xl border border-red-800/50 w-full max-w-sm shadow-2xl overflow-y-auto" style="max-height:90vh">
             <div class="p-5 border-b border-gray-700">
@@ -427,8 +432,10 @@
             </div>
         </div>
     </div>
+    </template>
 
     <!-- MFA Setup Modal -->
+    <template x-teleport="body">
     <div x-show="mfaUri" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="mfaUri = null; mfaSecret = null">
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm shadow-2xl text-center overflow-y-auto" style="max-height:90vh">
             <div class="p-5 border-b border-gray-700">
@@ -449,8 +456,10 @@
             </div>
         </div>
     </div>
+    </template>
 
     <!-- Create Role Modal -->
+    <template x-teleport="body">
     <div x-show="showCreateRole" x-cloak class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" @keydown.escape.window="showCreateRole = false">
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl overflow-y-auto" style="max-height:90vh" @click.away="showCreateRole = false">
             <div class="p-5 border-b border-gray-700">
@@ -493,13 +502,16 @@
             </div>
         </div>
     </div>
+    </template>
 
     <!-- Saving indicator -->
+    <template x-teleport="body">
     <div x-show="saving" x-cloak x-transition
         class="fixed bottom-6 right-6 bg-gray-800 border border-gray-600 text-gray-200 px-4 py-2.5 rounded-lg shadow-xl text-sm flex items-center gap-2">
         <svg class="w-4 h-4 animate-spin text-cyan-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
         Saving...
     </div>
+    </template>
 </div>
 
 <script src="/static/js/vendor/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>

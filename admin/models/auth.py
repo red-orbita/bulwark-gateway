@@ -6,7 +6,22 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+
+def _iso_if_datetime(value):
+    """Coerce a datetime to an ISO-8601 string, passing through str/None.
+
+    The admin store has two backends: SQLite persists timestamps as ISO
+    strings, while the PostgreSQL backend (used in HA deployments) returns
+    native ``datetime`` objects. Response models below declare these fields
+    as ``str``; without this coercion, Pydantic raises ``string_type`` and
+    the endpoint 500s on Postgres only. Normalising here keeps the API shape
+    identical across backends.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 class UserRole(str, Enum):
@@ -92,6 +107,11 @@ class UserResponse(BaseModel):
     created_at: str
     last_login: Optional[str] = None
 
+    @field_validator("created_at", "last_login", mode="before")
+    @classmethod
+    def _coerce_timestamps(cls, value):
+        return _iso_if_datetime(value)
+
 
 class SessionResponse(BaseModel):
     id: str
@@ -99,6 +119,11 @@ class SessionResponse(BaseModel):
     expires_at: str
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
+
+    @field_validator("created_at", "expires_at", mode="before")
+    @classmethod
+    def _coerce_timestamps(cls, value):
+        return _iso_if_datetime(value)
 
 
 class MFASetupResponse(BaseModel):

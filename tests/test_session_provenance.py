@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from admin.models.auth import SessionResponse
+from admin.models.auth import SessionResponse, UserResponse
 from admin.services.user_store import UserStore
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -114,3 +114,50 @@ class TestSessionTemplateBinding:
 
     def test_surfaces_captured_device_user_agent(self, template_src):
         assert "s.user_agent" in template_src
+
+
+# ─── Cross-backend timestamp contract ────────────────────────────────────────
+
+
+class TestResponseTimestampCoercion:
+    """The PostgreSQL admin backend returns native ``datetime`` objects for
+    timestamp columns, whereas SQLite persists ISO strings. ``UserResponse`` and
+    ``SessionResponse`` declare these fields as ``str``; without coercion the
+    ``GET /admin/users`` and session endpoints 500 on Postgres only ("Couldn't
+    load users"). These tests pin the coercion so the API shape is identical
+    across both storage backends.
+    """
+
+    def test_user_response_accepts_datetime_and_emits_iso_string(self):
+        now = datetime(2026, 6, 25, 9, 58, 44, tzinfo=timezone.utc)
+        resp = UserResponse(
+            id="u-1",
+            username="admin",
+            role="admin",
+            active=True,
+            created_at=now,
+            last_login=now,
+        )
+        assert isinstance(resp.created_at, str)
+        assert resp.created_at == now.isoformat()
+        assert isinstance(resp.last_login, str)
+        assert resp.last_login == now.isoformat()
+
+    def test_user_response_still_accepts_iso_strings_and_none(self):
+        resp = UserResponse(
+            id="u-2",
+            username="viewer",
+            role="viewer",
+            active=True,
+            created_at="2026-01-01T00:00:00+00:00",
+            last_login=None,
+        )
+        assert resp.created_at == "2026-01-01T00:00:00+00:00"
+        assert resp.last_login is None
+
+    def test_session_response_accepts_datetime_timestamps(self):
+        created = datetime(2026, 6, 25, 9, 58, 44, tzinfo=timezone.utc)
+        expires = datetime(2026, 6, 25, 17, 58, 44, tzinfo=timezone.utc)
+        resp = SessionResponse(id="s-1", created_at=created, expires_at=expires)
+        assert resp.created_at == created.isoformat()
+        assert resp.expires_at == expires.isoformat()
