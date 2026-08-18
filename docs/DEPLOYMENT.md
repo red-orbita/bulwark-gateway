@@ -147,6 +147,29 @@ helm install bulwark-gateway ./helm/bulwark-gateway \
 | `ingress.hosts.proxy` | Proxy hostname | `api.mycompany.com` |
 | `ingress.hosts.admin` | Admin hostname | `admin.mycompany.com` |
 
+### Private Registry (Image Pull Secret)
+
+If your images live in a private registry, create a pull secret and reference it
+so the pods can authenticate:
+
+```bash
+kubectl create secret docker-registry bulwark-registry \
+  --docker-server=<REGISTRY> \
+  --docker-username=<USERNAME> \
+  --docker-password=<PASSWORD> \
+  -n bulwark-gateway
+
+helm install bulwark-gateway ./helm/bulwark-gateway \
+  --set backend.ip=<YOUR_LLM_BACKEND_IP> \
+  --set proxy.image.repository=<REGISTRY>/bulwark-gateway-proxy \
+  --set admin.image.repository=<REGISTRY>/bulwark-gateway-admin \
+  --set 'imagePullSecrets[0].name=bulwark-registry' \
+  --namespace bulwark-gateway --create-namespace
+```
+
+Public registries (e.g. an org's public Docker Hub or GHCR) don't need the
+secret — omit the `imagePullSecrets` flag.
+
 ### Post-Deploy Validation
 
 ```bash
