@@ -221,19 +221,36 @@ except ConnectionError as e:
 
 ## Detection Coverage (Local Guard)
 
-The local guard includes patterns for:
+The local `BulwarkGuard` runs a **curated subset** of regex heuristics entirely
+offline — **12 input patterns** and **7 output patterns** compiled at startup.
+It is a lightweight pre-filter, **not** a full WAF or a replacement for the
+gateway engine.
+
+**Input scanning (12 patterns):**
 
 | Category | Patterns | Examples |
 |----------|----------|----------|
-| Prompt Injection | 4 | System override, fake messages, SSTI |
-| Jailbreak | 2 | DAN mode, persona switching |
-| Exfiltration | 3 | External URLs, HTTP clients, path traversal |
-| Reverse Shell | 2 | Shell commands, code execution |
-| Credential Access | 1 | Secret extraction attempts |
-| SQL Injection | 1 | UNION SELECT, OR 1=1 |
-| **Output: Secrets** | 7 | AWS keys, GitHub tokens, JWTs, SSNs |
+| Prompt Injection | 4 | Instruction override, fake `system:` message, SSTI (`{{...}}`), SQL-injection heuristic |
+| Jailbreak | 2 | DAN / known jailbreak keywords, persona/mode switch |
+| Exfiltration | 3 | Send-to-external-URL, HTTP client invocation, path traversal |
+| Reverse Shell / RCE | 2 | Shell chaining / reverse shell, `exec`/`eval` code execution |
+| Credential Access | 1 | Secret-extraction phrasing ("reveal your API key") |
 
-For full coverage (4600+ patterns, ML models, IOC feeds), use remote mode with a Bulwark Gateway instance.
+**Output scanning (7 patterns):**
+
+| Category | Patterns | Examples |
+|----------|----------|----------|
+| Secrets & PII | 7 | AWS keys, OpenAI keys, GitHub tokens, RSA/private keys, hardcoded passwords, SSNs, JWTs |
+
+> **Scope honesty:** the local guard uses best-effort heuristics on free-form
+> text. The single SQL-injection pattern is categorized as prompt injection and
+> is **not** a reliable SQLi/XSS WAF — classic injection is enforced at the
+> tool-argument and database layers, not on chat input (see the main project's
+> scope notes). Treat the local guard as a fast first line of defense only.
+
+For full coverage (400+ input patterns, output secret/PII redaction, ML models,
+IOC feeds, and per-tenant policy) use remote mode with a Bulwark Gateway
+instance.
 
 ## Development
 
