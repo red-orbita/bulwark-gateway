@@ -117,10 +117,10 @@
                                       x-text="rpm > globalConfig.rate_limit_rpm ? '+' + (rpm - globalConfig.rate_limit_rpm) : rpm < globalConfig.rate_limit_rpm ? (rpm - globalConfig.rate_limit_rpm) : 'same'"></span>
                             </td>
                             <td class="text-right">
-                                <button @click="editTenant(tid, rpm)" aria-label="Edit tenant limit" title="Edit" class="text-gray-400 hover:text-cyan-400 p-1">
+                                <button @click="editTenant(tid, rpm)" aria-label="Edit tenant limit" title="Edit" class="text-gray-400 hover:text-cyan-400 p-1.5">
                                     <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                                 </button>
-                                <button @click="removeTenant(tid)" aria-label="Remove tenant limit" title="Remove" class="text-gray-400 hover:text-red-400 p-1 ml-1">
+                                <button @click="removeTenant(tid)" aria-label="Remove tenant limit" title="Remove" class="text-gray-400 hover:text-red-400 p-1.5 ml-1">
                                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                 </button>
                             </td>

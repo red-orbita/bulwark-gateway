@@ -818,6 +818,112 @@ def test_field_labels_are_programmatically_associated():
     )
 
 
+# ─── Pointer/touch target sizing (WCAG 2.5.5 / 2.5.8) ─────────────────────────
 
+# The admin UI is deliberately dense (input.css documents a 24px AA floor for
+# row/toolbar actions rather than a blanket 44px, which would wreck the density
+# pillar). Two invariants keep that honest: (1) every button *size* class the
+# templates use is actually defined — `sg-btn-xs` was referenced in 11 places
+# while undefined, so those buttons silently fell back to the 38px base; and
+# (2) isolated icon actions (modal close) get a real 44px pointer target via an
+# invisible ::after overlay, without inflating the visible glyph.
+
+TAILWIND_CSS = REPO_ROOT / "admin" / "static" / "css" / "tailwind.min.css"
+
+# WCAG 2.5.8 (AA) minimum target size; input.css treats this as the dense floor.
+_AA_TARGET_FLOOR_PX = 24
+# WCAG 2.5.5 (AAA) enhanced target size for standalone actions.
+_AAA_TARGET_PX = 44
+
+
+@pytest.fixture(scope="module")
+def served_css() -> str:
+    """The single minified stylesheet actually shipped to the browser (guarded
+    by SRI). Design-system rules live in input.css but must be mirrored here or
+    they never reach a user — this fixture lets tests assert the served copy."""
+    return TAILWIND_CSS.read_text(encoding="utf-8")
+
+
+def _min_height_px(css: str, cls: str) -> int | None:
+    """Return the min-height (px) declared for a `.cls` rule, if any. Tolerant
+    of both the pretty source and the minified served form."""
+    m = re.search(rf"\.{re.escape(cls)}\s*{{([^}}]*)}}", css)
+    if not m:
+        return None
+    h = re.search(r"min-height:\s*(\d+)px", m.group(1))
+    return int(h.group(1)) if h else None
+
+
+def test_button_size_classes_meet_aa_target_floor(input_css):
+    """WCAG 2.5.8 — the dense button sizes must still clear the 24px AA floor
+    that input.css documents. Guards against a future 'shrink it more' edit."""
+    for cls in ("sg-btn-xs", "sg-btn-sm"):
+        h = _min_height_px(input_css, cls)
+        assert h is not None, f".{cls} must declare an explicit min-height"
+        assert h >= _AA_TARGET_FLOOR_PX, (
+            f".{cls} min-height {h}px is below the {_AA_TARGET_FLOOR_PX}px AA floor"
+        )
+
+
+def test_no_template_references_undefined_button_size(input_css):
+    """Consistency audit — every `sg-btn-<variant>` used in the templates must
+    resolve to a defined class. Direct regression guard for `sg-btn-xs`, which
+    was referenced in 11 places while undefined (buttons fell back to base)."""
+    defined = set(re.findall(r"\.sg-btn-([a-z]+)\b", input_css))
+    assert defined, "no sg-btn variants found in stylesheet"
+    referenced: set[str] = set()
+    for page in list(PAGES_DIR.glob("*.html")) + [BASE_HTML]:
+        referenced |= set(
+            re.findall(r"\bsg-btn-([a-z]+)\b", page.read_text(encoding="utf-8"))
+        )
+    dangling = referenced - defined
+    assert not dangling, f"templates reference undefined button classes: {dangling}"
+
+
+def test_icon_button_expands_pointer_target_via_overlay(input_css):
+    """WCAG 2.5.5 — `.sg-icon-btn` keeps a compact glyph for density but must
+    expand the actual pointer/touch target to ≥44px through a positioned
+    ::after overlay. Assert the mechanism (relative host + negative inset ≥8px)
+    rather than a computed pixel size we can't derive from CSS alone."""
+    host = re.search(r"\.sg-icon-btn\s*{([^}]*)}", input_css)
+    assert host, ".sg-icon-btn must be defined"
+    assert "position: relative" in host.group(1) or "position:relative" in host.group(1), (
+        ".sg-icon-btn must be a positioned host so its ::after overlay anchors to it"
+    )
+    overlay = re.search(r"\.sg-icon-btn::after\s*{([^}]*)}", input_css)
+    assert overlay, ".sg-icon-btn needs an ::after overlay to enlarge the hit area"
+    body = overlay.group(1)
+    assert "position: absolute" in body or "position:absolute" in body
+    inset = re.search(r"inset:\s*-(\d+)px", body)
+    assert inset and int(inset.group(1)) >= 8, (
+        "::after must extend the target by ≥8px on each side "
+        f"(6px padding + ~20px glyph + 2×8px ≈ 48px ≥ {_AAA_TARGET_PX}px)"
+    )
+
+
+def test_served_css_mirrors_touch_target_rules(served_css):
+    """The touch-target work is only real if it ships: the minified stylesheet
+    that carries the SRI hash must contain both the resurrected `sg-btn-xs`
+    size and the `sg-icon-btn` overlay, not just the source input.css."""
+    assert _min_height_px(served_css, "sg-btn-xs") is not None, (
+        "served tailwind.min.css is missing .sg-btn-xs — rebuild the CSS"
+    )
+    assert re.search(r"\.sg-icon-btn::after\{[^}]*inset:-\d+px", served_css), (
+        "served tailwind.min.css is missing the .sg-icon-btn overlay — rebuild"
+    )
+
+
+def test_isolated_modal_close_buttons_adopt_icon_button():
+    """Adoption guard — the standalone modal-close buttons that were converted
+    to the 44px `sg-icon-btn` target must keep using it (not regress to a bare
+    `p-1.5` tap area). Scoped to the dialogs touched in the touch-target pass."""
+    for name in ("guardrails", "policies"):
+        src = (PAGES_DIR / f"{name}.html").read_text(encoding="utf-8")
+        closes = re.findall(r'<button[^>]*aria-label="Close dialog"[^>]*>', src)
+        assert closes, f"{name}.html should have labelled modal-close buttons"
+        for btn in closes:
+            assert "sg-icon-btn" in btn, (
+                f"{name}.html modal-close must use sg-icon-btn for a 44px target: {btn[:80]}"
+            )
 
 

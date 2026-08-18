@@ -106,7 +106,34 @@
 
 /* sg-btn-sm stays compact for dense toolbars/table rows (AA target ≥24px). */
 .sg-btn-sm { padding: 0.375rem 0.75rem; min-height: 30px; font-size: 0.75rem; border-radius: 6px; }
+/* sg-btn-xs is the densest row-action size — was referenced but undefined,
+   so those buttons silently fell back to the 38px base. Pin it just above the
+   WCAG 2.5.8 (AA) 24px floor. */
+.sg-btn-xs { padding: 0.25rem 0.5rem; min-height: 26px; font-size: 0.6875rem; border-radius: 5px; }
 .sg-btn-lg { padding: 0.75rem 1.5rem; min-height: 44px; font-size: 0.9375rem; }
+
+/* Standalone icon button: the glyph stays visually compact for density, but an
+   invisible ::after overlay expands the pointer/touch target to 44px (WCAG
+   2.5.5). Safe here because — unlike .sg-btn — it has no overflow:hidden that
+   would clip the overlay. Use for isolated actions (modal close, etc.), not for
+   tight sibling clusters where the overlays would overlap. */
+.sg-icon-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.375rem;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition-property: color, background-color, transform;
+    transition-duration: var(--sg-dur);
+    transition-timing-function: var(--sg-ease);
+}
+.sg-icon-btn:active { transform: scale(var(--sg-press)); }
+.sg-icon-btn::after { content: ''; position: absolute; inset: -8px; }
+.sg-icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px #030712, 0 0 0 4px #06b6d4; }
 
 .sg-btn-primary {
     background: linear-gradient(135deg, #0891b2, #06b6d4);
