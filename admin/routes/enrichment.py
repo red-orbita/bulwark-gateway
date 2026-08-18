@@ -15,8 +15,11 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+
+from ..models.auth import TokenPayload
+from ..services.auth_service import require_permission
 
 router = APIRouter()
 
@@ -87,7 +90,9 @@ class RegexReviewRequest(BaseModel):
 # --- Endpoints ---
 
 @router.get("/status")
-async def enrichment_status():
+async def enrichment_status(
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
+):
     """Get enrichment pipeline status and configuration."""
     db_exists = _REPLAY_DB_PATH.exists()
     enabled = os.environ.get("BULWARK_ENRICHMENT_ENABLED", "false").lower() == "true"
@@ -124,7 +129,9 @@ async def enrichment_status():
 
 
 @router.get("/stats")
-async def enrichment_stats():
+async def enrichment_stats(
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
+):
     """Get replay DB statistics."""
     if not _REPLAY_DB_PATH.exists():
         return {
@@ -170,7 +177,11 @@ async def enrichment_stats():
 
 
 @router.get("/evasions")
-async def get_evasions(limit: int = 50, offset: int = 0):
+async def get_evasions(
+    limit: int = 50,
+    offset: int = 0,
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
+):
     """Get detected evasion attempts (payloads that bypassed regex but ML flagged)."""
     entries = _query(
         "SELECT * FROM replay_entries WHERE is_evasion = 1 ORDER BY timestamp DESC LIMIT ? OFFSET ?",
@@ -191,6 +202,7 @@ async def get_entries(
     offset: int = 0,
     verdict: Optional[str] = None,
     category: Optional[str] = None,
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
 ):
     """Browse recent enrichment entries."""
     query = "SELECT * FROM replay_entries WHERE 1=1"
@@ -221,7 +233,10 @@ async def get_entries(
 
 
 @router.get("/regex-candidates")
-async def get_regex_candidates(status: str = "pending"):
+async def get_regex_candidates(
+    status: str = "pending",
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
+):
     """Get regex candidates by status (pending, approved, rejected)."""
     if status not in ("pending", "approved", "rejected", "deployed"):
         raise HTTPException(400, "Invalid status. Use: pending, approved, rejected, deployed")
@@ -241,7 +256,11 @@ async def get_regex_candidates(status: str = "pending"):
 
 
 @router.post("/regex-candidates/review")
-async def review_regex_candidate(request: Request, body: RegexReviewRequest):
+async def review_regex_candidate(
+    request: Request,
+    body: RegexReviewRequest,
+    user: TokenPayload = Depends(require_permission("guardrails:write")),
+):
     """Approve or reject a regex candidate."""
     if body.action not in ("approve", "reject"):
         raise HTTPException(400, "Action must be 'approve' or 'reject'")
@@ -253,7 +272,7 @@ async def review_regex_candidate(request: Request, body: RegexReviewRequest):
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc).isoformat()
-    reviewer = "admin"  # TODO: extract from session
+    reviewer = user.sub
 
     # Open a writable connection for this operation
     try:

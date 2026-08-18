@@ -76,6 +76,25 @@ WRITE_ENDPOINTS: list[tuple[str, str, str]] = [
     ("POST", "/admin/ml-scanners/toggle", "guardrails:write"),
     ("POST", "/admin/ml-scanners/configure", "guardrails:write"),
     ("POST", "/admin/ml-scanners/reset", "guardrails:write"),
+    # Enrichment — reviewing a regex candidate approves/rejects a pattern that
+    # is promoted into the live guardrail set, so it is a guardrail write.
+    ("POST", "/admin/enrichment/regex-candidates/review", "guardrails:write"),
+]
+
+
+# Read endpoints that expose sensitive enrichment telemetry (raw attack
+# payloads that bypassed regex, evasion attempts, regex-candidate lifecycle).
+# Before v1.0.0 the entire enrichment router carried NO auth dependency — an
+# unauthenticated caller could browse captured attack traffic and even approve
+# candidates. These are guarded with ``guardrails:read`` (auditor and above;
+# viewer, the least-privileged role, is intentionally excluded from raw
+# attack-payload access under least-privilege).
+ENRICHMENT_READ_ENDPOINTS: list[tuple[str, str]] = [
+    ("GET", "/admin/enrichment/status"),
+    ("GET", "/admin/enrichment/stats"),
+    ("GET", "/admin/enrichment/evasions"),
+    ("GET", "/admin/enrichment/entries"),
+    ("GET", "/admin/enrichment/regex-candidates"),
 ]
 
 
@@ -220,4 +239,44 @@ class TestUnauthenticatedIsRejected:
         resp = _request(client, method, path)
         assert resp.status_code == 401, (
             f"{method} {path} is not authenticated (got {resp.status_code})"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Enrichment read surface — regression for the pre-v1.0.0 gap where the whole
+# enrichment router shipped with NO auth dependency (unauthenticated read of
+# captured attack payloads / evasion telemetry).
+# --------------------------------------------------------------------------- #
+
+
+class TestEnrichmentReadSurfaceIsGuarded:
+    @pytest.mark.parametrize("method,path", ENRICHMENT_READ_ENDPOINTS)
+    def test_no_credentials_gets_401(self, client, method, path):
+        app.dependency_overrides.pop(get_current_user, None)
+        resp = client.request(method, path, headers={"x-csrf-token": _CSRF})
+        assert resp.status_code == 401, (
+            f"{method} {path} exposes enrichment data unauthenticated "
+            f"(got {resp.status_code})"
+        )
+
+    @pytest.mark.parametrize("method,path", ENRICHMENT_READ_ENDPOINTS)
+    def test_viewer_denied_raw_attack_payloads(self, client, method, path):
+        # Least privilege: the viewer role does not hold guardrails:read and
+        # must not reach raw attack-payload telemetry.
+        _override_role(UserRole.VIEWER)
+        resp = client.request(method, path, headers={"x-csrf-token": _CSRF})
+        assert resp.status_code == 403, (
+            f"{method} {path} leaked enrichment data to viewer "
+            f"(got {resp.status_code}; expected 403 for guardrails:read)"
+        )
+        assert "guardrails:read" in resp.text
+
+    @pytest.mark.parametrize("method,path", ENRICHMENT_READ_ENDPOINTS)
+    def test_auditor_allowed_through_rbac(self, client, method, path):
+        # auditor holds guardrails:read — RBAC must not block it (handler may
+        # still 404/503 when the replay DB is absent in the sandbox).
+        _override_role(UserRole.AUDITOR)
+        resp = client.request(method, path, headers={"x-csrf-token": _CSRF})
+        assert resp.status_code != 403, (
+            f"{method} {path} wrongly blocked auditor holding guardrails:read"
         )
