@@ -1,0 +1,68 @@
+# ============================================================
+# ArgoCD Application — Bulwark Gateway (Helm chart)
+#
+# Deploys the Helm chart in GitOps mode. secrets.create=false is REQUIRED so the
+# chart does not render Secret objects: ArgoCD renders with client-side
+# `helm template`, where Helm `lookup` returns nothing and would otherwise
+# regenerate random JWT/passwords/API keys on EVERY sync (permanent drift +
+# credential rotation). Secrets are owned by the bulwark-secrets Application.
+#
+# Sync-wave 0: runs after bulwark-secrets (sync-wave -1). If the derived Secrets
+# are not ready yet, the pods retry (CreateContainerConfigError) until the
+# SealedSecrets controller has created them — the state converges.
+# ============================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bulwark-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # -- CHANGE to your fork/mirror if different
+    repoURL: https://github.com/red-orbita/bulwark-gateway.git
+    targetRevision: v1.0.0
+    path: helm/bulwark-gateway
+    helm:
+      releaseName: bulwark
+      parameters:
+        # -- REQUIRED for GitOps: never let the chart generate/rotate secrets
+        - name: secrets.create
+          value: "false"
+        # -- REQUIRED: your LLM backend IP
+        - name: backend.ip
+          value: "10.0.1.50"
+        # -- Point at your registry (public example shown; use your own)
+        - name: proxy.image.repository
+          value: "ghcr.io/red-orbita/bulwark-gateway-proxy"
+        - name: admin.image.repository
+          value: "ghcr.io/red-orbita/bulwark-gateway-admin"
+        - name: proxy.image.tag
+          value: "1.0.0"
+        - name: admin.image.tag
+          value: "1.0.0"
+        # -- For a PRIVATE registry, also create a pull secret and set:
+        # - name: imagePullSecrets[0].name
+        #   value: "bulwark-registry"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: bulwark-gateway
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Secrets are managed by the bulwark-secrets Application / controller;
+      # ignore any Secret the chart is not tracking.
+      - RespectIgnoreDifferences=true
+  # The SealedSecrets controller mutates the derived Secrets; never diff them.
+  ignoreDifferences:
+    - group: ""
+      kind: Secret
+      jsonPointers:
+        - /data

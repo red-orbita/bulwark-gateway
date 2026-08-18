@@ -525,6 +525,14 @@ monitoring:
 
 # -- Secrets (leave empty to auto-generate random values)
 secrets:
+  # -- Let the chart create/manage the app Secrets. Set to false for GitOps
+  # (ArgoCD/Flux) where secrets are managed externally (SealedSecrets, External
+  # Secrets Operator, or a pre-created Secret). When false, the chart renders no
+  # Secret objects and expects bulwark-proxy-secrets / bulwark-admin-secrets /
+  # bulwark-redis-secrets (and bulwark-monitoring-secrets if monitoring is on)
+  # to already exist in the namespace. This avoids the ArgoCD drift caused by
+  # Helm `lookup` not working under client-side `helm template` rendering.
+  create: true
   # -- JWT secret for proxy authentication
   jwtSecret: ""
   # -- JWT secret for the admin API. Auto-generated if empty; kept distinct from

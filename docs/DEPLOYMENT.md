@@ -369,6 +369,70 @@ Security features in K8s deployment:
 
 ---
 
+## GitOps with ArgoCD
+
+Bulwark Gateway ships ArgoCD Applications in [`deploy/argocd/`](../deploy/argocd/)
+for declarative, pull-based deployment. ArgoCD reconciles the cluster against
+this Git repo (the Helm chart plus SealedSecrets).
+
+### The secrets caveat (read this first)
+
+The chart auto-generates secrets and relies on Helm `lookup` to keep them stable
+across `helm upgrade`. **ArgoCD renders with client-side `helm template`, where
+`lookup` returns nothing** — so it would regenerate random JWT secrets,
+passwords, and API keys on *every* sync, causing permanent `OutOfSync` drift and
+unwanted credential rotation.
+
+To avoid this, the chart exposes `secrets.create`:
+
+| `secrets.create` | Behavior | Use when |
+|------------------|----------|----------|
+| `true` (default) | Chart creates & manages the Secrets (with `lookup` stability) | `helm install` / `helm upgrade`, CI push-based deploys |
+| `false` | Chart renders **no** Secret objects; you manage them externally | GitOps (ArgoCD/Flux) |
+
+In GitOps mode secrets are owned by [SealedSecrets](https://github.com/bitnami-labs/sealed-secrets)
+(the same mechanism the Kustomize path already uses in `k8s/secrets/`), or by the
+External Secrets Operator.
+
+### Applications
+
+| Application | Manages | Sync wave |
+|-------------|---------|-----------|
+| `bulwark-secrets` | SealedSecret CRs → derived Secrets | `-1` (first) |
+| `bulwark-gateway` | Helm chart with `secrets.create=false` | `0` (after) |
+
+### SealedSecrets are per-cluster
+
+`k8s/secrets/sealed-secrets.yaml` only decrypts in the cluster whose public key
+sealed it. **You must regenerate it against your own cluster** — the committed
+file will not work elsewhere.
+
+### Deploy
+
+```bash
+# 1. Install the SealedSecrets controller (once per cluster)
+helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
+helm install sealed-secrets sealed-secrets/sealed-secrets -n kube-system
+
+# 2. Generate + seal secrets for THIS cluster (covers every key the chart needs)
+./secrets/init.sh
+NAMESPACE=bulwark-gateway ./k8s/secrets/generate-sealed-secrets.sh
+git commit -am "chore: seal secrets for <cluster>" && git push
+
+# 3. Edit deploy/argocd/*.yaml: repoURL, targetRevision, backend.ip, image.*
+#    Then register the Applications
+kubectl apply -f deploy/argocd/bulwark-secrets.yaml
+kubectl apply -f deploy/argocd/bulwark-gateway.yaml
+
+# 4. Verify
+argocd app get bulwark-gateway   # -> Synced, Healthy
+```
+
+Full walkthrough, rotation, and the External Secrets Operator alternative:
+[`deploy/argocd/README.md`](../deploy/argocd/README.md).
+
+---
+
 ## Redis Configuration
 
 Bulwark Gateway uses Redis for distributed rate limiting, guardrail pattern synchronization, and persistent metrics. By default, the Helm chart deploys a single-replica Redis instance inside the cluster. For production environments, you can configure an external managed Redis service.
