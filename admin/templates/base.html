@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="/static/css/fonts.css" integrity="sha384-XgeFDwW9V2hm/7UqsdbZ5oY6wnNzRAZX7gSu8Z2JfSLiG6l7lVBgff/oz9UCVn7W" crossorigin="anonymous">
 
     <!-- Tailwind CSS (pre-built) -->
-    <link rel="stylesheet" href="/static/css/tailwind.min.css" integrity="sha384-M0OmvMHF8BAMdXEWZjwf+B5zGUA8ZE+IP3uI6AMrV+xsyChZEYUYKncWUuDkvd9Z" crossorigin="anonymous">
+    <link rel="stylesheet" href="/static/css/tailwind.min.css" integrity="sha384-boBf99OW65AN4ndxtE5TfkUNzzS4c9wxkiKqSVJcLMlIVGNsnC7263H2aLluuOcP" crossorigin="anonymous">
 
     <!-- Alpine.js (vendored) -->
     <script src="/static/js/vendor/alpine-collapse.min.js" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n" crossorigin="anonymous" defer></script>
@@ -97,14 +97,14 @@
             font-size: 0.875rem;
             font-weight: 500;
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
-            transition: top 150ms ease-in-out;
+            transition: top var(--sg-dur) var(--sg-ease);
         }
         .skip-link:focus { top: 0.75rem; outline: 2px solid #ffffff; outline-offset: 2px; }
         .pulse-live { animation: pulse-live 2s ease-in-out infinite; }
         @keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        .sidebar-transition { transition: width 200ms cubic-bezier(0.4, 0, 0.2, 1), transform 200ms cubic-bezier(0.4, 0, 0.2, 1); }
+        .sidebar-transition { transition: width var(--sg-dur) var(--sg-ease), transform var(--sg-dur) var(--sg-ease); }
         @keyframes slide-in-right { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        .toast-enter { animation: slide-in-right 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .toast-enter { animation: slide-in-right var(--sg-dur-slow) var(--sg-ease); }
         body { background: #030712; color: #f3f4f6; }
         body::before {
             content: '';
@@ -127,9 +127,9 @@
 
     <!-- Mobile overlay -->
     <div x-show="sidebarOpen && isMobile" @click="sidebarOpen = false"
-         x-transition:enter="transition-opacity duration-200"
+         x-transition:enter="sg-trans"
          x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
-         x-transition:leave="transition-opacity duration-200"
+         x-transition:leave="sg-trans"
          x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
          class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 lg:hidden"></div>
 
@@ -305,7 +305,7 @@
     </aside>
 
     <!-- Main content -->
-    <div :class="sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'" class="min-h-screen" style="transition: margin-left 200ms ease-in-out">
+    <div :class="sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'" class="min-h-screen" style="transition: margin-left var(--sg-dur) var(--sg-ease)">
         <!-- Top bar -->
         <header class="sticky top-0 z-30 header-glass">
             <div class="flex items-center justify-between h-14 px-4 lg:px-6">
@@ -356,9 +356,9 @@
          @keydown.window.meta.k.prevent="openPalette()" @keydown.window.ctrl.k.prevent="openPalette()"
          x-cloak class="fixed inset-0 z-[200]">
         <div class="fixed inset-0 bg-black/70 backdrop-blur-md" @click="open = false"
-             x-transition:enter="transition-opacity duration-150" x-transition:enter-start="opacity-0"></div>
+             x-transition:enter="sg-trans" x-transition:enter-start="opacity-0"></div>
         <div class="fixed top-[20%] left-1/2 -translate-x-1/2 w-full max-w-lg"
-             x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0 scale-95">
+             x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95">
             <div class="sg-card !p-0 overflow-hidden" style="box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8), 0 0 60px rgba(6,182,212,0.05);">
                 <div class="flex items-center gap-3 px-4 py-3" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
                     <i data-lucide="search" class="w-5 h-5 text-gray-500"></i>
@@ -405,12 +405,12 @@
 
     <!-- Profile Settings Slide-over -->
     <div x-show="showProfile" x-cloak class="fixed inset-0 z-[80]"
-         x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0" x-transition:leave="transition duration-150" x-transition:leave-end="opacity-0">
+         x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" x-transition:leave="sg-trans" x-transition:leave-end="opacity-0">
         <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" @click="showProfile = false"></div>
         <div class="fixed right-0 top-0 h-full w-full max-w-md overflow-y-auto"
              style="background: linear-gradient(180deg, #0f172a, #030712); border-left: 1px solid rgba(255,255,255,0.06); box-shadow: -10px 0 40px rgba(0,0,0,0.5);"
-             x-transition:enter="transition transform duration-200" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
-             x-transition:leave="transition transform duration-150" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full">
+             x-transition:enter="sg-trans" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+             x-transition:leave="sg-trans" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full">
             <!-- Header -->
             <div class="flex items-center justify-between p-5" style="border-bottom: 1px solid rgba(255,255,255,0.06);">
                 <h2 class="text-base font-semibold text-white">Profile Settings</h2>

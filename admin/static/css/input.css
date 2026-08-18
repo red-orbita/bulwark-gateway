@@ -163,6 +163,20 @@
     transition-timing-function: var(--sg-ease);
 }
 
+/* Enter/leave transition for Alpine `x-transition` (modals, dropdowns, menus,
+   drawers, tab panels). Replaces ad-hoc Tailwind `transition duration-150/200
+   ease-in/out` utilities so every appear/dismiss shares ONE curve (--sg-ease)
+   and ONE duration (--sg-dur) instead of a spread of 150/200ms + three easings.
+   Animates only opacity + transform (the properties Alpine's start/end classes
+   toggle: opacity-0, scale-95, translate-x-full …). Non-`!important` so the
+   global reduced-motion guard (`* { transition-duration: .001ms !important }`)
+   still neutralises it for users who opt out. */
+.sg-trans {
+    transition-property: opacity, transform;
+    transition-duration: var(--sg-dur);
+    transition-timing-function: var(--sg-ease);
+}
+
 .sg-btn-primary {
     background: linear-gradient(135deg, #0891b2, #06b6d4);
     color: #fff;

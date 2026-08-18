@@ -1127,3 +1127,109 @@ def test_served_css_entrance_keyframes_are_containing_block_safe(served_css):
     )
 
 
+# ─── Motion tokenisation (Fase 2) ────────────────────────────────────────────
+#
+# Every appear/dismiss animation must flow through the design-system tokens
+# (--sg-dur, --sg-ease) so the whole product shares ONE curve and ONE duration.
+# Before this pass the templates carried a spread of ad-hoc Tailwind utilities
+# (`transition duration-150/200 ease-in/ease-out`) that produced three easings
+# and two durations — a genuine "generic AI UI" tell. The `.sg-trans` helper
+# replaces them; these guards keep the regression from creeping back.
+
+# Alpine x-transition attributes carry the motion utilities. We only inspect the
+# *class-string* forms (`x-transition:enter="…"`), never the ambient CSS loops
+# (pulse-live / float) which are intentional, symmetric, opacity/transform-only
+# keyframes and are covered by their own reduced-motion guard.
+_X_TRANSITION_ATTR = re.compile(r'x-transition[:\.][a-z-]*(?:=\s*"([^"]*)")?')
+
+
+def _motion_templates() -> list[Path]:
+    return list(PAGES_DIR.glob("*.html")) + [BASE_HTML]
+
+
+def test_sg_trans_helper_is_token_driven(input_css):
+    """`.sg-trans` must be defined once, purely from tokens, animating only the
+    two compositor-friendly properties (opacity + transform) — never `all`."""
+    m = re.search(r"\.sg-trans\s*{([^}]*)}", input_css)
+    assert m, ".sg-trans helper missing from input.css"
+    body = m.group(1)
+    assert "transition-property: opacity, transform" in body, (
+        ".sg-trans must animate only opacity + transform (no reflow, no `all`)"
+    )
+    assert "all" not in body, ".sg-trans must never use `transition-property: all`"
+    assert "var(--sg-dur)" in body, ".sg-trans duration must be token-driven"
+    assert "var(--sg-ease)" in body, ".sg-trans easing must be token-driven"
+    # No hard-coded ms/s literals or literal easing curves leaking past the token.
+    assert "cubic-bezier(" not in body, ".sg-trans must reference --sg-ease, not a literal curve"
+    assert not re.search(r"\b\d+m?s\b", body), ".sg-trans must not hard-code a duration"
+
+
+def test_served_sg_trans_helper_is_token_driven(served_css):
+    """The token-driven helper must ship in the SRI-guarded minified stylesheet,
+    not just the source — otherwise the deployed image diverges from intent."""
+    m = re.search(r"\.sg-trans{([^}]*)}", served_css)
+    assert m, ".sg-trans helper missing from served tailwind.min.css — rebuild"
+    body = m.group(1)
+    assert "transition-property:opacity,transform" in body, (
+        "served .sg-trans must animate only opacity + transform"
+    )
+    assert "var(--sg-dur)" in body and "var(--sg-ease)" in body, (
+        "served .sg-trans must be token-driven"
+    )
+
+
+def test_alpine_x_transitions_use_sg_trans_not_ad_hoc_utilities():
+    """No Alpine `x-transition` may carry ad-hoc Tailwind timing utilities
+    (`duration-N`, `ease-in/out/linear`, a bare `transition` class) or a
+    `.duration.*` modifier — they must delegate to the `.sg-trans` helper."""
+    offenders: list[str] = []
+    for page in _motion_templates():
+        src = page.read_text(encoding="utf-8")
+        for m in _X_TRANSITION_ATTR.finditer(src):
+            full = m.group(0)
+            # `.duration.200ms` style modifier bypasses the token entirely.
+            if ".duration" in full:
+                offenders.append(f"{page.name}: {full}")
+            classes = (m.group(1) or "").split()
+            if any(
+                c == "transition"
+                or c.startswith("duration-")
+                or re.fullmatch(r"ease-(in|out|linear|in-out)", c)
+                for c in classes
+            ):
+                offenders.append(f"{page.name}: {full}")
+    assert not offenders, (
+        "x-transition still uses ad-hoc timing utilities instead of `sg-trans`:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_no_ad_hoc_duration_utilities_in_templates():
+    """Belt-and-braces: the `duration-N` Tailwind utility must not appear
+    anywhere in the templates (it is the fingerprint of un-tokenised motion)."""
+    offenders: list[str] = []
+    for page in _motion_templates():
+        src = page.read_text(encoding="utf-8")
+        for lineno, line in enumerate(src.splitlines(), 1):
+            if re.search(r"\bduration-\d", line):
+                offenders.append(f"{page.name}:{lineno}: {line.strip()}")
+    assert not offenders, "ad-hoc `duration-N` utilities remain:\n" + "\n".join(offenders)
+
+
+def test_base_html_inline_transitions_are_tokenized(base_src):
+    """The shared shell's inline CSS (skip-link, sidebar, toast, content wrapper)
+    must express its transitions through the motion tokens — no literal
+    `cubic-bezier(...)` curve and no bespoke transition timing."""
+    assert "cubic-bezier(" not in base_src, (
+        "base.html must reference --sg-ease, never inline a literal easing curve"
+    )
+    # The four shell transitions we tokenised must still be token-driven.
+    for needle in (
+        "transition: top var(--sg-dur) var(--sg-ease)",          # skip-link
+        "transition: width var(--sg-dur) var(--sg-ease)",        # sidebar
+        "slide-in-right var(--sg-dur-slow) var(--sg-ease)",      # toast
+        "transition: margin-left var(--sg-dur) var(--sg-ease)",  # content wrapper
+    ):
+        assert needle in base_src, f"shell transition lost its tokens: {needle!r}"
+
+

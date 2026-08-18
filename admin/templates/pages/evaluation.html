@@ -78,9 +78,9 @@
                         <p class="text-xs text-gray-500">Add legitimate requests to measure false positive rate</p>
                     </div>
                     <button @click="includeBenign = !includeBenign" type="button"
-                            class="relative w-10 h-5 rounded-full transition-colors duration-200"
+                            class="relative w-10 h-5 rounded-full sg-interactive"
                             :class="includeBenign ? 'bg-cyan-500' : 'bg-gray-700'">
-                        <span class="absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200"
+                        <span class="absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow sg-trans"
                               :class="includeBenign ? 'translate-x-5' : 'translate-x-0'"></span>
                     </button>
                 </div>

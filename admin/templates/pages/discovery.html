@@ -35,7 +35,7 @@
     </div>
 
     <!-- Tab 1: Network Scan -->
-    <div x-show="activeTab === 'network'" x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0" class="space-y-4">
+    <div x-show="activeTab === 'network'" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
         <div class="sg-card">
             <h3 class="text-sm font-semibold text-white mb-3">Network Agent Scan</h3>
             <p class="text-xs text-gray-400 mb-4">Discover AI agents and LLM endpoints on your network</p>
@@ -122,7 +122,7 @@
     </div>
 
     <!-- Tab 2: Shadow AI -->
-    <div x-show="activeTab === 'shadow'" x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0" class="space-y-4">
+    <div x-show="activeTab === 'shadow'" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
         <div class="sg-card">
             <div class="flex items-center justify-between mb-3">
                 <h3 class="text-sm font-semibold text-white">Shadow AI Detection</h3>
@@ -198,7 +198,7 @@
         </div>
     </div>
     <!-- Tab 3: MCP Risk -->
-    <div x-show="activeTab === 'mcp'" x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0" class="space-y-4">
+    <div x-show="activeTab === 'mcp'" x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" class="space-y-4">
         <div class="sg-card">
             <h3 class="text-sm font-semibold text-white mb-3">MCP Tool Risk Assessment</h3>
             <p class="text-xs text-gray-400 mb-4">Evaluate the security risk of an MCP tool before deployment</p>
