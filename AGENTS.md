@@ -1010,20 +1010,41 @@ Exporter features: batch flush (100 events or 1s), circuit breaker, exponential 
 
 ## 14. Container Security
 
-Both Dockerfiles use multi-stage builds:
+Both Dockerfiles use multi-stage builds with a Google Distroless runtime:
 
 ```
-Builder stage: python:3.11-slim → install dependencies
-Runtime stage: python:3.11-slim → copy only installed packages + source
+Builder stage:  python:3.13-slim-trixie (digest-pinned) → install dependencies
+Runtime stage:  gcr.io/distroless/python3-debian13:nonroot (digest-pinned)
+                → copy only installed packages + source
 
 Hardening:
-- Non-root user: `bulwark` (UID 10001)
+- Distroless runtime: NO shell (no /bin/sh), no package manager, no
+  coreutils — only the Python 3.13 interpreter + its stdlib
+- Non-root user: distroless `nonroot` (UID/GID 65532)
 - Read-only filesystem (tmpfs for /tmp)
 - No pip/setuptools in runtime image
-- No shell utilities (curl, wget) — only python stdlib
 - CAP_DROP ALL
 - No new privileges
 ```
+
+**Distroless implications** (important for anyone editing deploy manifests):
+- The proxy entrypoint is `docker/proxy_launcher.py` (derives `BULWARK_WORKERS`
+  then `os.execv`'s uvicorn) — there is no shell wrapper. The admin image uses an
+  exec-form uvicorn ENTRYPOINT.
+- **initContainers that run on the app image MUST use `python3`, not `sh`** —
+  `init-policies` / `init-models` use `python3 -c` (shutil.copy2 / hashlib).
+  initContainers on other images (e.g. `wait-postgresql` on the postgres image,
+  Filebeat sidecar) may still use `sh`.
+- The admin image encrypts `users.db` with SQLCipher via the self-contained
+  `sqlcipher3-binary` wheel (no native `.so` to copy into distroless).
+- **UID migration (999 → 65532)**: releases before the distroless migration ran
+  as UID 999. Existing PVCs are re-owned automatically on Kubernetes via
+  `fsGroup: 65532` + `fsGroupChangePolicy: Always`. For Docker Compose, `chown`
+  the volumes manually — see `docs/DEPLOYMENT.md` → "Upgrading (Distroless UID
+  Migration)".
+- Base images are pinned by SHA256 digest per the secure-coding standards.
+  Current OS-package CVE posture: 0 Python-library CVEs; residual CVEs are
+  base-OS only and unpatchable without a distroless base refresh.
 
 ---
 

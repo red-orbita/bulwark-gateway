@@ -5,6 +5,40 @@ All notable changes to Bulwark Gateway are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Migrated both container images (proxy and admin) to a **Google Distroless**
+  runtime (`gcr.io/distroless/python3-debian13:nonroot`, digest-pinned) built
+  from a `python:3.13-slim-trixie` builder stage. The runtime ships no shell, no
+  package manager and no coreutils — only the Python 3.13 interpreter and its
+  stdlib — shrinking the attack surface and reducing base-OS CVEs (0 Python-library
+  CVEs; residual CVEs are base-OS only).
+- The proxy now starts via `docker/proxy_launcher.py` (derives `BULWARK_WORKERS`
+  then `os.execv`'s uvicorn) instead of a shell entrypoint; the admin image uses
+  an exec-form uvicorn ENTRYPOINT.
+- The admin image encrypts `users.db` with SQLCipher via the self-contained
+  `sqlcipher3-binary` wheel (replacing `pysqlcipher3`), avoiding a native `.so`
+  copy into the distroless image.
+- Container user changed from UID 999 to the distroless `nonroot` **UID/GID
+  65532**. Kubernetes manifests set `fsGroup: 65532` + `fsGroupChangePolicy:
+  Always` so existing PersistentVolumes are re-owned automatically on upgrade.
+  Helm and Kustomize `securityContext` blocks were aligned accordingly.
+- `initContainers` running on the app image (`init-policies`, `init-models`) now
+  use `python3` instead of `sh`, since the distroless image has no shell.
+- Helm test hooks (`test-connection`, `test-security`) hardened for
+  PSS-restricted namespaces: compliant `securityContext`, `dnsConfig` `ndots:2`
+  for reliable in-cluster FQDN resolution, API-key authentication (bare key,
+  `:tenant` suffix stripped), and a dedicated `test-hook-access` NetworkPolicy.
+
+### Migration notes
+
+- **Kubernetes**: no manual action required — `fsGroupChangePolicy: Always`
+  re-owns existing PVCs from UID 999 to 65532 on the next mount.
+- **Docker Compose**: `chown` persistent volumes to `65532:65532` before
+  upgrading. See `docs/DEPLOYMENT.md` → "Upgrading (Distroless UID Migration)".
+
 ## [1.0.0] - 2026-08-18
 
 First stable release. Bulwark Gateway is a fail-closed security guardrail proxy
@@ -112,4 +146,5 @@ request on a pure-regex hot path with no LLM calls in the request pipeline.
 - Aligned all version strings across the codebase, Helm chart (`appVersion`),
   Kustomize image tags and OpenAPI spec to `1.0.0`.
 
+[Unreleased]: https://github.com/anomalyco/bulwark-gateway/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/anomalyco/bulwark-gateway/releases/tag/v1.0.0
