@@ -12,7 +12,7 @@
 | [Operations](OPERATIONS.md) | Day-to-day runbook: restarts, secret rotation, policy reload, backups |
 | [Troubleshooting](TROUBLESHOOTING.md) | Known issues and solutions (Redis, auth, SIEM, pods) |
 | [Notifications](NOTIFICATIONS.md) | Multi-channel alerting: Slack, Teams, Email, PagerDuty, etc. |
-| [Security Hardening](SECURITY-HARDENING.md) | Pentest results, remediations, security posture |
+| [Security Hardening](SECURITY-HARDENING.md) | Living security log: audits, remediations, OWASP LLM coverage, posture |
 | [API Reference](API-REFERENCE.md) | Proxy + Admin API endpoints, request/response formats |
 | [E2E Validation](E2E-VALIDATION.md) | Validate the full proxy pipeline (forward + output filter) in K8s via a mock LLM |
 | [Roadmap](ROADMAP.md) | Implementation plan: ML detection, multilingual, SDK mode, plugin hub |

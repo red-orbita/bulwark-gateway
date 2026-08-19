@@ -315,7 +315,7 @@ Detailed guides are in the [`docs/`](docs/) directory:
 | [**Operations**](docs/OPERATIONS.md) | Runbook: account reset, secret rotation, backup, scaling |
 | [**Troubleshooting**](docs/TROUBLESHOOTING.md) | Redis unhealthy, auth issues, SIEM, pod errors |
 | [**Notifications**](docs/NOTIFICATIONS.md) | Multi-channel alerting setup (Slack, Teams, Email, PagerDuty) |
-| [**Security Hardening**](docs/SECURITY-HARDENING.md) | Pentest results, remediations, OWASP LLM coverage |
+| [**Security Hardening**](docs/SECURITY-HARDENING.md) | Living security log: audits, remediations, OWASP LLM coverage |
 | [**API Reference**](docs/API-REFERENCE.md) | Proxy + Admin endpoints, request/response formats |
 
 ---

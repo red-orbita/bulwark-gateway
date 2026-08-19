@@ -1,15 +1,58 @@
-# Security Hardening
+# Security Hardening & Assurance
 
-Summary of security audits, penetration tests, and remediations applied to Bulwark Gateway.
+This document is the authoritative record of the security posture of Bulwark
+Gateway: the audits and penetration tests it has undergone, the remediations
+applied, the threats it covers, and — going forward — a **living log of every
+security improvement** shipped after the 1.0.0 release.
+
+It is written to be read by three audiences: security engineers reviewing the
+design, auditors verifying due diligence, and maintainers who must keep the
+record accurate as the product evolves.
 
 ## Table of Contents
 
+- [How This Document Is Maintained](#how-this-document-is-maintained)
 - [Security Posture](#security-posture)
-- [Audit 1: Initial Security Review (37 findings)](#audit-1-initial-security-review)
-- [Audit 2: Penetration Test (17 findings)](#audit-2-penetration-test)
-- [Threat Coverage (OWASP LLM Top 10)](#threat-coverage)
+- [Security Update Log](#security-update-log)
+- [Audit History](#audit-history)
+  - [Audit 1: Initial Security Review (37 findings)](#audit-1-initial-security-review)
+  - [Audit 2: Penetration Test (17 findings)](#audit-2-penetration-test)
+  - [Audit 3: 1.0.0 Release Hardening (5 findings)](#audit-3-100-release-hardening)
+- [Threat Coverage (OWASP LLM Top 10 — 2025)](#threat-coverage-owasp-llm-top-10--2025)
 - [Defense-in-Depth Layers](#defense-in-depth-layers)
+- [Scope & Known Limitations](#scope--known-limitations)
 - [Ongoing Security Practices](#ongoing-security-practices)
+
+---
+
+## How This Document Is Maintained
+
+This is a **living document**, not a point-in-time snapshot. It is part of the
+definition of done for security-relevant work.
+
+**Update rule.** Any change that alters the security posture — authentication,
+authorization, network policy, container/runtime hardening, cryptography,
+dependency/supply-chain, secret handling, or guardrail coverage — MUST add a
+dated entry to the [Security Update Log](#security-update-log) **in the same pull
+request** that makes the change.
+
+**Entry format.** Each entry is stamped with a date and the release or commit it
+applies to, states *what changed*, *why it matters*, and *how it was verified*
+(test, scan, or live validation), and references the files touched.
+
+**Relationship to the CHANGELOG.** `CHANGELOG.md` records *all* user-facing
+changes. This document records the **security-relevant subset** with the extra
+remediation and verification detail an auditor needs. When both apply, the
+CHANGELOG entry is the summary and the Security Update Log entry is the evidence.
+
+**Accuracy over precision.** Prefer descriptive, verifiable statements over
+fragile hard-coded counts. Where a count is given, it is a floor ("1,300+
+tests") or is explicitly tied to a source of truth in the repository.
+
+**Ownership.** Changes to `src/middleware/auth.py`, `src/models.py`,
+`src/routes/proxy.py`, the guardrail engines, and the Helm/Kustomize
+`securityContext` / NetworkPolicy templates require security review and a
+corresponding Security Update Log entry.
 
 ---
 
@@ -18,20 +61,61 @@ Summary of security audits, penetration tests, and remediations applied to Bulwa
 | Aspect | Implementation |
 |--------|----------------|
 | Auth model | Fail-closed (deny on error) |
-| Network | Default-deny egress, minimal ingress |
-| Secrets | Mounted read-only, never in env vars directly |
-| Database | SQLCipher (AES-256) optional encryption |
-| Containers | Non-root, read-only rootfs, no capabilities |
+| Network | Default-deny egress, minimal ingress, zero-trust NetworkPolicies |
+| Secrets | Mounted read-only via `*_FILE`, never in env vars directly |
+| Database | SQLCipher (AES-256) encryption for the admin `users.db` |
+| Containers | Google Distroless runtime — non-root (UID 65532), read-only rootfs, no shell, all capabilities dropped |
 | Pod Security | Restricted PSS (proxy/admin), Baseline (Wazuh) |
-| Supply chain | Pinned dependencies, no eval/exec |
+| Supply chain | Digest-pinned base images, hash-pinned lockfiles, SBOM generated in CI, no `eval`/`exec`/`pickle` |
+| Hot path | Pure regex, no LLM calls, no external I/O during request processing |
 
 ---
 
-## Audit 1: Initial Security Review
+## Security Update Log
+
+Reverse-chronological. Newest entries first. Every security-relevant change lands
+here (see [How This Document Is Maintained](#how-this-document-is-maintained)).
+
+### 2026-08-19 — Distroless container migration & runtime hardening (post-1.0.0)
+
+Both container images were migrated to a **Google Distroless** runtime, removing
+the shell and OS toolchain from the attack surface and eliminating all
+Python-library CVEs.
+
+| Area | Change | Why it matters | File(s) |
+|------|--------|----------------|---------|
+| Base image | Runtime is `gcr.io/distroless/python3-debian13:nonroot` (SHA256-pinned), built from a `python:3.13-slim-trixie` builder (SHA256-pinned) | No shell (`/bin/sh` absent), no package manager, no coreutils — only the Python 3.13 interpreter + stdlib. A compromised process has no shell to pivot from | `Dockerfile`, `docker/Dockerfile.admin` |
+| Entry point | Proxy starts via `docker/proxy_launcher.py` (`os.execv` uvicorn after deriving `BULWARK_WORKERS`); admin uses an exec-form uvicorn ENTRYPOINT | Removes the shell wrapper that distroless can no longer provide | `docker/proxy_launcher.py` |
+| Runtime user | Container user changed from UID 999 to distroless `nonroot` **UID/GID 65532** | Aligns with the distroless image and PSS `restricted` | `Dockerfile`, `docker/Dockerfile.admin` |
+| PVC migration | Kubernetes manifests set `fsGroup: 65532` + `fsGroupChangePolicy: Always` | Existing PersistentVolumes owned by UID 999 are re-owned automatically on the next mount — zero-touch upgrade | `helm/.../proxy.yaml`, `helm/.../admin.yaml`, `helm/.../dedicated-tenants.yaml`, `k8s/base/proxy.yaml`, `k8s/base/admin.yaml` |
+| initContainers | `init-policies` / `init-models` rewritten from `sh` to `python3 -c` (shutil.copy2, hashlib) | The app image has no shell; other images (postgres, Filebeat) still use `sh` | `helm/.../proxy.yaml`, `helm/.../dedicated-tenants.yaml`, `k8s/base/proxy.yaml` |
+| Admin DB crypto | `pysqlcipher3` replaced with the self-contained `sqlcipher3-binary` wheel | No native `.so` to copy into the distroless image; SQLCipher AES-256 encryption of `users.db` preserved | `admin/services/user_store.py`, `requirements-admin.lock` |
+| Helm test hooks | `test-connection` / `test-security` given PSS-compliant `securityContext`, `dnsConfig ndots:2`, API-key auth (bare key, `:tenant` suffix stripped), and a dedicated `test-hook-access` NetworkPolicy | Post-deploy validation runs safely inside a `restricted` namespace under zero-trust egress | `helm/.../tests/*.yaml`, `helm/.../network-policies.yaml` |
+
+**CVE posture.** 0 Python-library CVEs. Residual CVEs are base-OS only (e.g. one
+fixable `libexpat1` finding), unpatchable without a distroless base refresh and
+tracked as such.
+
+**Verification.**
+- `helm test bulwark-gateway` — both hooks pass on a live minikube deployment.
+- `scripts/validate-deployment.sh --skip-backend` — 16 PASS / 0 FAIL (0 critical).
+- UID 999 → 65532 migration proven live: the enrichment PVC was re-owned on mount
+  via `fsGroupChangePolicy: Always` and remained writable.
+- CI (`.github/workflows/security.yml`) green: Bandit, Semgrep, Trivy, pip-audit,
+  gitleaks/TruffleHog, SBOM, license compliance.
+
+---
+
+## Audit History
+
+Point-in-time audits that predate the living log above. Retained verbatim as the
+historical remediation record.
+
+### Audit 1: Initial Security Review
 
 **37 findings remediated** across Critical (8), High (12), Medium (11), Low (5).
 
-### Critical Findings (C-01 to C-08)
+#### Critical Findings (C-01 to C-08)
 
 | ID | Finding | Remediation |
 |----|---------|-------------|
@@ -44,7 +128,7 @@ Summary of security audits, penetration tests, and remediations applied to Bulwa
 | C-07 | CORS wildcard (*) | Configurable origins, no wildcard in production |
 | C-08 | No audit logging | Immutable audit log (SQLite, exportable) |
 
-### High Findings (H-02 to H-13)
+#### High Findings (H-02 to H-13)
 
 | ID | Finding | Remediation |
 |----|---------|-------------|
@@ -61,17 +145,15 @@ Summary of security audits, penetration tests, and remediations applied to Bulwa
 | H-12 | No integrity check on config | SHA256 hash verification on reload |
 | H-13 | Redis without auth | Password required, dangerous commands blocked |
 
-### Medium and Low
+#### Medium and Low
 
 Covered various hardening: CSP headers, cookie security, log injection prevention, dependency updates, documentation gaps.
 
----
-
-## Audit 2: Penetration Test
+### Audit 2: Penetration Test
 
 **17 findings remediated** (5 Critical, 7 High, 5 Medium).
 
-### Critical (C-01 to C-05)
+#### Critical (C-01 to C-05)
 
 | ID | Finding | Remediation | File |
 |----|---------|-------------|------|
@@ -81,7 +163,7 @@ Covered various hardening: CSP headers, cookie security, log injection preventio
 | C-04 | Service account tokens auto-mounted | `automountServiceAccountToken: false` for Grafana + Prometheus | `k8s/monitoring/prometheus-grafana.yaml` |
 | C-05 | `/health/stats` unauthenticated | Explicit tenant auth check added | `src/routes/health.py` |
 
-### High (H-01 to H-07)
+#### High (H-01 to H-07)
 
 | ID | Finding | Remediation | File |
 |----|---------|-------------|------|
@@ -93,7 +175,7 @@ Covered various hardening: CSP headers, cookie security, log injection preventio
 | H-06 | K8s API accessible from pods | Blocked by 10.0.0.0/8 egress exclusion in NetworkPolicy | `k8s/base/network-policies.yaml` |
 | H-07 | Grafana unrestricted egress | Dedicated NetworkPolicy: only Prometheus:9090 + kube-system DNS | `k8s/base/network-policies.yaml` |
 
-### Medium (M-01 to M-05)
+#### Medium (M-01 to M-05)
 
 | ID | Finding | Remediation | File |
 |----|---------|-------------|------|
@@ -103,9 +185,7 @@ Covered various hardening: CSP headers, cookie security, log injection preventio
 | M-04 | Telemetry PVC could persist sensitive data | Changed to `emptyDir` (Memory, 50Mi) — ephemeral | `k8s/base/proxy.yaml` |
 | M-05 | No default-deny egress | Added default-deny + explicit allow rules | `k8s/base/network-policies.yaml` |
 
----
-
-## Audit 3: 1.0.0 Release Hardening
+### Audit 3: 1.0.0 Release Hardening
 
 Findings closed as part of the 1.0.0 stable release. See `CHANGELOG.md` for the
 full release entry.
@@ -124,20 +204,30 @@ graph, proving under-privileged callers are rejected at the HTTP boundary
 
 ---
 
-## Threat Coverage (OWASP LLM Top 10)
+## Threat Coverage (OWASP LLM Top 10 — 2025)
 
-| # | Threat | Coverage | Detection |
-|---|--------|----------|-----------|
-| LLM01 | Prompt Injection | Input Guardrail | Regex patterns, known injection signatures |
-| LLM02 | Insecure Output Handling | Output Filter | Secret/PII/credential redaction |
-| LLM03 | Training Data Poisoning | N/A | Out of scope (LLM provider responsibility) |
-| LLM04 | Model Denial of Service | Rate Limiter | Per-tenant rate limits, request size limits |
-| LLM05 | Supply Chain Vulnerabilities | N/A | Pinned deps, no dynamic code loading |
-| LLM06 | Sensitive Information Disclosure | Output Filter + Input Guardrail | Pattern matching for secrets, PII |
-| LLM07 | Insecure Plugin Design | Tool Policy | Per-tenant tool allowlist/blocklist |
-| LLM08 | Excessive Agency | Tool Policy + Streaming Buffer | Tool calls validated before execution |
-| LLM09 | Overreliance | WARN verdict | Flag suspicious but non-blocking patterns |
-| LLM10 | Model Theft | Auth + Network | JWT/API key auth, network segmentation |
+Mapped to the **2025** revision of the OWASP Top 10 for LLM Applications. Coverage
+is stated honestly: ✅ enforced control, ◑ partial / defense-in-depth, — out of
+scope (provider responsibility).
+
+| # | Threat (2025) | Coverage | Control |
+|---|---------------|----------|---------|
+| LLM01 | Prompt Injection | ✅ | Input Guardrail: regex signatures, Unicode NFKC normalization, entropy detection, multi-layer decoding |
+| LLM02 | Sensitive Information Disclosure | ✅ | Output Filter (secret/PII/credential redaction) + Input Guardrail exfiltration patterns |
+| LLM03 | Supply Chain | ✅ | Digest-pinned base images, hash-pinned lockfiles, SBOM in CI, no dynamic code loading |
+| LLM04 | Data and Model Poisoning | ◑ | RAG chunk scanner + memory guard for retrieval/vector poisoning; training-time poisoning is provider responsibility |
+| LLM05 | Improper Output Handling | ✅ | Output Filter + streaming (SSE) sliding-window buffer |
+| LLM06 | Excessive Agency | ✅ | Tool Policy engine (per-agent RBAC, allow/deny, `max_tool_calls`) + tool_call buffering before execution |
+| LLM07 | System Prompt Leakage | ✅ | Output Filter + Input Guardrail detection of system-prompt override/leak attempts |
+| LLM08 | Vector and Embedding Weaknesses | ◑ | Embedding scanner + RAG memory guard (semantic similarity, poisoning detection) |
+| LLM09 | Misinformation | ◑ | WARN verdict + output-validation scanners (hallucination, grounding, relevance) |
+| LLM10 | Unbounded Consumption | ✅ | Per-tenant rate limiter, request/response size limits, `max_tokens` enforcement |
+
+> This mapping was updated from the 2023 list. The most material changes: former
+> "Training Data Poisoning" (LLM03) is now "Data and Model Poisoning" (LLM04);
+> "Model Theft" was retired in favor of "Unbounded Consumption" (LLM10); and
+> "System Prompt Leakage" (LLM07) and "Vector and Embedding Weaknesses" (LLM08)
+> are new categories, both of which Bulwark now maps explicit controls to.
 
 ---
 
@@ -145,47 +235,70 @@ graph, proving under-privileged callers are rejected at the HTTP boundary
 
 ```
 Layer 1: Network
-  - Default-deny NetworkPolicies
+  - Default-deny NetworkPolicies (zero-trust)
   - Ingress with TLS termination
   - Separate subdomains (data plane vs control plane)
-  - Private IP egress blocked
+  - Private IP egress blocked; K8s API unreachable from app pods
 
 Layer 2: Authentication
   - JWT with audience + issuer validation
-  - API key validation
+  - API key validation (bare key, tenant-scoped)
   - Fail-closed on any auth error
-  - Session revocation via Redis
+  - Session revocation via Redis; TOTP MFA
 
 Layer 3: Authorization
   - Per-tenant RBAC policies
-  - Tool allowlists/blocklists
+  - Tool allowlists/blocklists, argument allow/deny
   - Admin portal: 4 roles with granular permissions
 
 Layer 4: Input Validation
   - Request size limits
-  - Regex-based injection detection
+  - Regex-based injection detection (Unicode-normalized, entropy-aware)
   - IOC matching (threat intelligence)
-  - Tool policy enforcement
+  - Tool policy enforcement (validated before execution)
 
 Layer 5: Output Protection
-  - Secret/credential redaction
+  - Secret/credential/private-key redaction
   - PII detection and masking
-  - Response size limits
+  - Response size limits; streaming buffered before yield
 
 Layer 6: Runtime Hardening
-  - Non-root containers
-  - Read-only root filesystem
-  - No capabilities (drop ALL)
-  - Memory-backed ephemeral storage
-  - automountServiceAccountToken: false
+  - Google Distroless runtime: no shell, no package manager, no coreutils
+  - Non-root (UID 65532), read-only root filesystem
+  - No capabilities (drop ALL), no new privileges
+  - Memory-backed ephemeral storage; automountServiceAccountToken: false
+  - Digest-pinned base images; 0 Python-library CVEs
 
 Layer 7: Monitoring & Response
   - Structured security events (ECS format)
-  - SIEM export (13 platforms)
-  - Real-time notifications (9 channels)
+  - SIEM export: 4 transports (file/HTTP/syslog/TCP-TLS) covering 13+ platforms
+  - Real-time notifications across 8 channels
   - Prometheus metrics + Grafana dashboards
   - Immutable audit log
 ```
+
+---
+
+## Scope & Known Limitations
+
+Stated plainly so operators do not over-rely on any single layer.
+
+- **Not a WAF for classic web attacks.** The input guardrail targets LLM-layer
+  threats. Classic SQL injection (`'; DROP TABLE …`), XSS, and bare path
+  traversal on free-form chat input are **not** reliably matched by design — they
+  are enforced where the payload actually reaches a database or filesystem: the
+  tool-argument layer (`tool_policy.py` path-traversal detection, `denied_arguments`)
+  and the output filter. Some `UNION SELECT`-style SQLi is caught incidentally by
+  exfiltration/tool-abuse patterns.
+- **Model/training-time poisoning is out of scope** (LLM04) — it is the LLM
+  provider's responsibility. Bulwark covers retrieval/vector-store poisoning on
+  the RAG path.
+- **Regex hot path is signature-based.** Novel, heavily obfuscated attacks may
+  evade static patterns; the ML scanners and red-team framework exist to close
+  this gap, and the `WARN` verdict surfaces suspicious-but-non-blocking traffic.
+- **Residual base-OS CVEs.** The distroless runtime carries base-OS CVEs that
+  cannot be patched without a base-image refresh; these are tracked and are
+  refreshed when a fixed digest is published.
 
 ---
 
@@ -193,10 +306,12 @@ Layer 7: Monitoring & Response
 
 ### Before Each Release
 
-1. Run full test suite (`pytest -v`) — 1,300+ tests
-2. Run `ruff check src/ tests/` — zero warnings
+1. Run full test suite (`pytest -q`) — 1,300+ tests
+2. Run `ruff check src/ tests/ admin/` — zero warnings
 3. Run `mypy src/` — type safety
 4. Review any changes to `src/middleware/auth.py` or `src/models.py`
+5. Confirm the [Security Update Log](#security-update-log) reflects every
+   security-relevant change in the release
 
 ### Periodic Tasks
 
@@ -205,8 +320,9 @@ Layer 7: Monitoring & Response
 | Rotate JWT secrets | Monthly | See [Operations](OPERATIONS.md#jwt-secret-rotation) |
 | Update IOC database | Daily (automated via feeds) | `config/feeds/` YAML configs |
 | Review audit logs | Weekly | Admin portal → Audit Log |
-| Dependency updates | Monthly | `pip-audit`, `safety check` |
-| Pentest / red team | Quarterly | Use built-in red team skills |
+| Dependency updates | Monthly | `pip-audit`, hash-pinned lockfiles |
+| Refresh distroless base image | On fixed-CVE digest publish | Re-pin the SHA256 digest in `Dockerfile` / `docker/Dockerfile.admin` |
+| Pentest / red team | Quarterly | Use built-in red team framework |
 | Certificate renewal | Before expiry | cert-manager (automatic) or manual |
 
 ### Red Team Testing
