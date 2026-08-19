@@ -14,6 +14,7 @@ Complete guide for deploying Bulwark Gateway in production and development envir
 - [High Availability](#high-availability)
 - [DNS Configuration](#dns-configuration)
 - [Resource Sizing](#resource-sizing)
+- [Upgrading (Distroless UID Migration)](#upgrading-distroless-uid-migration)
 
 ---
 
@@ -2120,3 +2121,45 @@ For internal-only deployments, use split-horizon DNS or private hosted zones.
 - **Small** (< 100 req/s): 2 proxy replicas, default limits
 - **Medium** (100-1000 req/s): 3-5 proxy replicas, increase CPU limit to 1000m
 - **Large** (> 1000 req/s): 5-10 proxy replicas, dedicated node pool, Redis cluster mode
+
+---
+
+## Upgrading (Distroless UID Migration)
+
+Starting with the Google Distroless images, the proxy and admin containers run as
+the distroless `nonroot` user **UID/GID 65532** (previously `999`). Persistent data
+written by earlier releases is still owned by `999`, so a plain image bump can leave
+the new process unable to write to its volumes.
+
+**Affected volumes:**
+- **Proxy:** `shared/enrichment` (attack replay DB), policies cache.
+- **Admin:** `admin_data` (SQLCipher `users.db` / `admin.db`), `siem_stats`, `telemetry_data`.
+
+Symptom after upgrade: `attempt to write a readonly database` or permission-denied
+errors on the affected SQLite files.
+
+### Kubernetes (Helm / Kustomize) — automatic
+
+The pod `securityContext` sets `fsGroup: 65532` with `fsGroupChangePolicy: Always`,
+so the kubelet recursively re-chowns each PVC to GID `65532` on mount. **No manual
+action is required** — just `helm upgrade` (or re-apply the manifests) and roll the pods.
+
+> If you use very large PVCs, the recursive chown on first mount can add a few seconds
+> to pod startup. This is a one-time cost per volume.
+
+### Docker Compose — manual chown
+
+Docker does **not** re-chown named volumes automatically. Before upgrading existing
+deployments, re-own the persistent volumes once:
+
+```bash
+docker compose down
+# Re-own each persistent volume to the distroless UID/GID (65532)
+for v in admin_data enrichment_data policies siem_stats telemetry_data; do
+  docker run --rm -v "bulwark-gateway_${v}:/vol" alpine:3.20 \
+    chown -R 65532:65532 /vol
+done
+docker compose up -d
+```
+
+Fresh deployments need no action — new volumes inherit the image mountpoint owner (65532).

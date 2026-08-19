@@ -12,7 +12,7 @@ jinja2==3.1.6
 pydantic==2.13.4
 pydantic-settings==2.14.2
 pyotp==2.9.0
-pysqlcipher3==1.2.0
+sqlcipher3-binary==0.6.0
 python-multipart==0.0.31
 pyyaml==6.0.3
 structlog==25.5.0

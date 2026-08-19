@@ -397,7 +397,7 @@ curl -sk -I https://admin.bulwark-gateway.local/login | grep content-security
 
 **Symptoms**:
 ```
-pysqlcipher3.dbapi2.DatabaseError: file is not a database
+sqlcipher3.dbapi2.DatabaseError: file is not a database
 ERROR: Application startup failed. Exiting.
 ```
 
