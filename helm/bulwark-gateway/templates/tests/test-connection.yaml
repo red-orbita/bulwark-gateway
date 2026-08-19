@@ -16,9 +16,32 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  # Query cluster FQDNs directly (avoid ndots:5 search-domain expansion, which
+  # is flaky under the musl resolver + zero-trust egress policy).
+  dnsConfig:
+    options:
+      - name: ndots
+        value: "2"
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: proxy-health
       image: curlimages/curl:8.5.0
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      env:
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bulwark-proxy-secrets
+              key: api-keys
       command:
         - /bin/sh
         - -c
@@ -43,9 +66,11 @@ spec:
           echo "  PASS: Admin is healthy"
           echo ""
 
-          # Test 3: Proxy stats endpoint
+          # Test 3: Proxy stats endpoint (requires authentication)
           echo "[3/4] Testing proxy stats endpoint..."
+          KEY=$(echo "${API_KEY}" | cut -d',' -f1 | cut -d':' -f1)
           STATS_RESP=$(curl -sf --max-time 10 \
+            -H "Authorization: Bearer ${KEY}" \
             http://proxy.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:8080/health/stats)
           echo "  Proxy stats: ${STATS_RESP}"
           echo "  PASS: Stats endpoint responding"

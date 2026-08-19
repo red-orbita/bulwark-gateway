@@ -115,7 +115,24 @@ spec:
         - name: init-policies
           image: {{ include "bulwark-gateway.proxy.image" . }}
           imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
-          command: ["sh", "-c", "cp -rn /app/config/policies/* /policies/ 2>/dev/null || true"]
+          # Distroless has no shell/coreutils; use the bundled Python to seed
+          # policies into the PVC (no-clobber, mirrors `cp -rn`).
+          command:
+            - python3
+            - -c
+            - |
+              import shutil, pathlib
+              src = pathlib.Path("/app/config/policies")
+              dst = pathlib.Path("/policies")
+              if src.is_dir():
+                  for p in src.rglob("*"):
+                      target = dst / p.relative_to(src)
+                      if p.is_dir():
+                          target.mkdir(parents=True, exist_ok=True)
+                      elif not target.exists():
+                          target.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copy2(p, target)
+              print("policies seeded")
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -128,45 +145,47 @@ spec:
         - name: init-models
           image: {{ include "bulwark-gateway.proxy.image" . }}
           imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
+          # Distroless has no shell/sha256sum; use the bundled Python (hashlib)
+          # for presence checks and SHA-256 integrity verification.
           command:
-            - sh
+            - python3
             - -c
             - |
-              echo "Checking ML models..."
-              MODELS="{{ join " " .Values.proxy.ml.models }}"
-              for model in $MODELS; do
-                if [ -f "/models/$model/model.onnx" ]; then
-                  echo "  Model '$model' already present"
-                elif [ -f "/models/$model/model.safetensors" ]; then
-                  echo "  Model '$model' already present (safetensors)"
-                else
-                  echo "  Model '$model' not found — will run without it (graceful degradation)"
-                fi
-              done
-              # Integrity verification (SHA-256) for downloaded models
+              import hashlib, sys
+              from pathlib import Path
+
+              print("Checking ML models...")
+              models = "{{ join " " .Values.proxy.ml.models }}".split()
+              for model in models:
+                  base = Path("/models") / model
+                  if (base / "model.onnx").is_file():
+                      print(f"  Model '{model}' already present")
+                  elif (base / "model.safetensors").is_file():
+                      print(f"  Model '{model}' already present (safetensors)")
+                  else:
+                      print(f"  Model '{model}' not found - will run without it (graceful degradation)")
+
+              def verify(name, path, expected):
+                  f = Path(path)
+                  if not f.is_file():
+                      return
+                  h = hashlib.sha256()
+                  with open(f, "rb") as fh:
+                      for chunk in iter(lambda: fh.read(1048576), b""):
+                          h.update(chunk)
+                  actual = h.hexdigest()
+                  if actual != expected:
+                      print(f"FATAL: {name} checksum mismatch! Expected={expected} Got={actual}")
+                      sys.exit(1)
+                  print(f"  Integrity verified: {name} ({actual})")
+
               {{- if .Values.proxy.mlModels.checksums.injection_classifier }}
-              if [ -f "/models/injection-classifier/model.safetensors" ]; then
-                EXPECTED="{{ .Values.proxy.mlModels.checksums.injection_classifier }}"
-                ACTUAL=$(sha256sum /models/injection-classifier/model.safetensors | cut -d' ' -f1)
-                if [ "${ACTUAL}" != "${EXPECTED}" ]; then
-                  echo "FATAL: injection-classifier checksum mismatch! Expected=${EXPECTED} Got=${ACTUAL}"
-                  exit 1
-                fi
-                echo "  Integrity verified: injection-classifier (${ACTUAL})"
-              fi
+              verify("injection-classifier", "/models/injection-classifier/model.safetensors", "{{ .Values.proxy.mlModels.checksums.injection_classifier }}")
               {{- end }}
               {{- if .Values.proxy.mlModels.checksums.toxicity }}
-              if [ -f "/models/toxicity/model.safetensors" ]; then
-                EXPECTED="{{ .Values.proxy.mlModels.checksums.toxicity }}"
-                ACTUAL=$(sha256sum /models/toxicity/model.safetensors | cut -d' ' -f1)
-                if [ "${ACTUAL}" != "${EXPECTED}" ]; then
-                  echo "FATAL: toxicity checksum mismatch! Expected=${EXPECTED} Got=${ACTUAL}"
-                  exit 1
-                fi
-                echo "  Integrity verified: toxicity (${ACTUAL})"
-              fi
+              verify("toxicity", "/models/toxicity/model.safetensors", "{{ .Values.proxy.mlModels.checksums.toxicity }}")
               {{- end }}
-              echo "Model check complete"
+              print("Model check complete")
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

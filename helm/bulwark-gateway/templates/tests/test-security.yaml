@@ -16,9 +16,26 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  # Query cluster FQDNs directly (avoid ndots:5 search-domain expansion, which
+  # is flaky under the musl resolver + zero-trust egress policy).
+  dnsConfig:
+    options:
+      - name: ndots
+        value: "2"
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: security-smoke
       image: curlimages/curl:8.5.0
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
       env:
         - name: API_KEY
           valueFrom:
@@ -31,8 +48,8 @@ spec:
         - |
           set -e
           PROXY="http://proxy.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:8080"
-          # Extract first API key (comma-separated list)
-          KEY=$(echo "${API_KEY}" | cut -d',' -f1)
+          # Extract first API key (comma-separated list, strip :tenant suffix)
+          KEY=$(echo "${API_KEY}" | cut -d',' -f1 | cut -d':' -f1)
           PASS=0
           FAIL=0
 

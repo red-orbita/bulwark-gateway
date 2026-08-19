@@ -54,7 +54,23 @@ spec:
           # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
           image: bulwark-gateway-proxy:0.4.9-hardened
           imagePullPolicy: IfNotPresent
-          command: ["sh", "-c", "cp -rn /app/config/policies/* /policies/ 2>/dev/null || true"]
+          # Distroless has no shell/coreutils; seed policies via bundled Python.
+          command:
+            - python3
+            - -c
+            - |
+              import shutil, pathlib
+              src = pathlib.Path("/app/config/policies")
+              dst = pathlib.Path("/policies")
+              if src.is_dir():
+                  for p in src.rglob("*"):
+                      target = dst / p.relative_to(src)
+                      if p.is_dir():
+                          target.mkdir(parents=True, exist_ok=True)
+                      elif not target.exists():
+                          target.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copy2(p, target)
+              print("policies seeded")
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
