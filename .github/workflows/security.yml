@@ -251,28 +251,32 @@ jobs:
 
       - name: Trivy proxy image (table)
         run: |
-          trivy image --scanners vuln \
+          # --ignore-unfixed: only report vulnerabilities that have a fixed
+          # package version available. Debian base-image CVEs without an
+          # upstream fix are not actionable (apt upgrade cannot resolve them);
+          # rebuilding on a schedule picks up fixes as Debian publishes them.
+          trivy image --scanners vuln --ignore-unfixed \
             --format table --output trivy-proxy-table.txt \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_PROXY }}:scan"
 
       - name: Trivy proxy image (SARIF)
         run: |
-          trivy image --scanners vuln \
+          trivy image --scanners vuln --ignore-unfixed \
             --format sarif --output trivy-proxy.sarif \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_PROXY }}:scan"
 
       - name: Trivy admin image (table)
         run: |
-          trivy image --scanners vuln \
+          trivy image --scanners vuln --ignore-unfixed \
             --format table --output trivy-admin-table.txt \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_ADMIN }}:scan"
 
       - name: Trivy admin image (SARIF)
         run: |
-          trivy image --scanners vuln \
+          trivy image --scanners vuln --ignore-unfixed \
             --format sarif --output trivy-admin.sarif \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_ADMIN }}:scan"
