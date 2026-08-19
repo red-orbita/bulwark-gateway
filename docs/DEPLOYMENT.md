@@ -2084,6 +2084,39 @@ spec:
 
 PDBs ensure minimum availability during node maintenance and cluster upgrades. These are defined in `k8s/base/pdb.yaml`.
 
+### Shared Storage Access Mode (Multi-Node)
+
+The proxy mounts several PersistentVolumeClaims that are **shared with the admin
+service** (`policies`, `siem-stats`, `admin-data`, `notifications-data`,
+`enrichment-data`). By default these PVCs use `ReadWriteOnce` (RWO), which binds
+a volume to a **single node**.
+
+This default is portable — it works on every block-storage CSI driver (AWS EBS,
+GCP PD, Azure Disk) and on single-node clusters (minikube, kind). **But** when
+the proxy scales to more than one replica (HPA 2→10) and the anti-affinity rules
+spread those replicas across **different nodes**, RWO triggers Kubernetes
+`Multi-Attach volume` errors and the extra replicas stay `ContainerCreating` —
+the HPA cannot actually scale out.
+
+For genuine multi-node HA, switch the shared PVCs to `ReadWriteMany` (RWX) and
+point them at an **RWX-capable StorageClass**:
+
+```bash
+helm upgrade bulwark ./helm/bulwark-gateway \
+  --set persistence.accessMode=ReadWriteMany \
+  --set persistence.storageClass=<rwx-storage-class>
+```
+
+RWX-capable drivers include NFS, CephFS (Rook), Azure Files, AWS EFS, and GCP
+Filestore. Block-storage classes (EBS/PD/Azure Disk) do **not** support RWX and
+will leave the PVC `Pending`.
+
+> Admin-only PVCs (`telemetry-data`, `reports`) always stay RWO — they have a
+> single writer and are never mounted by the proxy.
+>
+> **Kustomize users:** `k8s/base/volumes.yaml` ships RWO; patch the shared PVCs
+> to `ReadWriteMany` via an overlay for multi-node clusters.
+
 ### Redis High Availability
 
 The default `redis.mode` is `standalone` (single node). For production HA, set

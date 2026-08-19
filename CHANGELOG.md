@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `persistence.accessMode` Helm value (default `ReadWriteOnce`) applied to the
+  PVCs shared between proxy and admin (`policies`, `siem-stats`, `admin-data`,
+  `notifications-data`, `enrichment-data`). Set it to `ReadWriteMany` with an
+  RWX-capable `storageClass` for multi-node HA — otherwise scaling the proxy
+  across nodes triggers Kubernetes `Multi-Attach` errors. Admin-only PVCs
+  (`telemetry-data`, `reports`) remain `ReadWriteOnce`. See `docs/DEPLOYMENT.md`
+  → "Shared Storage Access Mode (Multi-Node)".
+
 ### Changed
 
 - Migrated both container images (proxy and admin) to a **Google Distroless**
@@ -31,6 +41,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PSS-restricted namespaces: compliant `securityContext`, `dnsConfig` `ndots:2`
   for reliable in-cluster FQDN resolution, API-key authentication (bare key,
   `:tenant` suffix stripped), and a dedicated `test-hook-access` NetworkPolicy.
+
+### Fixed
+
+- Kustomize build (`kubectl apply -k k8s/`) no longer fails with a namespace
+  ID conflict: the global `namespace:` directive rewrote both the
+  `bulwark-gateway` and `bulwark-siem` Namespace objects to the same name.
+  Every resource already declares its own namespace, so the directive was
+  removed. The overlay now renders 48 resources cleanly.
+- `docker/proxy_launcher.py` now treats an empty `BULWARK_WORKERS` value as
+  unset (falls back to 4 workers), preventing a CrashLoopBackOff when the
+  variable is injected empty.
+- Pinned the inline image tags in `k8s/base/proxy.yaml` and
+  `k8s/base/admin.yaml` to `1.0.0` (were `0.4.9-hardened` / `0.7.3-hardened`),
+  matching the kustomize `images:` transformer for direct `kubectl apply`.
+
+### Removed
+
+- Dead `docker/entrypoint-proxy.sh` shell entrypoint (superseded by
+  `docker/proxy_launcher.py`; cannot run under the shell-less distroless
+  runtime). Its `.dockerignore` exception was removed too.
 
 ### Migration notes
 
