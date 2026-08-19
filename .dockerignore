@@ -34,7 +34,10 @@ scripts/
 docker-compose.*
 Dockerfile
 docker/
-# Exception: the proxy entrypoint is baked into the image (GAP-A worker derivation)
+# Exception: the proxy launcher is baked into the image (distroless has no shell;
+# derives the uvicorn worker count from BULWARK_WORKERS — GAP-A).
+!docker/proxy_launcher.py
+# Kept for the (still Debian-based) admin image and any shell-based runtime.
 !docker/entrypoint-proxy.sh
 
 # --- Secrets (injected at runtime via mounts) ---
