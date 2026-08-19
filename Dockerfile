@@ -1,91 +1,103 @@
 # ============================================================
 # Bulwark Gateway — Proxy (Security Hot Path)
-# Multi-stage build for minimal attack surface
-# H-08 fix: Pin base image to SHA256 digest (prevents supply chain poisoning)
+# Distroless multi-stage build for MINIMAL attack surface.
+#
+# Runtime is Google Distroless (gcr.io/distroless/python3-debian13): no shell,
+# no apt, no package manager, no coreutils — only Python + its runtime libs.
+# This removes the post-exploitation toolkit (/bin/sh, curl, cat, ...) that
+# reverse shells and recon rely on, and shrinks the image dramatically.
+#
+# Security properties preserved from the previous Debian-slim build:
+#   - Non-root:      runs as the distroless `nonroot` user (UID 65532).
+#   - Read-only FS:  compatible (all writable paths are mounted volumes/tmpfs).
+#   - Pinned bases:  both stages pinned by SHA256 digest (supply-chain: H-08).
+#   - Reproducible:  deps installed with --require-hashes from requirements.lock.
+#   - Signal safety: proxy_launcher.py os.execv's into uvicorn (uvicorn = PID 1).
+#
+# Debian 13 (trixie) base is used instead of Debian 12 (bookworm): its package
+# snapshot is fresh, so `trivy --ignore-unfixed` reports ~1 fixable OS CVE vs
+# ~60 on the stale bookworm interpreter. Python is fixed at 3.13 to match the
+# distroless python3-debian13 runtime ABI (pyproject requires-python >= 3.11).
+# The builder MUST be the same 3.13/Debian 13 (trixie) toolchain so compiled
+# wheels and the venv are ABI-compatible.
 # ============================================================
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS builder
+FROM python:3.13-slim-trixie@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a AS builder
 
 WORKDIR /build
 
-COPY pyproject.toml requirements.lock ./
-RUN pip install --no-cache-dir --require-hashes --no-deps --prefix=/install -r requirements.lock && \
-    pip install --no-cache-dir --prefix=/install .
+# Build into an isolated virtual environment we can copy wholesale into the
+# distroless runtime. The runtime uses distroless's own python3.13 with
+# PYTHONPATH pointing at this venv's site-packages (same Python version = ABI
+# compatible); the venv's bin/ scripts are never executed.
+ENV VENV=/opt/venv
+RUN python -m venv "$VENV"
+ENV PATH="$VENV/bin:$PATH"
 
-# ML dependencies (optional, controlled by build args)
+COPY pyproject.toml requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements.lock && \
+    pip install --no-cache-dir --no-deps .
+
+# ML dependencies (optional, controlled by build args) — installed into the venv.
 ARG INSTALL_ML=false
 ARG INSTALL_EMBEDDINGS=false
 RUN if [ "$INSTALL_ML" = "true" ]; then \
-      pip install --no-cache-dir --prefix=/install \
+      pip install --no-cache-dir \
         "onnxruntime>=1.17" "tokenizers>=0.15" "numpy>=1.26"; \
     fi
 RUN if [ "$INSTALL_EMBEDDINGS" = "true" ] || [ "$INSTALL_ML" = "true" ]; then \
-      pip install --no-cache-dir --prefix=/install \
+      pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         "torch>=2.2" && \
-      pip install --no-cache-dir --prefix=/install \
+      pip install --no-cache-dir \
         "sentence-transformers>=2.6" || \
       echo "WARNING: torch/sentence-transformers install failed (non-fatal)"; \
     fi
 
+# Remove pip/setuptools/wheel from the venv so they are never shipped to runtime
+# (reduces post-exploitation surface — there is no package manager in the image).
+RUN pip uninstall -y pip setuptools wheel 2>/dev/null || true
+
+# Assemble the final /app tree here (distroless has no shell to mkdir/chown at
+# runtime). Ownership is set to the distroless nonroot UID (65532) via the COPY
+# --chown in the runtime stage below.
+WORKDIR /app
+COPY src/ src/
+COPY config/ config/
+COPY docker/proxy_launcher.py docker/proxy_launcher.py
+# Writable runtime directories (data, model downloads, enrichment/siem spool).
+RUN mkdir -p data reports models shared/enrichment shared/siem
+
 # ============================================================
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS runtime
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:eff0a6050f5ea9e8154c3d137d468901864803ce3c7f4657d419e64f3f1f8b40 AS runtime
 
 LABEL org.opencontainers.image.title="bulwark-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"
-LABEL org.opencontainers.image.version="0.4.3"
+LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.base.name="gcr.io/distroless/python3-debian13"
 
-# SECURITY: patch fixable OS CVEs not yet baked into the pinned base digest.
-# We upgrade ALL installed OS packages to the latest security-patched versions
-# available in the pinned base's Debian (trixie) apt snapshot. This clears the
-# fixable Trivy findings across perl(-base), openssl, ncurses, glibc (libc6),
-# libsqlite3, tar, gzip, bzip2, zlib1g, libacl1, libattr1, libpam*, util-linux
-# and systemd libraries in one deterministic layer. CVEs with no released
-# Debian fix remain until upstream ships one (expected).
-# Runtime stage only — the builder layer is discarded, and the final image is
-# what SCA/Trivy scans. Non-root + read-only rootfs still hold at runtime
-# (apt cannot write once the container starts).
-RUN apt-get update && \
-    apt-get upgrade -y --no-install-recommends && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Virtual environment (third-party deps) + application tree, owned by nonroot.
+COPY --from=builder --chown=65532:65532 /opt/venv /opt/venv
+COPY --from=builder --chown=65532:65532 /app /app
 
-# Security: non-root user
-RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark
+# Resolve imports from the venv's site-packages using distroless's python3.13.
+# PYTHONDONTWRITEBYTECODE keeps the read-only rootfs clean; unbuffered logs.
+ENV PYTHONPATH=/opt/venv/lib/python3.13/site-packages \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Copy installed dependencies
-COPY --from=builder /install /usr/local
-
-# Copy application code
-COPY src/ src/
-COPY config/ config/
-COPY docker/entrypoint-proxy.sh /app/docker/entrypoint-proxy.sh
-
-# Create data directories (models dir for ML, writable for download)
-RUN mkdir -p data reports models shared/enrichment shared/siem && \
-    chmod 0555 /app/docker/entrypoint-proxy.sh && \
-    chown -R bulwark:bulwark /app && \
-    rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 && \
-    rm -rf /usr/local/lib/python3.12/site-packages/pip \
-           /usr/local/lib/python3.12/site-packages/pip-*.dist-info
-
-USER bulwark
+# Distroless already runs as nonroot (UID 65532); declared explicitly.
+USER 65532:65532
 
 EXPOSE 8080
 
-# Healthcheck using built-in Python (no curl dependency)
-# SECURITY FIX (APT-19): Wrapped in try/except to suppress stack traces on failure
+# Exec-form healthcheck (distroless has no /bin/sh, so shell-form CMD is invalid).
+# Uses stdlib urllib; a raised exception exits non-zero => container unhealthy.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request,sys; \
-try: urllib.request.urlopen('http://127.0.0.1:8080/health'); \
-except: sys.exit(1)"
+    CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
 
-# SECURITY FIX (APT-13): Use exec-form entrypoint for proper signal handling.
-# Shell form invokes /bin/sh as PID 1 which doesn't forward SIGTERM properly,
-# delaying graceful shutdown and leaving zombie processes.
-# GAP-A: the entrypoint script derives uvicorn --workers from BULWARK_WORKERS so
-# the real worker count matches the rate limiter's per-worker divisor. The
-# script uses `exec`, preserving the APT-13 signal-handling guarantee (uvicorn
-# becomes PID 1).
-ENTRYPOINT ["/app/docker/entrypoint-proxy.sh"]
+# Exec-form entrypoint: distroless's python3 runs the launcher, which derives the
+# worker count from BULWARK_WORKERS and os.execv's into uvicorn (uvicorn => PID 1
+# for correct SIGTERM/graceful-shutdown handling).
+ENTRYPOINT ["python3", "/app/docker/proxy_launcher.py"]

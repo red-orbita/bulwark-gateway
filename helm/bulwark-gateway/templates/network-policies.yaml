@@ -316,4 +316,50 @@ spec:
         - port: 53
           protocol: UDP
 {{- end }}
+---
+# Helm test hooks — allow the ephemeral test pods (component: test) to reach
+# DNS plus the proxy/admin health endpoints under the zero-trust default-deny.
+# Kept as a regular resource (not a hook) so it is always present while the
+# test pods run; it selects only component=test pods, so it is inert otherwise.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: test-hook-access
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: test
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Proxy health/stats + guardrail endpoints
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Admin health endpoints
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin
+      ports:
+        - port: 8090
+          protocol: TCP
 {{- end }}
