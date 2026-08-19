@@ -87,9 +87,13 @@ spec:
                 topologyKey: topology.kubernetes.io/zone
       securityContext:
         runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
+        # Distroless nonroot UID/GID. On upgrade from the pre-distroless image
+        # (UID 999), fsGroup + fsGroupChangePolicy: Always re-chowns existing
+        # PVCs to GID 65532 on mount so the proxy can write shared/enrichment data.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: Always
         seccompProfile:
           type: RuntimeDefault
       initContainers:
