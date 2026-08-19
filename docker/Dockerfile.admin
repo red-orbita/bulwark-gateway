@@ -1,32 +1,64 @@
 # ============================================================
 # Bulwark Gateway — Admin Portal
-# Separate service, zero impact on proxy hot path
-# H-08 fix: Pin base image to SHA256 digest (prevents supply chain poisoning)
+# Distroless multi-stage build for MINIMAL attack surface.
+#
+# Runtime is Google Distroless (gcr.io/distroless/python3-debian13): no shell,
+# no apt, no package manager, no coreutils — only Python + its runtime libs.
+# This removes the post-exploitation toolkit (/bin/sh, curl, cat, ...) that
+# reverse shells and recon rely on, and shrinks the image dramatically.
+#
+# SQLCipher (encrypted user DB) is provided by `sqlcipher3-binary`, a wheel that
+# statically bundles SQLCipher AND its own OpenSSL. That removes the previous
+# runtime dependency on the system `libsqlcipher` shared library (and the apt
+# `upgrade` layer that patched it), so NO system .so needs to be copied into the
+# distroless runtime — the venv is fully self-contained.
+#
+# Security properties preserved from the previous Debian-slim build:
+#   - Non-root:      runs as the distroless `nonroot` user (UID 65532).
+#   - Read-only FS:  compatible (data/reports/backup are mounted volumes/tmpfs).
+#   - Pinned bases:  both stages pinned by SHA256 digest (supply-chain: H-08).
+#   - Reproducible:  deps installed with --require-hashes from requirements-admin.lock.
+#   - Signal safety: uvicorn is exec'd as PID 1 (direct SIGTERM/graceful shutdown).
+#
+# Debian 13 (trixie) base is used (matches the proxy image): its package snapshot
+# is fresh, so `trivy --ignore-unfixed` reports ~0-1 fixable OS CVEs instead of
+# the ~60 seen on the stale bookworm interpreter. Python is fixed at 3.13 to
+# match the distroless python3-debian13 runtime ABI (pyproject requires >= 3.11);
+# the builder MUST be the same 3.13/Debian 13 toolchain for ABI compatibility.
 # ============================================================
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS builder
+FROM python:3.13-slim-trixie@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a AS builder
 
 WORKDIR /build
 
-# Install build deps for pysqlcipher3 + yara-python (required by SkillSpector)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ libsqlcipher-dev git \
-    libyara-dev automake libtool make pkg-config && \
-    rm -rf /var/lib/apt/lists/*
+# Build into an isolated virtual environment we can copy wholesale into the
+# distroless runtime. The runtime uses distroless's own python3.13 with
+# PYTHONPATH pointing at this venv's site-packages (same Python version = ABI
+# compatible); the venv's bin/ scripts are never executed.
+ENV VENV=/opt/venv
+RUN python -m venv "$VENV"
+ENV PATH="$VENV/bin:$PATH"
 
 COPY pyproject.toml .
 COPY requirements-admin.lock .
-# All admin dependencies (including redis, PyJWT, asyncpg, aiosqlite,
-# python-multipart) are now hash-pinned in requirements-admin.lock — see
-# docker/requirements-admin.in for the source-of-truth direct deps. A single
-# --require-hashes install guarantees a reproducible, tamper-evident build.
+# All admin dependencies are hash-pinned in requirements-admin.lock (source of
+# truth: docker/requirements-admin.in). Every wheel in this set ships a cp313
+# manylinux build (sqlcipher3-binary, cryptography, bcrypt, asyncpg, cffi,
+# pydantic-core, ...), so NO compiler/apt build layer is required for the
+# default image — a single --require-hashes install is fully reproducible.
 RUN pip install --no-cache-dir --require-hashes -r requirements-admin.lock
 
-# Install NVIDIA SkillSpector from GitHub (Apache 2.0)
-# Provides 64 vulnerability patterns, AST analysis, taint tracking, YARA signatures, OSV.dev CVE lookups
-# SECURITY: Disabled by default until a verified release exists.
+# Install NVIDIA SkillSpector from GitHub (Apache 2.0) — OPTIONAL, off by default.
+# Provides 64 vulnerability patterns, AST analysis, taint tracking, YARA
+# signatures, OSV.dev CVE lookups. It pulls in yara-python, which is compiled
+# from source; the build tools + git are installed ONLY inside this conditional
+# so the default (disabled) build stays toolchain-free.
 # To enable: pass --build-arg SKILLSPECTOR_COMMIT=<verified-sha> at build time.
 ARG SKILLSPECTOR_COMMIT=""
 RUN if [ -n "$SKILLSPECTOR_COMMIT" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends \
+        gcc g++ git libyara-dev automake libtool make pkg-config && \
+      rm -rf /var/lib/apt/lists/* && \
       pip install --no-cache-dir "git+https://github.com/NVIDIA/SkillSpector.git@${SKILLSPECTOR_COMMIT}" && \
       echo "INFO: SkillSpector installed (commit: ${SKILLSPECTOR_COMMIT})" || \
       echo "WARN: SkillSpector install failed — falling back to built-in scanner"; \
@@ -34,61 +66,53 @@ RUN if [ -n "$SKILLSPECTOR_COMMIT" ]; then \
       echo "INFO: SkillSpector not installed (no SKILLSPECTOR_COMMIT provided)"; \
     fi
 
-# ============================================================
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS runtime
+# Remove pip/setuptools/wheel from the venv so they are never shipped to runtime
+# (reduces post-exploitation surface — there is no package manager in the image).
+RUN pip uninstall -y pip setuptools wheel 2>/dev/null || true
 
-LABEL org.opencontainers.image.title="bulwark-gateway-admin"
-LABEL org.opencontainers.image.description="Admin portal for Bulwark Gateway"
-LABEL org.opencontainers.image.version="0.4.3"
-
-# Runtime deps for SQLCipher (runtime library only, not -dev headers)
-# SECURITY FIX (APT-21): install the runtime shared library only (no headers,
-# no dev tools) to reduce attack surface.
-# Debian bumped the SONAME package name libsqlcipher0 -> libsqlcipher1, so try
-# the newer name first and fall back for older bases (keeps the build portable).
-# SECURITY: also upgrade ALL installed OS packages to the latest security-patched
-# versions in the pinned base's Debian (trixie) apt snapshot. This clears the
-# fixable Trivy findings across perl(-base), openssl, ncurses, glibc (libc6),
-# libsqlite3, tar, gzip, bzip2, zlib1g, libacl1, libattr1, libpam*, util-linux
-# and systemd libraries. Folded into a single apt layer. CVEs with no released
-# Debian fix remain until upstream ships one (expected).
-RUN apt-get update && \
-    (apt-get install -y --no-install-recommends libsqlcipher1 || \
-     apt-get install -y --no-install-recommends libsqlcipher0) && \
-    apt-get upgrade -y --no-install-recommends && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN groupadd -r bulwark && useradd -r -g bulwark -s /bin/false bulwark
-
+# Assemble the final /app tree here (distroless has no shell to mkdir/chown at
+# runtime). Writable runtime dirs are pre-created so they exist as mount points
+# on the read-only rootfs; ownership is set via COPY --chown in the runtime stage.
 WORKDIR /app
-
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy application code
 COPY src/ src/
 COPY admin/ admin/
 COPY config/ config/
+RUN mkdir -p data reports config/policies/.backup
 
-# Create writable directories for audit DB and backups
-# Remove pip to reduce post-exploitation surface
-RUN mkdir -p data reports config/policies/.backup && \
-    chown -R bulwark:bulwark /app && \
-    rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 && \
-    rm -rf /usr/local/lib/python3.12/site-packages/pip \
-           /usr/local/lib/python3.12/site-packages/pip-*.dist-info
+# ============================================================
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:eff0a6050f5ea9e8154c3d137d468901864803ce3c7f4657d419e64f3f1f8b40 AS runtime
 
-USER bulwark
+LABEL org.opencontainers.image.title="bulwark-gateway-admin"
+LABEL org.opencontainers.image.description="Admin portal for Bulwark Gateway"
+LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.base.name="gcr.io/distroless/python3-debian13"
+
+# Virtual environment (third-party deps) + application tree, owned by nonroot.
+COPY --from=builder --chown=65532:65532 /opt/venv /opt/venv
+COPY --from=builder --chown=65532:65532 /app /app
+
+# Resolve imports from the venv's site-packages using distroless's python3.13.
+# PYTHONDONTWRITEBYTECODE keeps the read-only rootfs clean; unbuffered logs.
+ENV PYTHONPATH=/opt/venv/lib/python3.13/site-packages \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Distroless already runs as nonroot (UID 65532); declared explicitly.
+USER 65532:65532
 
 EXPOSE 8090
 
+# Exec-form healthcheck (distroless has no /bin/sh, so shell-form CMD is invalid).
+# Uses stdlib urllib; a raised exception exits non-zero => container unhealthy.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request,sys; \
-try: urllib.request.urlopen('http://127.0.0.1:8090/admin/health'); \
-except: sys.exit(1)"
+    CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/admin/health')"]
 
-CMD ["python", "-m", "uvicorn", "admin.main:app", \
+# Exec-form entrypoint: distroless's python3 runs uvicorn directly so it becomes
+# PID 1 (correct SIGTERM/graceful-shutdown handling). The admin service is a
+# single process (scaled via replicas), so no worker-count derivation is needed.
+ENTRYPOINT ["python3", "-m", "uvicorn", "admin.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8090", \
      "--log-level", "info", \

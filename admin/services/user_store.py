@@ -29,10 +29,22 @@ except ImportError:
     _HAS_PYOTP = False
 
 try:
-    from pysqlcipher3 import dbapi2 as sqlcipher  # type: ignore
+    # sqlcipher3 (coleifer fork) is the maintained successor to pysqlcipher3 and
+    # is required on Python 3.13+ (pysqlcipher3 uses PyObject_AsCharBuffer, removed
+    # in 3.13). sqlcipher3-binary ships a self-contained wheel (SQLCipher + its own
+    # OpenSSL statically bundled) so no system libsqlcipher is needed at runtime —
+    # this is what lets the admin image run on distroless. The DB-API surface is
+    # identical, so the rest of this module is unchanged.
+    from sqlcipher3 import dbapi2 as sqlcipher  # type: ignore
     _HAS_SQLCIPHER = True
 except ImportError:
-    _HAS_SQLCIPHER = False
+    try:
+        # Legacy fallback for older (Python <= 3.12) environments that still ship
+        # pysqlcipher3. Same dbapi2 interface.
+        from pysqlcipher3 import dbapi2 as sqlcipher  # type: ignore
+        _HAS_SQLCIPHER = True
+    except ImportError:
+        _HAS_SQLCIPHER = False
 
 from ..models.auth import UserRole
 
@@ -116,7 +128,7 @@ class UserStore:
         """Create tables and seed default users if empty.
 
         Uses SQLCipher (AES-256) if:
-          1. pysqlcipher3 is installed
+          1. sqlcipher3 (or legacy pysqlcipher3) is installed
           2. DB_ENCRYPTION_KEY is provided (via Docker secret or env var)
         Otherwise falls back to standard SQLite.
         """
@@ -141,11 +153,11 @@ class UserStore:
             if encryption_key and not _HAS_SQLCIPHER:
                 import logging
                 logging.getLogger(__name__).warning(
-                    "DB_ENCRYPTION_KEY set but pysqlcipher3 not installed — database is NOT encrypted"
+                    "DB_ENCRYPTION_KEY set but sqlcipher3 not installed — database is NOT encrypted"
                 )
 
         if self._encrypted:
-            # pysqlcipher3 doesn't support sqlite3.Row; use a dict factory
+            # sqlcipher3/pysqlcipher3 don't support sqlite3.Row; use a dict factory
             def dict_row_factory(cursor, row):
                 columns = [col[0] for col in cursor.description]
                 return dict(zip(columns, row))
