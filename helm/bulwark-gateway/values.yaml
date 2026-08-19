@@ -556,6 +556,15 @@ secrets:
 persistence:
   # -- Storage class (empty = cluster default)
   storageClass: ""
+  # -- Access mode for PVCs SHARED between proxy and admin
+  # (policies, siemStats, adminData, notifications, enrichment).
+  # Default "ReadWriteOnce" is portable to every CSI driver (EBS/PD/Azure Disk)
+  # and is safe on single-node clusters. HOWEVER, when the proxy runs more than
+  # one replica AND pods land on DIFFERENT nodes (HPA + podAntiAffinity), RWO
+  # triggers Kubernetes "Multi-Attach" errors and the HPA cannot scale out.
+  # For multi-node HA set this to "ReadWriteMany" AND point storageClass at an
+  # RWX-capable driver (NFS, CephFS, Azure Files, AWS EFS, GCP Filestore).
+  accessMode: ReadWriteOnce
   policies:
     # -- Policies PVC size
     size: 100Mi

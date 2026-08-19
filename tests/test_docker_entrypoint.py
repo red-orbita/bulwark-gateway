@@ -8,113 +8,96 @@ a mismatch between the *real* uvicorn worker count and ``BULWARK_WORKERS`` let
 each worker over-allow traffic. These tests pin the entrypoint contract:
 
   * the real ``--workers`` value is derived from ``BULWARK_WORKERS``
-  * the default (unset) worker count stays aligned with the limiter divisor
-    default and ``settings.workers`` (all 4)
+  * the default (unset/empty) worker count stays aligned with the limiter
+    divisor default and ``settings.workers`` (all 4)
   * garbage / non-positive input fails closed instead of silently defaulting
-  * the Dockerfile invokes the script via ``exec`` (APT-13 signal handling)
+  * the Dockerfile invokes the launcher via ``exec`` (APT-13 signal handling)
 
-The entrypoint is a POSIX shell script, so we exercise it for real by shadowing
-``python`` on PATH with a stub that echoes its arguments.
+Since the distroless migration the entrypoint is a **Python** launcher
+(``docker/proxy_launcher.py``) rather than a POSIX shell script — distroless
+runtime images ship no ``/bin/sh``. The security-critical worker derivation now
+lives in ``_resolve_workers()``, which we exercise directly.
 """
 
 from __future__ import annotations
 
-import os
-import stat
-import subprocess
+import importlib.util
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ENTRYPOINT = REPO_ROOT / "docker" / "entrypoint-proxy.sh"
+LAUNCHER = REPO_ROOT / "docker" / "proxy_launcher.py"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 
 
-def _run_entrypoint(tmp_path: Path, workers_env: str | None) -> subprocess.CompletedProcess:
-    """Run the entrypoint with a fake `python` that prints its args and exits 0."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_python = fake_bin / "python"
-    fake_python.write_text('#!/bin/sh\necho "PYTHON_ARGS: $*"\nexit 0\n')
-    fake_python.chmod(0o755)
-
-    env = {"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"}
-    if workers_env is not None:
-        env["BULWARK_WORKERS"] = workers_env
-
-    return subprocess.run(  # noqa: S603 - fixed, test-controlled args
-        ["/bin/sh", str(ENTRYPOINT)],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=15,
-    )
+def _load_launcher():
+    """Import ``docker/proxy_launcher.py`` as a standalone module."""
+    spec = importlib.util.spec_from_file_location("proxy_launcher", LAUNCHER)
+    assert spec and spec.loader, "cannot load proxy_launcher.py"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_entrypoint_exists_and_is_executable():
-    assert ENTRYPOINT.is_file(), "proxy entrypoint script missing"
-    mode = ENTRYPOINT.stat().st_mode
-    # Source tree ships it readable/executable; the image chmods 0555.
-    assert mode & stat.S_IXUSR, "entrypoint should be executable for the owner"
+def _resolve(monkeypatch, workers_env: str | None) -> str:
+    """Set/clear BULWARK_WORKERS and return the launcher's resolved worker count."""
+    if workers_env is None:
+        monkeypatch.delenv("BULWARK_WORKERS", raising=False)
+    else:
+        monkeypatch.setenv("BULWARK_WORKERS", workers_env)
+    return _load_launcher()._resolve_workers()
 
 
-def test_entrypoint_is_valid_posix_shell():
-    # `sh -n` does a syntax-only parse — catches typos without executing.
-    result = subprocess.run(  # noqa: S603 - fixed, test-controlled args
-        ["/bin/sh", "-n", str(ENTRYPOINT)],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    assert result.returncode == 0, f"entrypoint has shell syntax errors: {result.stderr}"
+def test_launcher_exists():
+    assert LAUNCHER.is_file(), "proxy launcher missing"
 
 
 @pytest.mark.parametrize("value", ["1", "2", "8"])
-def test_workers_derived_from_env(tmp_path, value):
-    result = _run_entrypoint(tmp_path, value)
-    assert result.returncode == 0, result.stderr
-    assert f"--workers {value}" in result.stdout, result.stdout
+def test_workers_derived_from_env(monkeypatch, value):
+    assert _resolve(monkeypatch, value) == value
 
 
-def test_default_workers_is_four_when_unset(tmp_path):
+def test_default_workers_is_four_when_unset(monkeypatch):
     # Must match the rate limiter divisor default and settings.workers so an
     # unset BULWARK_WORKERS keeps real workers == limiter divisor.
-    result = _run_entrypoint(tmp_path, None)
-    assert result.returncode == 0, result.stderr
-    assert "--workers 4" in result.stdout, result.stdout
+    assert _resolve(monkeypatch, None) == "4"
+
+
+def test_empty_workers_defaults_to_four(monkeypatch):
+    # An explicitly empty BULWARK_WORKERS is treated as unset (historical
+    # ``${VAR:-4}`` semantics), falling back to the safe default of 4.
+    assert _resolve(monkeypatch, "") == "4"
 
 
 @pytest.mark.parametrize("bad", ["abc", "1.5", "-3", "0", "4x"])
-def test_invalid_workers_fails_closed(tmp_path, bad):
-    result = _run_entrypoint(tmp_path, bad)
-    assert result.returncode == 1, (
-        f"BULWARK_WORKERS={bad!r} should fail closed, got rc={result.returncode}"
-    )
-    # Must not have reached the exec (no uvicorn invocation).
-    assert "PYTHON_ARGS" not in result.stdout, result.stdout
+def test_invalid_workers_fails_closed(monkeypatch, bad):
+    # A non-empty, non-positive-integer value must abort startup (SystemExit 1),
+    # never silently default.
+    with pytest.raises(SystemExit) as exc:
+        _resolve(monkeypatch, bad)
+    assert exc.value.code == 1
 
 
-def test_empty_workers_defaults_to_four(tmp_path):
-    # An explicitly empty BULWARK_WORKERS is treated as unset by `${VAR:-4}`,
-    # falling back to the safe default aligned with the limiter divisor.
-    result = _run_entrypoint(tmp_path, "")
-    assert result.returncode == 0, result.stderr
-    assert "--workers 4" in result.stdout, result.stdout
+def test_workers_normalises_leading_zeros(monkeypatch):
+    # "007" -> "7": uvicorn must receive a canonical integer string.
+    assert _resolve(monkeypatch, "007") == "7"
 
 
-def test_entrypoint_targets_uvicorn_app(tmp_path):
-    result = _run_entrypoint(tmp_path, "1")
-    assert "-m uvicorn src.main:app" in result.stdout, result.stdout
+def test_launcher_targets_uvicorn_app():
+    text = LAUNCHER.read_text()
+    assert '"src.main:app"' in text, text
     # Preserve the hardened uvicorn flags from the old CMD.
-    for flag in ("--host 0.0.0.0", "--port 8080", "--no-server-header"):
-        assert flag in result.stdout, f"missing hardened flag {flag}: {result.stdout}"
+    for flag in ("0.0.0.0", "8080", "--no-server-header"):
+        assert flag in text, f"missing hardened flag {flag}"
+    # PID-1 signal handling: launcher must os.execv into uvicorn (not subprocess).
+    assert "os.execv" in text, "launcher must exec into uvicorn for SIGTERM handling"
 
 
-def test_dockerfile_uses_script_entrypoint_and_no_hardcoded_workers():
+def test_dockerfile_uses_launcher_entrypoint_and_no_hardcoded_workers():
     text = DOCKERFILE.read_text()
-    assert 'ENTRYPOINT ["/app/docker/entrypoint-proxy.sh"]' in text, (
-        "Dockerfile should invoke the parametrized entrypoint script"
+    assert 'ENTRYPOINT ["python3", "/app/docker/proxy_launcher.py"]' in text, (
+        "Dockerfile should invoke the distroless Python launcher"
     )
     # The old hardcoded worker CMD must be gone.
     assert '"--workers", "4"' not in text, (
@@ -123,7 +106,7 @@ def test_dockerfile_uses_script_entrypoint_and_no_hardcoded_workers():
 
 
 def test_worker_defaults_are_aligned():
-    """settings.workers, the rate limiter divisor default, and the entrypoint
+    """settings.workers, the rate limiter divisor default, and the launcher
     default must all be 4 so behavior is consistent when BULWARK_WORKERS unset."""
     from src.config import Settings
 
@@ -134,5 +117,5 @@ def test_worker_defaults_are_aligned():
         "rate limiter divisor default drifted from 4"
     )
 
-    entry_src = ENTRYPOINT.read_text()
-    assert 'BULWARK_WORKERS:-4' in entry_src, "entrypoint default drifted from 4"
+    launcher_src = LAUNCHER.read_text()
+    assert '_DEFAULT_WORKERS = "4"' in launcher_src, "launcher default drifted from 4"

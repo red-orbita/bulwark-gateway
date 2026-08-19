@@ -51,8 +51,11 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: init-policies
-          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
-          image: bulwark-gateway-proxy:0.4.9-hardened
+          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest.
+          # NOTE: kustomization.yaml's images: transformer overrides this tag to
+          # the release version (1.0.0) on `kubectl apply -k`; kept in sync here
+          # so a direct `kubectl apply -f base/proxy.yaml` also uses 1.0.0.
+          image: bulwark-gateway-proxy:1.0.0
           imagePullPolicy: IfNotPresent
           # Distroless has no shell/coreutils; seed policies via bundled Python.
           command:
@@ -81,8 +84,11 @@ spec:
               mountPath: /policies
       containers:
         - name: proxy
-          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
-          image: bulwark-gateway-proxy:0.4.9-hardened
+          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest.
+          # NOTE: kustomization.yaml's images: transformer overrides this tag to
+          # the release version (1.0.0) on `kubectl apply -k`; kept in sync here
+          # so a direct `kubectl apply -f base/proxy.yaml` also uses 1.0.0.
+          image: bulwark-gateway-proxy:1.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

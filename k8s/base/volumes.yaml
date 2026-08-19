@@ -1,4 +1,16 @@
 ---
+# PersistentVolumeClaims for Bulwark Gateway.
+#
+# ACCESS MODE (H-1): the PVCs shared between the proxy and admin — policies,
+# siem-stats, admin-data, notifications-data — default to ReadWriteOnce for
+# portability (works on every CSI driver and on single-node clusters).
+# When the proxy runs >1 replica AND pods land on DIFFERENT nodes
+# (HPA + podAntiAffinity), RWO triggers Kubernetes "Multi-Attach" errors and
+# the HPA cannot scale out. For multi-node HA, patch these PVCs to
+# ReadWriteMany and use an RWX-capable StorageClass (NFS, CephFS, Azure Files,
+# AWS EFS, GCP Filestore) via a kustomize overlay. The proxy-only mounts of
+# these volumes are readOnly, but RWO still binds the volume to a single node.
+# telemetry-data and reports are admin-only (single writer) → RWO is correct.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

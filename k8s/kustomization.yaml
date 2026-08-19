@@ -2,7 +2,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: bulwark-gateway
+# NOTE: no global `namespace:` transformer — this deployment spans TWO
+# namespaces (bulwark-gateway + bulwark-siem for Wazuh). A global directive
+# would rewrite BOTH Namespace object names to the same value and produce a
+# kustomize ID conflict. Every namespaced resource declares its own explicit
+# metadata.namespace instead.
 
 resources:
   - namespace.yaml

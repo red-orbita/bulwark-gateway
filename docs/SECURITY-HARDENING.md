@@ -76,6 +76,26 @@ corresponding Security Update Log entry.
 Reverse-chronological. Newest entries first. Every security-relevant change lands
 here (see [How This Document Is Maintained](#how-this-document-is-maintained)).
 
+### 2026-08-19 — Deployment audit remediation (H-1/H-2/H-3 + kustomize fix)
+
+Follow-up hardening/robustness pass on the deployment manifests and container
+entrypoint after a full 4-phase audit (SAST + infra review). No hot-path or
+detection-logic changes; all 1301 unit tests pass, 3 skipped.
+
+| ID | Area | Change | Why it matters | File(s) |
+|----|------|--------|----------------|---------|
+| H-1 | Storage HA | Added `persistence.accessMode` (default `ReadWriteOnce`) applied to the 5 PVCs shared between proxy and admin (`policies`, `siem-stats`, `admin-data`, `notifications-data`, `enrichment-data`); admin-only PVCs (`telemetry-data`, `reports`) stay RWO by design | With HPA (2-10) + `podAntiAffinity` spreading proxy replicas across nodes, shared RWO PVCs cause Kubernetes **Multi-Attach** errors and block scale-out. Operators can now set `ReadWriteMany` + an RWX StorageClass for multi-node HA; the RWO default stays portable to block-storage CSI drivers and single-node clusters | `helm/.../values.yaml`, `helm/.../templates/volumes.yaml`, `k8s/base/volumes.yaml` (documented) |
+| H-2 | Entrypoint | `docker/proxy_launcher.py::_resolve_workers` treats an empty `BULWARK_WORKERS` as unset → defaults to 4 (historical `${VAR:-4}` semantics); stale `docker/entrypoint-proxy.sh` removed; `tests/test_docker_entrypoint.py` rewritten to unit-test the launcher | Prevents a CrashLoop when `BULWARK_WORKERS=""` is injected; removes dead shell script that cannot run under distroless (no shell); test now matches the real entrypoint (15/15 pass) | `docker/proxy_launcher.py`, `docker/entrypoint-proxy.sh` (deleted), `tests/test_docker_entrypoint.py` |
+| H-3 | Image hygiene | Inline image tags in `k8s/base/proxy.yaml` + `k8s/base/admin.yaml` pinned to `1.0.0` (were `0.4.9-hardened` / `0.7.3-hardened`); the kustomize `images:` transformer already overrode them, so this is direct-`apply` consistency | Avoids confusion / accidental deploy of stale tags when applying base manifests without the kustomize overlay | `k8s/base/proxy.yaml`, `k8s/base/admin.yaml` |
+| — | Kustomize | Removed the global `namespace: bulwark-gateway` directive from `k8s/kustomization.yaml`; every resource already declares its own namespace | The global transformer rewrote **both** Namespace objects (`bulwark-gateway` + `bulwark-siem`) to the same name, producing an ID conflict that broke `kubectl apply -k` / `deploy.sh`. Build now renders 48 resources cleanly (39 `bulwark-gateway` + 7 `bulwark-siem`) | `k8s/kustomization.yaml` |
+
+**Verification.**
+- `kubectl kustomize k8s/` — exit 0, 48 resources, image tags `1.0.0`, no resource missing a namespace.
+- `helm template` — shared PVCs render `ReadWriteOnce` by default and `ReadWriteMany` under `--set persistence.accessMode=ReadWriteMany`; admin-only PVCs stay RWO.
+- `pytest tests/ --ignore=tests/test_admin_integration.py` — 1301 passed, 3 skipped.
+
+---
+
 ### 2026-08-19 — Distroless container migration & runtime hardening (post-1.0.0)
 
 Both container images were migrated to a **Google Distroless** runtime, removing

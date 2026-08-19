@@ -9,7 +9,7 @@ metadata:
     {{- include "bulwark-gateway.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.persistence.accessMode }}
   {{- if .Values.persistence.storageClass }}
   storageClassName: {{ .Values.persistence.storageClass | quote }}
   {{- end }}
@@ -27,7 +27,7 @@ metadata:
     {{- include "bulwark-gateway.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.persistence.accessMode }}
   {{- if .Values.persistence.storageClass }}
   storageClassName: {{ .Values.persistence.storageClass | quote }}
   {{- end }}
@@ -35,7 +35,7 @@ spec:
     requests:
       storage: {{ .Values.persistence.siemStats.size }}
 ---
-# PVC: Telemetry Data
+# PVC: Telemetry Data (admin-only writer — RWO is correct, not shared with proxy)
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -63,7 +63,7 @@ metadata:
     {{- include "bulwark-gateway.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.persistence.accessMode }}
   {{- if .Values.persistence.storageClass }}
   storageClassName: {{ .Values.persistence.storageClass | quote }}
   {{- end }}
@@ -71,7 +71,7 @@ spec:
     requests:
       storage: {{ .Values.persistence.adminData.size }}
 ---
-# PVC: Reports
+# PVC: Reports (admin-only writer — RWO is correct, not shared with proxy)
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -100,7 +100,7 @@ metadata:
     app.kubernetes.io/component: notifications
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.persistence.accessMode }}
   {{- if .Values.persistence.storageClass }}
   storageClassName: {{ .Values.persistence.storageClass | quote }}
   {{- end }}
@@ -141,7 +141,7 @@ metadata:
     app.kubernetes.io/component: enrichment
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ .Values.persistence.accessMode }}
   {{- if .Values.persistence.storageClass }}
   storageClassName: {{ .Values.persistence.storageClass | quote }}
   {{- end }}

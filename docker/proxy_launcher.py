@@ -34,9 +34,13 @@ _DEFAULT_WORKERS = "4"
 def _resolve_workers() -> str:
     """Validate and return the uvicorn worker count as a string.
 
-    Exits with status 1 (fail-closed) on any non-positive-integer input.
+    An unset *or empty* ``BULWARK_WORKERS`` falls back to the default (4),
+    preserving the historical POSIX ``${BULWARK_WORKERS:-4}`` semantics of the
+    former shell entrypoint (an empty value is treated as "unset", not as an
+    error, so a blank env var in a ConfigMap can never CrashLoop the pod).
+    Any *non-empty* non-positive-integer input aborts startup (fail-closed).
     """
-    raw = os.environ.get("BULWARK_WORKERS", _DEFAULT_WORKERS).strip()
+    raw = os.environ.get("BULWARK_WORKERS", "").strip() or _DEFAULT_WORKERS
     if not raw.isdigit() or int(raw) < 1:
         sys.stderr.write(
             f"FATAL: BULWARK_WORKERS must be a positive integer, got '{raw}'\n"

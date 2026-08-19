@@ -48,8 +48,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: admin
-          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest
-          image: bulwark-gateway-admin:0.7.3-hardened
+          # SECURITY FIX (VULN 2.12): Pin to explicit version, never use :latest.
+          # NOTE: kustomization.yaml's images: transformer overrides this tag to
+          # the release version (1.0.0) on `kubectl apply -k`; kept in sync here
+          # so a direct `kubectl apply -f base/admin.yaml` also uses 1.0.0.
+          image: bulwark-gateway-admin:1.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
