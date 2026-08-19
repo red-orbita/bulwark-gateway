@@ -39,7 +39,10 @@ credentials.json
 # --- Runtime data (generated at runtime) ---
 data/
 shared/
-reports/
+# Internal reports stay private (pentest / redteam / qa / benchmarks),
+# except the launch-facing blog evidence which is intentionally published.
+reports/*
+!reports/blog-evidence/
 *.db
 *.db-shm
 *.db-wal
