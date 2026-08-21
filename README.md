@@ -11,6 +11,7 @@ Intercepts, validates, and enforces policies on tool calls between users and LLM
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Features](#features)
+- [How It Compares](#how-it-compares)
 - [Quick Start](#quick-start)
 - [Configuration Summary](#configuration-summary)
 - [Admin Portal](#admin-portal)
@@ -84,6 +85,40 @@ If any layer detects a threat, the request is **blocked immediately** (fail-clos
 - **Kubernetes-native** — Full K8s manifests with NetworkPolicies, HPA, PDB, Pod Security
 - **Audit trail** — Immutable log of all administrative changes
 - **Enterprise secrets** — Vault, AWS SM, Azure KV, GCP SM, CyberArk, SealedSecrets
+
+---
+
+## How It Compares
+
+Most LLM-security tools ship as a **library/SDK** you embed in your app code, or
+as a **hosted SaaS** you send your prompts to. Bulwark Gateway is a
+**self-hosted, fail-closed proxy** that sits in front of any OpenAI-compatible
+backend — no code changes in your app, no prompts leaving your network.
+
+| Capability | Bulwark Gateway | LLM-security SDKs (LLM Guard, Guardrails AI, NeMo, Rebuff) | Hosted SaaS (Lakera, Prompt Security, etc.) |
+|---|:---:|:---:|:---:|
+| **Deployment** | Self-hosted proxy | Library in your app | Vendor cloud (API call) |
+| **Data leaves your network** | No | No | Yes (prompts sent to vendor) |
+| **Code changes required** | None (drop-in proxy) | Yes (wrap every call) | Yes (SDK/API) |
+| **Deterministic hot path** | Yes — regex only, no LLM | Varies (some call LLMs) | Vendor-side (opaque) |
+| **Added latency** | p95 < 40 ms (in-cluster) | Varies | Network round-trip to vendor |
+| **Multi-tenant / multi-agent routing** | Built-in | No | Vendor-dependent |
+| **Tool-call / MCP RBAC** | Yes (per-agent policies) | Rare | Vendor-dependent |
+| **Secret / PII output redaction** | Yes | Some | Yes |
+| **SIEM export (ECS / Wazuh / Splunk / …)** | Yes (13 platforms) | No | Limited / vendor dashboard |
+| **Standalone scan API** (`/v2/scan`) | Yes | N/A (is the library) | Yes (is the API) |
+
+**Honest scope.** Bulwark is a *guardrail proxy*, not a WAF and not a
+model-hosting platform. Classic SQLi/XSS on free-form chat input is **not**
+reliably matched by the input layer by design — those are enforced at the
+tool-argument layer where the payload actually reaches a DB/filesystem. See the
+published [gap report](reports/blog-evidence/GAP-REPORT.md) for exactly what it
+does and does not catch. The hot path is pure regex (~446 input + ~150 output
+patterns), so detection is fast and auditable but not a substitute for a semantic
+classifier on every edge case — ML scanners are available as an optional layer.
+
+> Comparison reflects the common deployment model of each category; individual
+> tools vary. Verify against each vendor's current capabilities.
 
 ---
 
@@ -387,4 +422,11 @@ mypy src/
 
 ## License
 
-GPL-3.0-or-later
+**GPL-3.0-or-later** — free to self-host, study, modify, and redistribute. See
+[`LICENSE`](./LICENSE).
+
+Contributions are welcome under the
+[Contributor License Agreement](./CLA.md), which lets you keep your copyright
+while keeping the project sustainably licensed.
+
+<sub>Licensing details and options: [`LICENSING.md`](./LICENSING.md).</sub>
