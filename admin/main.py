@@ -97,7 +97,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.gdpr import get_gdpr_service
     gdpr_service = get_gdpr_service()
     await gdpr_service.initialize()
+    # Start the durable Security Events sync: drains the proxy's capped Redis
+    # live buffer (bulwark:recent_blocks:* / recent_allowed:*) into the
+    # security_events table so the viewer has a real, queryable history that
+    # survives Redis flushes and outlives the per-tenant cap. Retention is
+    # SIEM-aware (see events_sync.resolve_retention_days).
+    from .services.events_sync import get_events_sync
+    events_sync = get_events_sync()
+    await events_sync.start()
     yield
+    await events_sync.stop()
     await scheduler.stop()
     await gdpr_service.close()
     await audit_log.close()
@@ -198,7 +207,7 @@ async def auth_guard_pages(request: Request, call_next):
 
     # Only guard HTML page routes (not /admin/* API routes)
     is_page_route = (
-        path in ("/", "/policies", "/guardrails", "/siem", "/audit",
+        path in ("/", "/policies", "/guardrails", "/allowlist", "/siem", "/audit",
                  "/tenants", "/agents", "/users", "/iocs", "/settings", "/coverage",
                  "/rbac", "/setup", "/status", "/notifications", "/skills",
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
@@ -354,6 +363,12 @@ async def policies_page(request: Request):
 async def guardrails_page(request: Request):
     """Guardrail manager page."""
     return templates.TemplateResponse(request, "pages/guardrails.html")
+
+
+@app.get("/allowlist", response_class=HTMLResponse)
+async def allowlist_page(request: Request):
+    """Allowlist / allow-exceptions management page."""
+    return templates.TemplateResponse(request, "pages/allowlist.html")
 
 
 @app.get("/siem", response_class=HTMLResponse)

@@ -10,6 +10,12 @@
             <p class="text-sm text-gray-400 mt-0.5">Real-time view of blocked and warned requests per tenant</p>
         </div>
         <div class="flex items-center gap-2">
+            <button @click="toggleSettings()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                    :aria-pressed="showSettings ? 'true' : 'false'"
+                    :title="'Retention & storage settings'">
+                <i data-lucide="settings" class="w-4 h-4"></i>
+                <span>Retention</span>
+            </button>
             <button @click="toggleDensity()" class="sg-btn sg-btn-ghost sg-btn-sm"
                     :aria-pressed="compact ? 'true' : 'false'"
                     :title="compact ? 'Switch to comfortable rows' : 'Switch to compact rows'">
@@ -20,6 +26,108 @@
                 <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
                 Refresh
             </button>
+        </div>
+    </div>
+
+    <!-- Retention & storage settings (durable history) -->
+    <div x-show="showSettings" x-cloak class="sg-card !p-5 space-y-5"
+         style="border-color: rgba(56,189,248,0.35);">
+        <div class="flex items-start justify-between gap-4">
+            <div>
+                <h2 class="text-base font-semibold text-white">Retention &amp; storage</h2>
+                <p class="text-xs text-gray-400 mt-0.5">
+                    How long the durable security-events history is kept and how much
+                    live buffer is drained. Portal values override environment defaults.
+                </p>
+            </div>
+            <button @click="showSettings = false" class="sg-btn sg-btn-ghost sg-btn-sm" title="Close">
+                <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+        </div>
+
+        <!-- Retention window -->
+        <div class="space-y-2">
+            <label class="sg-label text-xs">Retention window</label>
+            <div class="flex flex-wrap items-center gap-2">
+                <button type="button" @click="settings.retention_mode = 'auto'"
+                        class="sg-btn sg-btn-sm"
+                        :class="settings.retention_mode === 'auto' ? 'sg-btn-primary' : 'sg-btn-ghost'">
+                    Automatic (SIEM-aware)
+                </button>
+                <button type="button" @click="settings.retention_mode = 'custom'"
+                        class="sg-btn sg-btn-sm"
+                        :class="settings.retention_mode === 'custom' ? 'sg-btn-primary' : 'sg-btn-ghost'">
+                    Custom
+                </button>
+                <template x-if="settings.retention_mode === 'custom'">
+                    <div class="flex items-center gap-2">
+                        <input type="number" min="0" max="3650" x-model.number="settings.retention_days"
+                               class="sg-input text-sm" style="width:7rem;"
+                               aria-label="Retention days">
+                        <span class="text-xs text-gray-400">days (0 = keep forever)</span>
+                    </div>
+                </template>
+            </div>
+            <p class="text-xs text-gray-500">
+                <span x-show="settings.retention_mode === 'auto'">
+                    Automatic: 90 days when a SIEM exporter is configured, otherwise kept forever.
+                </span>
+                <span x-show="settings.retention_mode === 'custom' && Number(settings.retention_days) === 0">
+                    Events are kept forever (no age-based pruning).
+                </span>
+                <span x-show="settings.retention_mode === 'custom' && Number(settings.retention_days) > 0">
+                    Events older than <span x-text="settings.retention_days"></span> days are pruned.
+                </span>
+            </p>
+        </div>
+
+        <!-- Storage / cadence -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="space-y-1.5">
+                <label class="sg-label text-xs" for="evt-set-max">Max events per tenant (live buffer)</label>
+                <input id="evt-set-max" type="number" min="10" max="1000000"
+                       x-model.number="settings.max_per_tenant"
+                       class="sg-input w-full text-sm">
+                <p class="text-xs text-gray-500">Redis drain cap per tenant on the hot path.</p>
+            </div>
+            <div class="space-y-1.5">
+                <label class="sg-label text-xs" for="evt-set-interval">Sync interval (seconds)</label>
+                <input id="evt-set-interval" type="number" min="5" max="3600"
+                       x-model.number="settings.sync_interval_seconds"
+                       class="sg-input w-full text-sm">
+                <p class="text-xs text-gray-500">How often the durable store drains the live buffer.</p>
+            </div>
+        </div>
+
+        <!-- Effective values + source -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div class="sg-card !p-3" style="background:rgba(0,0,0,0.2);">
+                <div class="text-gray-500 uppercase tracking-wider mb-1">Effective retention</div>
+                <div class="text-white font-mono">
+                    <span x-text="effective.retention_days === 0 ? 'Unlimited' : effective.retention_days + ' days'"></span>
+                </div>
+                <div class="text-gray-500 mt-1">source: <span x-text="effective.retention_source"></span></div>
+            </div>
+            <div class="sg-card !p-3" style="background:rgba(0,0,0,0.2);">
+                <div class="text-gray-500 uppercase tracking-wider mb-1">Max / tenant</div>
+                <div class="text-white font-mono" x-text="effective.max_per_tenant"></div>
+                <div class="text-gray-500 mt-1">source: <span x-text="effective.max_source"></span></div>
+            </div>
+            <div class="sg-card !p-3" style="background:rgba(0,0,0,0.2);">
+                <div class="text-gray-500 uppercase tracking-wider mb-1">Sync interval</div>
+                <div class="text-white font-mono"><span x-text="effective.sync_interval_seconds"></span>s</div>
+                <div class="text-gray-500 mt-1">source: <span x-text="effective.interval_source"></span></div>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3 pt-1">
+            <button @click="saveSettings()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="settingsSaving">
+                <span x-show="!settingsSaving">Save settings</span>
+                <span x-show="settingsSaving">Saving…</span>
+            </button>
+            <button @click="loadSettings()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="settingsSaving">Reset</button>
+            <span x-show="settingsSaved" x-cloak class="text-xs text-emerald-400 inline-flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i> Saved</span>
+            <span x-show="settingsError" x-cloak class="text-xs text-red-400" x-text="settingsError"></span>
         </div>
     </div>
 
@@ -44,8 +152,28 @@
     </div>
 
     <!-- Filters -->
-    <div class="sg-card !p-4">
-        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+    <div class="sg-card !p-4 space-y-4">
+        <!-- Verdict feed switch. The security feed (Blocked + Warned) is the
+             default. "Allowed" reads the opt-in allowed-event feed so legitimate
+             traffic is browsable without drowning the security events. -->
+        <div>
+            <label class="sg-label text-xs">Feed</label>
+            <div class="flex flex-wrap gap-1.5" role="group" aria-label="Select event feed">
+                <template x-for="v in verdictTabs" :key="v.value">
+                    <button type="button"
+                            @click="setVerdict(v.value)"
+                            :aria-pressed="filterVerdict === v.value ? 'true' : 'false'"
+                            class="sg-btn sg-btn-sm"
+                            :class="filterVerdict === v.value ? 'sg-btn-primary' : 'sg-btn-ghost'">
+                        <span x-text="v.label"></span>
+                        <span x-show="v.value === 'allowed' && (summary.allowed_recorded || 0) > 0"
+                              class="ml-1 opacity-70" x-text="'· ' + (summary.allowed_recorded || 0)"></span>
+                    </button>
+                </template>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
                 <label class="sg-label text-xs" for="evt-filter-tenant">Tenant</label>
                 <select id="evt-filter-tenant" x-model="filterTenant" @change="applyFilters()" class="sg-input w-full text-sm">
@@ -64,19 +192,40 @@
                     </template>
                 </select>
             </div>
-            <div>
-                <label class="sg-label text-xs" for="evt-filter-severity">Severity</label>
-                <select id="evt-filter-severity" x-model="filterSeverity" @change="applyFilters()" class="sg-input w-full text-sm">
-                    <option value="">All severities</option>
-                    <option value="critical">Critical</option>
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
-                </select>
-            </div>
             <div class="flex items-end">
                 <button @click="clearFilters()" class="sg-btn sg-btn-ghost sg-btn-sm w-full">Clear Filters</button>
             </div>
+        </div>
+
+        <!-- Severity: multi-select chips. An analyst picks any combination
+             (e.g. Critical + High) instead of one value. No selection = all
+             severities shown. Filtered client-side on the loaded window so
+             toggling is instant (no refetch). Hidden on the Allowed feed where
+             every event shares one 'info' severity. -->
+        <div x-show="filterVerdict !== 'allowed'">
+            <div class="flex items-center justify-between mb-1.5">
+                <label class="sg-label !mb-0 text-xs">Severity</label>
+                <button x-show="filterSeverities.length > 0" x-cloak
+                        @click="filterSeverities = []"
+                        class="text-[11px] text-gray-400 hover:text-cyan-400 transition-colors">
+                    Reset (<span x-text="filterSeverities.length"></span> selected)
+                </button>
+            </div>
+            <div class="flex flex-wrap gap-2" role="group" aria-label="Filter by severity — select one or more">
+                <template x-for="s in severityOptions" :key="s">
+                    <button type="button"
+                            @click="toggleSeverity(s)"
+                            :aria-pressed="isSeverityActive(s) ? 'true' : 'false'"
+                            class="sg-badge cursor-pointer"
+                            :class="'sg-badge-' + s"
+                            :style="'transition:opacity .15s;opacity:' + ((filterSeverities.length === 0 || isSeverityActive(s)) ? '1' : '0.3')">
+                        <span x-text="s"></span>
+                        <span style="opacity:0.7" x-text="'· ' + severityCount(s)"></span>
+                    </button>
+                </template>
+            </div>
+            <p class="text-[11px] text-gray-500 mt-1.5"
+               x-text="filterSeverities.length === 0 ? 'Showing all severities — click one or more to narrow down.' : 'Showing selected severities only.'"></p>
         </div>
     </div>
 
@@ -112,6 +261,7 @@
             <table class="sg-table" :class="{ 'sg-table-compact': compact }">
                 <thead>
                     <tr>
+                        <th class="w-8" aria-label="Expand"></th>
                         <th :aria-sort="ariaSort('ts')">
                             <button class="sg-th-sort" @click="sortBy('ts')">
                                 Time
@@ -139,32 +289,116 @@
                         <th>Description</th>
                     </tr>
                 </thead>
-                <tbody>
-                    <template x-for="evt in displayEvents()" :key="evt.ts + evt.tenant + evt.description">
-                        <tr>
-                            <td class="text-xs text-gray-400 whitespace-nowrap" x-text="formatTime(evt.ts)"></td>
-                            <td>
-                                <span class="font-mono text-xs text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded" x-text="evt.tenant || '—'"></span>
-                            </td>
-                            <td>
-                                <span class="sg-badge text-[10px]"
-                                    :class="'sg-badge-' + (evt.severity || 'low')"
-                                    x-text="evt.severity"></span>
-                            </td>
-                            <td class="text-xs text-gray-300" x-text="evt.category"></td>
-                            <td class="text-xs text-gray-400 max-w-xs truncate" :title="evt.description" x-text="evt.description"></td>
-                        </tr>
-                    </template>
-                </tbody>
-            </table>
-        </div>
+                <template x-for="evt in displayEvents()" :key="rowKey(evt)">
+                    <!-- Elastic-style: click expands the row in place (no modal). One
+                         tbody per iteration is a single valid root element that Alpine
+                         renders (a bare template wrapper would render nothing). -->
+                    <tbody>
+                            <tr class="cursor-pointer hover:bg-cyan-400/5 focus:bg-cyan-400/10 focus:outline-none"
+                                :class="isExpanded(evt) && 'bg-cyan-400/10'"
+                                tabindex="0" role="button"
+                                :aria-expanded="isExpanded(evt) ? 'true' : 'false'"
+                                :aria-label="'Toggle details for ' + (evt.category || 'event')"
+                                @click="toggle(evt)"
+                                @keydown.enter.prevent="toggle(evt)"
+                                @keydown.space.prevent="toggle(evt)">
+                                <td class="text-gray-500 align-middle">
+                                    <svg class="w-4 h-4 transition-transform" :class="isExpanded(evt) && 'rotate-90'"
+                                         xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                                </td>
+                                <td class="text-xs text-gray-400 whitespace-nowrap" x-text="formatTime(evt.ts)"></td>
+                                <td>
+                                    <span class="font-mono text-xs text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded" x-text="evt.tenant || '—'"></span>
+                                </td>
+                                <td>
+                                    <span class="sg-badge text-[10px]"
+                                        :class="'sg-badge-' + (evt.severity || 'low')"
+                                        x-text="evt.severity"></span>
+                                </td>
+                                <td class="text-xs text-gray-300" x-text="evt.category"></td>
+                                <td class="text-xs text-gray-400">
+                                    <div class="flex items-center gap-2">
+                                        <span class="max-w-xs truncate" :title="evt.description" x-text="evt.description"></span>
+                                        <span x-show="isAllowedByException(evt)" x-cloak
+                                              class="sg-badge text-[9px] shrink-0 bg-amber-400/15 text-amber-300 border border-amber-500/30"
+                                              title="Allowed by an allowlist exception — degraded from BLOCK to WARN">
+                                            <i data-lucide="shield-check" class="w-3 h-3"></i> ALLOWED
+                                        </span>
+                                    </div>
+                                </td>
+                            </tr>
+                            <!-- Inline expanded detail (replaces the old slide-in drawer) -->
+                            <tr x-show="isExpanded(evt)" x-cloak class="bg-gray-950/60">
+                                <td></td>
+                                <td colspan="5" class="!py-4">
+                                    <div class="border-l-2 border-cyan-500/50 pl-4 space-y-4">
+                                        <div class="flex flex-wrap gap-2">
+                                            <span class="sg-badge text-[10px]" :class="'sg-badge-' + (evt.severity || 'low')" x-text="evt.severity"></span>
+                                            <span class="sg-badge text-[10px]"
+                                                  :class="verdictBadgeClass(evt.verdict)"
+                                                  x-text="(evt.verdict || 'block').toUpperCase()"></span>
+                                            <span class="font-mono text-xs text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded" x-text="evt.category"></span>
+                                            <span x-show="isAllowedByException(evt)" x-cloak
+                                                  class="sg-badge text-[10px] bg-amber-400/15 text-amber-300 border border-amber-500/30">
+                                                <i data-lucide="shield-check" class="w-3 h-3"></i>
+                                                <span x-text="'ALLOWED BY EXCEPTION' + (exceptionScope(evt) ? ' · ' + exceptionScope(evt) : '')"></span>
+                                            </span>
+                                        </div>
 
-        <!-- Empty -->
-        <div x-show="!loading && !error && events.length === 0" class="sg-empty">
-            <p class="sg-empty-title">No security events</p>
-            <p class="sg-empty-desc">Events appear here when the proxy blocks or warns on requests</p>
+                                        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Time</dt><dd class="text-gray-300 mt-0.5" x-text="formatTime(evt.ts)"></dd></div>
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Tenant / Agent</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(evt.tenant || '—') + ' / ' + (evt.agent || '—')"></dd></div>
+                                            <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Description</dt><dd class="text-gray-300 mt-0.5" x-text="evt.description || '—'"></dd></div>
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Source</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="evt.source || '—'"></dd></div>
+                                            <div x-show="evt.tool_name"><dt class="text-gray-500 uppercase tracking-wider">Tool</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="evt.tool_name"></dd></div>
+                                            <div x-show="evt.pattern" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Matched Pattern</dt><dd class="text-amber-300 mt-0.5 font-mono break-all" x-text="evt.pattern"></dd></div>
+                                            <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Request ID</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="evt.request_id || '—'"></dd></div>
+                                            <div x-show="evt.input_hash" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Input Hash (SHA-256)</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="evt.input_hash"></dd></div>
+                                        </dl>
+
+                                        <div x-show="evt.snippet">
+                                            <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Redacted Snippet</p>
+                                            <p class="text-[11px] text-gray-500 mb-1">Secrets/PII removed, truncated. Raw input is never stored.</p>
+                                            <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="evt.snippet"></pre>
+                                        </div>
+
+                                        <div x-show="evt.metadata && Object.keys(evt.metadata).length > 0">
+                                            <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Metadata</p>
+                                            <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="JSON.stringify(evt.metadata || {}, null, 2)"></pre>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </template>
+                </table>
+
+                <!-- Loaded events exist, but the active severity filter hides them all. -->
+                <div x-show="displayEvents().length === 0" x-cloak class="sg-empty">
+                    <p class="sg-empty-title">No events match the selected severity</p>
+                    <p class="sg-empty-desc">Adjust or reset the severity filter to see more events</p>
+                    <div class="sg-error-action">
+                        <button @click="filterSeverities = []" class="sg-btn sg-btn-ghost sg-btn-sm">Reset severity filter</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Empty (no events at all) -->
+            <div x-show="!loading && !error && events.length === 0" class="sg-empty">
+                <template x-if="filterVerdict === 'allowed'">
+                    <div>
+                        <p class="sg-empty-title">No allowed events recorded</p>
+                        <p class="sg-empty-desc">Allowed-request logging is opt-in. Enable <code class="font-mono text-cyan-400">BULWARK_LOG_ALLOWED=true</code> on the proxy to record passing traffic here. Only requests allowed <em>after</em> enabling it appear.</p>
+                    </div>
+                </template>
+                <template x-if="filterVerdict !== 'allowed'">
+                    <div>
+                        <p class="sg-empty-title">No security events</p>
+                        <p class="sg-empty-desc">Events appear here when the proxy blocks or warns on requests</p>
+                    </div>
+                </template>
+            </div>
         </div>
-    </div>
 
     <!-- Breakdown by Category (horizontal bar chart) -->
     <div x-show="Object.keys(summary.by_category || {}).length > 0" class="sg-card">
@@ -194,12 +428,183 @@ function eventsManager() {
         error: false,
         filterTenant: '',
         filterCategory: '',
-        filterSeverity: '',
+        // Verdict feed: '' = security feed (block + warn), 'blocked', 'warned',
+        // or 'allowed' (opt-in allowed-event feed, separate Redis list).
+        filterVerdict: '',
+        verdictTabs: [
+            { value: '', label: 'All security' },
+            { value: 'blocked', label: 'Blocked' },
+            { value: 'warned', label: 'Warned' },
+            { value: 'allowed', label: 'Allowed' },
+        ],
+        // Multi-select severity: any combination of these. Empty = show all.
+        filterSeverities: [],
+        severityOptions: ['critical', 'high', 'medium', 'low'],
         availableTenants: [],
         availableCategories: [],
         sortKey: 'ts',
         sortDir: 'desc',
         compact: false,
+        expandedKeys: [],
+
+        // ─── Retention & storage settings ───────────────────────────────────
+        showSettings: false,
+        settings: {
+            retention_mode: 'auto',
+            retention_days: 90,
+            max_per_tenant: 1000,
+            sync_interval_seconds: 30,
+        },
+        effective: {
+            retention_days: 0,
+            retention_source: '—',
+            max_per_tenant: 1000,
+            max_source: '—',
+            sync_interval_seconds: 30,
+            interval_source: '—',
+        },
+        settingsSaving: false,
+        settingsSaved: false,
+        settingsError: '',
+
+        toggleSettings() {
+            this.showSettings = !this.showSettings;
+            if (this.showSettings) this.loadSettings();
+        },
+
+        async loadSettings() {
+            this.settingsError = '';
+            try {
+                const resp = await fetch('/admin/events/settings');
+                if (!resp.ok) throw new Error(`settings ${resp.status}`);
+                const s = await resp.json();
+                this.settings.retention_mode = s.retention?.mode || 'auto';
+                this.settings.retention_days = s.retention?.custom_days ?? s.retention?.effective_days ?? 90;
+                this.settings.max_per_tenant = s.max_per_tenant?.override ?? s.max_per_tenant?.effective ?? 1000;
+                this.settings.sync_interval_seconds = s.sync_interval_seconds?.override ?? s.sync_interval_seconds?.effective ?? 30;
+                this.effective = {
+                    retention_days: s.retention?.effective_days ?? 0,
+                    retention_source: s.retention?.source || '—',
+                    max_per_tenant: s.max_per_tenant?.effective ?? 1000,
+                    max_source: s.max_per_tenant?.source || '—',
+                    sync_interval_seconds: s.sync_interval_seconds?.effective ?? 30,
+                    interval_source: s.sync_interval_seconds?.source || '—',
+                };
+            } catch (e) {
+                this.settingsError = 'Could not load settings';
+            }
+        },
+
+        async saveSettings() {
+            this.settingsSaving = true;
+            this.settingsError = '';
+            this.settingsSaved = false;
+            try {
+                const payload = {
+                    retention_mode: this.settings.retention_mode,
+                    max_per_tenant: Number(this.settings.max_per_tenant),
+                    sync_interval_seconds: Number(this.settings.sync_interval_seconds),
+                };
+                if (this.settings.retention_mode === 'custom') {
+                    payload.retention_days = Number(this.settings.retention_days);
+                }
+                const resp = await fetch('/admin/events/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (resp.status === 403) throw new Error('You do not have permission to change settings');
+                if (!resp.ok) {
+                    let detail = `Save failed (${resp.status})`;
+                    try { const j = await resp.json(); if (j.detail) detail = j.detail; } catch (_) {}
+                    throw new Error(detail);
+                }
+                const s = await resp.json();
+                this.effective = {
+                    retention_days: s.retention?.effective_days ?? 0,
+                    retention_source: s.retention?.source || '—',
+                    max_per_tenant: s.max_per_tenant?.effective ?? 1000,
+                    max_source: s.max_per_tenant?.source || '—',
+                    sync_interval_seconds: s.sync_interval_seconds?.effective ?? 30,
+                    interval_source: s.sync_interval_seconds?.source || '—',
+                };
+                this.settingsSaved = true;
+                setTimeout(() => { this.settingsSaved = false; }, 3000);
+            } catch (e) {
+                this.settingsError = e.message || 'Save failed';
+            }
+            this.settingsSaving = false;
+        },
+
+        // Stable identity for a row: prefer request_id, else a composite of the
+        // fields that make an event unique within the loaded window.
+        rowKey(evt) {
+            if (!evt) return '';
+            return evt.request_id
+                || `${evt.ts || ''}|${evt.tenant || ''}|${evt.category || ''}|${evt.pattern || ''}|${evt.description || ''}`;
+        },
+
+        toggle(evt) {
+            const k = this.rowKey(evt);
+            const i = this.expandedKeys.indexOf(k);
+            if (i === -1) {
+                this.expandedKeys.push(k);
+            } else {
+                this.expandedKeys.splice(i, 1);
+            }
+        },
+
+        isExpanded(evt) {
+            return this.expandedKeys.includes(this.rowKey(evt));
+        },
+
+        // Severity multi-select. Toggling filters the loaded window client-side,
+        // so an analyst can add/remove severities with zero latency.
+        toggleSeverity(s) {
+            const i = this.filterSeverities.indexOf(s);
+            if (i === -1) {
+                this.filterSeverities.push(s);
+            } else {
+                this.filterSeverities.splice(i, 1);
+            }
+        },
+
+        isSeverityActive(s) {
+            return this.filterSeverities.includes(s);
+        },
+
+        severityCount(s) {
+            return (this.summary.by_severity && this.summary.by_severity[s]) || 0;
+        },
+
+        // Verdict feed switch. Changing the feed refetches from the server
+        // (allowed events live in a separate Redis list). Reset severity +
+        // expanded rows so stale client-side state never leaks across feeds.
+        setVerdict(v) {
+            if (this.filterVerdict === v) return;
+            this.filterVerdict = v;
+            this.filterSeverities = [];
+            this.expandedKeys = [];
+            this.refresh();
+        },
+
+        verdictBadgeClass(v) {
+            const verdict = (v || 'block').toLowerCase();
+            if (verdict === 'allow') return 'sg-badge-allow';
+            if (verdict === 'warn') return 'sg-badge-medium';
+            return 'sg-badge-high';
+        },
+
+        // F3: an event was allowed through by an allowlist exception when the
+        // proxy degraded BLOCK → WARN and tagged the metadata accordingly.
+        isAllowedByException(evt) {
+            return !!(evt && evt.metadata && evt.metadata.allowed_by_exception);
+        },
+
+        exceptionScope(evt) {
+            if (!evt || !evt.metadata) return '';
+            return evt.metadata.exception_scope || evt.metadata.allowed_by_exception_scope || '';
+        },
 
         async init() {
             this.compact = localStorage.getItem('sg-events-density') === 'compact';
@@ -231,7 +636,13 @@ function eventsManager() {
             const rank = { critical: 4, high: 3, medium: 2, low: 1 };
             const key = this.sortKey;
             const dir = this.sortDir === 'asc' ? 1 : -1;
-            return [...this.events].sort((a, b) => {
+            // Severity is filtered here (client-side) so multi-select toggles are
+            // instant. Empty selection = no filter. Tenant/category stay server-side.
+            const sevs = this.filterSeverities;
+            const source = sevs.length === 0
+                ? this.events
+                : this.events.filter(e => sevs.includes(e.severity));
+            return [...source].sort((a, b) => {
                 let av, bv;
                 if (key === 'severity') {
                     av = rank[a.severity] || 0; bv = rank[b.severity] || 0;
@@ -262,7 +673,10 @@ function eventsManager() {
             let url = '/admin/events?limit=100';
             if (this.filterTenant) url += `&tenant=${encodeURIComponent(this.filterTenant)}`;
             if (this.filterCategory) url += `&category=${encodeURIComponent(this.filterCategory)}`;
-            if (this.filterSeverity) url += `&severity=${encodeURIComponent(this.filterSeverity)}`;
+            // Verdict selects the feed server-side ('allowed' reads a separate
+            // Redis list; 'blocked'/'warned' narrow the security feed).
+            if (this.filterVerdict) url += `&verdict=${encodeURIComponent(this.filterVerdict)}`;
+            // Severity is filtered client-side (multi-select) — not sent to the server.
             const resp = await fetch(url);
             if (!resp.ok) throw new Error(`events ${resp.status}`);
             this.events = await resp.json();
@@ -284,7 +698,8 @@ function eventsManager() {
         clearFilters() {
             this.filterTenant = '';
             this.filterCategory = '';
-            this.filterSeverity = '';
+            this.filterSeverities = [];
+            this.filterVerdict = '';
             this.refresh();
         },
 

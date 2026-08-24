@@ -116,7 +116,16 @@ def mock_redis():
     client.lrem.return_value = 0
     client.sismember.return_value = False
     client.zrangebyscore.return_value = []
-    client.scan_iter.return_value = ["bulwark:recent_blocks:user-123"]
+    # Real Redis SCAN honours the match prefix. The allowed feed lives under a
+    # different prefix (bulwark:recent_allowed:*), so a block-only keyspace must
+    # yield nothing for that match — otherwise the block key leaks into both feeds.
+    _scan_keys = ["bulwark:recent_blocks:user-123"]
+
+    def _scan_iter(match=None, count=None):
+        prefix = match.rstrip("*") if match else ""
+        return iter([k for k in _scan_keys if k.startswith(prefix)])
+
+    client.scan_iter.side_effect = _scan_iter
 
     def _make_pipeline(*args, **kwargs):
         pipe = MagicMock()
@@ -450,8 +459,22 @@ class TestRetentionPolicy:
         assert result["deleted"] == 0
 
     @pytest.mark.asyncio
-    async def test_retention_status(self, gdpr_service):
-        """get_retention_status should return configured values."""
+    async def test_retention_status(self, gdpr_service, monkeypatch):
+        """get_retention_status should report the effective (SIEM-aware) retention.
+
+        Security-events retention is now unified with ``events_sync`` (single
+        source of truth): a portal override wins, else ``BULWARK_EVENTS_RETENTION_DAYS``,
+        else a SIEM-aware default of 90 days when a SIEM exporter is on. Reset the
+        process-level settings cache and enable telemetry so the default resolves
+        to 90 deterministically.
+        """
+        from admin.services import events_settings
+
+        events_settings.reset_cache_for_tests()
+        monkeypatch.delenv("BULWARK_EVENTS_RETENTION_DAYS", raising=False)
+        monkeypatch.delenv("BULWARK_RETENTION_SECURITY_DAYS", raising=False)
+        monkeypatch.setenv("BULWARK_TELEMETRY_ENABLED", "true")
+
         with patch("admin.services.gdpr.get_redis_client", return_value=None):
             status = await gdpr_service.get_retention_status()
 

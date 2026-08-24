@@ -327,6 +327,74 @@ MIGRATIONS: list[Migration] = [
                 ON audit_log(sequence_id) WHERE sequence_id IS NOT NULL;
         """,
     ),
+
+    # Version 5: Durable security-events history. The proxy writes a capped LIVE
+    # buffer to Redis (bulwark:recent_blocks:* / recent_allowed:*); the admin syncs
+    # that buffer into this table so the Security Events viewer has a real,
+    # queryable history that survives Redis flushes/restarts and is not bounded by
+    # the Redis cap. Retention (age-based) is enforced by the sync task.
+    Migration(
+        version=5,
+        description="Add security_events durable history table",
+        sqlite_sql="""
+            CREATE TABLE IF NOT EXISTS security_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                ts REAL NOT NULL,
+                occurred_at TEXT,
+                tenant TEXT NOT NULL,
+                agent TEXT,
+                verdict TEXT NOT NULL,
+                category TEXT,
+                severity TEXT,
+                description TEXT,
+                source TEXT,
+                pattern TEXT,
+                request_id TEXT,
+                tool_name TEXT,
+                snippet TEXT,
+                input_hash TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_secevents_ts ON security_events(ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_secevents_tenant ON security_events(tenant);
+            CREATE INDEX IF NOT EXISTS idx_secevents_verdict ON security_events(verdict);
+            CREATE INDEX IF NOT EXISTS idx_secevents_category ON security_events(category);
+            CREATE INDEX IF NOT EXISTS idx_secevents_severity ON security_events(severity);
+            CREATE INDEX IF NOT EXISTS idx_secevents_tenant_ts
+                ON security_events(tenant, ts DESC);
+        """,
+        postgresql_sql="""
+            CREATE TABLE IF NOT EXISTS security_events (
+                id SERIAL PRIMARY KEY,
+                event_id TEXT NOT NULL UNIQUE,
+                ts DOUBLE PRECISION NOT NULL,
+                occurred_at TIMESTAMPTZ,
+                tenant TEXT NOT NULL,
+                agent TEXT,
+                verdict TEXT NOT NULL,
+                category TEXT,
+                severity TEXT,
+                description TEXT,
+                source TEXT,
+                pattern TEXT,
+                request_id TEXT,
+                tool_name TEXT,
+                snippet TEXT,
+                input_hash TEXT,
+                metadata TEXT,
+                created_at TIMESTAMPTZ NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_secevents_ts ON security_events(ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_secevents_tenant ON security_events(tenant);
+            CREATE INDEX IF NOT EXISTS idx_secevents_verdict ON security_events(verdict);
+            CREATE INDEX IF NOT EXISTS idx_secevents_category ON security_events(category);
+            CREATE INDEX IF NOT EXISTS idx_secevents_severity ON security_events(severity);
+            CREATE INDEX IF NOT EXISTS idx_secevents_tenant_ts
+                ON security_events(tenant, ts DESC);
+        """,
+    ),
 ]
 
 

@@ -38,8 +38,31 @@ GDPR_ARCHIVE_DIR = Path(os.getenv("BULWARK_GDPR_ARCHIVE_DIR", "data/gdpr/archive
 GDPR_REQUESTS_DB = Path(os.getenv("BULWARK_GDPR_REQUESTS_DB", "data/gdpr/requests.db"))
 
 # Retention defaults (days)
-RETENTION_SECURITY_EVENTS_DAYS = int(os.getenv("BULWARK_RETENTION_SECURITY_DAYS", "90"))
+# Security-events retention is now portal-configurable (unified with the events
+# sync task). The env var below is only a bootstrap fallback; the effective value
+# is resolved via ``events_settings`` so the GDPR view and the pruning task never
+# disagree. Audit retention remains env/const driven (regulatory minimum).
 RETENTION_AUDIT_DAYS = int(os.getenv("BULWARK_RETENTION_AUDIT_DAYS", "365"))
+
+
+def security_events_retention_days() -> int:
+    """Effective security-events retention in days (0 = keep forever).
+
+    Single source of truth shared with ``events_sync``: portal override →
+    ``BULWARK_EVENTS_RETENTION_DAYS`` → SIEM-aware default. Falls back to the
+    legacy ``BULWARK_RETENTION_SECURITY_DAYS`` env var only when nothing else is
+    set and no SIEM is configured.
+    """
+    from . import events_settings
+    days = events_settings.effective_retention_days()
+    if days == 0 and not events_settings._telemetry_enabled():
+        legacy = os.getenv("BULWARK_RETENTION_SECURITY_DAYS", "").strip()
+        if legacy:
+            try:
+                return max(0, int(legacy))
+            except ValueError:
+                pass
+    return days
 
 # ─── Art.30 controller identity ─────────────────────────────────────────────────
 # Art.30 records MUST name the data controller and (where applicable) the DPO.
@@ -202,11 +225,17 @@ class GDPRService:
         # persist PII that must be erased alongside the audit DB.
         redis_erased = await self._erase_redis_subject_data(subject_id)
 
+        # Also erase the subject from the durable security_events history — the
+        # Redis buffer is transient, but the table is the long-lived record and
+        # must honour the erasure too.
+        db_events_erased = await self._erase_db_security_events(subject_id)
+
         # Record the GDPR request
         await self._record_request(
             request_id, "pseudonymize", subject_id, requested_by,
-            "completed", pseudonymized_count + redis_erased,
-            f"Pseudonymized {pseudonymized_count} DB records + {redis_erased} Redis keys"
+            "completed", pseudonymized_count + redis_erased + db_events_erased,
+            f"Pseudonymized {pseudonymized_count} DB records + {redis_erased} Redis keys "
+            f"+ {db_events_erased} security events"
         )
 
         # Meta-audit: log the pseudonymization action itself
@@ -333,7 +362,7 @@ class GDPRService:
         audit = get_audit_logger()
         now = datetime.now(timezone.utc)
 
-        security_cutoff = now - timedelta(days=RETENTION_SECURITY_EVENTS_DAYS)
+        security_cutoff = now - timedelta(days=security_events_retention_days())
         audit_cutoff = now - timedelta(days=RETENTION_AUDIT_DAYS)
 
         archived_count = 0
@@ -394,7 +423,7 @@ class GDPRService:
             details=json.dumps({
                 "archived": archived_count,
                 "deleted": deleted_count,
-                "security_retention_days": RETENTION_SECURITY_EVENTS_DAYS,
+                "security_retention_days": security_events_retention_days(),
                 "audit_retention_days": RETENTION_AUDIT_DAYS,
             }),
             ip_address=ip_address,
@@ -420,6 +449,8 @@ class GDPRService:
         Records of processing activities — required for organizations with
         more than 250 employees or processing sensitive data.
         """
+        from . import events_settings
+        await events_settings.refresh_cache()
         categories = [
             DataCategory(
                 category="audit_log",
@@ -436,7 +467,7 @@ class GDPRService:
                 description="Detected threats, blocked requests, guardrail triggers",
                 purpose="Threat detection, incident response, security analytics",
                 legal_basis="Legitimate interest (Art.6(1)(f)) — security of processing",
-                retention_period=f"{RETENTION_SECURITY_EVENTS_DAYS} days",
+                retention_period=f"{security_events_retention_days()} days",
                 recipients=["Security team", "SIEM platform", "SOC analysts"],
                 contains_pii=True,
                 pseudonymizable=True,
@@ -456,7 +487,7 @@ class GDPRService:
                 description="IP addresses, user agents, request timestamps",
                 purpose="Authentication, abuse detection, forensics",
                 legal_basis="Legitimate interest (Art.6(1)(f)) — security of processing",
-                retention_period=f"{RETENTION_SECURITY_EVENTS_DAYS} days",
+                retention_period=f"{security_events_retention_days()} days",
                 recipients=["Security team", "SIEM platform"],
                 contains_pii=True,
                 pseudonymizable=True,
@@ -535,8 +566,10 @@ class GDPRService:
 
     async def get_retention_status(self) -> RetentionStatus:
         """Get current retention policy configuration and last enforcement status."""
+        from . import events_settings
+        await events_settings.refresh_cache()
         status = RetentionStatus(
-            security_events_retention_days=RETENTION_SECURITY_EVENTS_DAYS,
+            security_events_retention_days=security_events_retention_days(),
             audit_retention_days=RETENTION_AUDIT_DAYS,
         )
 
@@ -707,26 +740,58 @@ class GDPRService:
         ]
 
     async def _find_security_events(self, subject_id: str) -> list[dict]:
-        """Find security events related to a subject (from Redis recent blocks)."""
-        events = []
-        client = get_redis_client()
-        if not client:
-            return events
+        """Find security events related to a subject.
 
+        Combines two sources so an Art.15 export is complete:
+
+        * the durable ``security_events`` table (the queryable history), and
+        * the Redis live buffer (recent entries that may not be synced yet).
+
+        Entries are de-duplicated on ``input_hash`` + ``ts`` so an event present
+        in both the buffer and the table is only exported once.
+        """
+        events: list[dict] = []
+        seen: set[tuple] = set()
+
+        def _add(event: dict) -> None:
+            key = (event.get("input_hash", ""), event.get("ts", ""))
+            if key in seen:
+                return
+            seen.add(key)
+            events.append(event)
+
+        # 1. Durable store (survives Redis flushes, full retained history)
         try:
-            # Recent blocks are stored per tenant (bulwark:recent_blocks:<tenant>);
-            # aggregate across all tenant lists, then match on subject.
-            from .redis_sync import fetch_recent_blocks
-            recent = fetch_recent_blocks(client, max_items=10000)
-            for event in recent:
-                try:
-                    # Match on tenant_id, source IP, or any field containing subject
-                    if self._event_matches_subject(event, subject_id):
-                        events.append(event)
-                except (json.JSONDecodeError, TypeError):
-                    continue
+            from .security_events_store import get_security_events_store
+            store = get_security_events_store()
+            for event in await store.find_by_subject(subject_id):
+                if self._event_matches_subject(event, subject_id):
+                    _add(event)
         except Exception as e:
-            logger.warning("Failed to query security events from Redis: %s", e)
+            logger.warning("Failed to query durable security events: %s", e)
+
+        # 2. Redis live buffer (not-yet-synced recent entries)
+        client = get_redis_client()
+        if client:
+            try:
+                # Recent blocks are stored per tenant (bulwark:recent_blocks:<tenant>);
+                # allowed events, when opt-in logging is enabled, live in a parallel
+                # feed (bulwark:recent_allowed:<tenant>). Aggregate across both feeds
+                # and match on subject so a data-subject export is complete.
+                from .redis_sync import fetch_recent_allowed, fetch_recent_blocks
+                recent = [
+                    *fetch_recent_blocks(client, max_items=10000),
+                    *fetch_recent_allowed(client, max_items=10000),
+                ]
+                for event in recent:
+                    try:
+                        # Match on tenant_id, source IP, or any field containing subject
+                        if self._event_matches_subject(event, subject_id):
+                            _add(event)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+            except Exception as e:
+                logger.warning("Failed to query security events from Redis: %s", e)
 
         return events
 
@@ -855,6 +920,22 @@ class GDPRService:
                 self._requests_conn.close()
                 self._requests_conn = None
 
+    async def _erase_db_security_events(self, subject_id: str) -> int:
+        """Erase the subject from the durable security_events table.
+
+        The Redis buffer is transient; the ``security_events`` table is the
+        long-lived queryable history and must honour Art.17 erasure too. Uses
+        the shared store (works for both SQLite and PostgreSQL backends).
+        Returns the number of rows deleted.
+        """
+        try:
+            from .security_events_store import get_security_events_store
+            store = get_security_events_store()
+            return await store.erase_subject(subject_id)
+        except Exception as e:
+            logger.warning("gdpr_db_security_events_erase_failed: %s", e)
+            return 0
+
     async def _erase_redis_subject_data(self, subject_id: str) -> int:
         """SECURITY (H-09 fix): Erase Redis keys containing subject's PII.
 
@@ -882,15 +963,16 @@ class GDPRService:
                     client.delete(*keys)
                     erased += len(keys)
 
-            # 2. Remove entries in per-tenant recent_blocks lists that contain
-            # subject_id. Blocks are stored one capped list per tenant
-            # (bulwark:recent_blocks:<tenant>), so scan and clean every list.
-            from .redis_sync import iter_recent_block_keys
-            for recent_key in iter_recent_block_keys(client):
-                recent_blocks = client.lrange(recent_key, 0, -1)
-                if not recent_blocks:
+            # 2. Remove entries in per-tenant recent_blocks / recent_allowed lists
+            # that contain subject_id. Both feeds are stored one capped list per
+            # tenant (bulwark:recent_blocks:<tenant>, bulwark:recent_allowed:<tenant>),
+            # so scan and clean every list in both feeds.
+            from .redis_sync import iter_recent_allowed_keys, iter_recent_block_keys
+            for recent_key in [*iter_recent_block_keys(client), *iter_recent_allowed_keys(client)]:
+                recent_entries = client.lrange(recent_key, 0, -1)
+                if not recent_entries:
                     continue
-                for entry in recent_blocks:
+                for entry in recent_entries:
                     entry_str = entry if isinstance(entry, str) else entry.decode("utf-8", errors="ignore")
                     if subject_id in entry_str:
                         client.lrem(recent_key, 0, entry)
