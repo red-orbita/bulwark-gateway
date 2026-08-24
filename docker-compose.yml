@@ -72,7 +72,11 @@ services:
       # Admin-managed state read from the shared admin_data volume (see volumes).
       # Matches Helm: admin writes /app/data/{agents.yaml,iocs.json}; proxy reads
       # them here so UI-driven tenant/agent + IOC changes reach the hot path.
-      BULWARK_AGENTS_FILE: /app/shared/admin/agents.yaml
+      # NOTE: main.py resolves the registry from BULWARK_AGENTS_CONFIG (settings
+      # .agents_config); BULWARK_AGENTS_FILE is not a recognized setting, so the
+      # proxy would silently fall back to the baked-in config/agents.yaml seed
+      # (support-bot + code-assistant only) and ignore admin-managed agents.
+      BULWARK_AGENTS_CONFIG: /app/shared/admin/agents.yaml
       BULWARK_IOC_PATH: /app/shared/admin/iocs.json
       BULWARK_LOG_FORMAT: json
       BULWARK_LOG_LEVEL: ${BULWARK_LOG_LEVEL:-INFO}

@@ -101,6 +101,19 @@ class Settings(BaseSettings):
     redact_email: bool = False   # Redact email addresses in LLM output ([REDACTED:EMAIL])
     redact_phone: bool = False   # Redact phone numbers in LLM output ([REDACTED:PHONE])
 
+    # Allowed-request visibility (opt-in). By default only BLOCK and WARN verdicts
+    # are recorded as browsable events; legitimate ALLOW traffic is only counted.
+    # Enabling this records each allowed request as a (redacted, capped) event so
+    # analysts can drill into passing traffic in the Security Events viewer. This
+    # trades Redis memory + write volume for auditability — keep the cap modest.
+    log_allowed: bool = False        # Record ALLOW verdicts as browsable events
+    # Redis is only the *live buffer* for the Security Events viewer; the durable,
+    # queryable history lives in the admin database (synced from these lists). This
+    # cap bounds Redis memory per tenant per feed (block/warn and allowed). It must
+    # stay comfortably above the per-sync event volume so nothing is evicted before
+    # the admin sync drains it into the durable store.
+    events_max_per_tenant: int = 1000
+
     # Multi-tenancy (Tier 2: Pod-level isolation)
     # Comma-separated list of tenant IDs this pod is allowed to serve.
     # Empty = serve all tenants (shared pool mode).

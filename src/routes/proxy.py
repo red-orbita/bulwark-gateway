@@ -474,7 +474,7 @@ async def chat_completions(request: Request):
     if input_result.verdict == Verdict.BLOCK:
         await _log_events(input_result.events, source_ip)
         asyncio.create_task(_fire_webhook_alert(input_result.events, tenant_id, agent_id))
-        _push_recent_block(input_result.events, tenant_id, agent_id)
+        _push_recent_block(input_result.events, tenant_id, agent_id, snippet_source=scan_content)
         _counters.record("block", (time.perf_counter() - _req_start) * 1000)
         _record_tenant_usage(tenant_id, "block")
         # Record blocked payload in enrichment replay DB (async, fire-and-forget)
@@ -509,6 +509,19 @@ async def chat_completions(request: Request):
     if input_result.verdict == Verdict.WARN:
         await _log_events(input_result.events, source_ip)
         asyncio.create_task(_fire_webhook_alert(input_result.events, tenant_id, agent_id))
+        # An incident analyst needs to see EVERY warned request — not just blocks —
+        # in the Security Events viewer. Push all WARN events to recent_blocks
+        # (exception-allowed ones carry allowed_by_exception + exception_scope in
+        # metadata, which the UI renders as an "ALLOWED" badge with the scope).
+        _warn_snippet_src = " ".join(
+            m.get("content", "")
+            for m in messages
+            if isinstance(m.get("content"), str) and m.get("content")
+        )
+        _push_recent_block(
+            input_result.events, tenant_id, agent_id, snippet_source=_warn_snippet_src
+        )
+        _record_tenant_usage(tenant_id, "warn")
 
     # === PHASE 1a: Multi-turn decomposition check ===
     # Tracks threat signal accumulation across requests from same session.
@@ -526,7 +539,7 @@ async def chat_completions(request: Request):
             if session_result.verdict == Verdict.BLOCK:
                 await _log_events(session_result.events, source_ip)
                 asyncio.create_task(_fire_webhook_alert(session_result.events, tenant_id, agent_id))
-                _push_recent_block(session_result.events, tenant_id, agent_id)
+                _push_recent_block(session_result.events, tenant_id, agent_id, snippet_source=user_content_for_session)
                 _counters.record("block", (time.perf_counter() - _req_start) * 1000)
                 _record_tenant_usage(tenant_id, "block")
                 return JSONResponse(
@@ -569,7 +582,7 @@ async def chat_completions(request: Request):
             )
             await _log_events([event], source_ip)
             asyncio.create_task(_fire_webhook_alert([event], tenant_id, agent_id))
-            _push_recent_block([event], tenant_id, agent_id)
+            _push_recent_block([event], tenant_id, agent_id, snippet_source=scan_content)
             _counters.record("block", (time.perf_counter() - _req_start) * 1000)
             return JSONResponse(
                 status_code=403,
@@ -607,6 +620,15 @@ async def chat_completions(request: Request):
             # Cache hit — skip backend call entirely
             _counters.record("allow", (time.perf_counter() - _req_start) * 1000)
             _record_tenant_usage(tenant_id, "allow")
+            _push_recent_allowed(
+                tenant_id, agent_id,
+                snippet_source=" ".join(
+                    m.get("content", "")
+                    for m in messages
+                    if isinstance(m.get("content"), str) and m.get("content")
+                ),
+                request_id=f"{tenant_id}:{agent_id}:{int(time.time()*1000)}",
+            )
             return JSONResponse(content=cached_response)
 
     # Build ordered list of backends to try (primary + fallbacks)
@@ -858,7 +880,12 @@ async def chat_completions(request: Request):
             if policy_result.verdict == Verdict.BLOCK:
                 await _log_events(policy_result.events, source_ip)
                 asyncio.create_task(_fire_webhook_alert(policy_result.events, tenant_id, agent_id))
-                _push_recent_block(policy_result.events, tenant_id, agent_id)
+                _push_recent_block(
+                    policy_result.events,
+                    tenant_id,
+                    agent_id,
+                    snippet_source=", ".join(t for t in policy_result.blocked_tools) or None,
+                )
                 # Remove blocked tool calls from response
                 # SECURITY FIX (PENTEST-DEEP CRIT-3): Normalize tool names before
                 # comparison to prevent Unicode confusable bypass (F-01).
@@ -929,7 +956,7 @@ async def chat_completions(request: Request):
                 message["content"] = "[Content blocked by security policy — output contained dangerous material]"
                 await _log_events(filter_result.events, source_ip)
                 asyncio.create_task(_fire_webhook_alert(filter_result.events, tenant_id, agent_id))
-                _push_recent_block(filter_result.events, tenant_id, agent_id)
+                _push_recent_block(filter_result.events, tenant_id, agent_id, snippet_source=content)
             elif filter_result.verdict == Verdict.WARN and filter_result.events:
                 # WARN: log to SIEM + notify but don't modify content
                 await _log_events(filter_result.events, source_ip)
@@ -981,6 +1008,19 @@ async def chat_completions(request: Request):
 
     _counters.record(input_result.verdict.value, (time.perf_counter() - _req_start) * 1000)
     _record_tenant_usage(tenant_id, input_result.verdict.value)
+    # Opt-in visibility: record ALLOW verdicts as browsable events. WARN was
+    # already pushed to recent_blocks upstream, so only log genuine ALLOWs here
+    # to avoid double-recording.
+    if input_result.verdict == Verdict.ALLOW:
+        _allow_snippet = " ".join(
+            m.get("content", "")
+            for m in messages
+            if isinstance(m.get("content"), str) and m.get("content")
+        )
+        _push_recent_allowed(
+            tenant_id, agent_id, snippet_source=_allow_snippet,
+            request_id=f"{tenant_id}:{agent_id}:{int(time.time()*1000)}",
+        )
     return JSONResponse(content=response_data)
 
 
@@ -1210,7 +1250,12 @@ async def _handle_streaming(
                                 # Log security events + fire notifications
                                 await _log_events(policy_result.events, source_ip)
                                 asyncio.create_task(_fire_webhook_alert(policy_result.events, tenant_id, agent_id))
-                                _push_recent_block(policy_result.events, tenant_id, agent_id)
+                                _push_recent_block(
+                                    policy_result.events,
+                                    tenant_id,
+                                    agent_id,
+                                    snippet_source=", ".join(policy_result.blocked_tools) or None,
+                                )
                                 # Emit error instead of tool calls
                                 blocked_names = ", ".join(policy_result.blocked_tools)
                                 yield _make_error_event(
@@ -1364,6 +1409,12 @@ async def _log_events(events: list[SecurityEvent], source_ip: str | None = None)
     """Log security events for SIEM and enqueue to telemetry pipeline."""
     queue = get_telemetry_queue()
     for event in events:
+        # F3: an allow-exception degrades BLOCK→WARN and tags the metadata. Surface
+        # that in BOTH the stdout log and the SIEM export so an incident analyst can
+        # tell an exception-allowed attack apart from a generic warn.
+        _md = event.metadata or {}
+        _allowed_by_exception = bool(_md.get("allowed_by_exception"))
+        _exception_scope = _md.get("exception_scope") or _md.get("allowed_by_exception_scope")
         await logger.awarn(
             "security_event",
             verdict=event.verdict.value,
@@ -1374,6 +1425,8 @@ async def _log_events(events: list[SecurityEvent], source_ip: str | None = None)
             severity=event.severity,
             tool=event.tool_name,
             pattern=event.matched_pattern,
+            allowed_by_exception=_allowed_by_exception,
+            exception_scope=_exception_scope,
         )
         # Enqueue to telemetry — non-blocking, ≤2ms
         telemetry_event = from_security_event(
@@ -1387,6 +1440,8 @@ async def _log_events(events: list[SecurityEvent], source_ip: str | None = None)
             latency_ms=0.0,
             source_ip=source_ip,
             confidence=1.0,
+            allowed_by_exception=_allowed_by_exception,
+            exception_scope=_exception_scope,
         )
         queue.enqueue_nowait(telemetry_event)
 
@@ -1412,7 +1467,56 @@ async def _fire_webhook_alert(events: list[SecurityEvent], tenant_id: str, agent
             logger.error(f"notification_error: {type(e).__name__}: {e}")
 
 
-def _push_recent_block(events: list[SecurityEvent], tenant_id: str, agent_id: str):
+def _make_block_snippet(snippet_source: str | None) -> tuple[str | None, str | None]:
+    """Produce a privacy-safe (redacted + truncated) snippet plus a content hash.
+
+    F1 (event detail): the recent-blocks list is shown verbatim in the admin UI,
+    so we must never persist raw user input. We (1) hash the full original for
+    correlation, then (2) redact secrets/PII via the output filter and truncate
+    to a bounded preview. Best-effort: any failure yields (None, hash-or-None).
+    """
+    if not snippet_source:
+        return None, None
+    import hashlib as _hashlib
+
+    input_hash: str | None = None
+    try:
+        input_hash = _hashlib.sha256(snippet_source.encode("utf-8", "ignore")).hexdigest()[:16]
+    except Exception:
+        input_hash = None
+
+    snippet: str | None = None
+    try:
+        # SECURITY: redact secrets/PII DIRECTLY — do NOT route through
+        # output_filter.inspect_and_redact(), whose indirect-injection check
+        # short-circuits (returns BLOCK) BEFORE the secret-redaction stage.
+        # A blocked request's input almost always contains injection patterns,
+        # so relying on that path would persist secrets verbatim (e.g. an AWS
+        # key embedded in an injection string). Applying the patterns here
+        # guarantees the stored preview is always scrubbed.
+        import unicodedata as _ud
+
+        from src.guardrails.output_filter import (
+            REDACTION_PATTERNS as _RP,
+            _strip_invisible as _strip,
+        )
+        text = _strip(_ud.normalize("NFKC", snippet_source))
+        for pattern, _name, replacement in _RP:
+            text = pattern.sub(replacement or "[REDACTED]", text)
+        preview = " ".join(text.split())  # collapse whitespace/newlines
+        _MAX = 240
+        snippet = preview[:_MAX] + ("…" if len(preview) > _MAX else "")
+    except Exception:
+        snippet = None
+    return snippet, input_hash
+
+
+def _push_recent_block(
+    events: list[SecurityEvent],
+    tenant_id: str,
+    agent_id: str,
+    snippet_source: str | None = None,
+):
     """Push block event to Redis recent-blocks list (non-blocking, best effort)."""
     try:
         from src.guardrails.dynamic_registry import get_pattern_registry
@@ -1421,6 +1525,8 @@ def _push_recent_block(events: list[SecurityEvent], tenant_id: str, agent_id: st
         if not r:
             return
         import json as _json
+        # F1: privacy-safe preview + correlation hash (computed once per push).
+        snippet, input_hash = _make_block_snippet(snippet_source)
         # SECURITY FIX (SGW-XT-002): Per-tenant recent_blocks key.
         # Previously all tenants shared a single list, leaking block metadata
         # across tenant boundaries.
@@ -1434,11 +1540,68 @@ def _push_recent_block(events: list[SecurityEvent], tenant_id: str, agent_id: st
                 "description": event.description,
                 "severity": event.severity or "high",
                 "pattern": event.matched_pattern or "",
+                # F1: full event detail (previously dropped, forcing a shallow UI).
+                "verdict": event.verdict.value if event.verdict else "block",
+                "source": event.source or "",
+                "request_id": event.request_id or "",
+                "tool_name": event.tool_name or "",
+                "metadata": event.metadata or {},
+                "snippet": snippet or "",
+                "input_hash": input_hash or "",
             })
             r.lpush(redis_key, entry)
-            r.ltrim(redis_key, 0, 49)  # Keep last 50 per tenant
+            r.ltrim(redis_key, 0, max(1, settings.events_max_per_tenant) - 1)
     except Exception as exc:
         logger.warning("recent_blocks_push_failed", error=str(exc))
+
+
+def _push_recent_allowed(
+    tenant_id: str,
+    agent_id: str,
+    snippet_source: str | None = None,
+    request_id: str | None = None,
+):
+    """Record an ALLOWED request as a browsable event (opt-in, best effort).
+
+    Unlike blocks/warns, an allowed request carries no SecurityEvent (nothing was
+    detected), so we synthesise a minimal, privacy-safe record: a redacted +
+    truncated snippet and a correlation hash — never the raw input. Stored under a
+    DEDICATED key (``bulwark:recent_allowed:<tenant>``) so high-volume legitimate
+    traffic never evicts the security-relevant block/warn events from their list.
+    Gated behind ``settings.log_allowed`` and capped at ``settings.events_max_per_tenant``.
+    """
+    if not settings.log_allowed:
+        return
+    try:
+        from src.guardrails.dynamic_registry import get_pattern_registry
+        registry = get_pattern_registry()
+        r = registry._redis
+        if not r:
+            return
+        import json as _json
+        snippet, input_hash = _make_block_snippet(snippet_source)
+        redis_key = f"bulwark:recent_allowed:{tenant_id}"
+        cap = max(1, int(settings.events_max_per_tenant))
+        entry = _json.dumps({
+            "ts": time.time(),
+            "tenant": tenant_id,
+            "agent": agent_id,
+            "category": "allowed",
+            "description": "Request passed all guardrails",
+            "severity": "info",
+            "pattern": "",
+            "verdict": "allow",
+            "source": "input_guardrail",
+            "request_id": request_id or "",
+            "tool_name": "",
+            "metadata": {},
+            "snippet": snippet or "",
+            "input_hash": input_hash or "",
+        })
+        r.lpush(redis_key, entry)
+        r.ltrim(redis_key, 0, cap - 1)
+    except Exception as exc:
+        logger.warning("recent_allowed_push_failed", error=str(exc))
 
 
 def _record_tenant_usage(tenant_id: str, verdict: str):

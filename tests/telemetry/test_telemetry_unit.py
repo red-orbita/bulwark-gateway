@@ -140,6 +140,68 @@ class TestSchema:
         assert secret_payload not in cef_str
         assert secret_payload not in leef_str
 
+    def test_allow_exception_enrichment_ecs(self):
+        """F3: an exception-allowed warn is tagged + carries scope in ECS."""
+        event = from_security_event(
+            verdict="warn",
+            rule_id="input-tool_abuse-115",
+            rule_description="pipe to shell",
+            threat_category="tool_abuse",
+            tenant_id="default-corp",
+            agent_id="support-bot",
+            guardrail_layer="input",
+            latency_ms=1.2,
+            allowed_by_exception=True,
+            exception_scope="default-corp:support-bot",
+        )
+        ecs = event.to_ecs_json()
+        assert ecs["bulwark"]["allowed_by_exception"] is True
+        assert ecs["bulwark"]["exception_scope"] == "default-corp:support-bot"
+        # SIEM correlation: a dedicated tag isolates exception-allowed attacks.
+        assert "allowed-by-exception" in ecs["tags"]
+
+    def test_allow_exception_enrichment_cef_leef(self):
+        """F3: legacy SIEM formats expose the exception flag + scope."""
+        event = from_security_event(
+            verdict="warn",
+            rule_id="input-tool_abuse-115",
+            rule_description="pipe to shell",
+            threat_category="tool_abuse",
+            tenant_id="default-corp",
+            agent_id="support-bot",
+            guardrail_layer="input",
+            latency_ms=1.2,
+            allowed_by_exception=True,
+            exception_scope="default-corp:support-bot",
+        )
+        cef = event.to_cef()
+        assert "cs4=true" in cef and "cs4Label=AllowedByException" in cef
+        assert "cs5=default-corp:support-bot" in cef and "cs5Label=ExceptionScope" in cef
+        leef = event.to_leef()
+        assert "allowedByException=true" in leef
+        assert "exceptionScope=default-corp:support-bot" in leef
+
+    def test_non_exception_warn_not_tagged(self):
+        """A generic warn must NOT be flagged as exception-allowed."""
+        event = from_security_event(
+            verdict="warn",
+            rule_id="X",
+            rule_description="generic warn",
+            threat_category="overreliance",
+            tenant_id="t",
+            agent_id=None,
+            guardrail_layer="output",
+            latency_ms=0.0,
+        )
+        ecs = event.to_ecs_json()
+        assert ecs["bulwark"]["allowed_by_exception"] is False
+        # exception_scope is None → dropped by exclude_none
+        assert "exception_scope" not in ecs["bulwark"]
+        assert "allowed-by-exception" not in ecs["tags"]
+        # Legacy formats fall back to the "none" sentinel.
+        assert "cs4=false" in event.to_cef()
+        assert "exceptionScope=none" in event.to_leef()
+
 
 # === Queue Tests ===
 

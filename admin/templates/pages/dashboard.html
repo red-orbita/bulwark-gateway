@@ -319,7 +319,9 @@
             <!-- Blocks list -->
             <div x-show="!blocksLoading && blocks.length > 0" class="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                 <template x-for="b in blocks" :key="b.ts">
-                    <div class="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-gray-800/50 hover:bg-gray-800 transition-colors group">
+                    <div class="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-gray-800/50 hover:bg-gray-800 transition-colors group cursor-pointer focus:outline-none focus:bg-gray-800"
+                         tabindex="0" role="button" :aria-label="'View details for ' + (b.category || 'block')"
+                         @click="openBlock(b)" @keydown.enter.prevent="openBlock(b)" @keydown.space.prevent="openBlock(b)">
                         <span class="sg-dot sg-dot-danger flex-shrink-0"></span>
                         <span class="text-[11px] text-gray-500 font-mono w-14 flex-shrink-0" x-text="new Date(b.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})"></span>
                         <span class="sg-badge sg-badge-neutral text-[10px]" x-text="b.tenant"></span>
@@ -338,6 +340,47 @@
                 <button @click="loadBlocks()" aria-label="Refresh recent blocks" title="Refresh" class="sg-btn sg-btn-ghost sg-btn-sm">
                         <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
                     </button>
+                </div>
+            </div>
+
+            <!-- Recent-block detail drawer (F1) -->
+            <div x-show="selectedBlock" x-cloak class="fixed inset-0 z-50" @keydown.escape.window="closeBlock()">
+                <div class="absolute inset-0 bg-black/60" @click="closeBlock()"></div>
+                <div class="absolute right-0 top-0 h-full w-full max-w-md bg-gray-900 border-l border-gray-700 shadow-2xl overflow-y-auto"
+                     role="dialog" aria-modal="true" aria-label="Block detail"
+                     x-transition:enter="sg-trans" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+                     x-transition:leave="sg-trans" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full">
+                    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-700 sticky top-0 bg-gray-900">
+                        <h3 class="text-sm font-semibold text-gray-200 uppercase tracking-wider">Block Detail</h3>
+                        <button class="text-gray-400 hover:text-white" @click="closeBlock()" aria-label="Close detail">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                        </button>
+                    </div>
+                    <div class="p-5 space-y-4" x-show="selectedBlock">
+                        <div class="flex flex-wrap gap-2">
+                            <span class="sg-badge text-[10px]" :class="'sg-badge-' + (selectedBlock?.severity || 'low')" x-text="selectedBlock?.severity"></span>
+                            <span class="sg-badge text-[10px] sg-badge-high" x-text="(selectedBlock?.verdict || 'block').toUpperCase()"></span>
+                            <span class="font-mono text-xs text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded" x-text="selectedBlock?.category"></span>
+                        </div>
+                        <dl class="space-y-3 text-xs">
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Tenant / Agent</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(selectedBlock?.tenant || '—') + ' / ' + (selectedBlock?.agent || '—')"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Description</dt><dd class="text-gray-300 mt-0.5" x-text="selectedBlock?.description || '—'"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Source</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="selectedBlock?.source || '—'"></dd></div>
+                            <div x-show="selectedBlock?.tool_name"><dt class="text-gray-500 uppercase tracking-wider">Tool</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="selectedBlock?.tool_name"></dd></div>
+                            <div x-show="selectedBlock?.pattern"><dt class="text-gray-500 uppercase tracking-wider">Matched Pattern</dt><dd class="text-amber-300 mt-0.5 font-mono break-all" x-text="selectedBlock?.pattern"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Request ID</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="selectedBlock?.request_id || '—'"></dd></div>
+                            <div x-show="selectedBlock?.input_hash"><dt class="text-gray-500 uppercase tracking-wider">Input Hash (SHA-256)</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="selectedBlock?.input_hash"></dd></div>
+                        </dl>
+                        <div x-show="selectedBlock?.snippet">
+                            <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Redacted Snippet</p>
+                            <p class="text-[11px] text-gray-500 mb-1">Secrets/PII removed, truncated. Raw input is never stored.</p>
+                            <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="selectedBlock?.snippet"></pre>
+                        </div>
+                        <div x-show="selectedBlock && selectedBlock.metadata && Object.keys(selectedBlock.metadata).length > 0">
+                            <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Metadata</p>
+                            <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="JSON.stringify(selectedBlock?.metadata || {}, null, 2)"></pre>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -428,6 +471,7 @@ function dashboardPage() {
         blocks: [],
         blocksLoading: true,
         blocksError: null,
+        selectedBlock: null,
         blockedDelta: 0,
         bypassRate: 0,
         fpRate: 0,
@@ -611,6 +655,9 @@ function dashboardPage() {
             if (p95) parts.push(p95);
             return parts.join(' · ');
         },
+
+        openBlock(b) { this.selectedBlock = b; },
+        closeBlock() { this.selectedBlock = null; },
 
         async loadBlocks() {
             this.blocksLoading = true;

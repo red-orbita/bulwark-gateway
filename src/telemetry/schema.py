@@ -86,6 +86,12 @@ class BulwarkFields(BaseModel):
     input_hash: Optional[str] = None  # SHA-256, never raw payload
     session_id: Optional[str] = None
     request_id: Optional[str] = None
+    # F3 (allow-exception): when an allowlist exception degrades a would-be BLOCK
+    # to WARN, the request is still adversarial and is exported to the SIEM tagged
+    # so an analyst can distinguish "let through by policy exception" from a
+    # generic warn. `exception_scope` is the tenant:agent the exception applied to.
+    allowed_by_exception: bool = False
+    exception_scope: Optional[str] = None
 
 
 class TenantFields(BaseModel):
@@ -149,6 +155,8 @@ class SecurityTelemetryEvent(BaseModel):
             f"cs2={self.bulwark.guardrail_layer} cs2Label=GuardrailLayer "
             f"cs3={self.bulwark.rule_id or 'none'} cs3Label=RuleID "
             f"cn1={int(self.bulwark.latency_ms)} cn1Label=LatencyMs "
+            f"cs4={str(self.bulwark.allowed_by_exception).lower()} cs4Label=AllowedByException "
+            f"cs5={self.bulwark.exception_scope or 'none'} cs5Label=ExceptionScope "
             f"msg={self.message}"
         )
         return (
@@ -168,6 +176,8 @@ class SecurityTelemetryEvent(BaseModel):
             f"ruleId={self.bulwark.rule_id or 'none'}\t"
             f"guardrailLayer={self.bulwark.guardrail_layer}\t"
             f"latencyMs={int(self.bulwark.latency_ms)}\t"
+            f"allowedByException={str(self.bulwark.allowed_by_exception).lower()}\t"
+            f"exceptionScope={self.bulwark.exception_scope or 'none'}\t"
             f"msg={self.message}"
         )
 
@@ -185,6 +195,8 @@ def from_security_event(
     source_ip: Optional[str] = None,
     request_id: Optional[str] = None,
     confidence: float = 1.0,
+    allowed_by_exception: bool = False,
+    exception_scope: Optional[str] = None,
 ) -> SecurityTelemetryEvent:
     """Factory: create telemetry event from guardrail SecurityEvent."""
     input_hash = hashlib.sha256(raw_input.encode()).hexdigest()[:16] if raw_input else None
@@ -202,9 +214,16 @@ def from_security_event(
 
     message = f"Bulwark Gateway {verdict.upper()}: {rule_description or threat_category or 'security event'}"
 
+    # An allow-exception is a distinct, auditable signal — tag it so SIEM
+    # searches/correlations can isolate "adversarial but allowed by exception".
+    tags = ["bulwark-gateway", "security"]
+    if allowed_by_exception:
+        tags.append("allowed-by-exception")
+
     return SecurityTelemetryEvent(
         **{"@timestamp": datetime.now(timezone.utc).isoformat()},  # type: ignore[arg-type]
         message=message,
+        tags=tags,
         event=ECSEvent(
             category=TelemetryEventCategory.INTRUSION_DETECTION,
             action=action,
@@ -223,6 +242,8 @@ def from_security_event(
             latency_ms=latency_ms,
             input_hash=input_hash,
             request_id=request_id,
+            allowed_by_exception=allowed_by_exception,
+            exception_scope=exception_scope,
         ),
         tenant=TenantFields(id=tenant_id, agent_id=agent_id),
     )

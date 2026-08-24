@@ -403,6 +403,12 @@ ingress:
     nginx.ingress.kubernetes.io/enable-hsts: "true"
     nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
     nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+    # LLM backends can be slow (large models stream tokens for minutes). Raise
+    # the upstream timeouts so legitimate long completions are not cut off with
+    # a 504 before the guardrail/backend finishes. Tune per your slowest model.
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
   hosts:
     # -- Proxy API hostname
     proxy: "bulwark-gateway.local"

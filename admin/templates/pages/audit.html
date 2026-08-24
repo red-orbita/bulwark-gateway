@@ -32,6 +32,8 @@
                 <option value="policy_delete">Policy Delete</option>
                 <option value="policy_toggle">Policy Toggle</option>
                 <option value="guardrail_update">Guardrail Update</option>
+                <option value="guardrail_exception_add">Guardrail Exception Add</option>
+                <option value="guardrail_exception_remove">Guardrail Exception Remove</option>
                 <option value="siem_update">SIEM Update</option>
                 <option value="config_apply">Config Apply</option>
                 <option value="config_rollback">Config Rollback</option>
@@ -79,6 +81,7 @@
             <table class="sg-table">
                 <thead>
                     <tr>
+                        <th class="w-8" aria-label="Expand"></th>
                         <th>Timestamp</th>
                         <th>User</th>
                         <th>Action</th>
@@ -87,24 +90,59 @@
                         <th>Details</th>
                     </tr>
                 </thead>
-                <tbody>
-                    <template x-for="entry in entries" :key="entry.id">
-                        <tr>
-                            <td class="font-mono text-xs text-gray-400" x-text="entry.timestamp"></td>
-                            <td x-text="entry.user"></td>
-                            <td>
-                                <span class="sg-badge" :class="entry.action.includes('delete') ? 'sg-badge-danger' : entry.action.includes('create') ? 'sg-badge-success' : 'sg-badge-brand'" x-text="entry.action"></span>
-                            </td>
-                            <td class="font-mono text-xs" x-text="entry.target"></td>
-                            <td>
-                                <span class="sg-badge" :class="entry.status === 'success' ? 'sg-badge-success' : 'sg-badge-danger'" x-text="entry.status"></span>
-                            </td>
-                            <td class="text-gray-400 max-w-xs truncate" x-text="entry.details"></td>
-                        </tr>
+                <template x-for="entry in entries" :key="entry.id">
+                    <!-- Elastic-style: click expands the row in place (no modal). One
+                         tbody per iteration is a single valid root element that Alpine
+                         renders (a bare template wrapper would render nothing). -->
+                    <tbody>
+                            <tr class="cursor-pointer hover:bg-cyan-400/5 focus:bg-cyan-400/10 focus:outline-none"
+                                :class="isExpanded(entry) && 'bg-cyan-400/10'"
+                                tabindex="0" role="button"
+                                :aria-expanded="isExpanded(entry) ? 'true' : 'false'"
+                                :aria-label="'Toggle details for ' + entry.action"
+                                @click="toggle(entry)" @keydown.enter.prevent="toggle(entry)" @keydown.space.prevent="toggle(entry)">
+                                <td class="text-gray-500 align-middle">
+                                    <svg class="w-4 h-4 transition-transform" :class="isExpanded(entry) && 'rotate-90'"
+                                         xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                                </td>
+                                <td class="font-mono text-xs text-gray-400" x-text="entry.timestamp"></td>
+                                <td x-text="entry.user"></td>
+                                <td>
+                                    <span class="sg-badge" :class="entry.action.includes('delete') || entry.action.includes('remove') ? 'sg-badge-danger' : entry.action.includes('create') || entry.action.includes('add') ? 'sg-badge-success' : 'sg-badge-brand'" x-text="entry.action"></span>
+                                </td>
+                                <td class="font-mono text-xs" x-text="entry.target"></td>
+                                <td>
+                                    <span class="sg-badge" :class="entry.status === 'success' ? 'sg-badge-success' : 'sg-badge-danger'" x-text="entry.status"></span>
+                                </td>
+                                <td class="text-gray-400 max-w-xs truncate" x-text="entry.details"></td>
+                            </tr>
+                            <!-- Inline expanded detail (replaces the old slide-in drawer) -->
+                            <tr x-show="isExpanded(entry)" x-cloak class="bg-gray-950/60">
+                                <td></td>
+                                <td colspan="6" class="!py-4">
+                                    <div class="border-l-2 border-cyan-500/50 pl-4 space-y-4">
+                                        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Timestamp</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="entry._raw?.timestamp || '—'"></dd></div>
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Actor</dt><dd class="text-gray-300 mt-0.5" x-text="entry._raw?.actor || '—'"></dd></div>
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Action</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="entry._raw?.action || '—'"></dd></div>
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Resource</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(entry._raw?.resource_type || '—') + ' / ' + (entry._raw?.resource_id || '—')"></dd></div>
+                                            <div><dt class="text-gray-500 uppercase tracking-wider">Result</dt><dd class="text-gray-300 mt-0.5" x-text="entry._raw?.result || '—'"></dd></div>
+                                            <div x-show="entry._raw?.tenant_id"><dt class="text-gray-500 uppercase tracking-wider">Tenant</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="entry._raw?.tenant_id"></dd></div>
+                                            <div x-show="entry._raw?.ip_address"><dt class="text-gray-500 uppercase tracking-wider">Source IP</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="entry._raw?.ip_address"></dd></div>
+                                            <div x-show="entry._raw?.hash" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Entry Hash</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="entry._raw?.hash"></dd></div>
+                                            <div x-show="entry._raw?.prev_hash" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Prev Hash</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="entry._raw?.prev_hash"></dd></div>
+                                        </dl>
+                                        <div x-show="entry._raw?.details">
+                                            <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Details</p>
+                                            <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="entry._raw?.details"></pre>
+                                        </div>
+                                     </div>
+                                 </td>
+                             </tr>
+                        </tbody>
                     </template>
-                </tbody>
-            </table>
-        </div>
+                </table>
+            </div>
 
         <!-- Empty state -->
         <div x-show="entries.length === 0 && !loading" class="sg-empty">
@@ -140,6 +178,13 @@ function auditManager() {
         loading: false,
         error: false,
         filters: { search: '', action: '', user: '', tenant_id: '', date_from: '' },
+        expandedIds: [],
+        toggle(entry) {
+            const i = this.expandedIds.indexOf(entry.id);
+            if (i === -1) { this.expandedIds.push(entry.id); }
+            else { this.expandedIds.splice(i, 1); }
+        },
+        isExpanded(entry) { return this.expandedIds.includes(entry.id); },
         async init() { await this.loadEntries(); },
         async loadEntries() {
             this.loading = true;
@@ -161,7 +206,8 @@ function auditManager() {
                     action: e.action,
                     target: (e.resource_type || '') + '/' + (e.resource_id || ''),
                     status: e.result || 'success',
-                    details: e.details || ''
+                    details: e.details || '',
+                    _raw: e
                 }));
                 const totalHeader = resp.headers.get('X-Total-Count');
                 this.total = totalHeader !== null ? parseInt(totalHeader, 10) : this.entries.length;

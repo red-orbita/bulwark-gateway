@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Redis keys (must match src/guardrails/dynamic_registry.py)
 KEY_DISABLED = "bulwark:guardrails:disabled"
 KEY_CUSTOM = "bulwark:guardrails:custom"
+KEY_EXCEPTIONS = "bulwark:guardrails:exceptions"
 KEY_VERSION = "bulwark:guardrails:version"
 
 # Per-tenant recent-blocks lists. The proxy writes one capped list per tenant
@@ -31,36 +32,33 @@ KEY_VERSION = "bulwark:guardrails:version"
 # no single shared list.
 RECENT_BLOCKS_PREFIX = "bulwark:recent_blocks:"
 
+# Per-tenant recent-ALLOWED lists (opt-in, BULWARK_LOG_ALLOWED). Kept under a
+# separate prefix so high-volume legitimate traffic never evicts block/warn
+# events from their list. Same per-entry schema as recent_blocks.
+RECENT_ALLOWED_PREFIX = "bulwark:recent_allowed:"
 
-def iter_recent_block_keys(r: "redis.Redis") -> list[str]:
-    """Return all per-tenant recent-block list keys.
 
-    Uses SCAN (not KEYS) to avoid blocking Redis on large keyspaces.
-    """
+def _iter_keys_by_prefix(r: "redis.Redis", prefix: str) -> list[str]:
+    """SCAN (never KEYS) for all per-tenant list keys under ``prefix``."""
     keys: list[str] = []
     try:
-        for k in r.scan_iter(match=f"{RECENT_BLOCKS_PREFIX}*", count=200):
+        for k in r.scan_iter(match=f"{prefix}*", count=200):
             keys.append(k)
     except Exception as exc:
-        logger.warning("recent_blocks_scan_failed: %s", exc)
+        logger.warning("recent_keys_scan_failed: %s", exc)
     return keys
 
 
-def fetch_recent_blocks(
-    r: "redis.Redis", max_items: int = 200, tenant: Optional[str] = None
+def _fetch_recent_by_prefix(
+    r: "redis.Redis", prefix: str, max_items: int, tenant: Optional[str]
 ) -> list[dict]:
-    """Merge per-tenant recent-block lists into one newest-first list.
-
-    Each stored entry is a JSON object with a numeric ``ts`` field; the merged
-    result is sorted by ``ts`` descending and truncated to ``max_items``. When
-    ``tenant`` is provided, only that tenant's list is read (fast path).
-    """
+    """Merge per-tenant lists under ``prefix`` into one newest-first list."""
     events: list[dict] = []
     try:
         if tenant:
-            keys = [f"{RECENT_BLOCKS_PREFIX}{tenant}"]
+            keys = [f"{prefix}{tenant}"]
         else:
-            keys = iter_recent_block_keys(r)
+            keys = _iter_keys_by_prefix(r, prefix)
         if not keys:
             return []
         pipe = r.pipeline(transaction=False)
@@ -76,6 +74,43 @@ def fetch_recent_blocks(
         return events
     events.sort(key=lambda e: e.get("ts", 0), reverse=True)
     return events[:max_items]
+
+
+def iter_recent_block_keys(r: "redis.Redis") -> list[str]:
+    """Return all per-tenant recent-block list keys.
+
+    Uses SCAN (not KEYS) to avoid blocking Redis on large keyspaces.
+    """
+    return _iter_keys_by_prefix(r, RECENT_BLOCKS_PREFIX)
+
+
+def fetch_recent_blocks(
+    r: "redis.Redis", max_items: int = 200, tenant: Optional[str] = None
+) -> list[dict]:
+    """Merge per-tenant recent-block lists into one newest-first list.
+
+    Each stored entry is a JSON object with a numeric ``ts`` field; the merged
+    result is sorted by ``ts`` descending and truncated to ``max_items``. When
+    ``tenant`` is provided, only that tenant's list is read (fast path).
+    """
+    return _fetch_recent_by_prefix(r, RECENT_BLOCKS_PREFIX, max_items, tenant)
+
+
+def iter_recent_allowed_keys(r: "redis.Redis") -> list[str]:
+    """Return all per-tenant recent-ALLOWED list keys (SCAN-based)."""
+    return _iter_keys_by_prefix(r, RECENT_ALLOWED_PREFIX)
+
+
+def fetch_recent_allowed(
+    r: "redis.Redis", max_items: int = 200, tenant: Optional[str] = None
+) -> list[dict]:
+    """Merge per-tenant recent-ALLOWED lists into one newest-first list.
+
+    Mirrors :func:`fetch_recent_blocks` but reads the opt-in allowed-event feed
+    (``bulwark:recent_allowed:<tenant>``). Empty unless ``BULWARK_LOG_ALLOWED`` is
+    enabled on the proxy.
+    """
+    return _fetch_recent_by_prefix(r, RECENT_ALLOWED_PREFIX, max_items, tenant)
 
 # ─── Connection Pool Singleton ────────────────────────────────────────
 # Avoids creating a new TCP connection + PING on every call.
@@ -213,6 +248,30 @@ def sync_custom_patterns(patterns: list[dict]) -> None:
     pipe.delete(KEY_CUSTOM)
     if custom:
         pipe.hset(KEY_CUSTOM, mapping=custom)
+    pipe.incr(KEY_VERSION)
+    pipe.execute()
+
+
+def sync_exceptions(exceptions: dict[str, list[str]]) -> None:
+    """Sync per-tenant/agent allow-exceptions to Redis.
+
+    ``exceptions`` maps ``pattern_id`` → list of scope strings
+    (``"tenant:agent"``, ``"tenant:*"`` or ``"*:*"``). The proxy's
+    DynamicPatternRegistry reads this HASH to degrade a would-be BLOCK to WARN
+    for the matching tenant/agent while keeping the event auditable.
+    """
+    r = _get_redis()
+    if not r:
+        return
+    mapping = {
+        pid: json.dumps(sorted(set(scopes)))
+        for pid, scopes in exceptions.items()
+        if scopes
+    }
+    pipe = r.pipeline()
+    pipe.delete(KEY_EXCEPTIONS)
+    if mapping:
+        pipe.hset(KEY_EXCEPTIONS, mapping=mapping)
     pipe.incr(KEY_VERSION)
     pipe.execute()
 
