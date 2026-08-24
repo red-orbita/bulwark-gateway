@@ -30,6 +30,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.config import settings
+from src.correlation.event_tap import get_event_tap
 from src.correlation.incident import get_correlator
 from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
@@ -523,6 +524,48 @@ async def chat_completions(request: Request):
             input_result.events, tenant_id, agent_id, snippet_source=_warn_snippet_src
         )
         _record_tenant_usage(tenant_id, "warn")
+
+    # === PHASE 1r: Adaptive origin-risk enforcement ===
+    # Cross-request feedback loop: read the origin's accumulated (decayed) risk
+    # score — built up from prior correlated incidents and WARN/BLOCK events via
+    # the correlation event tap — and harden THIS request if it has crossed the
+    # configured threshold, even when the current input looked clean. WARN below
+    # the block threshold; BLOCK at/above it (only when correlation_blocking is
+    # on). Zero cost when correlation is disabled.
+    if settings.correlation_enabled and input_result.verdict != Verdict.BLOCK:
+        _risk_assessment = get_correlator().evaluate_origin_risk(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
+        )
+        if _risk_assessment is not None:
+            _risk_event = _risk_assessment.to_security_event()
+            await _log_events([_risk_event], source_ip)
+            _risk_snippet = " ".join(
+                m.get("content", "")
+                for m in messages
+                if isinstance(m.get("content"), str) and m.get("content")
+            )
+            _push_recent_block(
+                [_risk_event], tenant_id, agent_id, snippet_source=_risk_snippet
+            )
+            if _risk_assessment.verdict == Verdict.BLOCK:
+                asyncio.create_task(
+                    _fire_webhook_alert([_risk_event], tenant_id, agent_id)
+                )
+                _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+                _record_tenant_usage(tenant_id, "block")
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": {
+                            "message": "Request blocked by security policy",
+                            "type": "security_violation",
+                            "code": "security_block",
+                        }
+                    },
+                )
+            _record_tenant_usage(tenant_id, "warn")
 
     # === PHASE 1a: Multi-turn decomposition check ===
     # Tracks threat signal accumulation across requests from same session.
@@ -1500,6 +1543,12 @@ async def _log_events(events: list[SecurityEvent], source_ip: str | None = None)
             exception_scope=_exception_scope,
         )
         queue.enqueue_nowait(telemetry_event)
+
+        # Feed the correlation event tap (feedback loop) fire-and-forget. Only
+        # active when correlation is enabled; publish() is non-blocking and drops
+        # on back-pressure, so this can never stall the response path.
+        if settings.correlation_enabled:
+            get_event_tap().publish(event)
 
 
 async def _fire_webhook_alert(events: list[SecurityEvent], tenant_id: str, agent_id: str):

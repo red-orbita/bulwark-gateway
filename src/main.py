@@ -99,6 +99,27 @@ async def lifespan(app: FastAPI):
         redis=bool(settings.redis_url),
     )
 
+    # Initialize the runtime-tunable correlation config (admin can override
+    # thresholds/weights via Redis without a restart). Cheap; degrades to the
+    # static settings defaults when Redis is unavailable.
+    from src.correlation.runtime import get_correlation_runtime
+
+    get_correlation_runtime().initialize(
+        redis_url=settings.redis_url,
+        redis_tls_insecure=settings.redis_tls_insecure,
+    )
+
+    # Start the correlation event tap (feedback loop) only when correlation is
+    # enabled — otherwise it stays fully idle (zero cost).
+    app.state.correlation_tap = None
+    if settings.correlation_enabled:
+        from src.correlation.event_tap import get_event_tap
+
+        _corr_tap = get_event_tap()
+        _corr_tap.start()
+        app.state.correlation_tap = _corr_tap
+        await logger.ainfo("correlation_event_tap_started")
+
     # Register enrichment scanners (async, background only)
     from src.enrichment.manager import get_enrichment_manager, ENRICHMENT_ENABLED
 
@@ -233,6 +254,9 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     app.state._ml_sync_task.cancel()
+    _corr_tap = getattr(app.state, "correlation_tap", None)
+    if _corr_tap is not None:
+        await _corr_tap.stop()
     await app.state.scanner_pipeline.shutdown()
     await app.state.telemetry_exporter.stop()
     await app.state.policy_loader.stop_hot_reload()

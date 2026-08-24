@@ -107,6 +107,8 @@ ALL_PERMISSIONS = sorted({
     "users:manage",
     "config:validate", "config:rollback",
     "admin:read",
+    "sessions:read", "sessions:write",
+    "correlation:read", "correlation:write",
 })
 
 

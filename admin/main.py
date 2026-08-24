@@ -36,7 +36,7 @@ from .routes.auth import _should_set_secure_cookie
 from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
 from .routes import (
     plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment,
-    events, gdpr, virtual_keys, quotas, cost, cache, sessions,
+    events, gdpr, virtual_keys, quotas, cost, cache, sessions, correlation,
 )
 
 logger = logging.getLogger("bulwark.admin")
@@ -213,7 +213,7 @@ async def auth_guard_pages(request: Request, call_next):
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
                  "/rate-limits", "/enrichment", "/events", "/tenant-analytics",
                  "/gdpr", "/virtual-keys", "/quotas", "/cost", "/cache",
-                 "/sessions")
+                 "/sessions", "/correlation")
     )
 
     if is_page_route:
@@ -339,6 +339,7 @@ app.include_router(quotas.router, prefix="/admin/quotas", tags=["quotas"])
 app.include_router(cost.router, prefix="/admin/cost", tags=["cost"])
 app.include_router(cache.router, prefix="/admin/cache", tags=["cache"])
 app.include_router(sessions.router, prefix="/admin/sessions", tags=["sessions"])
+app.include_router(correlation.router, prefix="/admin/correlation", tags=["correlation"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -532,3 +533,9 @@ async def cache_page(request: Request):
 async def sessions_page(request: Request):
     """Session decomposition tracker — thresholds, active sessions, reset."""
     return templates.TemplateResponse(request, "pages/sessions.html")
+
+
+@app.get("/correlation", response_class=HTMLResponse)
+async def correlation_page(request: Request):
+    """Adaptive correlation engine — enforcement tuning, active origins, reset."""
+    return templates.TemplateResponse(request, "pages/correlation.html")

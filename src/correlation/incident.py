@@ -34,6 +34,7 @@ import structlog
 from pydantic import Field
 
 from src.correlation.risk_state import get_risk_state_store
+from src.correlation.runtime import get_correlation_runtime
 from src.models import SecurityEvent, StrictModel, ThreatCategory, Verdict
 
 logger = structlog.get_logger()
@@ -126,6 +127,53 @@ class Incident(StrictModel):
         )
 
 
+class OriginRiskAssessment(StrictModel):
+    """A hardening decision derived from an origin's *accumulated* risk state.
+
+    Unlike :class:`Incident` (which confirms a single request's input↔output
+    exfiltration), this is the cross-request feedback signal: an origin whose
+    decayed risk score — accrued from prior correlated incidents and WARN/BLOCK
+    events via the :mod:`~src.correlation.event_tap` — has crossed a configured
+    threshold. It hardens the *current* request even if that request's own input
+    looked clean. WARN below the block threshold; BLOCK at/above it (and only when
+    ``blocking`` is enabled).
+    """
+
+    tenant_id: str
+    agent_id: str
+    verdict: Verdict
+    score: float
+    tenant_score: float
+    threshold: float
+    reason: str
+    request_id: str | None = None
+
+    def to_security_event(self) -> SecurityEvent:
+        """Render the assessment as a SecurityEvent for logging / SIEM export.
+
+        Category is POLICY_VIOLATION — the request was hardened by the adaptive
+        risk *policy*, not by a fresh content detection. ``metadata.correlation``
+        is set so the event tap skips it (no risk-feedback amplification).
+        """
+        return SecurityEvent(
+            tenant_id=self.tenant_id,
+            agent_id=self.agent_id,
+            verdict=self.verdict,
+            category=ThreatCategory.POLICY_VIOLATION,
+            description=self.reason,
+            source="correlation_engine",
+            severity="high" if self.verdict == Verdict.BLOCK else "medium",
+            request_id=self.request_id,
+            metadata={
+                "correlation": True,
+                "adaptive_enforcement": True,
+                "origin_risk_score": round(self.score, 2),
+                "origin_tenant_score": round(self.tenant_score, 2),
+                "threshold": round(self.threshold, 2),
+            },
+        )
+
+
 def _categories(events: Iterable[SecurityEvent], allowed: frozenset[ThreatCategory]) -> set[ThreatCategory]:
     """Collect the subset of event categories that fall in ``allowed``."""
     out: set[ThreatCategory] = set()
@@ -170,8 +218,10 @@ class InputOutputCorrelator:
         or when the input/output pairing falls outside the correlation window.
         Never raises — correlation must never break the response path.
         """
-        cfg = self._cfg()
-        if not getattr(cfg, "correlation_enabled", False):
+        # Master switch stays a process-level settings flag (the event tap is
+        # started at boot); the *enforcement* knobs (window/blocking) are read
+        # from the runtime config so admin overrides take effect without restart.
+        if not getattr(self._cfg(), "correlation_enabled", False):
             return None
 
         try:
@@ -180,13 +230,15 @@ class InputOutputCorrelator:
             if not in_cats or not out_cats:
                 return None
 
+            rc = get_correlation_runtime().get()
+
             # Window guard: input↔output is same-request/synchronous, so this only
             # rejects pathological clock skew or mis-wired async ordering.
-            window = float(getattr(cfg, "correlation_window_seconds", 30.0))
+            window = float(rc.window_seconds)
             if input_detected_at is not None and (time.time() - input_detected_at) > window:
                 return None
 
-            blocking = bool(getattr(cfg, "correlation_blocking", False))
+            blocking = bool(rc.blocking)
             verdict = Verdict.BLOCK if blocking else Verdict.WARN
             critical = bool(out_cats & _CRITICAL_OUTPUT)
             severity = "critical" if critical else "high"
@@ -222,6 +274,62 @@ class InputOutputCorrelator:
             return incident
         except Exception as e:  # noqa: BLE001 - correlation must never break responses
             logger.warning("correlation_evaluate_error", error=str(e))
+            return None
+
+    def evaluate_origin_risk(
+        self,
+        *,
+        tenant_id: str,
+        agent_id: str,
+        request_id: str | None = None,
+    ) -> Optional[OriginRiskAssessment]:
+        """Assess an origin's accumulated risk and return a hardening decision.
+
+        Reads the decayed risk score for the request's *session* (tenant+agent) —
+        the most specific origin — and compares it to the runtime thresholds. The
+        tenant-wide score is surfaced for context but is deliberately *not* the
+        decision score, so one noisy session cannot escalate a whole tenant.
+
+        Returns ``None`` when the origin is below the WARN threshold. Never raises.
+        """
+        try:
+            rc = get_correlation_runtime().get()
+            session_score = self._risk.get("session", f"{tenant_id}:{agent_id}")
+            tenant_score = self._risk.get("tenant", tenant_id)
+            score = session_score
+
+            if score >= rc.risk_block_threshold and rc.blocking:
+                return OriginRiskAssessment(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    verdict=Verdict.BLOCK,
+                    score=score,
+                    tenant_score=tenant_score,
+                    threshold=rc.risk_block_threshold,
+                    request_id=request_id,
+                    reason=(
+                        f"Adaptive enforcement: origin risk {score:.1f} >= block "
+                        f"threshold {rc.risk_block_threshold:.1f}, accumulated from "
+                        f"prior correlated/suspicious activity. Request hardened to BLOCK."
+                    ),
+                )
+            if score >= rc.risk_warn_threshold:
+                return OriginRiskAssessment(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    verdict=Verdict.WARN,
+                    score=score,
+                    tenant_score=tenant_score,
+                    threshold=rc.risk_warn_threshold,
+                    request_id=request_id,
+                    reason=(
+                        f"Adaptive enforcement: origin risk {score:.1f} >= warn "
+                        f"threshold {rc.risk_warn_threshold:.1f}. Origin flagged as elevated."
+                    ),
+                )
+            return None
+        except Exception as e:  # noqa: BLE001 - enforcement must never break responses
+            logger.warning("origin_risk_evaluate_error", error=str(e))
             return None
 
 

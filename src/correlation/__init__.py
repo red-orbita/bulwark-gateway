@@ -13,24 +13,44 @@ Scope (deliberately narrow):
 * :mod:`src.correlation.incident` — the :class:`InputOutputCorrelator`, which
   links a suspicious INPUT verdict to a sensitive OUTPUT detection within a tight
   time window and, on a confirmed exfiltration pattern, WARNs/BLOCKs the response
-  and emits a correlated :class:`Incident` for explainability.
+  and emits a correlated :class:`Incident` for explainability. It also exposes
+  :meth:`InputOutputCorrelator.evaluate_origin_risk`, the cross-request feedback
+  hook that hardens the *next* request from a high-risk origin.
+* :mod:`src.correlation.event_tap` — a bounded async bus that folds every logged
+  WARN/BLOCK :class:`~src.models.SecurityEvent` into the risk state, so risk
+  accrues from ongoing suspicious activity, not only from confirmed incidents.
+* :mod:`src.correlation.runtime` — the Redis-backed, throttled runtime config
+  that makes the enforcement thresholds/weights tunable without a restart.
 
 Everything multi-source, forensic, cross-tenant, or long-horizon is delegated to
 the SIEM (events are already exported in ECS). This module only implements what
 requires *inline* enforcement.
 """
 
+from src.correlation.event_tap import CorrelationEventTap, get_event_tap
 from src.correlation.incident import (
     Incident,
     InputOutputCorrelator,
+    OriginRiskAssessment,
     get_correlator,
 )
 from src.correlation.risk_state import RiskStateStore, get_risk_state_store
+from src.correlation.runtime import (
+    CorrelationConfig,
+    CorrelationRuntimeConfig,
+    get_correlation_runtime,
+)
 
 __all__ = [
+    "CorrelationConfig",
+    "CorrelationEventTap",
+    "CorrelationRuntimeConfig",
     "Incident",
     "InputOutputCorrelator",
+    "OriginRiskAssessment",
     "RiskStateStore",
+    "get_correlation_runtime",
     "get_correlator",
+    "get_event_tap",
     "get_risk_state_store",
 ]

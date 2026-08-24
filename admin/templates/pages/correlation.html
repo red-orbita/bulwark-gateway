@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+{% block title %}Correlation Engine — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Correlation Engine{% endblock %}
+{% block content %}
+<div x-data="correlationPage()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Adaptive Correlation Engine</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Correlates security signals <em>per origin</em> into a decaying risk score. Risk accrues from confirmed input↔output exfiltration and from ongoing WARN/BLOCK events folded in by the event tap. When an origin crosses the threshold, the <em>next</em> request from that origin is hardened — WARN, or BLOCK when blocking is on. Config changes below write to Redis and the proxy honors them within ~5s <em>without a restart</em>. Origin keys are irreversible SHA-256 digests. All mutations are audit-logged. This is inline enforcement only — multi-source, forensic, and cross-tenant correlation is delegated to your SIEM.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Active Origins</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="fmtNum(status.active_origins)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Enforcement</p>
+            <p class="text-sm font-semibold mt-1" :class="status.effective.blocking ? 'text-red-300' : 'text-amber-300'"
+               x-text="status.effective.blocking ? 'BLOCK' : 'WARN only'"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">BLOCK Threshold</p>
+            <p class="text-sm font-semibold text-red-300 mt-1" x-text="fmtNum(status.effective.risk_block_threshold)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Override</p>
+            <p class="text-sm font-semibold mt-1" :class="status.overridden ? 'text-cyan-300' : 'text-gray-400'"
+               x-text="status.overridden ? 'Active' : 'Defaults'"></p>
+        </div>
+    </div>
+
+    <!-- Redis warning -->
+    <div x-show="!status.redis_connected" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="text-sm font-medium text-amber-200">Redis not reachable</p>
+                <p class="text-xs text-amber-200/80">Runtime overrides and active-origin visibility require Redis. Without it, each proxy tracks risk in-process only, using built-in default thresholds, and no cross-pod risk sharing occurs.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Runtime override -->
+        <div class="sg-card">
+            <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="sliders-horizontal" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Enforcement Tuning</h2>
+            </div>
+            <p class="text-[11px] text-gray-500 mb-4">Lower thresholds = more aggressive hardening (higher recall, more false positives). Decay is the risk half-life in seconds. Leave a field blank to keep its current effective value; only changed fields are written. The <span class="font-mono">correlation_enabled</span> master switch is a boot-time setting and is not tunable here.</p>
+
+            <div class="space-y-4">
+                <!-- Blocking toggle -->
+                <div class="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-2.5">
+                    <div>
+                        <p class="text-sm text-gray-200">Blocking enforcement</p>
+                        <p class="text-[11px] text-gray-500">On: origins over the BLOCK threshold get 403. Off: hardening is WARN-only (logged, forwarded).</p>
+                    </div>
+                    <button type="button" @click="form.blocking = !form.blocking" :disabled="!canWrite"
+                            class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0"
+                            :class="form.blocking ? 'bg-red-500/70' : 'bg-gray-600'">
+                        <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform"
+                              :class="form.blocking ? 'translate-x-5' : 'translate-x-1'"></span>
+                    </button>
+                </div>
+
+                <div>
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Thresholds &amp; decay</p>
+                    <div class="grid grid-cols-3 gap-3">
+                        <template x-for="f in thresholdFields" :key="f.key">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1.5" :for="'corr-'+f.key" x-text="f.label"></label>
+                                <input :id="'corr-'+f.key" type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
+                                <p class="text-[10px] text-gray-600 mt-1">default <span class="font-mono" x-text="status.defaults[f.key]"></span></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Event bump &amp; severity multipliers</p>
+                    <div class="grid grid-cols-2 gap-3">
+                        <template x-for="f in bumpFields" :key="f.key">
+                            <div>
+                                <label class="text-xs text-gray-400 block mb-1.5" :for="'corr-'+f.key" x-text="f.label"></label>
+                                <input :id="'corr-'+f.key" type="number" :step="f.step" min="0" x-model.number="form[f.key]" class="sg-input w-full" :disabled="!canWrite">
+                                <p class="text-[10px] text-gray-600 mt-1">default <span class="font-mono" x-text="status.defaults[f.key]"></span></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-1">
+                    <button @click="clearOverride()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                            :disabled="!canWrite || !status.overridden" title="Revert to built-in defaults">
+                        Clear Override
+                    </button>
+                    <button @click="saveOverride()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!canWrite || saving">
+                        <span x-text="saving ? 'Saving…' : 'Apply Override'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Effective + maintenance -->
+        <div class="space-y-6">
+            <div class="sg-card">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="gauge" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Effective Config</h2>
+                </div>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <div class="flex justify-between"><span class="text-gray-400">Blocking</span><span class="font-mono" :class="status.effective.blocking ? 'text-red-300' : 'text-amber-300'" x-text="status.effective.blocking ? 'on' : 'off'"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Window</span><span class="font-mono text-gray-300" x-text="status.effective.window_seconds + 's'"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">BLOCK</span><span class="font-mono text-red-300" x-text="status.effective.risk_block_threshold"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">WARN</span><span class="font-mono text-amber-300" x-text="status.effective.risk_warn_threshold"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Decay half-life</span><span class="font-mono text-gray-300" x-text="status.effective.risk_decay_seconds + 's'"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Bump WARN</span><span class="font-mono text-gray-300" x-text="status.effective.event_bump_warn"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Bump BLOCK</span><span class="font-mono text-gray-300" x-text="status.effective.event_bump_block"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">High ×</span><span class="font-mono text-gray-300" x-text="status.effective.severity_high_mult"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Critical ×</span><span class="font-mono text-gray-300" x-text="status.effective.severity_critical_mult"></span></div>
+                </div>
+            </div>
+
+            <div class="sg-card border-red-900/40">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="alert-octagon" class="w-4 h-4 text-red-400"></i>
+                    <h2 class="text-sm font-medium text-white">Maintenance</h2>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <p class="text-sm text-gray-200">Reset all origin risk</p>
+                        <p class="text-[11px] text-gray-500">Clear accumulated risk for every origin (tenant/session/input). Use for incident response or after tuning. The config override is kept.</p>
+                    </div>
+                    <button @click="resetAll()" class="sg-btn sg-btn-sm" style="color:#fca5a5;" :disabled="!canWrite">Reset All</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active origins -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="radar" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Active Origins</h2>
+                <span class="text-xs text-gray-500" x-text="'(' + origins.length + ')'"></span>
+            </div>
+        </div>
+        <div x-show="origins.length === 0" x-cloak class="text-sm text-gray-500 py-6 text-center">
+            No origins with accumulated risk.
+        </div>
+        <div x-show="origins.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
+                <thead>
+                    <tr>
+                        <th>Scope</th>
+                        <th>Origin Digest</th>
+                        <th class="sg-num">Risk (decayed)</th>
+                        <th class="sg-num">Stored</th>
+                        <th class="sg-num">TTL</th>
+                        <th class="text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="o in origins" :key="o.scope_type + ':' + o.digest">
+                        <tr>
+                            <td>
+                                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                                      :class="scopeClass(o.scope_type)"
+                                      x-text="o.scope_type"></span>
+                            </td>
+                            <td class="font-mono text-xs text-gray-300" x-text="o.digest"></td>
+                            <td class="sg-num font-mono" :class="scoreClass(o)" x-text="o.score.toFixed(2)"></td>
+                            <td class="sg-num font-mono text-gray-500" x-text="o.stored_score.toFixed(2)"></td>
+                            <td class="sg-num font-mono text-gray-500" x-text="o.ttl_seconds === null ? '—' : o.ttl_seconds + 's'"></td>
+                            <td class="text-right">
+                                <button @click="clearOrigin(o.scope_type, o.digest)" class="sg-btn sg-btn-ghost sg-btn-sm"
+                                        style="color:#fca5a5;" :disabled="!canWrite" title="Clear accumulated risk for this origin">Clear</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+function correlationPage() {
+    return {
+        loading: true,
+        saving: false,
+        canWrite: false,
+        status: {
+            redis_connected: false, active_origins: 0, overridden: false,
+            effective: { blocking: false, window_seconds: 30, risk_block_threshold: 7, risk_warn_threshold: 4, risk_decay_seconds: 900, event_bump_warn: 0.5, event_bump_block: 1.0, severity_high_mult: 1.5, severity_critical_mult: 2.0 },
+            defaults: { blocking: false, window_seconds: 30, risk_block_threshold: 7, risk_warn_threshold: 4, risk_decay_seconds: 900, event_bump_warn: 0.5, event_bump_block: 1.0, severity_high_mult: 1.5, severity_critical_mult: 2.0 },
+            override: {},
+        },
+        origins: [],
+        form: {},
+        thresholdFields: [
+            { key: 'risk_block_threshold', label: 'BLOCK', step: '0.1' },
+            { key: 'risk_warn_threshold', label: 'WARN', step: '0.1' },
+            { key: 'risk_decay_seconds', label: 'Decay (s)', step: '10' },
+            { key: 'window_seconds', label: 'Window (s)', step: '1' },
+        ],
+        bumpFields: [
+            { key: 'event_bump_warn', label: 'Bump on WARN', step: '0.1' },
+            { key: 'event_bump_block', label: 'Bump on BLOCK', step: '0.1' },
+            { key: 'severity_high_mult', label: 'High severity ×', step: '0.1' },
+            { key: 'severity_critical_mult', label: 'Critical severity ×', step: '0.1' },
+        ],
+
+        async init() {
+            await this.reloadAll();
+        },
+
+        async reloadAll() {
+            await this.loadStatus();
+            await this.loadOrigins();
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/correlation/status');
+                if (res.ok) {
+                    this.status = await res.json();
+                    this.canWrite = !!this.status.can_write;
+                    // Seed the form from effective config.
+                    this.form = Object.assign({}, this.status.effective);
+                } else {
+                    showToast('Failed to load correlation status', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading correlation status', 'error');
+            }
+        },
+
+        async loadOrigins() {
+            try {
+                const res = await fetch('/admin/correlation/origins');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.origins = data.origins || [];
+                }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        scopeClass(scope) {
+            if (scope === 'tenant') return 'bg-purple-500/15 text-purple-300';
+            if (scope === 'session') return 'bg-cyan-500/15 text-cyan-300';
+            return 'bg-gray-500/15 text-gray-300';
+        },
+
+        scoreClass(o) {
+            const block = Number(this.status.effective.risk_block_threshold);
+            const warn = Number(this.status.effective.risk_warn_threshold);
+            if (o.score >= block) return 'text-red-400';
+            if (o.score >= warn) return 'text-amber-400';
+            return 'text-gray-300';
+        },
+
+        _changedFields() {
+            // Only send fields that differ from the current effective value.
+            const out = {};
+            // blocking is a boolean toggle — send it if it differs.
+            if (Boolean(this.form.blocking) !== Boolean(this.status.effective.blocking)) {
+                out.blocking = Boolean(this.form.blocking);
+            }
+            const numKeys = ['window_seconds','risk_block_threshold','risk_warn_threshold','risk_decay_seconds','event_bump_warn','event_bump_block','severity_high_mult','severity_critical_mult'];
+            for (const k of numKeys) {
+                const v = this.form[k];
+                if (v === '' || v === null || v === undefined) continue;
+                const num = Number(v);
+                if (!Number.isFinite(num) || num < 0) continue;
+                if (num !== Number(this.status.effective[k])) out[k] = num;
+            }
+            return out;
+        },
+
+        async saveOverride() {
+            const payload = this._changedFields();
+            if (Object.keys(payload).length === 0) {
+                showToast('No changes to apply', 'error');
+                return;
+            }
+            this.saving = true;
+            try {
+                const res = await fetch('/admin/correlation/config', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Save failed', 'error');
+                    return;
+                }
+                showToast('Correlation override applied', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during save', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async clearOverride() {
+            const ok = await showConfirm('Clear Runtime Override', 'Remove the runtime override so the proxy reverts to built-in default correlation config?', 'Clear');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/correlation/config', { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Clear failed', 'error');
+                    return;
+                }
+                showToast('Override cleared — reverting to defaults', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+
+        async clearOrigin(scope, digest) {
+            const ok = await showConfirm('Clear Origin Risk', 'Clear accumulated risk for origin ' + scope + ':' + digest + '?', 'Clear');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/correlation/origin/' + encodeURIComponent(scope) + '/' + encodeURIComponent(digest), { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Clear failed', 'error');
+                    return;
+                }
+                showToast('Origin risk cleared', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+
+        async resetAll() {
+            const ok = await showConfirm('Reset All Origin Risk', 'Clear accumulated risk for ALL origins? This resets adaptive hardening cluster-wide. The config override is kept.', 'Reset All');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/correlation/reset', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Reset failed', 'error');
+                    return;
+                }
+                const data = await res.json();
+                showToast(`Origin risk reset (${data.keys_deleted} keys)`, 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during reset', 'error');
+            }
+        },
+
+        fmtNum(n) { return (Number(n) || 0).toLocaleString(); },
+    };
+}
+</script>
+{% endblock %}
