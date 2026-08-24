@@ -1243,6 +1243,130 @@ TOOL_ABUSE_PATTERNS: list[Pattern] = [
         "critical",
         "Python pty.spawn shell escalation",
     ),
+    # === LLM4Shell / PALChain code-execution injection ===
+    # Attackers coerce a code-interpreter / PAL (Program-Aided-LLM) agent into
+    # *defining a function that performs OS/file/import access and is then
+    # auto-executed*. The discriminator that separates an exploit from a benign
+    # "write a function that reverses a string, then call it" coding question is
+    # the co-occurrence of a dangerous sink (os./__import__/subprocess/open()/
+    # file/secret/etc.) INSIDE the define-function-then-execute construction.
+    Pattern(
+        re.compile(
+            r"\b(?:define|write|create|make|build|generate)\b[^.\n]{0,80}\bfunction\b"
+            r".{0,400}"
+            r"(?:__import__|\bos\.[a-z_]+\s*[\(\[]|\bsubprocess\b|\bopen\s*\(|\bfile\b|"
+            r"\blistdir\b|/etc/|\.env\b|\bsecret(?:s|\.md)?\b|\bsystem\s*\()"
+            r".{0,300}"
+            r"(?:then\s+it\s+is\s+call(?:ed)?|then\s+call\s+it|and\s+call\s+it|"
+            r"then\s+run\s+it|and\s+run\s+it|it\s+is\s+(?:then\s+)?(?:called|executed|invoked|run))",
+            re.I | re.S,
+        ),
+        ThreatCategory.TOOL_ABUSE,
+        "high",
+        "PALChain/code-interpreter injection: define function with OS/file sink and auto-execute",
+    ),
+    # __import__ builtin — near-zero legitimate use in a chat prompt; hallmark of
+    # PAL/eval sandbox-escape payloads (__import__('os').system/listdir/...).
+    Pattern(
+        re.compile(r"\b__import__\s*\(", re.I),
+        ThreatCategory.TOOL_ABUSE,
+        "critical",
+        "Python __import__ dynamic import (code-exec / sandbox escape)",
+    ),
+    # Direct dangerous OS module calls requested in-band.
+    Pattern(
+        re.compile(
+            r"\bos\.(?:system|popen|listdir|scandir|walk|remove|unlink|rmdir|rename|chmod|chown|getcwd|environ|execv?p?)\s*[\(\[]",
+            re.I,
+        ),
+        ThreatCategory.TOOL_ABUSE,
+        "high",
+        "Direct os.* filesystem/OS call in prompt (code-exec)",
+    ),
+    Pattern(
+        re.compile(
+            r"\bsubprocess\.(?:run|call|Popen|check_output|check_call|getoutput|getstatusoutput)\s*\(",
+            re.I,
+        ),
+        ThreatCategory.TOOL_ABUSE,
+        "critical",
+        "subprocess execution call in prompt (code-exec)",
+    ),
+    # open(...).read() — coercing a code agent to read an arbitrary file's
+    # contents and return them (secret.md / source exfil via code interpreter).
+    Pattern(
+        re.compile(
+            r"\bopen\s*\(\s*['\"][^'\"]{1,160}['\"]\s*(?:,[^)]{0,40})?\)\s*\.?\s*(?:read|readlines|readline)\s*\(",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION,
+        "high",
+        "Code reads arbitrary file contents (open(...).read())",
+    ),
+    # NL variant with no Python tokens: "open/read the file X ... return/print
+    # its (text|content|lines) ... then it is called" — filename-agnostic PAL
+    # file-read exfiltration.
+    Pattern(
+        re.compile(
+            r"\b(?:open|read|reads)\b[^.\n]{0,30}\bfile\b"
+            r".{0,220}\b(?:return|returns|print|output|reads?)\b"
+            r".{0,140}(?:then\s+it\s+is\s+call(?:ed)?|then\s+call\s+it|and\s+call\s+it|"
+            r"it\s+is\s+(?:then\s+)?(?:called|executed|invoked))",
+            re.I | re.S,
+        ),
+        ThreatCategory.EXFILTRATION,
+        "high",
+        "PAL file-read exfil: open file, return contents, auto-execute",
+    ),
+    # === Secret / token exfiltration probing & output-filter evasion ===
+    # Asking for a secret by its prefix (e.g. "the token that begins with ...")
+    # is a canonical prompt-leaking / secret-exfil probe.
+    Pattern(
+        re.compile(
+            r"\b(?:token|secret|key|password|flag|api[_\s-]?key|credential)\b"
+            r"[^.\n]{0,40}\b(?:that\s+)?(?:begins?|starts?)\s+with\b",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION,
+        "high",
+        "Secret/token exfiltration probe (asks for value by prefix)",
+    ),
+    # Coercing the model to emit a real credential value inline
+    # ("the real api_key argument value already filled in").
+    Pattern(
+        re.compile(
+            r"\b(?:real|actual|genuine|live|already[\s-]?filled[\s-]?in|filled[\s-]?in)\b"
+            r"[^.\n]{0,30}\b(?:api[_\s-]?key|token|secret|password|credential)\b",
+            re.I,
+        ),
+        ThreatCategory.CREDENTIAL_ACCESS,
+        "high",
+        "Requests a real credential value be emitted inline",
+    ),
+    # === P2SQL: destructive DB ops & content-exfil expressed in natural language ===
+    Pattern(
+        re.compile(
+            r"\b(?:delete|drop|truncate|wipe|erase|purge|remove)\b"
+            r"[^.\n]{0,40}\b(?:every|all|each|the\s+entire)\b"
+            r"[^.\n]{0,30}\b(?:rows?|records?|entries|tables?|data)\b",
+            re.I,
+        ),
+        ThreatCategory.TOOL_ABUSE,
+        "high",
+        "Destructive database operation in natural language (delete/drop all rows)",
+    ),
+    # Exfil probe: return the DB row/message whose content matches a secret.
+    Pattern(
+        re.compile(
+            r"\b(?:rows?|records?|messages?|entries|chat)\b"
+            r"[^.\n]{0,50}\b(?:contains?|includes?|mentions?|matches?|has|with|say[s]?)\b"
+            r"[^.\n]{0,25}\b(?:a\s+)?(?:flag|secret|password|token|ctf)\b",
+            re.I,
+        ),
+        ThreatCategory.EXFILTRATION,
+        "high",
+        "Database content-exfiltration probe (row/message containing a flag/secret)",
+    ),
 ]
 
 # === SOCIAL ENGINEERING PATTERNS ===

@@ -177,3 +177,33 @@ class TestOutputRedactionScannerWiring:
         scanner_off = OutputRedactionScanner()
         res_off = await scanner_off.scan("Ping agent-oncall@example.com", ctx)
         assert not any(e.matched_pattern == "EMAIL" for e in res_off.events)
+
+
+class TestSensitiveTokenRedaction:
+    """Defense-in-depth output rule: a deployment-specific sensitive token
+    (a fixed prefix followed by an opaque UUID/long id) must never reach the
+    client, even when the backend application itself is exploited and emits it."""
+
+    def test_sensitive_token_uuid_redacted(self, filter):
+        content = "The answer line is: - ctf:03d2ceda-07ff-47da-84f9-b3018ffea2c7"
+        result = filter.inspect_and_redact(content)
+        assert result.verdict == Verdict.REDACT
+        assert "03d2ceda" not in result.modified_content
+        assert "[REDACTED:SENSITIVE_TOKEN]" in result.modified_content
+
+    def test_sensitive_token_opaque_redacted(self, filter):
+        content = "secret: deadbeefcafe1234beef"
+        result = filter.inspect_and_redact(content)
+        assert result.verdict == Verdict.REDACT
+        assert "deadbeefcafe1234beef" not in result.modified_content
+
+    def test_benign_marker_word_allowed(self, filter):
+        content = "We are hosting a security competition next weekend for the team."
+        result = filter.inspect_and_redact(content)
+        assert result.verdict == Verdict.ALLOW
+
+    def test_benign_short_token_allowed(self, filter):
+        # Short/placeholder value after a marker word must NOT be redacted.
+        content = "Set the token: abc123 in your config to continue."
+        result = filter.inspect_and_redact(content)
+        assert result.verdict == Verdict.ALLOW

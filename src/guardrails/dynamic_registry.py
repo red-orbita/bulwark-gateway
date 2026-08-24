@@ -6,7 +6,15 @@ The proxy reads from Redis with a local TTL cache to avoid per-request latency.
 Redis keys:
   bulwark:guardrails:disabled   — SET of pattern_ids that are disabled
   bulwark:guardrails:custom     — HASH { pattern_id: JSON(regex, severity, category, layer) }
+  bulwark:guardrails:exceptions — HASH { pattern_id: JSON(list of "tenant:agent" scopes) }
   bulwark:guardrails:version    — INT incremented on every change (cache invalidation)
+
+Allow-exceptions (F2): a per-tenant/agent scoped exception does NOT silence a
+pattern. When a would-be BLOCK matches a pattern that has an exception for the
+requesting tenant/agent, the proxy degrades the verdict to WARN and stamps the
+security event with ``allowed_by_exception=true`` so the allow remains fully
+auditable. Scopes support ``tenant:agent`` (exact), ``tenant:*`` (any agent in
+the tenant) and ``*:*`` (global).
 """
 
 from __future__ import annotations
@@ -56,6 +64,7 @@ _REGEX_TIMEOUT_SEC = 0.005  # 5ms
 # Redis keys
 KEY_DISABLED = "bulwark:guardrails:disabled"
 KEY_CUSTOM = "bulwark:guardrails:custom"
+KEY_EXCEPTIONS = "bulwark:guardrails:exceptions"
 KEY_VERSION = "bulwark:guardrails:version"
 
 
@@ -67,6 +76,7 @@ class DynamicPatternRegistry:
         self._disabled: set[str] = set()
         self._custom: list[str] = []
         self._compiled_custom: list[tuple[re.Pattern, dict]] = []
+        self._exceptions: dict[str, set[str]] = {}
         self._last_fetch: float = 0.0
         self._cached_version: int = -1
         self._lock = threading.Lock()
@@ -96,6 +106,32 @@ class DynamicPatternRegistry:
         """Get compiled custom patterns. Uses cached state."""
         self._refresh_if_needed()
         return self._compiled_custom
+
+    def matched_exception(
+        self, pattern_id: str, tenant_id: str, agent_id: str
+    ) -> Optional[str]:
+        """Return the scope string that grants an allow-exception, or None.
+
+        An exception does NOT disable the pattern — it signals the caller to
+        degrade a would-be BLOCK to WARN while keeping the event auditable.
+        Scope precedence (most specific first): ``tenant:agent`` → ``tenant:*``
+        → ``*:*``. Returns the FIRST matching scope so the audit trail records
+        exactly which rule granted the allow.
+        """
+        self._refresh_if_needed()
+        if not pattern_id:
+            return None
+        scopes = self._exceptions.get(pattern_id)
+        if not scopes:
+            return None
+        for candidate in (
+            f"{tenant_id}:{agent_id}",
+            f"{tenant_id}:*",
+            "*:*",
+        ):
+            if candidate in scopes:
+                return candidate
+        return None
 
     def _refresh_if_needed(self) -> None:
         """Re-read Redis if cache expired or version changed."""
@@ -140,6 +176,21 @@ class DynamicPatternRegistry:
 
             self._compiled_custom = custom_patterns
             self._custom = [v.decode() if isinstance(v, bytes) else v for v in raw_custom.values()]
+
+            # Allow-exceptions: HASH { pattern_id: JSON([ "tenant:agent", ... ]) }
+            raw_exc = self._redis.hgetall(KEY_EXCEPTIONS) or {}
+            exceptions: dict[str, set[str]] = {}
+            for pid_raw, raw in raw_exc.items():
+                try:
+                    pid = pid_raw.decode() if isinstance(pid_raw, bytes) else pid_raw
+                    raw_str = raw.decode() if isinstance(raw, bytes) else raw
+                    scopes = json.loads(raw_str)
+                    if isinstance(scopes, list) and scopes:
+                        exceptions[pid] = {str(s) for s in scopes}
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+            self._exceptions = exceptions
+
             self._cached_version = version
             self._last_fetch = now
         except Exception:

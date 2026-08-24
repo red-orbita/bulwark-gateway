@@ -1669,6 +1669,39 @@ class InputGuardrail:
                 match = pattern.regex.search(text)
                 if match:
                     matched_descriptions.add(pattern.description)
+                    would_block = severity_rank[pattern.severity] >= 2
+                    # F2 allow-exception: a scoped exception degrades a would-be
+                    # BLOCK to WARN but keeps the event auditable. It never
+                    # silences the pattern (fail-closed by default).
+                    exc_scope = (
+                        _registry.matched_exception(pattern.pattern_id, tenant_id, agent_id)
+                        if (would_block and _registry.available)
+                        else None
+                    )
+                    if exc_scope:
+                        events.append(
+                            SecurityEvent(
+                                tenant_id=tenant_id,
+                                agent_id=agent_id,
+                                verdict=Verdict.WARN,
+                                category=pattern.category,
+                                description=pattern.description,
+                                source="input_guardrail",
+                                severity=pattern.severity,
+                                matched_pattern=match.group(0)[:200],
+                                metadata={
+                                    "allowed_by_exception": True,
+                                    "exception_scope": exc_scope,
+                                    "original_verdict": "block",
+                                    "pattern_id": pattern.pattern_id,
+                                },
+                            )
+                        )
+                        # Cap escalation at "medium" so an excepted pattern can
+                        # never force the request-level verdict to BLOCK.
+                        if severity_rank["medium"] > severity_rank[max_severity]:
+                            max_severity = "medium"
+                        continue
                     event = SecurityEvent(
                         tenant_id=tenant_id,
                         agent_id=agent_id,
@@ -1701,6 +1734,35 @@ class InputGuardrail:
                             cat = ThreatCategory(cat_str)
                         except ValueError:
                             cat = ThreatCategory.PROMPT_INJECTION
+                        would_block = severity_rank.get(sev, 2) >= 2
+                        pid = meta.get("id", "")
+                        exc_scope = (
+                            _registry.matched_exception(pid, tenant_id, agent_id)
+                            if (would_block and pid)
+                            else None
+                        )
+                        if exc_scope:
+                            events.append(
+                                SecurityEvent(
+                                    tenant_id=tenant_id,
+                                    agent_id=agent_id,
+                                    verdict=Verdict.WARN,
+                                    category=cat,
+                                    description=meta["description"],
+                                    source="input_guardrail_custom",
+                                    severity=sev,
+                                    matched_pattern=match.group(0)[:200],
+                                    metadata={
+                                        "allowed_by_exception": True,
+                                        "exception_scope": exc_scope,
+                                        "original_verdict": "block",
+                                        "pattern_id": pid,
+                                    },
+                                )
+                            )
+                            if severity_rank["medium"] > severity_rank[max_severity]:
+                                max_severity = "medium"
+                            continue
                         event = SecurityEvent(
                             tenant_id=tenant_id,
                             agent_id=agent_id,

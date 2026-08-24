@@ -119,6 +119,23 @@ REDACTION_PATTERNS: list[tuple[re.Pattern, str, str | None]] = [
         "TFSTATE_SECRET",
         "[REDACTED:TFSTATE_SECRET]",
     ),
+    # Deployment-specific sensitive token marker. Many environments tag their
+    # crown-jewel secret with a fixed prefix followed by an opaque id (UUID or a
+    # long random token). This is the operator workflow for redacting a
+    # deployment secret so an exfiltrated value never reaches the client even
+    # when the backend application itself is exploited (defense in depth). The
+    # body is constrained to a UUID or 16+ char opaque token to keep false
+    # positives low; extend the prefix alternation for your own marker.
+    (
+        re.compile(
+            r"\b(?:ctf|flag|secret|token)_?:\s?"
+            r"(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+            r"|[A-Za-z0-9]{16,})",
+            re.IGNORECASE,
+        ),
+        "SENSITIVE_TOKEN",
+        "[REDACTED:SENSITIVE_TOKEN]",
+    ),
 ]
 
 # Placeholder patterns that should NOT trigger redaction (false positives)
