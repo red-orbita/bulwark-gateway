@@ -13,6 +13,7 @@ Common issues and their solutions for Bulwark Gateway.
 - [Wazuh CrashLoopBackOff](#wazuh-crashloopbackoff)
 - [Admin Portal: White Screen / All Forms Visible](#admin-portal-white-screen--all-forms-visible)
 - [Admin Portal: "file is not a database"](#admin-portal-file-is-not-a-database)
+- [IOC Store: "Couldn't load indicators"](#ioc-store-couldnt-load-indicators)
 - [Common Deployment Issues](#common-deployment-issues)
 
 ---
@@ -412,6 +413,70 @@ ERROR: Application startup failed. Exiting.
    kubectl scale deployment admin -n bulwark-gateway --replicas=1
    ```
 3. **Key contains invalid characters**: Only `[a-zA-Z0-9+/=\-_]` are accepted
+
+---
+
+## IOC Store: "Couldn't load indicators"
+
+### Admin IOC page shows "Couldn't load indicators / The IOC store didn't respond"
+
+**Symptom**: The **IOCs** admin page fails to load with the error banner
+*"Couldn't load indicators — The IOC store didn't respond. Check the connection
+and try again."* `GET /admin/iocs` returns `500`.
+
+**Cause**: The IOC database file (`/app/data/iocs.json`, or `BULWARK_IOC_PATH`)
+is **corrupt or truncated** — most commonly because a threat-intel feed refresh
+was interrupted mid-write (pod eviction, OOM kill, disk full). The admin logs
+show a `JSONDecodeError`:
+
+```
+IOC store: /app/data/iocs.json is corrupt (Unterminated string starting at:
+line 52663 column 5 (char 2125796)); quarantined to
+/app/data/iocs.json.corrupt-20260824T143451Z, continuing with empty data
+```
+
+**Automatic recovery (self-healing)**: On startup the store now loads
+`iocs.json` and `feed_state.json` defensively. If a file is corrupt it is
+**quarantined** to `<name>.corrupt-<UTC-timestamp>` and the store continues with
+an empty set instead of crashing. The feed scheduler then repopulates the IOCs
+on its next refresh cycle, so the page recovers on its own after an admin
+restart (or the next scheduled feed pull).
+
+> This behavior lives in `admin/services/ioc_store.py` (`_load_json_resilient`).
+> Regression tests: `tests/test_ioc_store_resilience.py`.
+
+**If the page is still broken** (e.g. you are on an older build without the
+self-healing loader), recover manually. The admin image is **distroless** — it
+has **no shell**, `cat`, `ls`, or `rm`, only `python3` — so use `python3` for
+all file operations inside the container:
+
+```bash
+# 1. Inspect: is the file valid JSON?
+kubectl exec deploy/admin -n bulwark-gateway -- python3 -c \
+  "import json,os;p=os.environ.get('BULWARK_IOC_PATH','data/iocs.json');json.load(open(p));print('OK')"
+# → prints a JSONDecodeError with the byte offset if corrupt
+
+# 2. Quarantine the corrupt file (preserve it for inspection)
+kubectl exec deploy/admin -n bulwark-gateway -- python3 -c \
+  "import os,shutil,time;p=os.environ.get('BULWARK_IOC_PATH','data/iocs.json');\
+shutil.move(p, p+'.corrupt-'+time.strftime('%Y%m%dT%H%M%SZ'));print('quarantined')"
+
+# 3. Recreate an empty (valid) IOC file so the store starts clean
+kubectl exec deploy/admin -n bulwark-gateway -- python3 -c \
+  "import os,json;p=os.environ.get('BULWARK_IOC_PATH','data/iocs.json');\
+json.dump({'domains':[],'ips':[],'urls':[],'hashes':[]}, open(p,'w'), indent=2);print('reset')"
+
+# 4. Restart admin so the store reloads (feeds will repopulate on next refresh)
+kubectl rollout restart deploy/admin -n bulwark-gateway
+```
+
+**Prevention**:
+- Ensure the `/app/data` PVC has enough free space (a full disk truncates writes).
+- Give the admin pod adequate memory limits so feed writes aren't OOM-killed
+  mid-flush.
+- Manually-added IOCs are re-persisted from the in-memory store on the next
+  write, and feed-sourced IOCs are re-fetched automatically — so a quarantined
+  file rarely means permanent data loss.
 
 ---
 

@@ -7,6 +7,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import logging
 import os
 import socket
 import threading
@@ -29,9 +30,44 @@ from admin.models.iocs import (
     IOCUpdate,
 )
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_IOC_PATH = Path(os.environ.get("BULWARK_IOC_PATH", "data/iocs.json"))
 _LEGACY_IOC_PATH = Path("config/iocs.json")
 FEED_STATE_PATH = Path("data/feed_state.json")
+
+
+def _load_json_resilient(path: Path, default: dict) -> dict:
+    """Load a JSON file, tolerating corruption.
+
+    If the file is missing, returns ``default``. If the file exists but is
+    corrupt/truncated (e.g. an interrupted feed write), the bad file is set
+    aside with a timestamped ``.corrupt-*`` suffix and ``default`` is returned
+    so a single damaged file can never brick the whole IOC subsystem.
+    """
+    if not path.exists():
+        return dict(default)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError(f"expected JSON object, got {type(data).__name__}")
+        return data
+    except (json.JSONDecodeError, ValueError, OSError) as exc:
+        backup = path.with_name(f"{path.name}.corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}")
+        try:
+            path.rename(backup)
+            logger.error(
+                "IOC store: %s is corrupt (%s); quarantined to %s, continuing with empty data",
+                path, exc, backup,
+            )
+        except OSError as move_err:
+            logger.error(
+                "IOC store: %s is corrupt (%s) and could not be quarantined (%s); "
+                "continuing with empty data",
+                path, exc, move_err,
+            )
+        return dict(default)
 
 # SECURITY FIX (C-03): SSRF blocklist for feed URL validation
 _BLOCKED_SSRF_NETWORKS = [
@@ -125,8 +161,7 @@ class IOCStore:
         if not self._ioc_path.exists():
             return
 
-        with open(self._ioc_path) as f:
-            raw = json.load(f)
+        raw = _load_json_resilient(self._ioc_path, {})
 
         now = datetime.now(timezone.utc)
         for key, ioc_type in _KEY_TO_TYPE.items():
@@ -147,8 +182,7 @@ class IOCStore:
 
         # Load feed state
         if self._feed_state_path.exists():
-            with open(self._feed_state_path) as f:
-                self._feed_state = json.load(f)
+            self._feed_state = _load_json_resilient(self._feed_state_path, {})
 
     def _persist(self) -> None:
         """Write back to flat iocs.json format for proxy compatibility."""
