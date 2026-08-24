@@ -57,7 +57,7 @@
         <div class="px-5 py-4 border-b border-gray-700">
             <h3 class="text-sm font-semibold text-white flex items-center gap-2">
                 <i data-lucide="shield-alert" class="w-4 h-4 text-cyan-400"></i>
-                OWASP LLM Top 10 Coverage
+                OWASP LLM Top 10 Coverage <span class="text-xs font-normal text-gray-500">(2025)</span>
             </h3>
         </div>
         <div class="overflow-x-auto">
@@ -166,48 +166,51 @@ function coverageManager() {
             return this.owasp.filter(o => o.covered !== 'none').length;
         },
         owasp: [
-            { id: 'LLM01', name: 'Prompt Injection', covered: 'full', layer: 'Input + Output' },
-            { id: 'LLM02', name: 'Insecure Output Handling', covered: 'full', layer: 'Output (17 patterns)' },
-            { id: 'LLM03', name: 'Training Data Poisoning', covered: 'partial', layer: 'Input (RAG manipulation)' },
-            { id: 'LLM04', name: 'Model Denial of Service', covered: 'full', layer: 'Input (entropy, rate limit)' },
-            { id: 'LLM05', name: 'Supply Chain Vulnerabilities', covered: 'none', layer: '—' },
-            { id: 'LLM06', name: 'Sensitive Info Disclosure', covered: 'full', layer: 'Output + Tool Policy' },
-            { id: 'LLM07', name: 'Insecure Plugin Design', covered: 'full', layer: 'Tool Policy' },
-            { id: 'LLM08', name: 'Excessive Agency', covered: 'full', layer: 'Tool Policy + Output' },
-            { id: 'LLM09', name: 'Overreliance', covered: 'full', layer: 'Output (human review)' },
-            { id: 'LLM10', name: 'Model Theft', covered: 'full', layer: 'Input (extraction detect)' },
+            // OWASP LLM Top 10 — 2025 revision. Kept in sync with
+            // docs/SECURITY-HARDENING.md ("Threat Coverage"). full = enforced
+            // control, partial = defense-in-depth, none = out of scope.
+            { id: 'LLM01', name: 'Prompt Injection', covered: 'full', layer: 'Input Guardrail' },
+            { id: 'LLM02', name: 'Sensitive Information Disclosure', covered: 'full', layer: 'Output + Input' },
+            { id: 'LLM03', name: 'Supply Chain', covered: 'full', layer: 'Build/CI (digest-pin, SBOM)' },
+            { id: 'LLM04', name: 'Data and Model Poisoning', covered: 'partial', layer: 'RAG scanner + memory guard' },
+            { id: 'LLM05', name: 'Improper Output Handling', covered: 'full', layer: 'Output Filter + SSE buffer' },
+            { id: 'LLM06', name: 'Excessive Agency', covered: 'full', layer: 'Tool Policy (RBAC)' },
+            { id: 'LLM07', name: 'System Prompt Leakage', covered: 'full', layer: 'Output + Input' },
+            { id: 'LLM08', name: 'Vector and Embedding Weaknesses', covered: 'partial', layer: 'Embedding scanner + RAG guard' },
+            { id: 'LLM09', name: 'Misinformation', covered: 'partial', layer: 'Output validation (WARN)' },
+            { id: 'LLM10', name: 'Unbounded Consumption', covered: 'full', layer: 'Rate limiter + size/token limits' },
         ],
         layers: [
             { name: 'INPUT GUARDRAIL', description: 'Before input reaches LLM', attacks: [
                 { id: 1, name: 'Prompt Injection', owasp: 'LLM01' },
                 { id: 2, name: 'Jailbreak', owasp: 'LLM01' },
                 { id: 3, name: 'Social Engineering', owasp: 'LLM01' },
-                { id: 4, name: 'Tool Abuse', owasp: 'LLM08' },
-                { id: 5, name: 'Exfiltration', owasp: 'LLM07' },
-                { id: 6, name: 'Credential Access', owasp: 'LLM06' },
-                { id: 7, name: 'Reverse Shell', owasp: 'LLM08' },
+                { id: 4, name: 'Tool Abuse', owasp: 'LLM06' },
+                { id: 5, name: 'Exfiltration', owasp: 'LLM02' },
+                { id: 6, name: 'Credential Access', owasp: 'LLM02' },
+                { id: 7, name: 'Reverse Shell', owasp: 'LLM06' },
                 { id: 8, name: 'Model Theft', owasp: 'LLM10' },
                 { id: 9, name: 'Privacy Attack', owasp: '—' },
                 { id: 10, name: 'Plan Corruption', owasp: 'Agentic' },
                 { id: 11, name: 'Cross-Agent Injection', owasp: 'Agentic' },
-                { id: 12, name: 'Memory/RAG Manipulation', owasp: 'Agentic' },
-                { id: 13, name: 'DoS via Encoding', owasp: 'LLM04' },
+                { id: 12, name: 'Memory/RAG Manipulation', owasp: 'LLM08' },
+                { id: 13, name: 'DoS via Encoding', owasp: 'LLM10' },
             ]},
             { name: 'OUTPUT FILTER', description: 'Before returning response', attacks: [
-                { id: 14, name: 'Insecure Output (RCE/SQLi/XSS)', owasp: 'LLM02' },
+                { id: 14, name: 'Insecure Output (RCE/SQLi/XSS)', owasp: 'LLM05' },
                 { id: 15, name: 'Overreliance (--force, prod)', owasp: 'LLM09' },
-                { id: 16, name: 'Credential Leak', owasp: 'LLM06' },
-                { id: 17, name: 'PII Exposure', owasp: 'LLM06' },
+                { id: 16, name: 'Credential Leak', owasp: 'LLM02' },
+                { id: 17, name: 'PII Exposure', owasp: 'LLM02' },
                 { id: 18, name: 'Indirect Injection in Output', owasp: 'LLM01' },
                 { id: 19, name: 'Unicode Smuggling', owasp: 'LLM01' },
-                { id: 20, name: 'Encoded Secrets (ROT13/B64)', owasp: 'LLM06' },
+                { id: 20, name: 'Encoded Secrets (ROT13/B64)', owasp: 'LLM02' },
             ]},
             { name: 'TOOL POLICY', description: 'Before executing tools', attacks: [
-                { id: 21, name: 'Unauthorized Tool Use', owasp: 'LLM08' },
-                { id: 22, name: 'Sensitive File Access', owasp: 'LLM06' },
+                { id: 21, name: 'Unauthorized Tool Use', owasp: 'LLM06' },
+                { id: 22, name: 'Sensitive File Access', owasp: 'LLM02' },
                 { id: 23, name: 'Self-Protection Bypass', owasp: '—' },
-                { id: 24, name: 'Rate Limiting', owasp: 'LLM04' },
-                { id: 25, name: 'Argument Validation', owasp: 'LLM08' },
+                { id: 24, name: 'Rate Limiting', owasp: 'LLM10' },
+                { id: 25, name: 'Argument Validation', owasp: 'LLM06' },
             ]},
         ],
         evasions: [
