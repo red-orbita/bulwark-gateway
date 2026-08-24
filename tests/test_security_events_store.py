@@ -139,6 +139,49 @@ async def test_query_limit_and_offset(store):
     assert page2[0]["ts"] == 2.0
 
 
+# ─── time-range (since / until) ──────────────────────────────────────────────
+
+async def test_query_since_filters_lower_bound(store):
+    await store.bulk_insert([
+        _evt("old", ts=100.0),
+        _evt("mid", ts=200.0),
+        _evt("new", ts=300.0),
+    ])
+    events = await store.query(since=200.0)
+    assert {e["ts"] for e in events} == {200.0, 300.0}  # since is inclusive
+
+
+async def test_query_until_filters_upper_bound(store):
+    await store.bulk_insert([
+        _evt("old", ts=100.0),
+        _evt("mid", ts=200.0),
+        _evt("new", ts=300.0),
+    ])
+    events = await store.query(until=300.0)
+    assert {e["ts"] for e in events} == {100.0, 200.0}  # until is exclusive
+
+
+async def test_query_since_and_until_window(store):
+    await store.bulk_insert([
+        _evt("a", ts=100.0),
+        _evt("b", ts=200.0),
+        _evt("c", ts=300.0),
+        _evt("d", ts=400.0),
+    ])
+    events = await store.query(since=200.0, until=400.0)
+    assert {e["ts"] for e in events} == {200.0, 300.0}
+
+
+async def test_count_respects_time_range(store):
+    await store.bulk_insert([
+        _evt("a", ts=100.0),
+        _evt("b", ts=200.0),
+        _evt("c", ts=300.0),
+    ])
+    assert await store.count(since=200.0) == 2
+    assert await store.count(until=200.0) == 1
+
+
 # ─── summary ─────────────────────────────────────────────────────────────────
 
 async def test_summary_aggregates_security_feed_and_allowed_count(store):

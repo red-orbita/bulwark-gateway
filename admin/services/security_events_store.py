@@ -70,8 +70,16 @@ def _build_filters(
     category: Optional[str],
     severity: Optional[str],
     verdict: Optional[str],
+    since: Optional[float] = None,
+    until: Optional[float] = None,
 ) -> tuple[str, list]:
-    """Build a WHERE clause (without the ``WHERE`` keyword) + bound params."""
+    """Build a WHERE clause (without the ``WHERE`` keyword) + bound params.
+
+    ``since``/``until`` bound the event ``ts`` (unix epoch seconds) to a
+    half-open ``[since, until)`` window. Both are optional; either may be given
+    alone. The ``(tenant, ts DESC)`` / ``ts DESC`` indexes back these range
+    scans, so time-window queries stay cheap even over the full retained history.
+    """
     conditions: list[str] = []
     params: list = []
 
@@ -88,6 +96,12 @@ def _build_filters(
     if severity:
         conditions.append("severity = ?")
         params.append(severity)
+    if since is not None:
+        conditions.append("ts >= ?")
+        params.append(float(since))
+    if until is not None:
+        conditions.append("ts < ?")
+        params.append(float(until))
 
     return " AND ".join(conditions), params
 
@@ -184,11 +198,18 @@ class SecurityEventsStore:
         category: Optional[str] = None,
         severity: Optional[str] = None,
         verdict: Optional[str] = None,
+        since: Optional[float] = None,
+        until: Optional[float] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict]:
-        """Return events (newest first) matching the filters."""
-        where, params = _build_filters(tenant, category, severity, verdict)
+        """Return events (newest first) matching the filters.
+
+        ``since``/``until`` restrict results to the half-open ``[since, until)``
+        time window (unix epoch seconds), enabling correlation lookups over a
+        recent slice of history without scanning everything.
+        """
+        where, params = _build_filters(tenant, category, severity, verdict, since, until)
         # SQLi-safe (S608): `where` is composed only of fixed "col = ?" / "col IN
         # (?, ?)" fragments built above; every value is a bound param.
         sql = (
@@ -206,8 +227,10 @@ class SecurityEventsStore:
         category: Optional[str] = None,
         severity: Optional[str] = None,
         verdict: Optional[str] = None,
+        since: Optional[float] = None,
+        until: Optional[float] = None,
     ) -> int:
-        where, params = _build_filters(tenant, category, severity, verdict)
+        where, params = _build_filters(tenant, category, severity, verdict, since, until)
         sql = f"SELECT COUNT(*) AS n FROM security_events WHERE {where}"  # noqa: S608 — bound params only
         row = await self._db().fetch_one(sql, params)
         return int(row.get("n", 0)) if row else 0

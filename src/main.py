@@ -82,6 +82,23 @@ async def lifespan(app: FastAPI):
     )
     await logger.ainfo("session_decomposition_tracker_initialized", redis=bool(settings.redis_url))
 
+    # Initialize the correlation risk-state store (input↔output correlation).
+    # No-op-cheap when correlation is disabled; the store simply stays empty.
+    from src.correlation.risk_state import get_risk_state_store
+
+    risk_store = get_risk_state_store()
+    risk_store.initialize(
+        redis_url=settings.redis_url,
+        redis_tls_insecure=settings.redis_tls_insecure,
+        decay_seconds=settings.correlation_risk_decay_seconds,
+    )
+    await logger.ainfo(
+        "correlation_risk_state_initialized",
+        enabled=settings.correlation_enabled,
+        blocking=settings.correlation_blocking,
+        redis=bool(settings.redis_url),
+    )
+
     # Register enrichment scanners (async, background only)
     from src.enrichment.manager import get_enrichment_manager, ENRICHMENT_ENABLED
 

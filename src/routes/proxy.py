@@ -30,6 +30,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.config import settings
+from src.correlation.incident import get_correlator
 from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
@@ -915,6 +916,9 @@ async def chat_completions(request: Request):
     # SECURITY FIX (AC-01): Also filter tool_call arguments for secrets/PII.
     # Previously only message.content was scanned, allowing secret exfiltration
     # via tool call arguments returned to the client.
+    # Collect every output-side detection so PHASE 5c can correlate it against the
+    # request's INPUT verdict (input↔output exfiltration confirmation).
+    _output_events_corr: list[SecurityEvent] = []
     for choice in choices:
         message = choice.get("message", {})
         for tc in message.get("tool_calls", []):
@@ -923,10 +927,12 @@ async def chat_completions(request: Request):
                 tc_filter = output_filter.inspect_and_redact(args_raw, tenant_id, agent_id)
                 if tc_filter.verdict == Verdict.REDACT and tc_filter.modified_content:
                     tc["function"]["arguments"] = tc_filter.modified_content
+                    _output_events_corr.extend(tc_filter.events)
                     await _log_events(tc_filter.events, source_ip)
                 elif tc_filter.verdict == Verdict.BLOCK:
                     # Dangerous content in tool args — nullify the tool call
                     tc["function"]["arguments"] = "{}"
+                    _output_events_corr.extend(tc_filter.events)
                     await _log_events(tc_filter.events, source_ip)
                     asyncio.create_task(_fire_webhook_alert(tc_filter.events, tenant_id, agent_id))
 
@@ -949,18 +955,68 @@ async def chat_completions(request: Request):
 
             if filter_result.verdict == Verdict.REDACT and filter_result.modified_content:
                 message["content"] = filter_result.modified_content
+                _output_events_corr.extend(filter_result.events)
                 await _log_events(filter_result.events, source_ip)
                 asyncio.create_task(_fire_webhook_alert(filter_result.events, tenant_id, agent_id))
             elif filter_result.verdict == Verdict.BLOCK:
                 # Block dangerous output entirely — replace with safe message
                 message["content"] = "[Content blocked by security policy — output contained dangerous material]"
+                _output_events_corr.extend(filter_result.events)
                 await _log_events(filter_result.events, source_ip)
                 asyncio.create_task(_fire_webhook_alert(filter_result.events, tenant_id, agent_id))
                 _push_recent_block(filter_result.events, tenant_id, agent_id, snippet_source=content)
             elif filter_result.verdict == Verdict.WARN and filter_result.events:
                 # WARN: log to SIEM + notify but don't modify content
+                _output_events_corr.extend(filter_result.events)
                 await _log_events(filter_result.events, source_ip)
                 asyncio.create_task(_fire_webhook_alert(filter_result.events, tenant_id, agent_id))
+
+    # === PHASE 5c: Input↔Output Correlation ===
+    # Bulwark's inline differentiator: a *suspicious-but-allowed* INPUT (e.g. a
+    # prompt-injection attempt that wasn't individually block-worthy) followed by
+    # a *sensitive* OUTPUT (credential/PII leak) in the SAME request confirms an
+    # exfiltration. When confirmed we elevate the origin's risk state and — if
+    # correlation_blocking is on — replace the leaking content. Zero cost when
+    # disabled or when either side produced no relevant detections.
+    if settings.correlation_enabled and input_result.events and _output_events_corr:
+        import hashlib as _hashlib
+
+        _corr_input = " ".join(
+            m.get("content", "")
+            for m in messages
+            if isinstance(m.get("content"), str) and m.get("content")
+        )
+        _corr_hash = (
+            _hashlib.sha256(_corr_input.encode("utf-8", "ignore")).hexdigest()[:16]
+            if _corr_input
+            else None
+        )
+        incident = get_correlator().evaluate(
+            input_events=input_result.events,
+            output_events=_output_events_corr,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            input_hash=_corr_hash,
+            request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
+        )
+        if incident is not None:
+            _corr_event = incident.to_security_event()
+            await _log_events([_corr_event], source_ip)
+            asyncio.create_task(_fire_webhook_alert([_corr_event], tenant_id, agent_id))
+            _push_recent_block([_corr_event], tenant_id, agent_id, snippet_source=_corr_input)
+            if incident.verdict == Verdict.BLOCK:
+                # Confirmed exfiltration — scrub the response before it ships.
+                for choice in choices:
+                    _msg = choice.get("message", {})
+                    if _msg.get("content"):
+                        _msg["content"] = (
+                            "[Content blocked by security policy — "
+                            "correlated exfiltration detected]"
+                        )
+                    _msg.pop("tool_calls", None)
+                _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+                _record_tenant_usage(tenant_id, "block")
+                return JSONResponse(content=response_data)
 
     # === PHASE 5b: Output Async Scanners (fire-and-forget) ===
     # Run async output scanners (hallucination detection, etc.) in background.

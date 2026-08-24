@@ -195,6 +195,32 @@ class Settings(BaseSettings):
     tracing_sample_rate: float = 1.0  # 1.0 = trace all, 0.1 = 10% sampling
     tracing_service_name: str = "bulwark-gateway-proxy"
 
+    # === Correlation Engine (Phase 0/1) ===
+    # Inline input↔output correlation: raise the risk state of a request's origin
+    # (tenant / session / input-hash) when a suspicious INPUT is followed by a
+    # sensitive OUTPUT in the same request, and confirm exfiltration by BLOCKing
+    # the leaking response. This is enforcement-oriented (not forensic): the SIEM
+    # remains the system of record for multi-source / cross-tenant correlation.
+    #
+    # Master switch. Off by default — zero cost on the hot path when disabled.
+    correlation_enabled: bool = False
+    # When True, a confirmed input→output exfiltration correlation BLOCKs the
+    # response (replaces leaking content). When False, it only WARNs + records the
+    # incident and elevates risk state (observe-first rollout). WARN-before-BLOCK.
+    correlation_blocking: bool = False
+    # Sliding window (seconds) linking a request's INPUT verdict to its OUTPUT
+    # detections. Input↔output correlation is same-request/synchronous, so this is
+    # a tight bound guarding against clock skew and async event ordering.
+    correlation_window_seconds: float = 30.0
+    # Risk-state decay half-life (seconds). Elevated origin risk decays over time
+    # so a single bad request does not permanently penalise a tenant/session.
+    correlation_risk_decay_seconds: float = 900.0  # 15 min
+    # Origin risk score at/above which the next requests from that origin are
+    # hardened (WARN→BLOCK escalation eligibility). Bounded 0..10 scale.
+    correlation_risk_block_threshold: float = 7.0
+    # Origin risk score at/above which the origin is flagged as elevated (WARN).
+    correlation_risk_warn_threshold: float = 4.0
+
     model_config = SettingsConfigDict(
         env_prefix="BULWARK_",
         env_file=".env",
