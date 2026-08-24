@@ -214,6 +214,10 @@ def test_incident_to_security_event_shape(correlator):
     assert ev.metadata["input_hash"] == "cafebabe"
     assert "prompt_injection" in ev.metadata["input_categories"]
     assert "credential_access" in ev.metadata["output_categories"]
+    # Full metadata contract the events viewer (Phase 3) renders for an incident.
+    assert ev.metadata["kind"] == "input_output_exfiltration"
+    assert isinstance(ev.metadata["incident_id"], str) and ev.metadata["incident_id"]
+    assert isinstance(ev.metadata["risk_score"], (int, float))
 
 
 def test_correlation_bumps_origin_risk(correlator):
@@ -487,3 +491,8 @@ def test_origin_risk_assessment_to_security_event(correlator, monkeypatch):
     assert ev.metadata["correlation"] is True
     assert ev.metadata["adaptive_enforcement"] is True
     assert ev.request_id == "r9"
+    # Full metadata contract the events viewer (Phase 3) renders for an adaptive
+    # origin-risk decision: the meter + score fields must always be present.
+    assert ev.metadata["origin_risk_score"] == pytest.approx(5.0, abs=0.5)
+    assert ev.metadata["origin_tenant_score"] == pytest.approx(2.0, abs=0.5)
+    assert isinstance(ev.metadata["threshold"], (int, float))

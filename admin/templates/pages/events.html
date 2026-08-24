@@ -319,6 +319,11 @@
                                 <td class="text-xs text-gray-400">
                                     <div class="flex items-center gap-2">
                                         <span class="max-w-xs truncate" :title="evt.description" x-text="evt.description"></span>
+                                        <span x-show="isCorrelation(evt)" x-cloak
+                                              class="sg-badge text-[9px] shrink-0 bg-fuchsia-400/15 text-fuchsia-300 border border-fuchsia-500/30"
+                                              title="Correlation engine event — cross-request origin risk or input↔output exfiltration">
+                                            <i data-lucide="git-merge" class="w-3 h-3"></i> CORRELATED
+                                        </span>
                                         <span x-show="isAllowedByException(evt)" x-cloak
                                               class="sg-badge text-[9px] shrink-0 bg-amber-400/15 text-amber-300 border border-amber-500/30"
                                               title="Allowed by an allowlist exception — degraded from BLOCK to WARN">
@@ -338,11 +343,92 @@
                                                   :class="verdictBadgeClass(evt.verdict)"
                                                   x-text="(evt.verdict || 'block').toUpperCase()"></span>
                                             <span class="font-mono text-xs text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded" x-text="evt.category"></span>
+                                            <span x-show="isCorrelation(evt)" x-cloak
+                                                  class="sg-badge text-[10px] bg-fuchsia-400/15 text-fuchsia-300 border border-fuchsia-500/30">
+                                                <i data-lucide="git-merge" class="w-3 h-3"></i> CORRELATED
+                                            </span>
                                             <span x-show="isAllowedByException(evt)" x-cloak
                                                   class="sg-badge text-[10px] bg-amber-400/15 text-amber-300 border border-amber-500/30">
                                                 <i data-lucide="shield-check" class="w-3 h-3"></i>
                                                 <span x-text="'ALLOWED BY EXCEPTION' + (exceptionScope(evt) ? ' · ' + exceptionScope(evt) : '')"></span>
                                             </span>
+                                        </div>
+
+                                        <!-- Correlation detail (Phase 3): a structured, human-readable
+                                             explanation of why the correlation engine acted — either an
+                                             adaptive cross-request origin-risk decision or a same-request
+                                             input→output exfiltration. Driven entirely by the metadata the
+                                             engine emits (source="correlation_engine"); hidden otherwise. -->
+                                        <div x-show="isCorrelation(evt)" x-cloak
+                                             class="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/[0.06] p-4 space-y-3">
+                                            <div class="flex items-center gap-2">
+                                                <i data-lucide="git-merge" class="w-4 h-4 text-fuchsia-300"></i>
+                                                <span class="text-xs font-semibold uppercase tracking-wider text-fuchsia-200">Correlation</span>
+                                                <span class="sg-badge text-[9px] bg-fuchsia-400/15 text-fuchsia-300 border border-fuchsia-500/30"
+                                                      x-text="correlationKindLabel(evt)"></span>
+                                            </div>
+
+                                            <!-- Adaptive cross-request enforcement: origin-risk meter + scores -->
+                                            <template x-if="isAdaptiveEnforcement(evt)">
+                                                <div class="space-y-3">
+                                                    <p class="text-[11px] text-gray-400">
+                                                        This request was hardened by the adaptive origin-risk policy,
+                                                        not by a fresh content match. The score is accumulated from
+                                                        prior correlated / suspicious activity for this origin and
+                                                        decays over time.
+                                                    </p>
+                                                    <div class="space-y-1">
+                                                        <div class="flex items-center justify-between text-[11px]">
+                                                            <span class="text-gray-500 uppercase tracking-wider">Origin risk (session)</span>
+                                                            <span class="font-mono text-gray-300">
+                                                                <span x-text="riskScore(evt).toFixed(1)"></span><span class="text-gray-600"> / </span><span x-text="riskThreshold(evt).toFixed(1)"></span><span class="text-gray-600"> · max </span><span x-text="riskScale()"></span>
+                                                            </span>
+                                                        </div>
+                                                        <div class="relative h-2.5 rounded-full bg-gray-700/50 overflow-hidden">
+                                                            <div class="absolute top-0 bottom-0 w-px bg-amber-300/80 z-10"
+                                                                 :style="'left:' + riskThresholdPct(evt) + '%'"
+                                                                 :title="'Threshold ' + riskThreshold(evt).toFixed(1)"></div>
+                                                            <div class="h-full rounded-full"
+                                                                 :class="riskScore(evt) >= riskThreshold(evt) ? 'bg-gradient-to-r from-fuchsia-500 to-rose-400' : 'bg-gradient-to-r from-cyan-500/70 to-cyan-400/50'"
+                                                                 :style="'width:' + riskPct(evt) + '%'"></div>
+                                                        </div>
+                                                    </div>
+                                                    <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 text-xs">
+                                                        <div><dt class="text-gray-500 uppercase tracking-wider">Session score</dt><dd class="text-fuchsia-200 mt-0.5 font-mono" x-text="riskScore(evt).toFixed(2)"></dd></div>
+                                                        <div><dt class="text-gray-500 uppercase tracking-wider">Tenant score</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="tenantScore(evt).toFixed(2)"></dd></div>
+                                                        <div><dt class="text-gray-500 uppercase tracking-wider">Threshold</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="riskThreshold(evt).toFixed(2)"></dd></div>
+                                                    </dl>
+                                                </div>
+                                            </template>
+
+                                            <!-- Input→output exfiltration: the confirmed inline chain -->
+                                            <template x-if="isCorrelatedIncident(evt)">
+                                                <div class="space-y-3">
+                                                    <p class="text-[11px] text-gray-400">
+                                                        A suspicious input was followed by sensitive output in the same
+                                                        request — the signature of a working prompt-injection /
+                                                        exfiltration. The engine paired these categories inline:
+                                                    </p>
+                                                    <div class="flex flex-wrap items-center gap-2">
+                                                        <div class="flex flex-wrap gap-1.5">
+                                                            <template x-for="c in inputCats(evt)" :key="'in-' + c">
+                                                                <span class="sg-badge text-[10px] bg-amber-400/15 text-amber-300 border border-amber-500/30" x-text="c"></span>
+                                                            </template>
+                                                        </div>
+                                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-fuchsia-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                                        <div class="flex flex-wrap gap-1.5">
+                                                            <template x-for="c in outputCats(evt)" :key="'out-' + c">
+                                                                <span class="sg-badge text-[10px] bg-rose-400/15 text-rose-300 border border-rose-500/30" x-text="c"></span>
+                                                            </template>
+                                                        </div>
+                                                    </div>
+                                                    <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 text-xs">
+                                                        <div x-show="incidentId(evt)"><dt class="text-gray-500 uppercase tracking-wider">Incident ID</dt><dd class="text-fuchsia-200 mt-0.5 font-mono break-all" x-text="incidentId(evt)"></dd></div>
+                                                        <div x-show="riskScore(evt) > 0"><dt class="text-gray-500 uppercase tracking-wider">Origin risk</dt><dd class="text-fuchsia-200 mt-0.5 font-mono" x-text="riskScore(evt).toFixed(2)"></dd></div>
+                                                        <div x-show="correlationInputHash(evt)" class="col-span-2 sm:col-span-1"><dt class="text-gray-500 uppercase tracking-wider">Input hash</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="correlationInputHash(evt)"></dd></div>
+                                                    </dl>
+                                                </div>
+                                            </template>
                                         </div>
 
                                         <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
@@ -690,6 +776,67 @@ function eventsManager() {
             if (!evt || !evt.metadata) return '';
             return evt.metadata.exception_scope || evt.metadata.allowed_by_exception_scope || '';
         },
+
+        // ─── Correlation detail (Phase 3) ───────────────────────────────────
+        // Surface the correlation engine's reasoning in the expanded row. Events
+        // are tagged source="correlation_engine" with metadata.correlation=true.
+        // Two shapes: adaptive cross-request enforcement (origin-risk scores) and
+        // same-request input→output exfiltration (paired categories). All values
+        // come straight from the emitted metadata — no client-side heuristics.
+
+        // Full-scale ceiling for the risk meter. Origin risk clamps at 10 in the
+        // store (src/correlation/risk_state.py), so the meter is honest at /10.
+        riskScale() { return 10; },
+
+        _meta(evt) { return (evt && evt.metadata) || {}; },
+
+        isCorrelation(evt) {
+            if (!evt) return false;
+            return evt.source === 'correlation_engine' || this._meta(evt).correlation === true;
+        },
+
+        isAdaptiveEnforcement(evt) {
+            return this.isCorrelation(evt) && this._meta(evt).adaptive_enforcement === true;
+        },
+
+        // A correlated incident carries the paired input/output categories. Guard
+        // against also matching adaptive-enforcement events (which have neither).
+        isCorrelatedIncident(evt) {
+            if (!this.isCorrelation(evt) || this.isAdaptiveEnforcement(evt)) return false;
+            const m = this._meta(evt);
+            return m.kind === 'input_output_exfiltration'
+                || (Array.isArray(m.input_categories) && Array.isArray(m.output_categories));
+        },
+
+        correlationKindLabel(evt) {
+            if (this.isAdaptiveEnforcement(evt)) return 'Adaptive enforcement';
+            if (this.isCorrelatedIncident(evt)) return 'Input→output exfiltration';
+            return 'Correlation';
+        },
+
+        // Decision score: origin_risk_score for adaptive enforcement, risk_score
+        // for a correlated incident. Numeric-coerced so toFixed() is always safe.
+        riskScore(evt) {
+            const m = this._meta(evt);
+            const v = this.isAdaptiveEnforcement(evt) ? m.origin_risk_score : m.risk_score;
+            return Number(v) || 0;
+        },
+
+        tenantScore(evt) { return Number(this._meta(evt).origin_tenant_score) || 0; },
+        riskThreshold(evt) { return Number(this._meta(evt).threshold) || 0; },
+
+        // Meter widths, clamped to [0, 100] against the /10 scale.
+        riskPct(evt) {
+            return Math.max(0, Math.min(100, (this.riskScore(evt) / this.riskScale()) * 100));
+        },
+        riskThresholdPct(evt) {
+            return Math.max(0, Math.min(100, (this.riskThreshold(evt) / this.riskScale()) * 100));
+        },
+
+        inputCats(evt) { const c = this._meta(evt).input_categories; return Array.isArray(c) ? c : []; },
+        outputCats(evt) { const c = this._meta(evt).output_categories; return Array.isArray(c) ? c : []; },
+        incidentId(evt) { return this._meta(evt).incident_id || ''; },
+        correlationInputHash(evt) { return this._meta(evt).input_hash || ''; },
 
         async init() {
             this.compact = localStorage.getItem('sg-events-density') === 'compact';
