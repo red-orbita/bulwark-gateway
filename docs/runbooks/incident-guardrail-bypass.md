@@ -125,7 +125,7 @@ Categorize the bypass:
 | **Encoding evasion** | Base64, hex, URL, Unicode escapes, Morse, Braille, NATO | Add to multi-layer decode pipeline |
 | **Homoglyph substitution** | Cyrillic а instead of Latin a | Strengthen NFKC normalization |
 | **Zero-width injection** | U+200B, U+FEFF between keywords | Strip zero-width chars before matching |
-| **Chunked injection** | Split payload across multiple messages | Add cross-message correlation |
+| **Chunked injection** | Split payload across multiple messages | Add cross-message correlation; enable the inline correlation engine (`BULWARK_CORRELATION_ENABLED`) so repeated WARN/BLOCK signals from one origin accrue risk and harden later requests |
 | **Semantic evasion** | Rephrase without matching regex | Add ML scanner pattern or expand regex |
 | **Role confusion** | Convince LLM to ignore system prompt | Add role boundary patterns |
 | **Tool name manipulation** | Encode tool names to bypass policy | Normalize tool names before policy check |

@@ -9,6 +9,7 @@ Common issues and their solutions for Bulwark Gateway.
 - [Pod / Kubernetes Issues](#pod--kubernetes-issues)
 - [SIEM Export Issues](#siem-export-issues)
 - [Proxy Issues](#proxy-issues)
+- [Correlation Engine Issues](#correlation-engine-issues)
 - [Notification Issues](#notification-issues)
 - [Wazuh CrashLoopBackOff](#wazuh-crashloopbackoff)
 - [Admin Portal: White Screen / All Forms Visible](#admin-portal-white-screen--all-forms-visible)
@@ -254,6 +255,73 @@ kubectl exec deploy/proxy -n bulwark-gateway -- cat /app/config/agents.yaml
 # Check policy exists
 kubectl exec deploy/proxy -n bulwark-gateway -- ls /app/config/policies/
 ```
+
+---
+
+## Correlation Engine Issues
+
+The inline correlation engine is **opt-in** (`BULWARK_CORRELATION_ENABLED=true`) and inert when off.
+Use the admin API (`/admin/correlation/*`) for observability instead of exec'ing into the distroless
+proxy. `curl` examples assume an admin bearer token in `$TOK`.
+
+### Correlation isn't enforcing anything
+
+**Cause**: engine disabled, or blocking off (WARN-only), or no risk has accrued yet.
+
+```bash
+# Confirm the engine is enabled and see the effective config
+curl -s -H "Authorization: Bearer $TOK" https://admin.corp.com/admin/correlation/status | jq
+
+# Look for: proxy boot logs "correlation_risk_state_initialized enabled=True"
+#           and "correlation_event_tap_started"
+kubectl logs deploy/proxy -n bulwark-gateway | grep correlation
+```
+
+- If `effective.blocking` is `false`, correlated decisions surface as **WARN**, not 403 — this is the
+  default. Set `BULWARK_CORRELATION_BLOCKING=true` (or override at runtime) once thresholds are tuned.
+- Risk decays over time (`risk_decay_seconds`, default 900s). A single attack may not cross the block
+  threshold; check `active_origins` and the `/admin/correlation/origins` list.
+
+### An origin is stuck blocked / risk won't clear
+
+**Cause**: accrued risk hasn't decayed below the threshold yet, or you need an immediate reset.
+
+```bash
+# See current decayed scores + TTLs (highest first)
+curl -s -H "Authorization: Bearer $TOK" https://admin.corp.com/admin/correlation/origins | jq
+
+# Clear one origin (scope_type = tenant|session|input, digest = 16 hex chars)
+curl -s -X DELETE -H "Authorization: Bearer $TOK" \
+  https://admin.corp.com/admin/correlation/origin/session/24d52a99be7b756a
+
+# Or clear ALL accrued risk (keeps runtime config override)
+curl -s -X POST -H "Authorization: Bearer $TOK" https://admin.corp.com/admin/correlation/reset
+```
+
+Both actions require the `correlation:write` permission (admin/security roles) and are audit-logged.
+
+### Correlation blocking too aggressively (false positives)
+
+**Cause**: thresholds too low or decay too slow for your traffic profile.
+
+```bash
+# Raise the block threshold and speed up decay — no restart needed (proxy re-reads in ~5s)
+curl -s -X PUT -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+  -d '{"blocking": false, "risk_block_threshold": 8.5, "risk_decay_seconds": 600}' \
+  https://admin.corp.com/admin/correlation/config
+
+# Revert to built-in defaults (env values) when done tuning
+curl -s -X DELETE -H "Authorization: Bearer $TOK" https://admin.corp.com/admin/correlation/config
+```
+
+Prefer `blocking: false` (WARN) while tuning, then re-enable blocking once the score distribution
+looks right in `/admin/correlation/origins`.
+
+### `redis_connected: false` in correlation status
+
+**Cause**: correlation risk state and runtime overrides live in Redis. Without Redis, each proxy pod
+falls back to in-memory risk (not shared across replicas) and runtime overrides can't be read.
+See [Redis Issues](#redis-issues).
 
 ---
 

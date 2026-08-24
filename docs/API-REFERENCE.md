@@ -737,6 +737,136 @@ session (`sub`), not a fixed value. Requires `guardrails:write`.
 
 ---
 
+### Correlation (Inline Origin-Risk Engine)
+
+The proxy's opt-in correlation engine (`BULWARK_CORRELATION_ENABLED`, off by default) keeps a
+decaying, per-origin **risk score** in Redis. Risk accrues from (a) confirmed input↔output
+exfiltration incidents and (b) ongoing WARN/BLOCK security events. When an origin's decayed score
+crosses a threshold, the *next* request from that origin is hardened (WARN, or BLOCK when blocking is
+enabled). This surface exposes observability plus **real** runtime tuning — overrides are written to
+`bulwark:correlation:config` and the proxy re-reads them within ~5s without a restart.
+
+Risk keys are irreversible SHA-256 digests of the origin (`scope_type` ∈ `tenant`/`session`/`input`,
+`digest` = 16 hex chars); they are never a raw tenant/agent/IP and cannot be mapped back to an
+identity. Read endpoints require `correlation:read` (all roles); mutations require `correlation:write`
+(admin + security).
+
+#### GET /admin/correlation/status
+
+Effective enforcement config (defaults merged with any runtime override), override state, Redis
+connectivity, and active-origin count. Requires `correlation:read`.
+
+```json
+{
+  "redis_connected": true,
+  "can_write": true,
+  "effective": {
+    "blocking": false,
+    "window_seconds": 30.0,
+    "risk_block_threshold": 7.0,
+    "risk_warn_threshold": 4.0,
+    "risk_decay_seconds": 900.0,
+    "event_bump_warn": 0.5,
+    "event_bump_block": 1.0,
+    "severity_high_mult": 1.5,
+    "severity_critical_mult": 2.0
+  },
+  "defaults": { "...": "..." },
+  "override": {},
+  "overridden": false,
+  "active_origins": 0,
+  "note": null
+}
+```
+
+#### GET /admin/correlation/config/fields
+
+Read-only catalog of tunable fields and their numeric bounds. Requires `correlation:read`.
+
+```json
+{
+  "boolean_fields": ["blocking"],
+  "numeric_fields": {
+    "window_seconds": {"min": 1.0, "max": 3600.0},
+    "risk_block_threshold": {"min": 0.1, "max": 10.0},
+    "risk_warn_threshold": {"min": 0.1, "max": 10.0},
+    "risk_decay_seconds": {"min": 10.0, "max": 604800.0},
+    "event_bump_warn": {"min": 0.0, "max": 10.0},
+    "event_bump_block": {"min": 0.0, "max": 10.0},
+    "severity_high_mult": {"min": 0.1, "max": 10.0},
+    "severity_critical_mult": {"min": 0.1, "max": 10.0}
+  }
+}
+```
+
+#### GET /admin/correlation/origins
+
+List active origins with their current decayed risk score (highest first). Requires
+`correlation:read`.
+
+**Query**: `limit` (default 200, max 1000)
+
+```json
+{
+  "redis_connected": true,
+  "count": 1,
+  "origins": [
+    {
+      "scope_type": "session",
+      "digest": "24d52a99be7b756a",
+      "score": 9.32,
+      "stored_score": 10.0,
+      "updated_ts": 1766600000.0,
+      "ttl_seconds": 7180
+    }
+  ]
+}
+```
+
+#### PUT /admin/correlation/config
+
+Set a runtime override for correlation enforcement. Only provided fields are written; passing no
+fields is rejected (400) to avoid silent no-ops. Bounds mirror the proxy so an override can never
+disable enforcement with a nonsensical value. Requires `correlation:write`.
+
+```json
+// Request (all fields optional)
+{"blocking": true, "risk_block_threshold": 6.0, "risk_decay_seconds": 1200}
+
+// Response
+{"message": "Correlation override updated", "override": {"blocking": true, "risk_block_threshold": 6.0, "risk_decay_seconds": 1200.0}}
+```
+
+Numeric bounds: `window_seconds` 1–3600, `risk_block_threshold`/`risk_warn_threshold` >0–10,
+`risk_decay_seconds` 10–604800, `event_bump_warn`/`event_bump_block` 0–10,
+`severity_high_mult`/`severity_critical_mult` >0–10.
+
+#### DELETE /admin/correlation/config
+
+Remove the runtime override so the proxy reverts to built-in defaults. Requires `correlation:write`.
+
+#### DELETE /admin/correlation/origin/{scope_type}/{digest}
+
+Clear the accumulated risk for a single origin. `scope_type` must be one of `tenant`/`session`/`input`
+and `digest` must be 16 hex chars (else 400). Requires `correlation:write`.
+
+```json
+{"message": "Origin risk cleared", "keys_deleted": 1}
+```
+
+#### POST /admin/correlation/reset
+
+Clear ALL accumulated origin risk (keeps the runtime config override). Requires `correlation:write`.
+
+```json
+{"message": "All origin risk cleared", "keys_deleted": 12}
+```
+
+All mutations are recorded in the admin audit log (`correlation.config_update`,
+`correlation.config_clear`, `correlation.origin_delete`, `correlation.reset`).
+
+---
+
 ## Error Format
 
 All error responses follow this format:

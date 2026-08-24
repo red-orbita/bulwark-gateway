@@ -47,6 +47,13 @@ User → [Bulwark Gateway Proxy :8080] → LLM Backend
 
 **Streaming**: SSE responses are filtered with a 256-char sliding window buffer.
 
+**Inline correlation (opt-in, `BULWARK_CORRELATION_ENABLED`, off by default)**: when enabled, an
+adaptive origin-risk check runs **after step 3** (input guardrail) — if the request's origin
+(session/tenant) has accrued enough decayed risk, the verdict is hardened to WARN or BLOCK before
+forwarding. After the response is filtered, an input↔output correlator flags exfiltration patterns
+within a time window, and an async event tap accrues origin risk from every WARN/BLOCK event. When
+disabled the engine is fully inert (zero hot-path cost). See §5 (Redis), §6 (config), §8 (admin API).
+
 ---
 
 ## 2. Project Structure
@@ -66,6 +73,11 @@ bulwark-gateway/
 │   │   ├── output_filter.py      # Secret/PII redaction patterns
 │   │   ├── tool_policy.py        # Per-agent RBAC enforcement
 │   │   └── dynamic_registry.py   # Redis-synced pattern enable/disable
+│   ├── correlation/               # Inline correlation engine (opt-in, off by default)
+│   │   ├── incident.py           # Input↔output exfiltration correlator + adaptive origin-risk
+│   │   ├── risk_state.py         # Decayed per-origin risk store (Redis + in-memory fallback)
+│   │   ├── event_tap.py          # Async event bus: WARN/BLOCK events → origin risk accrual
+│   │   └── runtime.py            # Throttled Redis-overlaid tunable config (no restart)
 │   ├── middleware/
 │   │   ├── auth.py               # JWT + API key authentication
 │   │   └── rate_limit.py         # Redis sliding window rate limiter
@@ -539,12 +551,13 @@ agents:
 
 ### Redis Usage
 
-Redis is used for 5 purposes (optional — falls back to in-memory if unavailable):
+Redis is used for 6 purposes (optional — falls back to in-memory if unavailable):
 1. **Rate limiting** — distributed sliding window counters per tenant
 2. **Pattern sync** — admin publishes pattern changes, proxy picks them up via version tracking
 3. **Global metrics** — `bulwark:global:{requests_total,block,allow,warn}` survive pod restarts
 4. **SIEM stats** — `bulwark:siem:{batches_sent,events_exported,export_errors,...}`
 5. **Recent blocks** — last N blocked requests for admin dashboard
+6. **Correlation state** — decayed per-origin risk scores + runtime-tunable correlation config (opt-in)
 
 Redis keys:
 ```
@@ -563,6 +576,8 @@ bulwark:guardrails:custom        # HASH { id: JSON(pattern) }
 bulwark:guardrails:version       # INT (incremented on change)
 bulwark:rate_limit:{tenant}      # Sorted set (sliding window)
 bulwark:recent_blocks            # List (last N blocked requests)
+bulwark:risk:{scope}:{digest}    # HASH {score, ts} — decayed origin risk (scope: tenant|session|input)
+bulwark:correlation:config       # HASH — runtime-tunable correlation overrides (throttled re-read)
 ```
 
 TLS supported via `rediss://` URL scheme. External Redis (Azure/AWS/GCP) fully supported.
@@ -608,6 +623,12 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_REDACT_EMAIL` | bool | `false` | Opt-in: redact emails in LLM output (`[REDACTED:EMAIL]`) |
 | `BULWARK_REDACT_PHONE` | bool | `false` | Opt-in: redact phone numbers in LLM output (`[REDACTED:PHONE]`) |
 | `BULWARK_WEBHOOK_ALERT_URLS` | str | `""` | Webhook URLs for alerts |
+| `BULWARK_CORRELATION_ENABLED` | bool | `false` | Master switch for the inline correlation engine (starts event tap at boot) |
+| `BULWARK_CORRELATION_BLOCKING` | bool | `false` | When on, correlated exfiltration / origin-risk decisions BLOCK; otherwise WARN. Runtime-tunable |
+| `BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD` | float | `7.0` | Origin risk score (0–10) at/above which requests are hardened to BLOCK. Runtime-tunable |
+| `BULWARK_CORRELATION_RISK_WARN_THRESHOLD` | float | `4.0` | Origin risk score at/above which requests are flagged WARN. Runtime-tunable |
+| `BULWARK_CORRELATION_RISK_DECAY_SECONDS` | float | `900.0` | Half-life for decaying accumulated origin risk. Runtime-tunable |
+| `BULWARK_CORRELATION_WINDOW_SECONDS` | float | `30.0` | Input↔output pairing window (guards clock skew). Runtime-tunable |
 
 ### Docker Secrets Support
 
@@ -778,6 +799,13 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | GET | `/admin/discovery/mcp/status` | Session | MCP inventory status |
 | POST | `/admin/discovery/mcp/assess-risk` | Session | Assess MCP tool risk |
 | POST | `/admin/discovery/mcp/enumerate` | Session | Enumerate MCP server tools |
+| GET | `/admin/correlation/status` | Session | Correlation engine status (enabled/blocking, effective config, Redis health) |
+| GET | `/admin/correlation/config/fields` | Session | Tunable field metadata (defaults + numeric bounds) |
+| GET | `/admin/correlation/origins` | Session | Active origins with decayed risk score, scope, digest, TTL |
+| PUT | `/admin/correlation/config` | Session | Set runtime overrides (blocking/thresholds/decay/window/bumps) — `correlation:write` |
+| DELETE | `/admin/correlation/config` | Session | Clear all runtime overrides (revert to env defaults) — `correlation:write` |
+| DELETE | `/admin/correlation/origin/{scope_type}/{digest}` | Session | Clear one origin's accrued risk — `correlation:write` |
+| POST | `/admin/correlation/reset` | Session | Clear all accrued origin risk — `correlation:write` |
 
 ### Authentication
 
@@ -786,6 +814,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 - **Tenant/Agent**: `X-Tenant-ID` and `X-Agent-ID` headers (required for proxy)
 - **Admin session**: HTTP-only cookie set by `/admin/auth/login`
 - **Admin roles**: admin, security, auditor, viewer (RBAC enforced)
+- **Correlation RBAC**: `correlation:read` (status/origins/config view) and `correlation:write` (tuning/reset) — dedicated permission namespace, not reused from `sessions:*`
 
 ---
 
