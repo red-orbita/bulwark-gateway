@@ -22,7 +22,7 @@ class GuardrailsStore:
 
     def save_state(self) -> None:
         """Persist current guardrail state atomically."""
-        from ..routes.guardrails import _patterns_cache, _module_state, _params
+        from ..routes.guardrails import _exceptions, _module_state, _params, _patterns_cache
 
         patterns = _patterns_cache or []
         custom_patterns = [p for p in patterns if "custom" in p.get("id", "")]
@@ -33,6 +33,7 @@ class GuardrailsStore:
             "disabled_patterns": disabled_patterns,
             "module_state": dict(_module_state),
             "params": dict(_params),
+            "exceptions": {pid: list(scopes) for pid, scopes in _exceptions.items()},
         }
 
         # Atomic write
@@ -55,7 +56,7 @@ class GuardrailsStore:
 
     def _apply_state(self, state: dict[str, Any]) -> None:
         """Apply loaded state to in-memory guardrail structures."""
-        from ..routes.guardrails import _load_patterns, _module_state, _params
+        from ..routes.guardrails import _exceptions, _load_patterns, _module_state, _params
 
         # Apply module state
         if "module_state" in state:
@@ -68,6 +69,19 @@ class GuardrailsStore:
             for k, v in state["params"].items():
                 if k in _params:
                     _params[k] = v
+
+        # Apply allow-exceptions (F2). Mutate in place so the routes module's
+        # reference stays valid, then re-sync to Redis for the proxy.
+        if "exceptions" in state and isinstance(state["exceptions"], dict):
+            _exceptions.clear()
+            for pid, scopes in state["exceptions"].items():
+                if isinstance(scopes, list) and scopes:
+                    _exceptions[pid] = [str(s) for s in scopes]
+            try:
+                from .redis_sync import sync_exceptions
+                sync_exceptions(_exceptions)
+            except Exception:  # noqa: S110 - Redis re-sync is best-effort; proxy re-reads on next version bump
+                pass
 
         # Apply custom patterns and disabled state
         patterns = _load_patterns()
@@ -100,7 +114,11 @@ class GuardrailsStore:
             resource_type="guardrail_params",
             limit=limit,
         ))
-        all_entries = entries + module_entries + param_entries
+        exception_entries = await audit.query(AuditQuery(
+            resource_type="pattern_exception",
+            limit=limit,
+        ))
+        all_entries = entries + module_entries + param_entries + exception_entries
         all_entries.sort(key=lambda e: e.timestamp, reverse=True)
         return [
             {
@@ -118,7 +136,7 @@ class GuardrailsStore:
 
     def export_config(self) -> dict[str, Any]:
         """Export full guardrails config as JSON."""
-        from ..routes.guardrails import _load_patterns, _module_state, _params
+        from ..routes.guardrails import _exceptions, _load_patterns, _module_state, _params
 
         patterns = _load_patterns()
         return {
@@ -127,6 +145,7 @@ class GuardrailsStore:
             "all_patterns": patterns,
             "module_state": dict(_module_state),
             "params": dict(_params),
+            "exceptions": {pid: list(scopes) for pid, scopes in _exceptions.items()},
         }
 
     def import_config(self, data: dict[str, Any]) -> None:

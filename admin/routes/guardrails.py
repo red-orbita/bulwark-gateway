@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -15,7 +16,12 @@ from ..services.auth_service import require_permission
 from ..services.config_validator import ConfigValidator
 from ..services.audit_logger import get_audit_logger
 from ..services.guardrails_store import get_guardrails_store
-from ..services.redis_sync import sync_all, sync_disabled_patterns, sync_custom_patterns
+from ..services.redis_sync import (
+    sync_all,
+    sync_custom_patterns,
+    sync_disabled_patterns,
+    sync_exceptions,
+)
 
 router = APIRouter()
 
@@ -23,6 +29,17 @@ router = APIRouter()
 _PARAMS_FILE = Path("/app/data/guardrail_params.json")
 _module_state = {"input": True, "tool_policy": True, "output": True}
 _params = {"entropy_threshold": 4.5, "max_input_size": 102400, "max_nesting_depth": 10, "chunk_window": 4096}
+
+# Per-tenant/agent allow-exceptions (F2): pattern_id -> list of "tenant:agent"
+# scope strings. An exception degrades a would-be BLOCK to WARN for the matching
+# tenant/agent while keeping the security event auditable (allowed_by_exception).
+# Persisted to disk via GuardrailsStore and synced to Redis for the proxy.
+_exceptions: dict[str, list[str]] = {}
+
+# A scope is "tenant:agent"; each side allows alphanumerics, _.- and the "*"
+# wildcard. Exactly one colon. Enforced to prevent key injection / malformed
+# scopes reaching the proxy registry.
+_SCOPE_PART_RE = re.compile(r"^[A-Za-z0-9_.\-*]{1,128}$")
 
 
 def _load_persisted_state():
@@ -66,8 +83,13 @@ def _load_patterns() -> list[dict]:
         from src.guardrails.input_guardrail import InputGuardrail
         ig = InputGuardrail()
         for i, p in enumerate(getattr(ig, 'all_patterns', [])):
+            # Use the proxy's real pattern_id (input-{category}-{i}) so that
+            # admin toggle/exception actions key on the SAME id the proxy checks
+            # at match-time (input_guardrail.py: is_disabled / exception lookup).
+            # Falling back to positional id only if pattern_id is unset.
+            real_id = getattr(p, "pattern_id", "") or f"input-{i}"
             patterns.append({
-                "id": f"input-{i}",
+                "id": real_id,
                 "layer": "input",
                 "description": getattr(p, 'description', f'Pattern {i}'),
                 "regex": getattr(p, 'regex', None).pattern[:120] if getattr(p, 'regex', None) else '',
@@ -470,6 +492,116 @@ async def guardrail_history(user: TokenPayload = Depends(require_permission("gua
     """Get guardrail change history."""
     store = get_guardrails_store()
     return await store.get_history()
+
+
+# --- Allow-exception endpoints (F2) ---
+
+
+def _normalize_scope(data: dict) -> str:
+    """Build and validate a "tenant:agent" scope from request data.
+
+    Accepts either an explicit ``scope`` string or separate ``tenant_id`` /
+    ``agent_id`` fields (agent defaults to ``*``). Raises HTTPException(422) on
+    malformed input.
+    """
+    scope = (data.get("scope") or "").strip()
+    if not scope:
+        tenant = (data.get("tenant_id") or "").strip()
+        agent = (data.get("agent_id") or "*").strip() or "*"
+        if not tenant:
+            raise HTTPException(status_code=422, detail="tenant_id (or scope) is required")
+        scope = f"{tenant}:{agent}"
+
+    if scope.count(":") != 1:
+        raise HTTPException(status_code=422, detail="scope must be 'tenant:agent'")
+    tenant, agent = scope.split(":", 1)
+    if not _SCOPE_PART_RE.match(tenant) or not _SCOPE_PART_RE.match(agent):
+        raise HTTPException(status_code=422, detail="invalid characters in scope")
+    return f"{tenant}:{agent}"
+
+
+def _pattern_exists(pattern_id: str) -> bool:
+    return any(p["id"] == pattern_id for p in _load_patterns())
+
+
+@router.get("/exceptions")
+async def list_exceptions(user: TokenPayload = Depends(require_permission("guardrails:read"))):
+    """List all allow-exceptions as ``{pattern_id: [scopes]}``."""
+    return {"exceptions": {pid: list(scopes) for pid, scopes in _exceptions.items()}}
+
+
+@router.get("/patterns/{pattern_id}/exceptions")
+async def get_pattern_exceptions(
+    pattern_id: str,
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
+):
+    """List allow-exception scopes for a single pattern."""
+    return {"pattern_id": pattern_id, "scopes": list(_exceptions.get(pattern_id, []))}
+
+
+@router.post("/patterns/{pattern_id}/exceptions")
+async def add_pattern_exception(
+    pattern_id: str,
+    data: dict = Body(...),
+    user: TokenPayload = Depends(require_permission("guardrails:write")),
+):
+    """Add a per-tenant/agent allow-exception for a pattern.
+
+    Body: ``{"tenant_id": "...", "agent_id": "..."}`` or ``{"scope": "tenant:agent"}``.
+    The exception degrades a would-be BLOCK to WARN for that scope; it does NOT
+    disable the pattern. All changes are audited.
+    """
+    if not _pattern_exists(pattern_id):
+        raise HTTPException(status_code=404, detail="Pattern not found")
+    scope = _normalize_scope(data)
+
+    scopes = _exceptions.setdefault(pattern_id, [])
+    if scope in scopes:
+        return {"pattern_id": pattern_id, "scopes": scopes, "added": False}
+    scopes.append(scope)
+
+    audit = get_audit_logger()
+    await audit.log(
+        actor=user.sub,
+        action="guardrail_exception_add",
+        resource_type="pattern_exception",
+        resource_id=pattern_id,
+        details=json.dumps({"scope": scope}),
+    )
+    get_guardrails_store().save_state()
+    sync_exceptions(_exceptions)
+    return {"pattern_id": pattern_id, "scopes": scopes, "added": True}
+
+
+@router.delete("/patterns/{pattern_id}/exceptions")
+async def remove_pattern_exception(
+    pattern_id: str,
+    data: dict = Body(...),
+    user: TokenPayload = Depends(require_permission("guardrails:write")),
+):
+    """Remove a per-tenant/agent allow-exception for a pattern.
+
+    Body: ``{"scope": "tenant:agent"}`` or ``{"tenant_id": ..., "agent_id": ...}``.
+    """
+    scope = _normalize_scope(data)
+    scopes = _exceptions.get(pattern_id, [])
+    if scope not in scopes:
+        raise HTTPException(status_code=404, detail="Exception scope not found")
+    scopes.remove(scope)
+    if not scopes:
+        _exceptions.pop(pattern_id, None)
+
+    audit = get_audit_logger()
+    await audit.log(
+        actor=user.sub,
+        action="guardrail_exception_remove",
+        resource_type="pattern_exception",
+        resource_id=pattern_id,
+        details=json.dumps({"scope": scope}),
+    )
+    get_guardrails_store().save_state()
+    sync_exceptions(_exceptions)
+    return {"pattern_id": pattern_id, "scopes": list(_exceptions.get(pattern_id, [])), "removed": True}
 
 
 # --- Output pattern endpoints ---

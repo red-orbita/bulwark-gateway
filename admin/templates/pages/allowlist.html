@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block title %}Allowlist — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Allowlist{% endblock %}
+{% block content %}
+<div x-data="allowlistManager()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Allowlist / Exceptions</h1>
+            <p class="text-sm text-gray-400 mt-0.5">Per-tenant/agent allow-exceptions that degrade a would-be BLOCK to WARN</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button @click="refresh()" class="sg-btn sg-btn-secondary sg-btn-sm">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Semantics banner -->
+    <div class="sg-card !p-4 border-l-4 border-amber-500/70">
+        <div class="flex gap-3">
+            <i data-lucide="shield-check" class="w-5 h-5 text-amber-400 shrink-0 mt-0.5"></i>
+            <div class="text-xs text-gray-300 space-y-1">
+                <p class="font-semibold text-amber-300">An allow-exception is not a disable.</p>
+                <p>It downgrades a matching pattern from <span class="font-mono text-red-300">BLOCK</span> to <span class="font-mono text-amber-300">WARN</span> for the chosen <span class="font-mono">tenant:agent</span> only. The request is still scanned, the security event is still emitted and shipped to your SIEM, tagged <span class="font-mono text-cyan-300">allowed_by_exception</span> for full auditability. Use <span class="font-mono">*</span> as the agent to cover every agent of a tenant.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add exception -->
+    <div class="sg-card">
+        <h3 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">Add exception</h3>
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+            <div class="lg:col-span-6">
+                <label class="sg-label text-xs" for="al-pattern">Pattern</label>
+                <div class="flex items-center gap-2">
+                    <select id="al-pattern" x-model="form.pattern_id" class="sg-input w-full text-sm font-mono">
+                        <option value="">Select a pattern…</option>
+                        <template x-for="p in selectablePatterns()" :key="p.id">
+                            <option :value="p.id" x-text="p.id + '  —  ' + (p.description || '') + '  (' + p.severity + ')'"></option>
+                        </template>
+                    </select>
+                </div>
+                <label class="flex items-center gap-2 mt-2 text-[11px] text-gray-400 select-none cursor-pointer">
+                    <input type="checkbox" x-model="onlyBlocking" class="sg-checkbox">
+                    Only show blocking patterns (high / critical)
+                </label>
+            </div>
+            <div class="lg:col-span-3">
+                <label class="sg-label text-xs" for="al-tenant">Tenant</label>
+                <input id="al-tenant" type="text" x-model.trim="form.tenant_id" placeholder="default-corp" class="sg-input w-full text-sm font-mono">
+            </div>
+            <div class="lg:col-span-2">
+                <label class="sg-label text-xs" for="al-agent">Agent</label>
+                <input id="al-agent" type="text" x-model.trim="form.agent_id" placeholder="*" class="sg-input w-full text-sm font-mono">
+            </div>
+            <div class="lg:col-span-1 flex items-end">
+                <button @click="add()" :disabled="!canAdd() || busy"
+                        class="sg-btn sg-btn-primary sg-btn-sm w-full"
+                        :class="(!canAdd() || busy) && 'opacity-50 cursor-not-allowed'">
+                    <i data-lucide="plus" class="w-4 h-4"></i> Add
+                </button>
+            </div>
+        </div>
+        <p x-show="formError" x-cloak class="text-xs text-red-400 mt-2" x-text="formError"></p>
+        <p x-show="scopePreview()" x-cloak class="text-[11px] text-gray-500 mt-2">
+            Scope: <span class="font-mono text-cyan-300" x-text="scopePreview()"></span>
+        </p>
+    </div>
+
+    <!-- Current exceptions -->
+    <div class="sg-card !p-0">
+        <div x-show="loading" class="p-4 space-y-3">
+            <div class="sg-skeleton h-4 w-full"></div>
+            <div class="sg-skeleton h-4 w-5/6"></div>
+            <div class="sg-skeleton h-4 w-3/4"></div>
+        </div>
+
+        <div x-show="error && !loading" class="sg-error">
+            <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+            <p class="sg-error-title">Couldn't load exceptions</p>
+            <p class="sg-error-desc">The request failed. Check the admin connection and try again.</p>
+            <div class="sg-error-action">
+                <button @click="refresh()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry
+                </button>
+            </div>
+        </div>
+
+        <div x-show="!loading && !error && rows().length > 0" class="sg-table-scroll">
+            <table class="sg-table">
+                <thead>
+                    <tr>
+                        <th>Pattern</th>
+                        <th>Category</th>
+                        <th>Severity</th>
+                        <th>Scope (tenant:agent)</th>
+                        <th class="text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="row in rows()" :key="row.pattern_id + '|' + row.scope">
+                        <tr class="hover:bg-cyan-400/5">
+                            <td>
+                                <div class="font-mono text-xs text-cyan-300" x-text="row.pattern_id"></div>
+                                <div class="text-[11px] text-gray-500 max-w-md truncate" :title="row.description" x-text="row.description || '—'"></div>
+                            </td>
+                            <td class="text-xs text-gray-300" x-text="row.category || '—'"></td>
+                            <td>
+                                <span class="sg-badge text-[10px]" :class="'sg-badge-' + (row.severity || 'low')" x-text="row.severity || '—'"></span>
+                            </td>
+                            <td>
+                                <span class="font-mono text-xs text-amber-300 bg-amber-400/10 px-1.5 py-0.5 rounded" x-text="row.scope"></span>
+                            </td>
+                            <td class="text-right">
+                                <button @click="remove(row.pattern_id, row.scope)" :disabled="busy"
+                                        class="sg-btn sg-btn-ghost sg-btn-sm text-red-400 hover:text-red-300"
+                                        :aria-label="'Remove exception ' + row.pattern_id + ' ' + row.scope">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i> Remove
+                                </button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
+        <div x-show="!loading && !error && rows().length === 0" class="sg-empty">
+            <div class="sg-empty-icon"><i data-lucide="shield-check" class="w-8 h-8"></i></div>
+            <p class="sg-empty-title">No allow-exceptions configured</p>
+            <p class="sg-empty-desc">The gateway is in full fail-closed mode. Add an exception above to degrade a specific pattern to WARN for one tenant/agent.</p>
+        </div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+function allowlistManager() {
+    return {
+        patterns: [],
+        patternById: {},
+        exceptions: {},
+        loading: false,
+        error: false,
+        busy: false,
+        onlyBlocking: true,
+        form: { pattern_id: '', tenant_id: '', agent_id: '' },
+        formError: '',
+
+        async init() { await this.refresh(); },
+
+        async refresh() {
+            this.loading = true;
+            this.error = false;
+            try {
+                await Promise.all([this.loadPatterns(), this.loadExceptions()]);
+            } catch (e) {
+                this.error = true;
+            }
+            this.loading = false;
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadPatterns() {
+            const resp = await fetch('/admin/guardrails/patterns');
+            if (!resp.ok) throw new Error('patterns ' + resp.status);
+            this.patterns = await resp.json();
+            this.patternById = {};
+            for (const p of this.patterns) this.patternById[p.id] = p;
+        },
+
+        async loadExceptions() {
+            const resp = await fetch('/admin/guardrails/exceptions');
+            if (!resp.ok) throw new Error('exceptions ' + resp.status);
+            const data = await resp.json();
+            this.exceptions = data.exceptions || {};
+        },
+
+        selectablePatterns() {
+            const blocking = { critical: 1, high: 1 };
+            return this.patterns
+                .filter(p => !this.onlyBlocking || blocking[p.severity])
+                .sort((a, b) => a.id.localeCompare(b.id));
+        },
+
+        rows() {
+            const out = [];
+            for (const [pid, scopes] of Object.entries(this.exceptions)) {
+                const meta = this.patternById[pid] || {};
+                for (const scope of scopes) {
+                    out.push({
+                        pattern_id: pid,
+                        scope: scope,
+                        description: meta.description || '',
+                        category: meta.category || '',
+                        severity: meta.severity || '',
+                    });
+                }
+            }
+            return out.sort((a, b) =>
+                a.pattern_id.localeCompare(b.pattern_id) || a.scope.localeCompare(b.scope));
+        },
+
+        scopePreview() {
+            const t = (this.form.tenant_id || '').trim();
+            if (!t) return '';
+            const a = (this.form.agent_id || '').trim() || '*';
+            return t + ':' + a;
+        },
+
+        canAdd() {
+            return !!this.form.pattern_id && !!(this.form.tenant_id || '').trim();
+        },
+
+        async add() {
+            this.formError = '';
+            if (!this.canAdd()) { this.formError = 'Select a pattern and enter a tenant.'; return; }
+            this.busy = true;
+            try {
+                const body = {
+                    tenant_id: (this.form.tenant_id || '').trim(),
+                    agent_id: (this.form.agent_id || '').trim() || '*',
+                };
+                const resp = await fetch(
+                    '/admin/guardrails/patterns/' + encodeURIComponent(this.form.pattern_id) + '/exceptions',
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                );
+                if (!resp.ok) {
+                    let msg = 'Failed to add exception (' + resp.status + ')';
+                    try { const d = await resp.json(); if (d.detail) msg = d.detail; } catch (e) {}
+                    this.formError = msg;
+                    return;
+                }
+                this.form.tenant_id = '';
+                this.form.agent_id = '';
+                await this.loadExceptions();
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            } catch (e) {
+                this.formError = 'Network error while adding exception.';
+            } finally {
+                this.busy = false;
+            }
+        },
+
+        async remove(pid, scope) {
+            this.busy = true;
+            try {
+                const resp = await fetch(
+                    '/admin/guardrails/patterns/' + encodeURIComponent(pid) + '/exceptions',
+                    { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: scope }) }
+                );
+                if (resp.ok) {
+                    await this.loadExceptions();
+                    this.$nextTick(() => window.lucide && window.lucide.createIcons());
+                }
+            } catch (e) {
+                /* keep current view; a refresh will resync */
+            } finally {
+                this.busy = false;
+            }
+        }
+    };
+}
+</script>
+{% endblock %}
