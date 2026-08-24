@@ -232,13 +232,22 @@ function coverageManager() {
             { name: 'Zero-Width Chars', description: 'U+200B-200F detect' },
         ],
         languages: [
+            // Injection = PROMPT_INJECTION + JAILBREAK patterns exist for the
+            // language (base English guardrail + src/scanners/multilingual).
+            // Plan Corruption / Memory Manipulation patterns are English-only
+            // (the multilingual layer covers injection/jailbreak exclusively),
+            // so those columns are deliberately No for non-English languages.
             { name: 'English', injection: true, plan: true, memory: true },
-            { name: 'Spanish', injection: true, plan: true, memory: true },
-            { name: 'French', injection: true, plan: true, memory: true },
-            { name: 'German', injection: true, plan: true, memory: true },
+            { name: 'Spanish', injection: true, plan: false, memory: false },
+            { name: 'French', injection: true, plan: false, memory: false },
+            { name: 'German', injection: true, plan: false, memory: false },
             { name: 'Portuguese', injection: true, plan: false, memory: false },
+            { name: 'Russian', injection: true, plan: false, memory: false },
             { name: 'Chinese', injection: true, plan: false, memory: false },
+            { name: 'Japanese', injection: true, plan: false, memory: false },
+            { name: 'Korean', injection: true, plan: false, memory: false },
             { name: 'Arabic', injection: true, plan: false, memory: false },
+            { name: 'Hindi', injection: true, plan: false, memory: false },
         ],
         async init() {
             // Only the pattern count is live. On failure, leave it null so the UI

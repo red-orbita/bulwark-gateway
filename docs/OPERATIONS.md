@@ -12,6 +12,8 @@ Day-to-day operational procedures for Bulwark Gateway.
 - [Backup & Restore](#backup--restore)
 - [Scaling](#scaling)
 - [Log Collection](#log-collection)
+- [Security Events History & Retention](#security-events-history--retention)
+- [Guardrail Allowlist / Exceptions](#guardrail-allowlist--exceptions)
 
 ---
 
@@ -387,6 +389,149 @@ kubectl logs -f deploy/admin -n bulwark-gateway
 curl -s https://admin.bulwark.corp.com/admin/audit/export \
   -H "Authorization: Bearer $TOKEN" > audit-export.json
 ```
+
+---
+
+## Security Events History & Retention
+
+The admin portal keeps a **durable history** of security events (blocks and
+warnings) in the `security_events` table. This is separate from the proxy's
+capped Redis live buffer (`bulwark:recent_blocks:*`): the durable store survives
+Redis flushes and pod restarts, and outlives the per-tenant buffer cap, so the
+**Security Events** page can show a real, queryable history.
+
+### Default behavior (enabled out of the box)
+
+- **On by default.** The admin lifespan starts the `events_sync` background task
+  unconditionally — no feature flag required. It drains the proxy's Redis live
+  buffer into the durable store every `sync_interval_seconds` (default **30s**).
+- **BLOCK + WARN are recorded** and browsable. Warnings include allow-exception
+  events (see [Allowlist / Exceptions](#guardrail-allowlist--exceptions)) tagged
+  `allowed_by_exception`.
+- **ALLOWED events are opt-in.** Set `BULWARK_LOG_ALLOWED=true` on the proxy to
+  also record legitimate/allowed traffic into a **separate** feed, browsable via
+  `GET /admin/events?verdict=allowed`. Kept separate so normal traffic doesn't
+  drown the security-relevant events.
+
+### Retention model
+
+Retention is resolved with the following precedence (highest wins):
+
+1. **Portal override** (`config` table, set from the UI or API),
+2. **Environment variable** (`BULWARK_EVENTS_RETENTION_DAYS`, deploy/Helm bootstrap),
+3. **SIEM-aware default** — **90 days** when a SIEM exporter is enabled
+   (`BULWARK_TELEMETRY_ENABLED=true`), otherwise **0 = keep forever**.
+
+`retention_days` semantics:
+
+| Value | Meaning |
+|-------|---------|
+| `-1` / auto | Fall back to env var, else SIEM-aware default |
+| `0` | Keep forever (unlimited) |
+| `> 0` | Prune events older than N days (max 3650 = 10 years) |
+
+> **Portal wins over env.** The environment variable is only a bootstrap
+> fallback; once an operator sets retention from the portal, that value governs
+> until it is changed back to *auto*.
+
+Pruning runs periodically inside the sync loop (every ~20 cycles). Changes made
+from the portal are applied to the live task immediately (`events_sync.reload()`),
+without waiting for the next cycle.
+
+### Configure retention from the portal
+
+Admin UI: **Security Events → Retention** panel. Or via API (requires
+`guardrails:write`):
+
+```bash
+# Keep events for 30 days
+curl -X POST https://admin.bulwark.corp.com/admin/events/settings \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"retention_mode":"custom","retention_days":30}'
+
+# Keep forever
+curl -X POST .../admin/events/settings \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"retention_mode":"custom","retention_days":0}'
+
+# Back to automatic (SIEM-aware) default
+curl -X POST .../admin/events/settings \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"retention_mode":"auto"}'
+
+# Inspect effective settings and where each value comes from
+curl -s .../admin/events/settings -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+Other tunables in the same payload:
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `max_per_tenant` | 1000 | Per-tenant cap when draining the Redis buffer each cycle |
+| `sync_interval_seconds` | 30 | How often the durable store is refreshed (5–3600) |
+
+Send `null` for either to clear the override and fall back to env/default.
+
+### Related environment variables (bootstrap)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `BULWARK_EVENTS_RETENTION_DAYS` | (unset → auto) | Bootstrap retention; portal overrides it |
+| `BULWARK_EVENTS_MAX_PER_TENANT` | 1000 | Bootstrap per-tenant drain cap |
+| `BULWARK_EVENTS_SYNC_INTERVAL` | 30 | Bootstrap sync cadence (seconds) |
+| `BULWARK_LOG_ALLOWED` | false | Opt-in: record allowed traffic into the browsable feed |
+| `BULWARK_TELEMETRY_ENABLED` | false | When true, the auto retention default becomes 90 days |
+
+---
+
+## Guardrail Allowlist / Exceptions
+
+The **Allowlist** page manages per-tenant/agent **allow-exceptions** for
+guardrail detection patterns — a scoped way to reduce false positives **without
+disabling a pattern globally** and without losing the audit trail.
+
+### How it works
+
+- An exception is keyed by `pattern_id` and scoped to one or more
+  `tenant:agent` strings.
+- When a would-be **BLOCK** matches a pattern that has an exception for the
+  requesting `tenant:agent`, the verdict is **degraded to WARN** instead of 403.
+- The request still emits a fully-auditable security event, tagged
+  `allowed_by_exception=true` with the matching `exception_scope`, and it is
+  still exported to the SIEM and browsable in the Security Events console.
+- The pattern remains **fully active** for every other tenant/agent. An
+  exception is *not* the same as disabling a pattern.
+
+Exceptions sync to the proxy via Redis (`bulwark:guardrails:exceptions` HASH), so
+they take effect on the hot path without a restart.
+
+### Manage exceptions
+
+Admin UI: **Allowlist** page. Or via API (patterns namespace):
+
+```bash
+# List all exceptions ({pattern_id: [scopes]})
+curl -s .../admin/guardrails/exceptions -H "Authorization: Bearer $TOKEN"
+
+# List scopes for one pattern
+curl -s .../admin/guardrails/patterns/<pattern_id>/exceptions \
+  -H "Authorization: Bearer $TOKEN"
+
+# Add an allow-exception for a tenant/agent (BLOCK → WARN for that scope only)
+curl -X POST .../admin/guardrails/patterns/<pattern_id>/exceptions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"scope":"default-corp:support-bot"}'
+
+# Remove an allow-exception
+curl -X DELETE .../admin/guardrails/patterns/<pattern_id>/exceptions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"scope":"default-corp:support-bot"}'
+```
+
+> **When to use.** Prefer a scoped allow-exception over disabling a pattern when
+> one tenant/agent has a legitimate need that trips an otherwise-valuable rule.
+> You keep detection everywhere else and retain full visibility (the event is
+> still logged and alertable) for the exempted scope.
 
 ---
 

@@ -310,6 +310,8 @@ Web-based management interface at `/` (port 8090).
 | Dashboard | Real-time metrics, recent blocks, sparklines |
 | Policies | CRUD, validation, hot-reload |
 | Guardrails | Pattern management, sandbox testing |
+| Allowlist | Per-tenant/agent allow-exceptions (BLOCK→WARN, auditable) |
+| Security Events | Durable event history, per-tenant analytics, retention |
 | SIEM Export | Transport configuration, connectivity testing |
 | **Notifications** | Alert channel management (Slack, Teams, Email, etc.) |
 | Audit Log | Immutable action history, export |

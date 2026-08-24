@@ -234,6 +234,124 @@ Test a pattern against sample input.
 {"matched": true, "groups": [...], "latency_ms": 0.5}
 ```
 
+#### Allow-Exceptions (Allowlist)
+
+Per-tenant/agent exceptions that degrade a would-be **BLOCK** to **WARN** for a
+specific `tenant:agent` scope **without disabling the pattern globally**. The
+request still emits an auditable security event tagged `allowed_by_exception`.
+Exceptions sync to the proxy hot path via Redis (`bulwark:guardrails:exceptions`).
+
+##### GET /admin/guardrails/exceptions
+
+List all allow-exceptions as `{pattern_id: [scopes]}`. Requires `guardrails:read`.
+
+```json
+// Response
+{"exceptions": {"pi-001": ["default-corp:support-bot"]}}
+```
+
+##### GET /admin/guardrails/patterns/{id}/exceptions
+
+List the scopes exempted for a single pattern. Requires `guardrails:read`.
+
+```json
+// Response
+{"pattern_id": "pi-001", "scopes": ["default-corp:support-bot"]}
+```
+
+##### POST /admin/guardrails/patterns/{id}/exceptions
+
+Add an allow-exception. Requires `guardrails:write`. Returns 404 if the pattern
+does not exist. All changes are audited.
+
+```json
+// Request (either form is accepted)
+{"scope": "default-corp:support-bot"}
+{"tenant_id": "default-corp", "agent_id": "support-bot"}
+
+// Response
+{"pattern_id": "pi-001", "scopes": ["default-corp:support-bot"], "added": true}
+```
+
+##### DELETE /admin/guardrails/patterns/{id}/exceptions
+
+Remove an allow-exception. Requires `guardrails:write`.
+
+```json
+// Request
+{"scope": "default-corp:support-bot"}
+
+// Response
+{"pattern_id": "pi-001", "scopes": [], "removed": true}
+```
+
+---
+
+### Security Events
+
+Durable, queryable history of security events (BLOCK + WARN) stored in the
+admin's `security_events` table. This is separate from the proxy's capped Redis
+live buffer: a background `events_sync` task (started unconditionally at admin
+startup) drains the buffer into the table every `sync_interval_seconds`, so the
+history survives Redis flushes/restarts and is not bounded by the per-tenant cap.
+
+#### GET /admin/events
+
+List security events from the durable store. Requires `guardrails:read`.
+
+Query params: `tenant`, `category`, `severity`, `verdict`, `limit` (1–200,
+default 50), `offset` (default 0).
+
+- Default feed = **BLOCK + WARN** (the security feed).
+- `verdict=blocked` / `verdict=warned` filter that feed.
+- `verdict=allowed` reads the **separate, opt-in** allowed-event feed (only
+  populated when the proxy runs with `BULWARK_LOG_ALLOWED=true`), so legitimate
+  traffic is browsable without drowning the security-relevant events.
+
+#### GET /admin/events/summary
+
+Aggregated counts over the *full retained* security feed: `by_tenant`,
+`by_category`, `by_severity`, `total`, plus `allowed_recorded` (count of
+browsable allowed-event records; 0 unless `BULWARK_LOG_ALLOWED` is on). Requires
+`guardrails:read`.
+
+#### GET /admin/events/tenant-analytics
+
+Combined per-tenant analytics: live Redis usage counters (total/blocked/allowed,
+block rate) enriched with a category breakdown from recent blocks. Requires
+`guardrails:read`.
+
+#### GET /admin/events/settings
+
+Return retention/storage settings for the portal: current overrides, the
+effective values, and where each value comes from (portal → env → SIEM-aware
+default). Requires `guardrails:read`.
+
+#### POST /admin/events/settings
+
+Persist retention/storage overrides and apply them to the live sync task
+immediately. Requires `guardrails:write`. Invalid values return 400.
+
+```json
+// Request — keep events for 30 days
+{"retention_mode": "custom", "retention_days": 30}
+
+// Request — keep forever
+{"retention_mode": "custom", "retention_days": 0}
+
+// Request — back to automatic (SIEM-aware) default
+{"retention_mode": "auto"}
+```
+
+Body keys (all optional): `retention_mode` (`auto`|`custom`), `retention_days`
+(required for `custom`; `0` = keep forever, max 3650), `max_per_tenant` (or
+`null` to clear the override), `sync_interval_seconds` (5–3600, or `null`).
+
+> **Retention precedence:** portal override → `BULWARK_EVENTS_RETENTION_DAYS`
+> env → SIEM-aware default (90 days when a SIEM exporter is enabled, otherwise
+> 0 = keep forever). See `docs/OPERATIONS.md` →
+> *Security Events History & Retention*.
+
 ---
 
 ### SIEM / Event Export
