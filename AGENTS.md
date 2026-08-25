@@ -557,7 +557,7 @@ Redis is used for 6 purposes (optional — falls back to in-memory if unavailabl
 3. **Global metrics** — `bulwark:global:{requests_total,block,allow,warn}` survive pod restarts
 4. **SIEM stats** — `bulwark:siem:{batches_sent,events_exported,export_errors,...}`
 5. **Recent blocks** — last N blocked requests for admin dashboard
-6. **Correlation state** — decayed per-origin risk scores + runtime-tunable correlation config (opt-in)
+6. **Correlation state** — decayed per-origin risk scores + runtime-tunable correlation config + Prometheus counters (opt-in)
 
 Redis keys:
 ```
@@ -578,6 +578,7 @@ bulwark:rate_limit:{tenant}      # Sorted set (sliding window)
 bulwark:recent_blocks            # List (last N blocked requests)
 bulwark:risk:{scope}:{digest}    # HASH {score, ts} — decayed origin risk (scope: tenant|session|input)
 bulwark:correlation:config       # HASH — runtime-tunable correlation overrides (throttled re-read)
+bulwark:correlation:counters     # HASH — replica-safe HINCRBY correlation metrics (incidents_*, origin_risk_*, tap_*)
 ```
 
 TLS supported via `rediss://` URL scheme. External Redis (Azure/AWS/GCP) fully supported.
