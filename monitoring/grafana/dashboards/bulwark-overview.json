@@ -113,7 +113,8 @@
     },
     {
       "id": 3,
-      "title": "Active Proxy Pods",
+      "title": "Metrics Pipeline",
+      "description": "Health of the admin metrics exposition — the sole source of proxy request/verdict/correlation metrics (the proxy has no /metrics endpoint of its own; it writes to Redis). DOWN here means monitoring is blind. True per-replica proxy pod count needs kube-state-metrics (not scraped).",
       "type": "stat",
       "gridPos": { "h": 4, "w": 3, "x": 18, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -124,17 +125,17 @@
             "mode": "absolute",
             "steps": [
               { "color": "red", "value": null },
-              { "color": "red", "value": 0 },
-              { "color": "yellow", "value": 1 },
-              { "color": "green", "value": 2 }
+              { "color": "green", "value": 1 }
             ]
           },
-          "mappings": []
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ]
         }
       },
       "targets": [
         {
-          "expr": "count(up{job=\"bulwark-proxy\"} == 1)",
+          "expr": "up{job=\"bulwark-admin\"}",
           "refId": "A"
         }
       ],

@@ -3,10 +3,14 @@
 # MITRE ATT&CK annotations included where applicable
 #
 # Metric sources:
-#   - bulwark-proxy (port 8080, /health/metrics)
-#   - bulwark-admin (port 8090, /admin/health/metrics)
-#   - cadvisor (container metrics)
-#   - kube-state-metrics (pod/deployment state)
+#   - bulwark-admin (port 8090, /admin/health/metrics) — the SOLE source of
+#     proxy request/verdict/correlation metrics. The proxy exposes NO Prometheus
+#     endpoint of its own; it writes counters to Redis, surfaced via the admin
+#     exposition. (There is no proxy /health/metrics — do not scrape one.)
+#   - Some alerts below reference cadvisor / kube-state-metrics / blackbox
+#     (probe_ssl_*) series that this standalone compose stack does NOT scrape;
+#     they are retained as aspirational and stay inactive until those targets
+#     are added. TODO(observability): add cadvisor + kube-state-metrics jobs.
 
 groups:
   # ============================================================================
@@ -76,25 +80,29 @@ groups:
             pattern sync disabled, global counters unavailable.
           runbook_url: "https://bulwark-gateway.internal/runbooks/redis-down"
 
-      # --- Proxy Pod Count Below Minimum ---
-      # Ensures HA requirements are met (minimum 2 replicas per HPA config).
-      - alert: BulwarkProxyPodsDown
-        expr: |
-          count(up{job="bulwark-proxy"} == 1) < 2
-            or
-          absent(up{job="bulwark-proxy"})
+      # Proxy pod-count / HA alerting requires per-pod liveness, which is only
+      # available from kube-state-metrics
+      # (kube_deployment_status_replicas_available{deployment="proxy"}). This
+      # standalone Prometheus does NOT scrape KSM, and the proxy exposes no
+      # /metrics endpoint of its own — all proxy metrics are written to Redis and
+      # surfaced through the admin exposition. So we anchor on a signal that is
+      # actually scraped: the admin metrics target.
+      # TODO(observability): add a kube-state-metrics scrape job to restore true
+      # per-replica proxy HA alerting (BulwarkProxyPodsDown).
+      - alert: BulwarkMetricsPipelineDown
+        expr: up{job="bulwark-admin"} == 0
         for: 2m
         labels:
           severity: critical
           team: platform
           compliance: "SOC2-CC7.2"
         annotations:
-          summary: "Proxy pod count below minimum replicas"
+          summary: "Bulwark metrics pipeline is down"
           description: |
-            Fewer than 2 healthy proxy pods are running.
-            This violates the high-availability requirement and may cause request failures.
-            Check pod status: `kubectl get pods -l app.kubernetes.io/name=bulwark-proxy`
-          runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-pods-down"
+            Prometheus cannot scrape the admin exposition — the sole source of
+            proxy request/verdict/correlation metrics. Monitoring is blind;
+            treat as a potential proxy or admin outage.
+          runbook_url: "https://bulwark-gateway.internal/runbooks/metrics-pipeline-down"
 
       # --- Backend Error Rate ---
       # High backend error rate means the LLM service is degraded.
@@ -133,19 +141,23 @@ groups:
             Renew immediately via cert-manager or manual process.
           runbook_url: "https://bulwark-gateway.internal/runbooks/cert-renewal"
 
-      # --- Proxy Target Down (Prometheus scrape failure) ---
-      - alert: BulwarkProxyTargetDown
-        expr: up{job="bulwark-proxy"} == 0
-        for: 2m
+      # --- Proxy No Traffic ---
+      # Real, scraped signal: the proxy increments bulwark_requests_total on the
+      # hot path (Redis → admin exposition). A hard stop to zero for 15m means
+      # the proxy is not serving (outage) OR the deployment is genuinely idle.
+      # Correlate with BulwarkMetricsPipelineDown to disambiguate outage vs idle.
+      - alert: BulwarkProxyNoTraffic
+        expr: sum(rate(bulwark_requests_total[15m])) == 0
+        for: 15m
         labels:
-          severity: critical
+          severity: warning
           team: platform
         annotations:
-          summary: "Bulwark proxy target is down"
+          summary: "Proxy has served no traffic for 15 minutes"
           description: |
-            Prometheus cannot scrape the proxy instance {{ $labels.instance }}.
-            The proxy may have crashed or the network path is broken.
-          runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-target-down"
+            No requests recorded via bulwark_requests_total on instance {{ $labels.instance }}.
+            Verify the proxy is up and reachable, or confirm the deployment is intentionally idle.
+          runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-no-traffic"
 
   # ============================================================================
   # WARNING ALERTS — Notify (Slack/Telegram) but don't page

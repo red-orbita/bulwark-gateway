@@ -21,15 +21,19 @@ data:
       - "recording-rules.yml"
 
     scrape_configs:
-      - job_name: "bulwark-proxy"
-        static_configs:
-          - targets: ["proxy.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:8080"]
-        metrics_path: "/health/metrics"
-        scrape_interval: 10s
-
+      # NOTE: the proxy intentionally exposes NO Prometheus endpoint. All
+      # proxy-derived metrics (requests, verdicts, correlation counters) are
+      # written to Redis on the hot path and surfaced cluster-wide through the
+      # admin /admin/health/metrics exposition below. Scraping the proxy
+      # directly would hit a non-existent route (401) — so there is no
+      # bulwark-proxy job by design.
       - job_name: "bulwark-admin"
         static_configs:
-          - targets: ["admin.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:8090"]
+          # Trailing dot = absolute FQDN. Prometheus' pod resolver uses the
+          # cluster default ndots:5; this name has <5 dots, so without the dot
+          # the resolver would append search domains first (slow → scrape
+          # timeout / "context deadline exceeded"). The dot skips that.
+          - targets: ["admin.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local.:8090"]
         metrics_path: "/admin/health/metrics"
         scrape_interval: 10s
         # /admin/health/metrics is gated by a dedicated least-privilege bearer
@@ -37,7 +41,7 @@ data:
         # from bulwark-admin-secrets (key metrics-scrape-token) into the pod.
         authorization:
           type: Bearer
-          credentials_file: /etc/prometheus/secrets/metrics-scrape-token
+          credentials_file: /etc/prometheus-token/metrics-scrape-token
 
   rules.yml: |
     # Bulwark Gateway - Prometheus Alerting Rules
@@ -94,20 +98,26 @@ data:
               description: "Rate limiting, pattern sync, and distributed counters are degraded."
               runbook_url: "https://bulwark-gateway.internal/runbooks/redis-down"
 
-          - alert: BulwarkProxyPodsDown
-            expr: |
-              count(up{job="bulwark-proxy"} == 1) < 2
-                or
-              absent(up{job="bulwark-proxy"})
+          # Proxy pod-count / HA alerting requires per-pod liveness, which is
+          # only available from kube-state-metrics
+          # (kube_deployment_status_replicas_available{deployment="proxy"}).
+          # This Prometheus does NOT scrape KSM, and the proxy exposes no
+          # /metrics endpoint of its own — all proxy metrics are written to
+          # Redis and surfaced through the admin exposition. So we anchor on a
+          # signal that is actually scraped: the admin metrics target.
+          # TODO(observability): add a kube-state-metrics scrape job to restore
+          # true per-replica proxy HA alerting (BulwarkProxyPodsDown).
+          - alert: BulwarkMetricsPipelineDown
+            expr: up{job="bulwark-admin"} == 0
             for: 2m
             labels:
               severity: critical
               team: platform
               compliance: "SOC2-CC7.2"
             annotations:
-              summary: "Proxy pod count below minimum replicas"
-              description: "Fewer than 2 healthy proxy pods. HA requirement violated."
-              runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-pods-down"
+              summary: "Bulwark metrics pipeline is down"
+              description: "Prometheus cannot scrape the admin exposition — the sole source of proxy request/verdict/correlation metrics. Monitoring is blind; treat as a potential proxy or admin outage."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/metrics-pipeline-down"
 
           - alert: BulwarkBackendErrorRateHigh
             expr: |
@@ -138,16 +148,21 @@ data:
               description: "Renew certificate immediately to prevent outage."
               runbook_url: "https://bulwark-gateway.internal/runbooks/cert-renewal"
 
-          - alert: BulwarkProxyTargetDown
-            expr: up{job="bulwark-proxy"} == 0
-            for: 2m
+          - alert: BulwarkProxyNoTraffic
+            # Real, scraped signal: the proxy increments bulwark_requests_total
+            # on the hot path (Redis → admin exposition). A hard stop to zero
+            # for 15m means the proxy is not serving (outage) OR the deployment
+            # is genuinely idle. Correlate with BulwarkMetricsPipelineDown to
+            # disambiguate outage vs idle.
+            expr: sum(rate(bulwark_requests_total[15m])) == 0
+            for: 15m
             labels:
-              severity: critical
+              severity: warning
               team: platform
             annotations:
-              summary: "Bulwark proxy target is down"
-              description: "Prometheus cannot scrape proxy instance {{ "{{" }} $labels.instance {{ "}}" }}."
-              runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-target-down"
+              summary: "Proxy has served no traffic for 15 minutes"
+              description: "No requests recorded via bulwark_requests_total on instance {{ "{{" }} $labels.instance {{ "}}" }}. Verify the proxy is up and reachable, or confirm the deployment is intentionally idle."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-no-traffic"
 
       # ====================================================================
       # WARNING ALERTS - Notify but don't page
@@ -589,10 +604,13 @@ spec:
               mountPath: /etc/prometheus
               readOnly: true
             # Least-privilege bearer used to scrape /admin/health/metrics.
-            # subPath keeps it a single file alongside the config mount.
+            # Mounted as its own directory on a dedicated top-level path (NOT
+            # nested under the read-only /etc/prometheus config mount, which has
+            # no secrets/ subdir — a subPath file there fails with a dir/file
+            # mount mismatch). The secret projects key `metrics-scrape-token`
+            # as a file in this dir.
             - name: metrics-scrape-token
-              mountPath: /etc/prometheus/secrets/metrics-scrape-token
-              subPath: metrics-scrape-token
+              mountPath: /etc/prometheus-token
               readOnly: true
             - name: tmp
               mountPath: /tmp

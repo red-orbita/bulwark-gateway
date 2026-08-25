@@ -10,12 +10,10 @@ rule_files:
   - "rules.yml"
 
 scrape_configs:
-  - job_name: "bulwark-proxy"
-    static_configs:
-      - targets: ["proxy:8080"]
-    metrics_path: "/health/metrics"
-    scrape_interval: 10s
-
+  # NOTE: there is no "bulwark-proxy" scrape job by design. The proxy exposes no
+  # Prometheus endpoint (no /health/metrics); all proxy request/verdict/
+  # correlation metrics are written to Redis and surfaced via the admin
+  # exposition below. Scraping the proxy directly would 404.
   - job_name: "bulwark-admin"
     static_configs:
       - targets: ["admin:8090"]
