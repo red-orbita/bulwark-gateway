@@ -1038,6 +1038,15 @@ async def chat_completions(request: Request):
             if _corr_input
             else None
         )
+        # Concatenated sensitive-output content — supplies the raw text the
+        # correlator uses to compute corroboration confidence (Phase 4b). Only the
+        # WARN→BLOCK escalation depends on it; category detection is unchanged.
+        _corr_output = " ".join(
+            _c.get("message", {}).get("content", "")
+            for _c in choices
+            if isinstance(_c.get("message", {}).get("content"), str)
+            and _c.get("message", {}).get("content")
+        )
         incident = get_correlator().evaluate(
             input_events=input_result.events,
             output_events=_output_events_corr,
@@ -1045,6 +1054,8 @@ async def chat_completions(request: Request):
             agent_id=agent_id,
             input_hash=_corr_hash,
             request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
+            input_text=_corr_input,
+            output_text=_corr_output,
         )
         if incident is not None:
             _corr_event = incident.to_security_event()

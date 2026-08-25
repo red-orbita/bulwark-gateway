@@ -33,6 +33,7 @@ from typing import Iterable, Optional
 import structlog
 from pydantic import Field
 
+from src.correlation.confidence import correlation_confidence
 from src.correlation.risk_state import get_risk_state_store
 from src.correlation.runtime import get_correlation_runtime
 from src.models import SecurityEvent, StrictModel, ThreatCategory, Verdict
@@ -98,6 +99,9 @@ class Incident(StrictModel):
     input_hash: str | None = None
     request_id: str | None = None
     risk_score: float = 0.0
+    # Content-corroboration confidence in [0, 1] (Phase 4b). Gates the WARN→BLOCK
+    # escalation: a bare category co-occurrence scores low and stays WARN.
+    confidence: float = 0.0
 
     def to_security_event(self) -> SecurityEvent:
         """Render the incident as a SecurityEvent for logging / SIEM export.
@@ -123,6 +127,7 @@ class Incident(StrictModel):
                 "output_categories": self.output_categories,
                 "input_hash": self.input_hash or "",
                 "risk_score": round(self.risk_score, 2),
+                "confidence": round(self.confidence, 2),
             },
         )
 
@@ -211,12 +216,20 @@ class InputOutputCorrelator:
         input_hash: str | None = None,
         request_id: str | None = None,
         input_detected_at: float | None = None,
+        input_text: str | None = None,
+        output_text: str | None = None,
     ) -> Optional[Incident]:
         """Return an :class:`Incident` when input↔output exfiltration is confirmed.
 
         Returns ``None`` when correlation is disabled, when either side is absent,
         or when the input/output pairing falls outside the correlation window.
         Never raises — correlation must never break the response path.
+
+        ``input_text``/``output_text`` (Phase 4b) supply the raw content used to
+        compute a corroboration *confidence*. The WARN→BLOCK escalation requires
+        that confidence to reach ``confidence_block_threshold``; without
+        corroborating content a bare category co-occurrence stays WARN even when
+        ``blocking`` is on, so the engine does not manufacture a false hard-block.
         """
         # Master switch stays a process-level settings flag (the event tap is
         # started at boot); the *enforcement* knobs (window/blocking) are read
@@ -238,10 +251,21 @@ class InputOutputCorrelator:
             if input_detected_at is not None and (time.time() - input_detected_at) > window:
                 return None
 
-            blocking = bool(rc.blocking)
-            verdict = Verdict.BLOCK if blocking else Verdict.WARN
             critical = bool(out_cats & _CRITICAL_OUTPUT)
             severity = "critical" if critical else "high"
+
+            # Corroboration confidence gates the WARN→BLOCK escalation. Computed
+            # from the paired categories plus (when available) the raw content;
+            # never raises (returns 0.0 on error → the safe WARN side).
+            confidence = correlation_confidence(
+                input_text=input_text,
+                output_text=output_text,
+                critical=critical,
+                paired_category_count=len(in_cats) + len(out_cats),
+            )
+            blocking = bool(rc.blocking)
+            block = blocking and confidence >= float(rc.confidence_block_threshold)
+            verdict = Verdict.BLOCK if block else Verdict.WARN
 
             # Elevate the origin's risk state. The session (tenant+agent) is the
             # primary origin; the content hash and tenant get smaller bumps.
@@ -252,11 +276,11 @@ class InputOutputCorrelator:
 
             in_desc = ", ".join(sorted(c.value for c in in_cats))
             out_desc = ", ".join(sorted(c.value for c in out_cats))
-            action = "blocked" if blocking else "flagged"
+            action = "blocked" if block else "flagged"
             description = (
                 f"Correlated exfiltration {action}: suspicious input ({in_desc}) "
                 f"was followed by sensitive output ({out_desc}) in the same request. "
-                f"Origin risk={risk_score:.1f}."
+                f"Confidence={confidence:.2f}, origin risk={risk_score:.1f}."
             )
 
             incident = Incident(
@@ -270,6 +294,7 @@ class InputOutputCorrelator:
                 input_hash=input_hash,
                 request_id=request_id,
                 risk_score=risk_score,
+                confidence=confidence,
             )
             return incident
         except Exception as e:  # noqa: BLE001 - correlation must never break responses

@@ -56,6 +56,10 @@ _NUMERIC_FIELDS: dict[str, tuple[float, float]] = {
     "event_bump_block": (0.0, 10.0),
     "severity_high_mult": (0.1, 10.0),
     "severity_critical_mult": (0.1, 10.0),
+    # Content-corroboration confidence required to escalate a confirmed
+    # correlation from WARN to BLOCK (Phase 4b). Bounded to the [0, 1] scale of
+    # src.correlation.confidence.correlation_confidence.
+    "confidence_block_threshold": (0.0, 1.0),
 }
 
 # Every tunable field name (numeric + the boolean), for the admin surface.
@@ -80,6 +84,7 @@ class CorrelationConfig:
     event_bump_block: float
     severity_high_mult: float
     severity_critical_mult: float
+    confidence_block_threshold: float
 
 
 def _clampf(value: float, lo: float, hi: float) -> float:
@@ -148,6 +153,9 @@ class CorrelationRuntimeConfig:
             "event_bump_block": _DEFAULT_EVENT_BUMP_BLOCK,
             "severity_high_mult": _DEFAULT_SEVERITY_HIGH_MULT,
             "severity_critical_mult": _DEFAULT_SEVERITY_CRITICAL_MULT,
+            "confidence_block_threshold": float(
+                getattr(settings, "correlation_confidence_block_threshold", 0.5)
+            ),
         }
 
     def _maybe_refresh(self) -> None:

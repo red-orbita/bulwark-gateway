@@ -220,6 +220,14 @@ class Settings(BaseSettings):
     correlation_risk_block_threshold: float = 7.0
     # Origin risk score at/above which the origin is flagged as elevated (WARN).
     correlation_risk_warn_threshold: float = 4.0
+    # Content-corroboration confidence (0..1) required to escalate a confirmed
+    # input↔output correlation from WARN to BLOCK when blocking is enabled. A pure
+    # category co-occurrence (suspicious input + sensitive output, no corroborating
+    # content) scores low and stays WARN; a high-entropy secret leak or a critical
+    # credential/model-theft output with lexical linkage scores high and BLOCKs.
+    # This guards against false "confirmed exfiltration" hard-blocks. Lower it to
+    # block more aggressively; raise it to require stronger content evidence.
+    correlation_confidence_block_threshold: float = 0.5
 
     model_config = SettingsConfigDict(
         env_prefix="BULWARK_",
