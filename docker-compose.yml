@@ -355,6 +355,7 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - ./prometheus/recording-rules.yml:/etc/prometheus/recording-rules.yml:ro
       - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
       - prometheus_data:/prometheus
     secrets:

@@ -8,12 +8,19 @@ global:
 
 rule_files:
   - "rules.yml"
+  - "recording-rules.yml"
 
 scrape_configs:
   # NOTE: there is no "bulwark-proxy" scrape job by design. The proxy exposes no
   # Prometheus endpoint (no /health/metrics); all proxy request/verdict/
   # correlation metrics are written to Redis and surfaced via the admin
   # exposition below. Scraping the proxy directly would 404.
+  #
+  # NOTE: there is likewise no "bulwark-redis" job. This stack ships plain
+  # redis:7-alpine with no redis_exporter sidecar, so redis:6379 speaks RESP —
+  # not the Prometheus text format. Scraping it would only produce scrape errors.
+  # Redis-derived counters reach Prometheus through the admin exposition, which
+  # reads Redis and renders bulwark_* series server-side.
   - job_name: "bulwark-admin"
     static_configs:
       - targets: ["admin:8090"]
@@ -26,9 +33,3 @@ scrape_configs:
     authorization:
       type: Bearer
       credentials_file: /run/secrets/metrics_scrape_token
-
-  - job_name: "bulwark-redis"
-    static_configs:
-      - targets: ["redis:6379"]
-    metrics_path: "/metrics"
-    scrape_interval: 30s

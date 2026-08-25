@@ -6,7 +6,7 @@
   "tags": ["bulwark", "operations", "overview"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "10s",
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -32,7 +32,7 @@
         "name": "tenant",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(bulwark_requests_total, tenant_id)",
+        "query": "label_values(bulwark_requests_by_tenant_total, tenant)",
         "multi": true,
         "includeAll": true,
         "allValue": ".*",
@@ -70,8 +70,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (tenant_id)(rate(bulwark_requests_total{tenant_id=~\"$tenant\"}[$timerange]))",
-          "legendFormat": "{{tenant_id}}",
+          "expr": "sum by (tenant)(rate(bulwark_requests_by_tenant_total{tenant=~\"$tenant\"}[$timerange]))",
+          "legendFormat": "{{tenant}}",
           "refId": "A"
         }
       ],
@@ -100,7 +100,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (verdict)(increase(bulwark_verdicts_total{tenant_id=~\"$tenant\"}[$__range]))",
+          "expr": "sum by (verdict)(bulwark_verdicts_total)",
           "legendFormat": "{{verdict}}",
           "refId": "A"
         }
@@ -147,29 +147,20 @@
     },
     {
       "id": 4,
-      "title": "Redis Status",
+      "title": "Total Requests",
+      "description": "Cluster-wide total proxy requests (bulwark:global:requests_total, survives restarts).",
       "type": "stat",
       "gridPos": { "h": 4, "w": 3, "x": 21, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "red", "value": 0 },
-              { "color": "green", "value": 1 }
-            ]
-          },
-          "mappings": [
-            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
-          ]
+          "color": { "mode": "fixed", "fixedColor": "blue" }
         }
       },
       "targets": [
         {
-          "expr": "up{job=\"bulwark-redis\"}",
+          "expr": "bulwark_requests_total",
           "refId": "A"
         }
       ],
@@ -182,12 +173,13 @@
     {
       "id": 5,
       "title": "P50 / P95 / P99 Latency",
+      "description": "Proxy request latency percentiles from /health/stats (per-worker best-effort). No per-request histogram is exported.",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "ms",
           "color": { "mode": "palette-classic" },
           "custom": {
             "lineWidth": 2,
@@ -225,7 +217,8 @@
     },
     {
       "id": 6,
-      "title": "Backend Error Rate",
+      "title": "SIEM Export Error Ratio",
+      "description": "Share of SIEM export attempts that errored over 5m (bulwark:siem:error_ratio_5m). High = security events may not be reaching the SIEM.",
       "type": "gauge",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -246,7 +239,7 @@
       },
       "targets": [
         {
-          "expr": "bulwark:backend:error_ratio_5m",
+          "expr": "bulwark:siem:error_ratio_5m",
           "refId": "A"
         }
       ],
@@ -258,7 +251,8 @@
     },
     {
       "id": 7,
-      "title": "Top Blocked Categories",
+      "title": "Top Detected Categories",
+      "description": "Guardrail detections (block+warn) by threat category (bulwark:detections:category).",
       "type": "barchart",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -274,7 +268,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum by (category)(increase(bulwark_verdicts_total{verdict=\"block\", tenant_id=~\"$tenant\"}[$__range])))",
+          "expr": "topk(10, sum by (category)(bulwark_detections_by_category_total))",
           "legendFormat": "{{category}}",
           "refId": "A",
           "format": "table",
@@ -296,7 +290,8 @@
     },
     {
       "id": 8,
-      "title": "Recent Security Events",
+      "title": "Blocks by Tenant",
+      "description": "Cluster-wide blocked requests per tenant (bulwark:usage:block).",
       "type": "table",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -305,13 +300,12 @@
           "custom": { "filterable": true }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 180 }] },
-          { "matcher": { "id": "byName", "options": "verdict" }, "properties": [{ "id": "custom.width", "value": 80 }] }
+          { "matcher": { "id": "byName", "options": "Tenant" }, "properties": [{ "id": "custom.width", "value": 260 }] }
         ]
       },
       "targets": [
         {
-          "expr": "topk(10, bulwark_verdicts_total{verdict=\"block\", tenant_id=~\"$tenant\"})",
+          "expr": "topk(20, bulwark_verdicts_by_tenant_total{verdict=\"block\", tenant=~\"$tenant\"})",
           "format": "table",
           "instant": true,
           "refId": "A"
@@ -319,15 +313,15 @@
       ],
       "options": {
         "showHeader": true,
-        "sortBy": [{ "displayName": "Value", "desc": true }],
+        "sortBy": [{ "displayName": "Count", "desc": true }],
         "footer": { "show": false }
       },
       "transformations": [
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "__name__": true, "job": true, "instance": true },
-            "renameByName": { "tenant_id": "Tenant", "category": "Category", "verdict": "Verdict", "Value": "Count" }
+            "excludeByName": { "__name__": true, "job": true, "instance": true, "verdict": true },
+            "renameByName": { "tenant": "Tenant", "Value": "Count" }
           }
         }
       ]

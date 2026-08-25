@@ -144,25 +144,31 @@ async def health_detailed(_user: TokenPayload = Depends(require_permission("admi
 async def prometheus_metrics(_user: TokenPayload = Depends(require_permission_or_scrape_token("admin:read"))):
     """Prometheus exposition format endpoint — requires auth.
 
-    Emits three metric families:
+    Emits four metric families:
 
       * the admin service's own in-process gauges (uptime, queue depth), and
       * the authoritative cluster-wide verdict totals from the shared Redis
         ``bulwark:global:*`` counters (``bulwark_requests_total`` /
-        ``bulwark_verdicts_total``), and
+        ``bulwark_verdicts_total``) plus per-tenant / per-category / per-severity
+        / per-pattern detections, token/cost accounting and SIEM export health,
+        and
       * the correlation-engine counters from ``bulwark:correlation:counters``
-        (``bulwark_correlation_*``).
+        (``bulwark_correlation_*``), and
+      * real proxy latency / throughput gauges from the cached proxy
+        ``/health/stats`` (``bulwark_proxy_latency_*``).
 
-    The Redis-sourced blocks are best effort: if Redis is unreachable they are
-    simply omitted rather than failing the scrape.
+    The Redis- and proxy-sourced blocks are best effort: if the source is
+    unreachable they are simply omitted rather than failing the scrape.
     """
     metrics = get_metrics()
     body = metrics.to_prometheus_text()
+    _ensure_bg_task()  # populate the proxy-stats cache for real latency gauges
     extra = await asyncio.get_event_loop().run_in_executor(
         None, _render_redis_prometheus
     )
+    proxy_extra = _render_proxy_telemetry()
     return Response(
-        content=body + extra,
+        content=body + extra + proxy_extra,
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
 
@@ -228,6 +234,52 @@ def _render_correlation_latency(corr_raw: dict, _i) -> list[str]:
     return lines
 
 
+def _esc(value: str) -> str:
+    """Escape a Prometheus label value (backslash, double-quote, newline).
+
+    Per the exposition format, only these three characters need escaping in a
+    label value. Applied to operator-influenced strings (tenant ids, category /
+    pattern names) before they are embedded in a ``{label="..."}`` clause.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+# Max number of per-pattern series emitted. Pattern ids are bounded by the
+# registered pattern set, but dynamically-added custom patterns could grow it;
+# cap defensively (top-N by count) so a scrape response stays bounded.
+_MAX_PATTERN_SERIES = 200
+
+_VERDICT_USAGE_KEYS: tuple[tuple[str, str], ...] = (
+    ("bulwark:usage:block", "block"),
+    ("bulwark:usage:allow", "allow"),
+    ("bulwark:usage:warn", "warn"),
+    ("bulwark:usage:redact", "redact"),
+)
+
+
+def _render_labeled_counter(
+    metric: str, help_text: str, samples: dict, label: str,
+) -> list[str]:
+    """Render a single-label counter family from a ``{value: count}`` mapping.
+
+    Values are coerced to int and non-numeric entries skipped. Label values are
+    escaped. Returns an empty list (no HELP/TYPE) when there are no samples so an
+    absent subsystem contributes nothing rather than a bare header.
+    """
+    def _i(v) -> int:
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    if not samples:
+        return []
+    lines = [f"# HELP {metric} {help_text}", f"# TYPE {metric} counter"]
+    for key, raw in samples.items():
+        lines.append(f'{metric}{{{label}="{_esc(str(key))}"}} {_i(raw)}')
+    return lines
+
+
 def _render_redis_prometheus() -> str:
     """Render Redis-sourced global + correlation metrics (best effort, sync).
 
@@ -249,18 +301,45 @@ def _render_redis_prometheus() -> str:
             "bulwark:global:redact",
         )
         pipe.hgetall("bulwark:correlation:counters")
-        globals_raw, corr_raw = pipe.execute()
+        pipe.hgetall("bulwark:usage:total")            # tenant -> request count
+        for key, _verdict in _VERDICT_USAGE_KEYS:
+            pipe.hgetall(key)                          # tenant -> verdict count
+        pipe.hgetall("bulwark:detections:category")    # category -> detections
+        pipe.hgetall("bulwark:detections:severity")    # severity -> detections
+        pipe.hgetall("bulwark:detections:pattern")     # pattern_id -> matches
+        pipe.hgetall("bulwark:cost:global")            # token/cost accounting
+        pipe.mget(
+            "bulwark:siem:batches_sent",
+            "bulwark:siem:events_exported",
+            "bulwark:siem:export_errors",
+        )
+        results = pipe.execute()
     except Exception:
         return ""
 
-    globals_raw = globals_raw or [None] * 5
-    corr_raw = corr_raw or {}
+    # Positional unpack mirrors the pipeline order above (single forward pass).
+    it = iter(results)
+    globals_raw = next(it) or [None] * 5
+    corr_raw = next(it) or {}
+    usage_total = next(it) or {}
+    usage_by_verdict: list[dict] = [next(it) or {} for _ in _VERDICT_USAGE_KEYS]
+    detections_category = next(it) or {}
+    detections_severity = next(it) or {}
+    detections_pattern = next(it) or {}
+    cost_global = next(it) or {}
+    siem_raw = next(it) or [None] * 3
 
     def _i(v) -> int:
         try:
             return int(v or 0)
         except (TypeError, ValueError):
             return 0
+
+    def _f(v) -> float:
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
     lines: list[str] = [
         "# HELP bulwark_requests_total Total proxy requests (cluster-wide, from Redis)",
@@ -274,6 +353,86 @@ def _render_redis_prometheus() -> str:
         f'bulwark_verdicts_total{{verdict="redact"}} {_i(globals_raw[4])}',
     ]
 
+    # ── Per-tenant volume (managers: who drives traffic / gets blocked) ──
+    lines.extend(_render_labeled_counter(
+        "bulwark_requests_by_tenant_total",
+        "Total proxy requests per tenant (cluster-wide, from Redis)",
+        usage_total, "tenant",
+    ))
+    verdict_tenant_samples: list[str] = []
+    for (_, verdict), samples in zip(_VERDICT_USAGE_KEYS, usage_by_verdict, strict=True):
+        for tenant, raw in (samples or {}).items():
+            verdict_tenant_samples.append(
+                f'bulwark_verdicts_by_tenant_total{{tenant="{_esc(str(tenant))}",'
+                f'verdict="{verdict}"}} {_i(raw)}'
+            )
+    if verdict_tenant_samples:
+        lines.append(
+            "# HELP bulwark_verdicts_by_tenant_total Proxy verdicts per tenant "
+            "and verdict (cluster-wide, from Redis)"
+        )
+        lines.append("# TYPE bulwark_verdicts_by_tenant_total counter")
+        lines.extend(verdict_tenant_samples)
+
+    # ── Guardrail detections (SOC: what is being caught) ──
+    lines.extend(_render_labeled_counter(
+        "bulwark_detections_by_category_total",
+        "Guardrail detections (block+warn) per threat category, from Redis",
+        detections_category, "category",
+    ))
+    lines.extend(_render_labeled_counter(
+        "bulwark_detections_by_severity_total",
+        "Guardrail detections (block+warn) per severity, from Redis",
+        detections_severity, "severity",
+    ))
+    # Top-N patterns only (bounded scrape size).
+    if detections_pattern:
+        try:
+            top = sorted(
+                detections_pattern.items(),
+                key=lambda kv: _i(kv[1]),
+                reverse=True,
+            )[:_MAX_PATTERN_SERIES]
+        except Exception:
+            top = list(detections_pattern.items())[:_MAX_PATTERN_SERIES]
+        lines.append(
+            "# HELP bulwark_pattern_matches_total Guardrail pattern matches per "
+            "pattern id (top 200 by count, from Redis)"
+        )
+        lines.append("# TYPE bulwark_pattern_matches_total counter")
+        for pattern_id, raw in top:
+            lines.append(
+                f'bulwark_pattern_matches_total{{pattern_id="{_esc(str(pattern_id))}"}} {_i(raw)}'
+            )
+
+    # ── Cost / token accounting (managers: spend & volume) ──
+    if cost_global:
+        lines.extend([
+            "# HELP bulwark_tokens_total LLM tokens processed by direction (from Redis)",
+            "# TYPE bulwark_tokens_total counter",
+            f'bulwark_tokens_total{{direction="prompt"}} {_i(cost_global.get("prompt"))}',
+            f'bulwark_tokens_total{{direction="completion"}} {_i(cost_global.get("completion"))}',
+            "# HELP bulwark_llm_requests_total Backend LLM requests accounted for cost (from Redis)",
+            "# TYPE bulwark_llm_requests_total counter",
+            f'bulwark_llm_requests_total {_i(cost_global.get("requests"))}',
+            "# HELP bulwark_cost_usd_total Estimated LLM spend in USD (from Redis)",
+            "# TYPE bulwark_cost_usd_total counter",
+            f'bulwark_cost_usd_total {_f(cost_global.get("cost_usd"))}',
+        ])
+
+    # ── SIEM export health ──
+    lines.extend([
+        "# HELP bulwark_siem_batches_sent_total SIEM export batches sent (from Redis)",
+        "# TYPE bulwark_siem_batches_sent_total counter",
+        f"bulwark_siem_batches_sent_total {_i(siem_raw[0])}",
+        "# HELP bulwark_siem_events_exported_total SIEM events exported (from Redis)",
+        "# TYPE bulwark_siem_events_exported_total counter",
+        f"bulwark_siem_events_exported_total {_i(siem_raw[1])}",
+        "# HELP bulwark_siem_export_errors_total SIEM export errors (from Redis)",
+        "# TYPE bulwark_siem_export_errors_total counter",
+        f"bulwark_siem_export_errors_total {_i(siem_raw[2])}",
+    ])
+
     for field, metric, help_text in _CORRELATION_METRIC_MAP:
         lines.append(f"# HELP {metric} {help_text}")
         lines.append(f"# TYPE {metric} counter")
@@ -281,6 +440,63 @@ def _render_redis_prometheus() -> str:
 
     lines.extend(_render_correlation_latency(corr_raw, _i))
 
+    return "\n".join(lines) + "\n"
+
+
+def _render_proxy_telemetry() -> str:
+    """Render real proxy latency / throughput gauges from cached ``/health/stats``.
+
+    The proxy computes these percentiles in-process (``src/telemetry/counters.py``)
+    and serves them on ``/health/stats``; the admin background task already caches
+    that payload, so this is zero blocking I/O. Values are per-worker best-effort
+    (the proxy runs multiple uvicorn workers/replicas behind a Service, so a scrape
+    reflects whichever worker answered the last poll) — labelled as such. Emitted
+    only when the cache holds a real payload so an unreachable proxy contributes
+    nothing rather than a misleading zero.
+    """
+    proxy_stats, _ = _get_cached_telemetry()
+    if not proxy_stats:
+        return ""
+
+    def _f(v) -> float:
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _i(v) -> int:
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    lines: list[str] = []
+    for pct in ("p50", "p95", "p99"):
+        key = f"latency_{pct}_ms"
+        if key in proxy_stats:
+            metric = f"bulwark_proxy_latency_{pct}_ms"
+            lines.append(
+                f"# HELP {metric} Proxy request latency {pct} in ms "
+                "(per-worker best-effort, from proxy /health/stats)"
+            )
+            lines.append(f"# TYPE {metric} gauge")
+            lines.append(f"{metric} {_f(proxy_stats.get(key)):.2f}")
+    if "requests_per_second" in proxy_stats:
+        lines.append(
+            "# HELP bulwark_proxy_requests_per_second Proxy throughput "
+            "(per-worker best-effort, from proxy /health/stats)"
+        )
+        lines.append("# TYPE bulwark_proxy_requests_per_second gauge")
+        lines.append(f"bulwark_proxy_requests_per_second {_f(proxy_stats.get('requests_per_second')):.2f}")
+    if "errors" in proxy_stats:
+        lines.append(
+            "# HELP bulwark_proxy_errors_total Proxy internal errors "
+            "(per-worker best-effort, from proxy /health/stats)"
+        )
+        lines.append("# TYPE bulwark_proxy_errors_total counter")
+        lines.append(f"bulwark_proxy_errors_total {_i(proxy_stats.get('errors'))}")
+    if not lines:
+        return ""
     return "\n".join(lines) + "\n"
 
 

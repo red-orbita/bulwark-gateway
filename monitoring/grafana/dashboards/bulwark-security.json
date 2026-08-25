@@ -2,11 +2,11 @@
   "id": null,
   "uid": "bulwark-security",
   "title": "Bulwark Gateway — Security Operations",
-  "description": "Security-focused dashboard for SOC teams: attack patterns, IOC matches, scanner performance, and SIEM export health.",
+  "description": "Security-focused dashboard for SOC teams: attack categories, severity, pattern matches, per-tenant blocks, and SIEM export health.",
   "tags": ["bulwark", "security", "soc", "attacks"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "10s",
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -32,7 +32,7 @@
         "name": "Security Alerts",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
         "enable": true,
-        "expr": "ALERTS{alertname=~\"Bulwark(HighBlockRate|PromptInjectionSpike|ExfiltrationAttempts|IOCMatchesElevated)\", alertstate=\"firing\"}",
+        "expr": "ALERTS{alertname=~\"Bulwark(HighBlockRate|PromptInjectionSpike|ToolPolicyViolations|CriticalDetectionSpike)\", alertstate=\"firing\"}",
         "iconColor": "red",
         "titleFormat": "{{alertname}}",
         "tagKeys": "severity,mitre_attack"
@@ -42,22 +42,10 @@
   "templating": {
     "list": [
       {
-        "name": "tenant",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(bulwark_requests_total, tenant_id)",
-        "multi": true,
-        "includeAll": true,
-        "allValue": ".*",
-        "current": { "text": "All", "value": "$__all" },
-        "refresh": 2,
-        "sort": 1
-      },
-      {
         "name": "category",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(bulwark_verdicts_total{verdict=\"block\"}, category)",
+        "query": "label_values(bulwark_detections_by_category_total, category)",
         "multi": true,
         "includeAll": true,
         "allValue": ".*",
@@ -77,6 +65,7 @@
     {
       "id": 1,
       "title": "Attack Attempts per Minute (by Category)",
+      "description": "Guardrail detections (block+warn) by threat category (bulwark:detections:category).",
       "type": "timeseries",
       "gridPos": { "h": 9, "w": 16, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -95,7 +84,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (category)(rate(bulwark_verdicts_total{verdict=\"block\", tenant_id=~\"$tenant\", category=~\"$category\"}[$timerange])) * 60",
+          "expr": "sum by (category)(rate(bulwark_detections_by_category_total{category=~\"$category\"}[$timerange])) * 60",
           "legendFormat": "{{category}}",
           "refId": "A"
         }
@@ -107,27 +96,27 @@
     },
     {
       "id": 2,
-      "title": "Notification Delivery Rate",
+      "title": "Critical Detections (1h)",
+      "description": "Critical-severity guardrail detections in the last hour (bulwark:detections:severity).",
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "short",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "red", "value": 0 },
-              { "color": "yellow", "value": 0.9 },
-              { "color": "green", "value": 0.95 }
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
             ]
           }
         }
       },
       "targets": [
         {
-          "expr": "bulwark:notifications:success_ratio_5m",
+          "expr": "sum(increase(bulwark_detections_by_severity_total{severity=\"critical\"}[1h]))",
           "refId": "A"
         }
       ],
@@ -160,7 +149,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(bulwark_verdicts_total{verdict=\"block\", tenant_id=~\"$tenant\"}[24h]))",
+          "expr": "sum(increase(bulwark_verdicts_total{verdict=\"block\"}[24h]))",
           "refId": "A"
         }
       ],
@@ -208,7 +197,8 @@
     },
     {
       "id": 5,
-      "title": "Blocked Patterns (Top 10)",
+      "title": "Matched Patterns (Top 10)",
+      "description": "Guardrail pattern matches by pattern id (bulwark:detections:pattern, top 200 exported).",
       "type": "barchart",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -224,7 +214,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum by (pattern_id)(increase(bulwark_pattern_matches_total{tenant_id=~\"$tenant\"}[$__range])))",
+          "expr": "topk(10, sum by (pattern_id)(bulwark_pattern_matches_total))",
           "legendFormat": "{{pattern_id}}",
           "refId": "A",
           "format": "table",
@@ -243,7 +233,8 @@
     },
     {
       "id": 6,
-      "title": "IOC Matches",
+      "title": "Detections by Severity",
+      "description": "Guardrail detection rate broken down by severity (bulwark:detections:severity).",
       "type": "timeseries",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -256,14 +247,21 @@
             "fillOpacity": 15,
             "spanNulls": false,
             "showPoints": "auto",
-            "pointSize": 5
+            "pointSize": 5,
+            "stacking": { "mode": "normal", "group": "A" }
           }
-        }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "dark-red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "high" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "low" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }
+        ]
       },
       "targets": [
         {
-          "expr": "sum by (ioc_type)(rate(bulwark_ioc_matches_total{tenant_id=~\"$tenant\"}[$timerange]))",
-          "legendFormat": "{{ioc_type}}",
+          "expr": "sum by (severity)(rate(bulwark_detections_by_severity_total[$timerange]))",
+          "legendFormat": "{{severity}}",
           "refId": "A"
         }
       ],
@@ -274,8 +272,8 @@
     },
     {
       "id": 7,
-      "title": "Scanner Verdicts by Type",
-      "description": "Stacked view of verdicts across all scanner engines.",
+      "title": "Detections by Category (Totals)",
+      "description": "Cumulative guardrail detections per category (bulwark:detections:category).",
       "type": "barchart",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -285,34 +283,32 @@
           "color": { "mode": "palette-classic" },
           "custom": {
             "fillOpacity": 80,
-            "stacking": { "mode": "normal", "group": "A" }
+            "gradientMode": "hue"
           }
-        },
-        "overrides": [
-          { "matcher": { "id": "byRegexp", "options": ".*allow.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
-          { "matcher": { "id": "byRegexp", "options": ".*block.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
-          { "matcher": { "id": "byRegexp", "options": ".*warn.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }
-        ]
+        }
       },
       "targets": [
         {
-          "expr": "sum by (scanner, verdict)(increase(bulwark_scanner_verdicts_total{tenant_id=~\"$tenant\"}[$__range]))",
-          "legendFormat": "{{scanner}} — {{verdict}}",
+          "expr": "topk(15, sum by (category)(bulwark_detections_by_category_total{category=~\"$category\"}))",
+          "legendFormat": "{{category}}",
           "refId": "A",
           "format": "table",
           "instant": true
         }
       ],
       "options": {
-        "orientation": "vertical",
-        "legend": { "displayMode": "table", "placement": "right" },
-        "tooltip": { "mode": "multi" }
-      }
+        "orientation": "horizontal",
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" }
+      },
+      "transformations": [
+        { "id": "sortBy", "options": { "sort": [{ "field": "Value", "desc": true }] } }
+      ]
     },
     {
       "id": 8,
-      "title": "Top Attacking Tenants",
-      "description": "Tenants with highest block counts in the selected timeframe.",
+      "title": "Top Blocking by Tenant",
+      "description": "Tenants with highest block counts and block rate (bulwark:usage:block vs bulwark:usage:total).",
       "type": "table",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -327,15 +323,15 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum by (tenant_id)(increase(bulwark_verdicts_total{verdict=\"block\"}[$__range])))",
-          "legendFormat": "{{tenant_id}}",
+          "expr": "topk(10, sum by (tenant)(bulwark_verdicts_by_tenant_total{verdict=\"block\"}))",
+          "legendFormat": "{{tenant}}",
           "refId": "A",
           "format": "table",
           "instant": true
         },
         {
-          "expr": "topk(10, sum by (tenant_id)(rate(bulwark_verdicts_total{verdict=\"block\"}[5m])) / clamp_min(sum by (tenant_id)(rate(bulwark_requests_total[5m])), 0.001))",
-          "legendFormat": "{{tenant_id}}",
+          "expr": "topk(10, sum by (tenant)(bulwark_verdicts_by_tenant_total{verdict=\"block\"}) / clamp_min(sum by (tenant)(bulwark_requests_by_tenant_total), 1))",
+          "legendFormat": "{{tenant}}",
           "refId": "B",
           "format": "table",
           "instant": true
@@ -343,7 +339,7 @@
       ],
       "options": {
         "showHeader": true,
-        "sortBy": [{ "displayName": "Value #A", "desc": true }],
+        "sortBy": [{ "displayName": "Blocks", "desc": true }],
         "footer": { "show": false }
       },
       "transformations": [
@@ -355,7 +351,7 @@
           "id": "organize",
           "options": {
             "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "verdict": true },
-            "renameByName": { "tenant_id": "Tenant", "Value #A": "Blocks", "Value #B": "Block Rate" }
+            "renameByName": { "tenant": "Tenant", "Value #A": "Blocks", "Value #B": "Block Rate" }
           }
         },
         {
@@ -366,8 +362,8 @@
     },
     {
       "id": 9,
-      "title": "Geographic Attack Distribution",
-      "description": "Attack source analysis by origin. Requires geo-IP labels on metrics (if unavailable, shows by tenant).",
+      "title": "Per-Tenant Verdict Breakdown",
+      "description": "Verdict counts per tenant (bulwark:usage:*). Shows where allow/block/warn/redact traffic concentrates.",
       "type": "table",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -376,14 +372,13 @@
           "custom": { "filterable": true, "align": "left" }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "Attacks" }, "properties": [{ "id": "custom.width", "value": 100 }, { "id": "custom.align", "value": "right" }] },
-          { "matcher": { "id": "byName", "options": "Top Category" }, "properties": [{ "id": "custom.width", "value": 200 }] }
+          { "matcher": { "id": "byName", "options": "Count" }, "properties": [{ "id": "custom.width", "value": 120 }, { "id": "custom.align", "value": "right" }] }
         ]
       },
       "targets": [
         {
-          "expr": "topk(20, sum by (source_country, tenant_id, category)(increase(bulwark_verdicts_total{verdict=\"block\"}[$__range])))",
-          "legendFormat": "{{source_country}} — {{tenant_id}}",
+          "expr": "sum by (tenant, verdict)(bulwark_verdicts_by_tenant_total)",
+          "legendFormat": "{{tenant}} — {{verdict}}",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -391,15 +386,15 @@
       ],
       "options": {
         "showHeader": true,
-        "sortBy": [{ "displayName": "Value", "desc": true }],
+        "sortBy": [{ "displayName": "Count", "desc": true }],
         "footer": { "show": true, "reducer": ["sum"] }
       },
       "transformations": [
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "verdict": true },
-            "renameByName": { "source_country": "Country", "tenant_id": "Tenant", "category": "Top Category", "Value": "Attacks" }
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true },
+            "renameByName": { "tenant": "Tenant", "verdict": "Verdict", "Value": "Count" }
           }
         }
       ]

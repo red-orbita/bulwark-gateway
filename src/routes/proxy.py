@@ -1679,13 +1679,16 @@ def _push_recent_block(
         # across tenant boundaries.
         redis_key = f"bulwark:recent_blocks:{tenant_id}"
         for event in events[:3]:  # Max 3 events per block
+            category = event.category.value if event.category else "unknown"
+            severity = event.severity or "high"
+            pattern_id = (event.matched_pattern or "").strip()
             entry = _json.dumps({
                 "ts": time.time(),
                 "tenant": tenant_id,
                 "agent": agent_id,
-                "category": event.category.value if event.category else "unknown",
+                "category": category,
                 "description": event.description,
-                "severity": event.severity or "high",
+                "severity": severity,
                 "pattern": event.matched_pattern or "",
                 # F1: full event detail (previously dropped, forcing a shallow UI).
                 "verdict": event.verdict.value if event.verdict else "block",
@@ -1698,6 +1701,17 @@ def _push_recent_block(
             })
             r.lpush(redis_key, entry)
             r.ltrim(redis_key, 0, max(1, settings.events_max_per_tenant) - 1)
+            # Observability counters (bounded cardinality: category is a fixed
+            # ThreatCategory enum; severity is a fixed 4-value set). These feed the
+            # Grafana Security dashboard's per-category / per-severity breakdowns.
+            # Best effort — already inside the surrounding try/except.
+            r.hincrby("bulwark:detections:category", category, 1)
+            r.hincrby("bulwark:detections:severity", severity, 1)
+            # Pattern id is bounded by the registered pattern set; truncate
+            # defensively to keep the Redis field (and later Prometheus label)
+            # size bounded even for dynamically-added custom patterns.
+            if pattern_id:
+                r.hincrby("bulwark:detections:pattern", pattern_id[:128], 1)
     except Exception as exc:
         logger.warning("recent_blocks_push_failed", error=str(exc))
 

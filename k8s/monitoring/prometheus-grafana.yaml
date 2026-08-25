@@ -106,14 +106,13 @@ data:
 
     rule_files:
       - "rules.yml"
+      - "recording-rules.yml"
 
     scrape_configs:
-      - job_name: "bulwark-proxy"
-        static_configs:
-          - targets: ["proxy.bulwark-gateway.svc.cluster.local:8080"]
-        metrics_path: "/health/metrics"
-        scrape_interval: 10s
-
+      # NOTE: there is no "bulwark-proxy" scrape job by design. The proxy exposes
+      # no Prometheus endpoint (no /health/metrics); all proxy request/verdict/
+      # correlation metrics are written to Redis and surfaced via the admin
+      # exposition below. Scraping the proxy directly would 404.
       - job_name: "bulwark-admin"
         static_configs:
           - targets: ["admin.bulwark-gateway.svc.cluster.local:8090"]
@@ -121,7 +120,430 @@ data:
         scrape_interval: 10s
 
   rules.yml: |
-    groups: []
+    # Bulwark Gateway - Prometheus Alerting Rules
+    # SOC 2 CC7.2 Monitoring Compliance
+    # MITRE ATT&CK annotations included where applicable
+    groups:
+      # ====================================================================
+      # CRITICAL ALERTS - Page immediately
+      # ====================================================================
+      - name: bulwark_critical
+        rules:
+          - alert: BulwarkHighBlockRate
+            expr: |
+              (
+                sum(rate(bulwark_verdicts_total{verdict="block"}[5m]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[5m])), 1)
+              ) > 0.10
+            for: 2m
+            labels:
+              severity: critical
+              team: security
+              compliance: "SOC2-CC7.2"
+              mitre_attack: "T1190,T1059"
+            annotations:
+              summary: "High guardrail block rate exceeds 10%"
+              description: "More than 10% of requests blocked in 5min window. Investigate active attacks or guardrail misconfiguration."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/high-block-rate"
+
+          - alert: BulwarkProxyLatencyHigh
+            # Real signal: the proxy computes p99 in-process (counters.py) and
+            # serves it on /health/stats; the admin surfaces it as a gauge
+            # (bulwark_proxy_latency_p99_ms, per-worker best-effort). No
+            # per-request histogram is exported, so we alert on the gauge.
+            expr: max(bulwark_proxy_latency_p99_ms) > 100
+            for: 3m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Proxy P99 latency above 100ms"
+              description: "End-to-end proxy processing latency (p99) is degrading request performance."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-latency"
+
+          # NOTE: no BulwarkRedisDown alert. This Prometheus scrapes ONLY the
+          # bulwark-admin target (no redis_exporter, no up{job="bulwark-redis"}).
+          # Redis health is surfaced operationally via the admin /admin/health/detailed
+          # probe, not through Prometheus. Adding a redis_exporter scrape job is the
+          # prerequisite to restoring a scraped Redis-down alert.
+
+          # Proxy pod-count / HA alerting requires per-pod liveness, which is
+          # only available from kube-state-metrics
+          # (kube_deployment_status_replicas_available{deployment="proxy"}).
+          # This Prometheus does NOT scrape KSM, and the proxy exposes no
+          # /metrics endpoint of its own — all proxy metrics are written to
+          # Redis and surfaced through the admin exposition. So we anchor on a
+          # signal that is actually scraped: the admin metrics target.
+          # TODO(observability): add a kube-state-metrics scrape job to restore
+          # true per-replica proxy HA alerting (BulwarkProxyPodsDown).
+          - alert: BulwarkMetricsPipelineDown
+            expr: up{job="bulwark-admin"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              team: platform
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Bulwark metrics pipeline is down"
+              description: "Prometheus cannot scrape the admin exposition — the sole source of proxy request/verdict/correlation metrics. Monitoring is blind; treat as a potential proxy or admin outage."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/metrics-pipeline-down"
+
+          - alert: BulwarkProxyErrorRateHigh
+            # Real signal: the proxy tracks internal errors in-process
+            # (counters.py `errors`) and the admin surfaces the counter
+            # (bulwark_proxy_errors_total, per-worker best-effort). No backend
+            # error histogram is exported, so we alert on the proxy error rate.
+            expr: |
+              sum(rate(bulwark_proxy_errors_total[5m])) > 0.5
+            for: 3m
+            labels:
+              severity: critical
+              team: platform
+            annotations:
+              summary: "Proxy internal error rate elevated"
+              description: "The proxy is recording more than 0.5 internal errors/sec (backend failures, timeouts or upstream faults). Investigate backend health."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/backend-errors"
+
+          # NOTE: no BulwarkCertificateExpiringSoon alert. TLS cert expiry needs a
+          # blackbox_exporter probe (probe_ssl_earliest_cert_expiry) which this
+          # Prometheus does not scrape. cert-manager handles renewal; add a
+          # blackbox scrape job to restore a scraped expiry alert.
+
+          - alert: BulwarkProxyNoTraffic
+            # Real, scraped signal: the proxy increments bulwark_requests_total
+            # on the hot path (Redis → admin exposition). A hard stop to zero
+            # for 15m means the proxy is not serving (outage) OR the deployment
+            # is genuinely idle. Correlate with BulwarkMetricsPipelineDown to
+            # disambiguate outage vs idle.
+            expr: sum(rate(bulwark_requests_total[15m])) == 0
+            for: 15m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Proxy has served no traffic for 15 minutes"
+              description: "No requests recorded via bulwark_requests_total on instance {{ $labels.instance }}. Verify the proxy is up and reachable, or confirm the deployment is intentionally idle."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/proxy-no-traffic"
+
+      # ====================================================================
+      # WARNING ALERTS - Notify but don't page
+      # ====================================================================
+      - name: bulwark_warning
+        rules:
+          # NOTE: several infrastructure-level warning alerts were removed because
+          # this Prometheus scrapes ONLY the bulwark-admin exposition — there is no
+          # cAdvisor (container_memory_working_set_bytes), kubelet
+          # (kubelet_volume_stats_*), kube-state-metrics, node-exporter or
+          # redis_exporter scrape job. The proxy also exposes no rate-limit / cache /
+          # audit / notification counters through Redis, so those series never exist.
+          # Removed (re-add once the corresponding scrape job exists):
+          #   BulwarkRateLimitRejectionsHigh (bulwark_rate_limit_rejected_total)
+          #   BulwarkScannersLow             (bulwark_scanners_active)
+          #   BulwarkMemoryPressure          (cAdvisor)
+          #   BulwarkDiskUsageHigh           (kubelet)
+          #   BulwarkAuditLogFailures        (bulwark_audit_log_errors_total)
+          #   BulwarkCacheHitRatioLow        (bulwark_cache_*)
+          #   BulwarkNotificationFailures    (bulwark_notification_errors_total)
+
+          - alert: BulwarkSIEMExportErrors
+            expr: |
+              increase(bulwark_siem_export_errors_total[5m]) > 0
+            for: 3m
+            labels:
+              severity: warning
+              team: security
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "SIEM export errors detected"
+              description: "Security events may not be reaching the SIEM platform. {{ $value }} export errors in the last 5m."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/siem-export-errors"
+
+          - alert: BulwarkCriticalDetectionSpike
+            # Real signal: guardrail detections tagged critical, sourced from the
+            # Redis bulwark:detections:severity hash via the admin exposition.
+            expr: |
+              sum(increase(bulwark_detections_by_severity_total{severity="critical"}[10m])) > 5
+            for: 3m
+            labels:
+              severity: warning
+              team: security
+              compliance: "SOC2-CC7.2"
+            annotations:
+              summary: "Spike in critical-severity guardrail detections"
+              description: "More than 5 critical-severity detections in 10min. Investigate a targeted attack or a misbehaving agent."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/critical-detections"
+
+          - alert: BulwarkWarnVerdictRateHigh
+            # Real signal: cluster-wide verdict totals (bulwark:global:* → admin).
+            expr: |
+              (
+                sum(rate(bulwark_verdicts_total{verdict="warn"}[10m]))
+                /
+                clamp_min(sum(rate(bulwark_requests_total[10m])), 1)
+              ) > 0.25
+            for: 10m
+            labels:
+              severity: warning
+              team: security
+            annotations:
+              summary: "Elevated WARN verdict rate (>25%)"
+              description: "More than 25% of requests are flagged WARN over 10min. Review guardrail tuning or an ongoing low-and-slow probe."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/warn-rate-high"
+
+      # ====================================================================
+      # INFO / SLO ALERTS - Informational, trend detection
+      # ====================================================================
+      - name: bulwark_info_slo
+        rules:
+          - alert: BulwarkThroughputAnomaly
+            expr: |
+              abs(
+                sum(rate(bulwark_requests_total[5m]))
+                -
+                sum(rate(bulwark_requests_total[1h]))
+              )
+              /
+              clamp_min(sum(rate(bulwark_requests_total[1h])), 0.1)
+              > 3.0
+            for: 5m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1498,T1499"
+            annotations:
+              summary: "Request throughput deviates significantly from baseline"
+              description: "Current rate deviates >3x from 1h baseline. Possible surge or DDoS."
+
+          - alert: BulwarkUnusualTenantActivity
+            # Repaired: uses the real per-tenant counter (bulwark:usage:total →
+            # bulwark_requests_by_tenant_total{tenant}). The previous form grouped
+            # by a non-existent tenant_id label on bulwark_requests_total, so it
+            # collapsed to one group == total and fired permanently.
+            expr: |
+              (
+                sum by (tenant)(rate(bulwark_requests_by_tenant_total[5m]))
+                /
+                clamp_min(sum(rate(bulwark_requests_by_tenant_total[5m])), 0.1)
+              ) > 0.80
+            for: 10m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1078"
+            annotations:
+              summary: "Tenant {{ $labels.tenant }} generating >80% of all traffic"
+              description: "Investigate whether traffic concentration is expected."
+
+          # NOTE: BulwarkMLScannerSlow removed — no per-phase request duration
+          # histogram is exported (ML scanner latency lives only in the proxy
+          # /internal/scanners/status payload, surfaced on the admin Status page).
+          # NOTE: BulwarkPodRestartsHigh removed — kube_pod_container_status_restarts_total
+          # requires a kube-state-metrics scrape job, which this Prometheus does not have.
+
+          - alert: BulwarkToolPolicyViolations
+            # Repaired: category is a label on the real detections counter
+            # (bulwark:detections:category → bulwark_detections_by_category_total),
+            # not on bulwark_verdicts_total.
+            expr: |
+              sum(increase(bulwark_detections_by_category_total{category="tool_abuse"}[15m])) > 10
+            for: 5m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1059,T1203"
+            annotations:
+              summary: "Elevated tool policy violations (>10 in 15min)"
+              description: "An agent may be attempting to exceed its allowed tool permissions."
+
+          - alert: BulwarkPromptInjectionSpike
+            # Repaired: category label sourced from the real detections counter.
+            expr: |
+              sum(increase(bulwark_detections_by_category_total{category="prompt_injection"}[10m])) > 20
+            for: 3m
+            labels:
+              severity: info
+              team: security
+              mitre_attack: "T1190,T1059.006"
+            annotations:
+              summary: "Prompt injection attempt spike detected"
+              description: "Automated adversarial testing or active attack in progress."
+
+          - alert: BulwarkSLOAvailabilityLow
+            # Repaired: uses the up-based availability recording rule instead of a
+            # verdict!="block" ratio (blocking is the product working, not a
+            # failure). Reflects real admin-target reachability over 1h.
+            expr: bulwark:slo:availability:ratio_1h < 0.95
+            for: 15m
+            labels:
+              severity: info
+              team: platform
+              slo: "availability"
+            annotations:
+              summary: "Availability SLO below 95% (1h)"
+              description: "The bulwark metrics/admin target's 1h availability has dropped below the 95% SLO target."
+
+          - alert: BulwarkSLOLatencyBreach
+            # Repaired: uses the real proxy p95 gauge (per-worker best-effort) —
+            # no per-request histogram is exported.
+            expr: max(bulwark_proxy_latency_p95_ms) > 1000
+            for: 10m
+            labels:
+              severity: info
+              team: platform
+              slo: "latency"
+            annotations:
+              summary: "End-to-end P95 latency SLO breach (>1s)"
+              description: "Proxy request P95 latency exceeds the 1s SLO target."
+
+      # ======================================================================
+      # CORRELATION ENGINE — Inline correlation observability (opt-in feature)
+      # Sourced from the shared Redis correlation counters (bulwark:correlation:*)
+      # via the admin exposition. These stay flat (no fire) unless
+      # BULWARK_CORRELATION_ENABLED is set on the proxy.
+      # ======================================================================
+      - name: bulwark_correlation
+        rules:
+          - alert: BulwarkCorrelatedExfiltration
+            expr: |
+              sum(increase(bulwark_correlation_incidents_total[15m])) > 0
+            for: 1m
+            labels:
+              severity: warning
+              team: security
+              mitre_attack: "T1041,T1048"
+            annotations:
+              summary: "Correlated input-output exfiltration detected"
+              description: "A suspicious input was paired with a sensitive output in the same request. Review source=correlation_engine events."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/incident-guardrail-bypass"
+
+          - alert: BulwarkOriginRiskBlocking
+            expr: |
+              sum(increase(bulwark_correlation_origin_risk_blocked_total[15m])) > 0
+            for: 2m
+            labels:
+              severity: warning
+              team: security
+              mitre_attack: "T1190"
+            annotations:
+              summary: "Adaptive origin-risk enforcement is blocking requests"
+              description: "Requests blocked from accumulated (decayed) origin risk, not the current input alone — likely multi-request probing or a decomposition attack."
+
+          - alert: BulwarkCorrelationTapDropping
+            expr: |
+              sum(rate(bulwark_correlation_tap_events_dropped_total[5m])) > 0
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Correlation event tap is dropping events"
+              description: "Origin-risk accrual is under-counting, weakening adaptive enforcement. Likely a saturated consumer — check proxy CPU and Redis latency."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/correlation-tap-drops"
+
+          - alert: BulwarkCorrelationEvaluationSlow
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(bulwark_correlation_eval_duration_seconds_bucket[5m])) by (le)
+              ) > 0.025
+            for: 10m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Correlation inline-evaluation P95 latency above 25ms"
+              description: "The opt-in correlation engine's hot-path cost (origin-risk read + input/output correlation, dominated by Redis round-trips) is elevated. Check Redis latency and proxy CPU."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/correlation-eval-latency"
+
+  recording-rules.yml: |
+    # SLO Recording Rules — Pre-computed metrics for dashboard performance
+    groups:
+      - name: bulwark_slo_recording
+        interval: 30s
+        rules:
+          - record: bulwark:slo:availability:ratio_30d
+            expr: |
+              avg_over_time(up{job="bulwark-admin"}[30d])
+          - record: bulwark:slo:availability:ratio_7d
+            expr: |
+              avg_over_time(up{job="bulwark-admin"}[7d])
+          - record: bulwark:slo:availability:ratio_1h
+            expr: |
+              avg_over_time(up{job="bulwark-admin"}[1h])
+          # Latency SLO — fraction of time the proxy p95 stayed under the 100ms
+          # objective. Derived from the real bulwark_proxy_latency_p95_ms gauge
+          # (sourced from the proxy /health/stats percentiles; no per-request
+          # histogram is exported), so this is an availability-of-latency ratio,
+          # not a per-request bucket ratio.
+          - record: bulwark:slo:latency:ratio_30d
+            expr: |
+              avg_over_time((bulwark_proxy_latency_p95_ms <= bool 100)[30d:1m])
+          - record: bulwark:slo:latency:ratio_7d
+            expr: |
+              avg_over_time((bulwark_proxy_latency_p95_ms <= bool 100)[7d:1m])
+          - record: bulwark:slo:latency:ratio_1h
+            expr: |
+              avg_over_time((bulwark_proxy_latency_p95_ms <= bool 100)[1h:1m])
+          - record: bulwark:error_budget:availability:remaining
+            expr: |
+              1 - (
+                (1 - bulwark:slo:availability:ratio_30d)
+                /
+                (1 - 0.999)
+              )
+          - record: bulwark:error_budget:latency:remaining
+            expr: |
+              1 - (
+                (1 - bulwark:slo:latency:ratio_30d)
+                /
+                (1 - 0.99)
+              )
+          - record: bulwark:error_budget:availability:burn_rate_1h
+            expr: |
+              (1 - bulwark:slo:availability:ratio_1h)
+              /
+              (1 - 0.999)
+          - record: bulwark:error_budget:availability:burn_rate_6h
+            expr: |
+              (1 - avg_over_time(up{job="bulwark-admin"}[6h]))
+              /
+              (1 - 0.999)
+          - record: bulwark:error_budget:latency:burn_rate_1h
+            expr: |
+              (1 - bulwark:slo:latency:ratio_1h)
+              /
+              (1 - 0.99)
+
+      - name: bulwark_operational_recording
+        interval: 30s
+        rules:
+          - record: bulwark:requests:rate5m:by_tenant
+            expr: sum by (tenant)(rate(bulwark_requests_by_tenant_total[5m]))
+          - record: bulwark:verdicts:rate5m:by_verdict
+            expr: sum by (verdict)(rate(bulwark_verdicts_total[5m]))
+          - record: bulwark:blocks:rate5m:by_category
+            expr: sum by (category)(rate(bulwark_detections_by_category_total[5m]))
+          # Latency percentiles come straight from the proxy's own gauges (no
+          # per-request histogram is exported); p50/p95/p99 mirror
+          # /health/stats. Values are per-worker best-effort.
+          - record: bulwark:latency:p50
+            expr: max(bulwark_proxy_latency_p50_ms)
+          - record: bulwark:latency:p95
+            expr: max(bulwark_proxy_latency_p95_ms)
+          - record: bulwark:latency:p99
+            expr: max(bulwark_proxy_latency_p99_ms)
+          - record: bulwark:siem:export_rate_5m
+            expr: sum(rate(bulwark_siem_events_exported_total[5m]))
+          - record: bulwark:siem:error_ratio_5m
+            expr: |
+              sum(rate(bulwark_siem_export_errors_total[5m]))
+              /
+              clamp_min(
+                sum(rate(bulwark_siem_export_errors_total[5m]))
+                + sum(rate(bulwark_siem_batches_sent_total[5m])),
+                1
+              )
 
   web.yml: |
     # Basic auth disabled in K8s (use NetworkPolicy instead)
