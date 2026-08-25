@@ -61,6 +61,16 @@ data:
   BULWARK_CACHE_TTL: {{ .Values.proxy.cache.ttl | quote }}
   BULWARK_CACHE_MAX_SIZE: {{ .Values.proxy.cache.maxSize | quote }}
   {{- end }}
+  # Inline correlation engine (opt-in). Rendered unconditionally so a helm
+  # upgrade never silently drops the master switch; inert when enabled=false.
+  BULWARK_CORRELATION_ENABLED: {{ .Values.proxy.correlation.enabled | quote }}
+  {{- if .Values.proxy.correlation.enabled }}
+  BULWARK_CORRELATION_BLOCKING: {{ .Values.proxy.correlation.blocking | quote }}
+  BULWARK_CORRELATION_WINDOW_SECONDS: {{ .Values.proxy.correlation.windowSeconds | quote }}
+  BULWARK_CORRELATION_RISK_DECAY_SECONDS: {{ .Values.proxy.correlation.riskDecaySeconds | quote }}
+  BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD: {{ .Values.proxy.correlation.riskBlockThreshold | quote }}
+  BULWARK_CORRELATION_RISK_WARN_THRESHOLD: {{ .Values.proxy.correlation.riskWarnThreshold | quote }}
+  {{- end }}
   {{- if and .Values.dedicatedTenants.enabled .Values.dedicatedTenants.tenants }}
   # Tier 2 Multi-Tenancy: list of tenants with dedicated proxy pods
   # The shared proxy pool uses this to route requests to dedicated services
