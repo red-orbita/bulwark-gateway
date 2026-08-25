@@ -9,6 +9,7 @@ Common issues and their solutions for Bulwark Gateway.
 - [Pod / Kubernetes Issues](#pod--kubernetes-issues)
 - [SIEM Export Issues](#siem-export-issues)
 - [Proxy Issues](#proxy-issues)
+- [Observability: Grafana Panel Shows "No data"](#grafana-panel-shows-no-data)
 - [Correlation Engine Issues](#correlation-engine-issues)
 - [Notification Issues](#notification-issues)
 - [Wazuh CrashLoopBackOff](#wazuh-crashloopbackoff)
@@ -254,6 +255,121 @@ kubectl exec deploy/proxy -n bulwark-gateway -- cat /app/config/agents.yaml
 
 # Check policy exists
 kubectl exec deploy/proxy -n bulwark-gateway -- ls /app/config/policies/
+```
+
+---
+
+## Grafana Panel Shows "No data"
+
+An empty Grafana panel almost always has one of five root causes. Work through
+them in order — the diagnosis is the same regardless of which dashboard.
+
+> Full observability reference (scrape topology, metric catalog, dashboard
+> map): [OBSERVABILITY.md](OBSERVABILITY.md).
+
+### Cause taxonomy
+
+| # | Cause | Tell-tale |
+|---|-------|-----------|
+| 1 | **Metric doesn't exist** (subsystem inactive) | The series is genuinely absent from `/admin/health/metrics`. Common for `bulwark_correlation_*` when correlation is disabled, or cost metrics before any traffic. |
+| 2 | **Wrong metric/label name** | Panel query references a renamed or non-existent series/label. |
+| 3 | **Instant-vector dimension is a label, not a column** | A barchart/table over `topk(...)` renders empty because it expects a column that is actually a label on `Value`. **This is the most common one here.** |
+| 4 | **Ghost / duplicate SLO series** | An SLO single-stat is blank or wrong because a stale `instance` series makes the query return multiple series. |
+| 5 | **Datasource unreachable** | *All* panels are empty; datasource test fails. |
+
+### Diagnosis
+
+**Step 1 — is the metric actually there?** Query the exposition endpoint
+directly (the scrape token bypasses the session):
+
+```bash
+TOKEN=$(kubectl get secret bulwark-admin-secrets -n bulwark-gateway \
+  -o jsonpath='{.data.metrics-scrape-token}' | base64 -d)
+kubectl exec deploy/admin -n bulwark-gateway -- \
+  python3 -c "import urllib.request as u; \
+    req=u.Request('http://localhost:8090/admin/health/metrics', \
+    headers={'Authorization':'Bearer $TOKEN'}); \
+    print(u.urlopen(req).read().decode())" | grep '^bulwark_detections_by_category'
+```
+
+- **No output** → Cause 1 or 2. Confirm the subsystem is active and that the
+  metric name matches §3 of OBSERVABILITY.md.
+- **Output present, panel still empty** → Cause 3 or 4 (rendering, not data).
+
+**Step 2 — ask Grafana what the query returns.** Use the Grafana datasource
+proxy (inside the pod, auth inline):
+
+```bash
+# from the grafana pod (BusyBox wget; note: --user/--password flags do NOT work,
+# embed credentials in the URL)
+wget -qO- 'http://admin:<pw>@localhost:3000/api/ds/query' \
+  --header='Content-Type: application/json' \
+  --post-data='{"queries":[{"refId":"A","datasource":{"uid":"prometheus"},
+    "expr":"topk(10, sum by (category)(bulwark_detections_by_category_total))",
+    "format":"table","instant":true}]}'
+```
+
+If the response contains **multiple frames**, each with a `Time` column and a
+`Value` field whose `labels` carry `category` → the dimension is a **label**, not
+a column (Cause 3).
+
+**Step 3 — SLO single-stat blank?** Run the recording-rule query; if it returns
+>1 series, a ghost `instance` is present (Cause 4).
+
+### Solutions
+
+- **Cause 1 (missing metric):** expected when the subsystem is off. For
+  correlation, set `BULWARK_CORRELATION_ENABLED=true`. Otherwise generate the
+  traffic that produces the metric. Do **not** fabricate the panel.
+- **Cause 2 (wrong name):** fix the query to a real series from
+  [OBSERVABILITY.md §3](OBSERVABILITY.md#3-metrics-catalog).
+- **Cause 3 (label-not-column) — the barchart `merge` fix:** the instant vector
+  returns one frame per series with the dimension as a **label on `Value`**.
+  Replace any `xField`/`labelsToFields` approach with a `merge` + `organize`
+  transform and name each field via `legendFormat`:
+
+  ```json
+  "targets": [{ "expr": "topk(10, sum by (category)(bulwark_detections_by_category_total))",
+                "format": "table", "instant": true, "legendFormat": "{{category}}" }],
+  "transformations": [
+    { "id": "merge", "options": {} },
+    { "id": "organize", "options": {
+        "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } }
+  ]
+  ```
+
+  This is the same mechanism the working "Verdict Distribution" piechart and
+  "Monthly SLO Report" table already use. Applied to the three category/pattern
+  barcharts (overview "Top Detected Categories", security "Detections by
+  Category (Totals)" and "Matched Patterns (Top 10)"). Full rationale:
+  [OBSERVABILITY.md §7](OBSERVABILITY.md#7-categorical-barcharts-from-instant-vectors-the-merge-pattern).
+
+  > **Status:** fix applied to both dashboard stacks and verified live via the
+  > Grafana `/api/dashboards/uid/...` API (transforms confirmed as
+  > `[merge, organize]`) and by user visual confirmation that bars render after a
+  > hard refresh (Ctrl+Shift+R). Because the Grafana pod ships **no**
+  > image-renderer, server-side screenshot verification is not possible — a
+  > browser hard refresh remains the confirmation step.
+
+- **Cause 4 (ghost SLO series):** the SLO recording rules aggregate with `max()`
+  precisely to collapse duplicate `instance`/`job` series into one cluster-wide
+  value. If you see duplicates, confirm the rule uses `max(...)` (see
+  [OBSERVABILITY.md §5](OBSERVABILITY.md#5-why-slo-rules-aggregate-with-max)) and
+  that only the `bulwark-admin` job is scraped.
+
+- **Cause 5 (datasource):** inside the Grafana pod, Prometheus resolves **only**
+  as `http://prometheus:9090` (the `.svc.cluster.local` FQDN does not resolve in
+  that pod). Fix the provisioned datasource URL, not the query.
+
+### After editing a dashboard
+
+Keep both stacks byte-identical, then roll it out and hard-refresh:
+
+```bash
+diff helm/bulwark-gateway/dashboards/bulwark-overview.json \
+     monitoring/grafana/dashboards/bulwark-overview.json   # must be empty
+# patch the ConfigMap, wait ~60-75s for kubelet sync + Grafana file-provider reload
+# then Ctrl+Shift+R in the browser to clear the client-side panel cache
 ```
 
 ---

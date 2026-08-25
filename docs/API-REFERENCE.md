@@ -192,6 +192,9 @@ access. Rotate/revoke by changing the secret. In-cluster deployments project the
 token from `bulwark-admin-secrets` (key `metrics-scrape-token`) into Prometheus,
 which references it via `authorization.credentials_file`.
 
+> Full metrics catalog, scrape topology, SLO recording rules and dashboard
+> mapping: [Observability](OBSERVABILITY.md).
+
 ---
 
 ### Policies

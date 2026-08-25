@@ -12,6 +12,30 @@
 
 ---
 
+## 0. Consolidated improvements (TL;DR)
+
+Six evidence-closed improvements took the engine from "works" to production-mature
+for `blocking:true` on a shared multi-user agent. Full detail in §3/§4.
+
+| ID | Improvement | Impact | Commit |
+|----|-------------|--------|--------|
+| **F1** | Atomic server-side decay+bump (Lua `EVALSHA`) replacing non-atomic read-modify-write | No lost updates under concurrent bursts (old path lost **87%**); collapses to 1 RTT | `b1a7042` |
+| **F2** | Pipelined risk reads (1 RTT) + circuit breaker degrading to in-memory | Redis latency spikes can't stall user requests (15 calls 0.000s vs ~15s) | `24783e6` |
+| **F3** | Per-subject risk scope (JWT `sub` / per-key digest); session/tenant demoted to WARN-only | One noisy user can't BLOCK a whole shared agent (self-DoS closed); subject kept out of SIEM | `ac7f33c` |
+| **F4** | `window_seconds` relabelled latent/reserved; removed from live tuning | No inert/misleading knob (honesty); zero enforcement change | `52482dc` |
+| **F5** | Labelled FP/FN corpus + harness at the shipped 0.5 gate | Quantified: **0 FP** on benign, **credential block-recall 1.00** | `8f01b27` |
+| **E6** | PII-multiplicity confidence signal (≥3 distinct structured IDs ⇒ +0.45, deduped, no-ReDoS) | Bulk-PII block-recall **0.00 → 0.778**, benign FP still 0 | `bd229b1` |
+
+**Observability (companion, not a finding):** the inline hot-path cost is exported
+as the `bulwark_correlation_eval_duration_seconds` **histogram** plus eight
+`bulwark_correlation_*` counters (`admin/routes/health.py`), surfaced on the
+`bulwark-correlation` Grafana dashboard and alerted at P95 > 25 ms for 10 m. This
+is the standing proof for criterion **A2** (bounded hot-path cost). See
+[OBSERVABILITY.md](../OBSERVABILITY.md#correlation-engine-redis-bulwarkcorrelationcounters--opt-in).
+
+---
+
+
 ## 1. Definition of "excellent" (acceptance criteria)
 
 The engine is considered production-mature for `blocking:true` on a **shared, multi-user
@@ -59,7 +83,7 @@ Severity: 🔴 high · 🟠 medium · 🟡 low. Status: `OPEN` → `IN PROGRESS`
 | **F3** | 🟠 | Blast radius of origin-risk BLOCK too coarse. Decision scope `session=(tenant,agent)` is **not per-end-user**; one noisy user or false positive accrues risk that BLOCKs **all** users of a shared agent for ~hours (half-life 15m). Self-inflicted DoS vector. | `incident.py:322-324`; `risk_state.py:66-69` | R3: per-subject scope dimension — hard-BLOCK only on the most-specific authenticated identity (JWT `sub`, or a stable non-reversible per-API-key digest); session/tenant become WARN-only context, never a hard block of the shared agent | `tests/test_auth_subject.py` (5 tests: server-derived subject, per-key digest ≠ raw key, anonymous→None) + `tests/test_correlation.py` (subject-aware `evaluate`/`evaluate_origin_risk` + 5-tuple tap); 123 correlation+auth tests green | **CLOSED** (`ac7f33c`) |
 | **F4** | 🟡 | `window_seconds` guard is **inert in production**. `evaluate()` uses `input_detected_at` (`incident.py:251`) but the proxy call **never passes it** ⇒ always `None` ⇒ guard skipped. Yet the knob is admin-tunable, in the UI, and documented as operative. Violates project honesty rule. | `incident.py:251`; `proxy.py:1053-1062` (no `input_detected_at` arg) | R4: relabel as latent/reserved (same-request pairing needs no window; wiring it would false-negative on slow backends) — surface `latent_fields` in the API, remove from active UI tuning, correct docs. Zero enforcement change. | `tests/test_correlation.py::{test_same_request_correlation_ignores_window,test_window_seconds_is_a_latent_field}` + `test_correlation_admin.py::test_config_fields` (latent surfaced); guard code retained for a future async correlator (`test_stale_input_outside_window_no_correlation`). 134 correlation+auth tests green | **CLOSED** (`52482dc`) |
 | **F5** | 🟡 | Correlator FP/FN rate unquantified. `correlation_confidence` (threshold 0.5) is a heuristic; no labelled dataset or red-team measures its error. A control that can BLOCK legitimate user content must not ship with unknown FP rate. | `confidence.py` (whole); no dataset under `tests/` or `src/evaluation/` covering the correlator | R5: labelled corpus (`tests/data/correlation_corpus.py`, 20 benign [→22 after E6] / 14 credential-leak / 9 pure-PII, secrets generated at runtime via `token_urlsafe` — no literal committed) + pure FP/FN harness; targets set & asserted | `tests/test_correlation_fp_fn.py` (10 tests): **0 FP** on benign (max benign confidence 0.48 < 0.50 default), **credential block-recall 1.00** (≥0.90 target), clean separation (every leak ≥0.56 > every benign), pure-PII kept WARN-tier by design yet still emits a WARN incident + accrues origin risk (measured, not silently passed), plus a data-backed defence of the 0.5 knob (dropping below the benign band reintroduces FP). End-to-end via `evaluate()`: credential→BLOCK, benign→WARN | **CLOSED** (`8f01b27`) |
-| **E6** | 🟢 enh | Post-sign-off enhancement (not a defect): the R5 corpus quantified pure-PII block-recall at **0.00** — genuine PII dumps only WARN'd. Opportunity to raise recall on *bulk structured* PII without costing any benign FP. | `confidence.py` scorer had no PII-density signal (only entropy/critical/lexical/corroboration) | E6: add a **PII-multiplicity** signal — count *distinct* structured identifiers (SSN/email/phone/card, anchored regex, no ReDoS); ≥3 distinct ⇒ +0.45. Deduped by value (padding one identifier can't forge the signal); capped fan-out; two-distinct boundary keeps legit contact replies safe | `tests/test_correlation.py` (6 new: 2 pos bulk/mixed-type, 3 neg single/two-distinct/padded-dedup, 1 dedup-count) + `tests/test_correlation_fp_fn.py` (bulk-PII recall ≥0.70 + bulk→BLOCK e2e + unstructured→WARN e2e). Result: **pii block-recall 0.00 → 0.778**, benign **FP still 0**, credential recall still 1.00, +2 boundary benign added | **CLOSED** (`_pending_`) |
+| **E6** | 🟢 enh | Post-sign-off enhancement (not a defect): the R5 corpus quantified pure-PII block-recall at **0.00** — genuine PII dumps only WARN'd. Opportunity to raise recall on *bulk structured* PII without costing any benign FP. | `confidence.py` scorer had no PII-density signal (only entropy/critical/lexical/corroboration) | E6: add a **PII-multiplicity** signal — count *distinct* structured identifiers (SSN/email/phone/card, anchored regex, no ReDoS); ≥3 distinct ⇒ +0.45. Deduped by value (padding one identifier can't forge the signal); capped fan-out; two-distinct boundary keeps legit contact replies safe | `tests/test_correlation.py` (6 new: 2 pos bulk/mixed-type, 3 neg single/two-distinct/padded-dedup, 1 dedup-count) + `tests/test_correlation_fp_fn.py` (bulk-PII recall ≥0.70 + bulk→BLOCK e2e + unstructured→WARN e2e). Result: **pii block-recall 0.00 → 0.778**, benign **FP still 0**, credential recall still 1.00, +2 boundary benign added | **CLOSED** (`bd229b1`) |
 
 ### Design constraints discovered during audit (inform the fixes)
 
