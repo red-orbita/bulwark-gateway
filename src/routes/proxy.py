@@ -24,6 +24,7 @@ import socket
 import time
 from contextvars import ContextVar
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 import structlog
@@ -65,6 +66,34 @@ logger = structlog.get_logger()
 # right subject. It is set from ``request.state.subject_id`` (server-derived,
 # hashed downstream) and is NEVER written to logs or SIEM.
 _request_subject: ContextVar[str | None] = ContextVar("bulwark_request_subject", default=None)
+
+# Fase B (IR traceability): the stable per-request correlation id (honoured from
+# an inbound X-Request-ID or minted by RequestIDMiddleware). Published here as a
+# task-local ContextVar — inherited by fire-and-forget child tasks — so the event
+# sinks can stamp it onto EVERY SecurityEvent without threading request_id through
+# ~50 call sites. All events of one HTTP request thus share this key (the SIEM,
+# logs, notifications and recent-blocks all join on it); event_id keeps the
+# per-detection grain. Set from ``request.state.request_id``.
+_request_id: ContextVar[str | None] = ContextVar("bulwark_request_id", default=None)
+
+
+def _ensure_request_id(
+    events: list[SecurityEvent], request_id: str | None = None
+) -> None:
+    """Stamp the request correlation id onto events that don't already carry one.
+
+    Idempotent and order-independent: guardrail/pipeline engines produce events
+    without a request_id, so this is where they inherit the per-request key. An
+    explicit ``request_id`` (used on the streaming path, where ContextVar
+    propagation across the response boundary is not guaranteed) takes precedence;
+    otherwise the request-scoped ContextVar is used.
+    """
+    rid = request_id or _request_id.get()
+    if not rid:
+        return
+    for ev in events:
+        if not ev.request_id:
+            ev.request_id = rid
 
 input_guardrail = InputGuardrail()
 output_filter = OutputFilter(
@@ -389,6 +418,11 @@ async def chat_completions(request: Request):
     # event tap via a ContextVar (task-local, inherited by child tasks).
     subject_id = getattr(request.state, "subject_id", None)
     _request_subject.set(subject_id)
+    # Fase B: one stable correlation id for every event/log/alert of THIS request.
+    # RequestIDMiddleware set it on request.state (honouring an inbound
+    # X-Request-ID); fall back to a fresh id for direct/test invocations.
+    request_id = getattr(request.state, "request_id", None) or uuid4().hex
+    _request_id.set(request_id)
     source_ip = request.client.host if request.client else None
 
     # Parse request body
@@ -469,7 +503,7 @@ async def chat_completions(request: Request):
         _scan_ctx = ScanContext(
             tenant_id=tenant_id,
             agent_id=agent_id,
-            request_id=f"{tenant_id}:{agent_id}:{int(time.time()*1000)}",
+            request_id=request_id,
             messages=messages,
             source_ip=source_ip,
         )
@@ -503,7 +537,6 @@ async def chat_completions(request: Request):
                 msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
             )
             if user_content:
-                request_id = f"{tenant_id}:{agent_id}:{int(time.time()*1000)}"
                 asyncio.create_task(
                     _enrich_and_record(user_content, "block", request_id, tenant_id)
                 )
@@ -554,7 +587,7 @@ async def chat_completions(request: Request):
         _risk_assessment = get_correlator().evaluate_origin_risk(
             tenant_id=tenant_id,
             agent_id=agent_id,
-            request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
+            request_id=request_id,
             subject_id=subject_id,
         )
         observe_correlation_latency(time.perf_counter() - _risk_t0)
@@ -694,7 +727,7 @@ async def chat_completions(request: Request):
                     for m in messages
                     if isinstance(m.get("content"), str) and m.get("content")
                 ),
-                request_id=f"{tenant_id}:{agent_id}:{int(time.time()*1000)}",
+                request_id=request_id,
             )
             return JSONResponse(content=cached_response)
 
@@ -816,6 +849,7 @@ async def chat_completions(request: Request):
                             ioc_manager,
                             policy_engine,
                             token_jti=token_jti,
+                            request_id=request_id,
                         )
                 finally:
                     if use_redis:
@@ -1073,7 +1107,7 @@ async def chat_completions(request: Request):
             tenant_id=tenant_id,
             agent_id=agent_id,
             input_hash=_corr_hash,
-            request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
+            request_id=request_id,
             input_text=_corr_input,
             output_text=_corr_output,
             subject_id=subject_id,
@@ -1127,7 +1161,6 @@ async def chat_completions(request: Request):
             msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
         )
         if user_content:
-            request_id = f"{tenant_id}:{agent_id}:{int(time.time()*1000)}"
             asyncio.create_task(
                 _enrich_and_record(user_content, input_result.verdict.value, request_id, tenant_id)
             )
@@ -1157,7 +1190,7 @@ async def chat_completions(request: Request):
         )
         _push_recent_allowed(
             tenant_id, agent_id, snippet_source=_allow_snippet,
-            request_id=f"{tenant_id}:{agent_id}:{int(time.time()*1000)}",
+            request_id=request_id,
         )
     return JSONResponse(content=response_data)
 
@@ -1170,6 +1203,9 @@ async def validate_tool_call(request: Request):
     """
     tenant_id = getattr(request.state, "tenant_id", "default")
     agent_id = getattr(request.state, "agent_id", "default")
+    # Fase B: one stable correlation id for every event/log/alert of THIS request.
+    request_id = getattr(request.state, "request_id", None) or uuid4().hex
+    _request_id.set(request_id)
 
     body = await request.json()
     tool_call = ToolCall(
@@ -1193,7 +1229,7 @@ async def validate_tool_call(request: Request):
         )
 
     if result.events:
-        await _log_events(result.events, request.client.host if request.client else None)
+        await _log_events(result.events, request.client.host if request.client else None, request_id)
         if result.verdict == Verdict.BLOCK:
             asyncio.create_task(_fire_webhook_alert(result.events, tenant_id, agent_id))
 
@@ -1216,6 +1252,7 @@ async def _handle_streaming(
     ioc_manager,
     policy_engine,
     token_jti: str | None = None,
+    request_id: str | None = None,
 ) -> StreamingResponse:
     """Forward streaming SSE response with chunk-level output guardrails.
 
@@ -1237,6 +1274,12 @@ async def _handle_streaming(
     # Previously tokens were only validated once at request start, allowing revoked
     # tokens to continue receiving data for up to 5 minutes.
     TOKEN_REVALIDATION_INTERVAL = 30  # seconds
+
+    # Re-publish the correlation id on the ContextVar for the streaming task chain
+    # (BaseHTTPMiddleware/StreamingResponse may run the generator in a fresh
+    # context where the handler's ContextVar did not propagate).
+    if request_id:
+        _request_id.set(request_id)
 
     async def stream_generator():
         content_buffer = ""
@@ -1291,7 +1334,7 @@ async def _handle_streaming(
                         # SECURITY FIX (CRIT-03): Scan ALL SSE lines through output filter,
                         # not just data lines. SSE comments (:), event types, and IDs can
                         # be used by compromised backends to exfiltrate secrets.
-                        filtered_line = _filter_chunk(line, tenant_id, agent_id, source_ip)
+                        filtered_line = _filter_chunk(line, tenant_id, agent_id, source_ip, request_id)
                         if filtered_line is None:
                             # Secret detected in non-data line — strip it silently
                             logger.warning(
@@ -1306,7 +1349,7 @@ async def _handle_streaming(
                     if data == "[DONE]":
                         # Flush remaining buffer
                         if content_buffer:
-                            redacted = _filter_chunk(content_buffer, tenant_id, agent_id, source_ip)
+                            redacted = _filter_chunk(content_buffer, tenant_id, agent_id, source_ip, request_id)
                             if redacted is None:
                                 # Dangerous content — emit error
                                 yield _make_error_event("Output blocked by security policy")
@@ -1321,7 +1364,7 @@ async def _handle_streaming(
                     except json.JSONDecodeError:
                         # SECURITY FIX (CRIT-03): Malformed JSON in data lines must also
                         # be scanned. A compromised backend could send secrets as non-JSON.
-                        filtered_data = _filter_chunk(data, tenant_id, agent_id, source_ip)
+                        filtered_data = _filter_chunk(data, tenant_id, agent_id, source_ip, request_id)
                         if filtered_data is None:
                             logger.warning(
                                 "sse_malformed_json_secret_stripped",
@@ -1386,7 +1429,7 @@ async def _handle_streaming(
 
                             if policy_result.verdict == Verdict.BLOCK:
                                 # Log security events + fire notifications
-                                await _log_events(policy_result.events, source_ip)
+                                await _log_events(policy_result.events, source_ip, request_id)
                                 asyncio.create_task(_fire_webhook_alert(policy_result.events, tenant_id, agent_id))
                                 _push_recent_block(
                                     policy_result.events,
@@ -1419,7 +1462,7 @@ async def _handle_streaming(
                             # Flush when buffer is full — retain last OVERLAP_SIZE chars for next scan
                             if len(content_buffer) >= BUFFER_SIZE:
                                 redacted = _filter_chunk(
-                                    content_buffer, tenant_id, agent_id, source_ip
+                                    content_buffer, tenant_id, agent_id, source_ip, request_id
                                 )
                                 if redacted is None:
                                     yield _make_error_event("Output blocked by security policy")
@@ -1451,44 +1494,64 @@ async def _handle_streaming(
     )
 
 
-def _filter_chunk(content: str, tenant_id: str, agent_id: str, source_ip: str | None) -> str | None:
+def _filter_chunk(
+    content: str,
+    tenant_id: str,
+    agent_id: str,
+    source_ip: str | None,
+    request_id: str | None = None,
+) -> str | None:
     """Run output filter on a content chunk.
 
     Returns redacted content, or None if content should be blocked entirely.
     Events from this function are emitted asynchronously via _emit_streaming_events.
+
+    ``request_id`` is threaded explicitly: the streaming generator runs in a
+    response-boundary context where the request-scoped ContextVar is not
+    guaranteed to propagate, so the correlation id is passed down by hand.
     """
     result = output_filter.inspect_and_redact(content, tenant_id, agent_id)
     if result.verdict == Verdict.BLOCK:
         # Fire telemetry for streaming block (fire-and-forget)
         if result.events:
-            _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip)
+            _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip, request_id)
         return None
     if result.verdict == Verdict.REDACT and result.modified_content:
         # Fire telemetry for streaming redaction (fire-and-forget)
         if result.events:
-            _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip)
+            _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip, request_id)
         return result.modified_content
     return content
 
 
 def _schedule_streaming_telemetry(
-    events: list[SecurityEvent], tenant_id: str, agent_id: str, source_ip: str | None
+    events: list[SecurityEvent],
+    tenant_id: str,
+    agent_id: str,
+    source_ip: str | None,
+    request_id: str | None = None,
 ):
     """Schedule streaming telemetry emission. Safe to call from sync context."""
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(_emit_streaming_events(events, tenant_id, agent_id, source_ip))
+        loop.create_task(
+            _emit_streaming_events(events, tenant_id, agent_id, source_ip, request_id)
+        )
     except RuntimeError:
         # No running event loop (e.g., in unit tests) — skip telemetry
         pass
 
 
 async def _emit_streaming_events(
-    events: list[SecurityEvent], tenant_id: str, agent_id: str, source_ip: str | None
+    events: list[SecurityEvent],
+    tenant_id: str,
+    agent_id: str,
+    source_ip: str | None,
+    request_id: str | None = None,
 ):
     """Emit telemetry events from streaming output filter (fire-and-forget)."""
     try:
-        await _log_events(events, source_ip)
+        await _log_events(events, source_ip, request_id)
         await _fire_webhook_alert(events, tenant_id, agent_id)
     except Exception as exc:
         logger.warning("streaming_telemetry_emit_failed", error=str(exc))
@@ -1543,8 +1606,16 @@ async def _run_output_async_scanners(
         await logger.awarn("output_async_scanner_error", error=str(e)[:200])
 
 
-async def _log_events(events: list[SecurityEvent], source_ip: str | None = None):
+async def _log_events(
+    events: list[SecurityEvent],
+    source_ip: str | None = None,
+    request_id: str | None = None,
+):
     """Log security events for SIEM and enqueue to telemetry pipeline."""
+    # Stamp the per-request correlation id onto events that lack one (guardrail/
+    # pipeline engines produce events without it) so the stdout log and SIEM
+    # export share the same request_id as every other sink for this request.
+    _ensure_request_id(events, request_id)
     queue = get_telemetry_queue()
     for event in events:
         # F3: an allow-exception degrades BLOCK→WARN and tags the metadata. Surface
@@ -1602,6 +1673,9 @@ async def _fire_webhook_alert(events: list[SecurityEvent], tenant_id: str, agent
     engine = get_notification_engine()
     if not engine.configured:
         return
+    # Ensure the alert carries the same request_id as the SIEM/log records even
+    # when this runs as a detached task (ContextVar is inherited at task creation).
+    _ensure_request_id(events)
     for event in events:
         alert = AlertPayload(
             verdict=event.verdict.value if event.verdict else "block",
@@ -1678,6 +1752,9 @@ def _push_recent_block(
         r = registry._redis
         if not r:
             return
+        # Stamp the per-request id so the admin recent-blocks entry correlates
+        # with the SIEM/log/notification records for the same request.
+        _ensure_request_id(events)
         import json as _json
         # F1: privacy-safe preview + correlation hash (computed once per push).
         snippet, input_hash = _make_block_snippet(snippet_source)
@@ -1829,7 +1906,7 @@ async def _enrich_and_record(
                         severity="medium",
                         metadata={"request_id": request_id},
                     )
-                    await _log_events([event])
+                    await _log_events([event], request_id=request_id)
     except Exception as e:
         # Never let enrichment errors affect anything
         await logger.awarn("enrichment_pipeline_error", error=str(e))

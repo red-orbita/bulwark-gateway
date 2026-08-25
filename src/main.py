@@ -24,6 +24,7 @@ from src.middleware.api_version import APIVersionMiddleware
 from src.middleware.auth import AuthMiddleware
 from src.middleware.quotas import QuotaMiddleware
 from src.middleware.rate_limit import RateLimitMiddleware
+from src.middleware.request_id import RequestIDMiddleware
 from src.middleware.tenant_router import TenantRouterMiddleware
 from src.routes import admin, health, proxy
 from src.routes.v2 import router as v2_router
@@ -306,7 +307,7 @@ def create_app() -> FastAPI:
         )
 
     # Middleware (order matters — last added = outermost = processes request first)
-    # Request flow: Auth → TenantRouter → APIVersion → RateLimit → Quota → CORS → Route handler
+    # Request flow: RequestID → Auth → TenantRouter → APIVersion → RateLimit → Quota → CORS → Route handler
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -318,7 +319,10 @@ def create_app() -> FastAPI:
             "X-Agent-ID",
             "X-Redteam-Mode",
             "X-API-Version",
+            "X-Request-ID",
         ],
+        # Let browser clients read the correlation id echoed on the response.
+        expose_headers=["X-Request-ID"],
     )
     app.add_middleware(QuotaMiddleware)
     app.add_middleware(RateLimitMiddleware)
@@ -328,6 +332,9 @@ def create_app() -> FastAPI:
     if settings.dedicated_tenants:
         app.add_middleware(TenantRouterMiddleware)
     app.add_middleware(AuthMiddleware)
+    # Outermost: mint/honour the per-request correlation id BEFORE auth so even
+    # rejected requests are traceable and get the echoed X-Request-ID header.
+    app.add_middleware(RequestIDMiddleware)
 
     # Routes
     app.include_router(health.router, tags=["health"])
