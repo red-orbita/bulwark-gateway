@@ -264,6 +264,33 @@ class TestCorrelationEndpoints:
         assert out["override"]["blocking"] is True
         assert audit.entries[-1]["action"] == "correlation.config_update"
 
+    async def test_update_config_confidence_gate(self, wired):
+        # Regression: the UI exposes `confidence_block_threshold` as a live knob
+        # (correlation.html) and the proxy runtime reads it back from the Redis
+        # override HASH (src.correlation.runtime._NUMERIC_FIELDS). The admin write
+        # model must carry it end-to-end — a prior omission made Pydantic silently
+        # drop the field, so an operator's change was accepted (200) yet never
+        # written. This asserts the field survives model → Redis → override read.
+        correlation, r, _ = wired
+        from admin.routes.correlation import CorrelationConfigUpdate
+
+        out = await correlation.update_correlation_config(
+            CorrelationConfigUpdate(confidence_block_threshold=0.75), user=_admin()
+        )
+        assert r.hashes["bulwark:correlation:config"]["confidence_block_threshold"] == "0.75"
+        assert out["override"]["confidence_block_threshold"] == 0.75
+
+    async def test_update_config_confidence_gate_out_of_bounds(self, wired):
+        # Confidence is a [0, 1] probability; a value above 1.0 must be rejected
+        # by the model (never written) rather than silently clamped/dropped.
+        correlation, _, _ = wired
+        from pydantic import ValidationError
+
+        from admin.routes.correlation import CorrelationConfigUpdate
+
+        with pytest.raises(ValidationError):
+            CorrelationConfigUpdate(confidence_block_threshold=1.5)
+
     async def test_update_config_empty_rejected(self, wired):
         correlation, _, _ = wired
         from fastapi import HTTPException

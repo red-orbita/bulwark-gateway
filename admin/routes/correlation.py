@@ -72,6 +72,11 @@ class CorrelationConfigUpdate(BaseModel):
     risk_block_threshold: float | None = Field(default=None, gt=0, le=10)
     risk_warn_threshold: float | None = Field(default=None, gt=0, le=10)
     risk_decay_seconds: float | None = Field(default=None, ge=10, le=604800)
+    # Content-corroboration confidence gate (Phase 4b): min confidence to escalate
+    # a correlated exfiltration incident from WARN to BLOCK. Enforced live in
+    # src.correlation.incident and read by the proxy runtime; bounds mirror
+    # src.correlation.runtime._NUMERIC_FIELDS["confidence_block_threshold"] = (0.0, 1.0).
+    confidence_block_threshold: float | None = Field(default=None, ge=0, le=1)
     event_bump_warn: float | None = Field(default=None, ge=0, le=10)
     event_bump_block: float | None = Field(default=None, ge=0, le=10)
     severity_high_mult: float | None = Field(default=None, gt=0, le=10)
