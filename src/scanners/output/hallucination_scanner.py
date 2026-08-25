@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from src.config import settings
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.scanners.ml.model_manager import get_model_manager, ml_dependencies_available
-from src.scanners.protocol import OutputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import MaturityTier, OutputScanner, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ class HallucinationScanner(OutputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="NLI-based hallucination detection for LLM outputs",
+            maturity=MaturityTier.EXPERIMENTAL,
             author="bulwark",
             priority=20,
         )

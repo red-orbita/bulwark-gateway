@@ -378,6 +378,7 @@ class ScannerPipeline:
                 "enabled": r.enabled,
                 "description": r.info.description,
                 "author": r.info.author,
+                "maturity": r.info.maturity.value,
                 "metrics": {
                     "total_calls": r.metrics.total_calls,
                     "total_blocks": r.metrics.total_blocks,

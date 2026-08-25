@@ -24,7 +24,7 @@ from collections import Counter
 
 from src.config import settings
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
-from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ class LanguageDetector(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Language identification + policy enforcement",
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=5,  # Highest priority: must run first
         )

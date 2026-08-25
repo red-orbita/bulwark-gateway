@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 from src.models import GuardrailResult, ToolCall, Verdict
-from src.scanners.protocol import OutputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import MaturityTier, OutputScanner, ScanContext, ScannerInfo, ScannerType
 
 
 class ToolPolicyScanner(OutputScanner):
@@ -47,6 +47,7 @@ class ToolPolicyScanner(OutputScanner):
             version="1.0.0",
             scanner_type=ScannerType.OUTPUT_BLOCKING,
             description="RBAC enforcement on agent tool calls",
+            maturity=MaturityTier.GA,
             author="bulwark",
             priority=5,  # Runs before output redaction
         )

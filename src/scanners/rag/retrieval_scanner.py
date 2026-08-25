@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
-from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +224,7 @@ class RetrievalScanner(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="RAG document chunk scanner for indirect prompt injection",
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=6,  # After language detector (5), before main regex (10)
         )

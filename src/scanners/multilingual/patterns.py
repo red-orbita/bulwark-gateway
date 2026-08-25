@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
-from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -503,6 +503,7 @@ class MultilingualPatterns(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Language-specific attack pattern detection (10 languages)",
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=8,  # After language detector (5), before English regex (10)
         )

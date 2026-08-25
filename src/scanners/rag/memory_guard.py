@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
-from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,7 @@ class MemoryGuard(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Multi-turn conversation manipulation detector",
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=4,  # Very early, before language detector (5)
         )

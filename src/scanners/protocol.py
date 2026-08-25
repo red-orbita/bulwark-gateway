@@ -32,6 +32,33 @@ class ScannerType(str, Enum):
     OUTPUT_ASYNC = "output_async"  # Output enrichment
 
 
+class MaturityTier(str, Enum):
+    """Declared maturity of a scanner's detection capability.
+
+    This is an HONESTY signal, not a functional gate. It tells operators how
+    much to trust a scanner's verdicts today, so the product never overstates
+    its own coverage:
+
+      - ``ga``           — Deterministic, tested, production-proven. Safe to run
+                           blocking. (e.g. the builtin regex / output-redaction /
+                           tool-policy engines.)
+      - ``beta``         — Functional with real detection logic or a provisioned
+                           model and test coverage, but efficacy is not yet
+                           validated against an external benchmark. Enable
+                           deliberately; prefer WARN/shadow before blocking.
+      - ``experimental`` — Incomplete, unvalidated, or not wired to a model.
+                           May be inert. Off by default. Third-party plugin
+                           scanners default here until explicitly promoted.
+
+    The default is ``EXPERIMENTAL``: anything not explicitly promoted is treated
+    as unproven, so new or externally supplied scanners never masquerade as GA.
+    """
+
+    GA = "ga"
+    BETA = "beta"
+    EXPERIMENTAL = "experimental"
+
+
 @dataclass
 class ScannerInfo:
     """Metadata about a registered scanner."""
@@ -43,6 +70,7 @@ class ScannerInfo:
     author: str = "bulwark"
     enabled: bool = True
     priority: int = 50  # Lower = runs first (0-100)
+    maturity: MaturityTier = MaturityTier.EXPERIMENTAL  # Honesty signal, not a gate
 
 
 @dataclass

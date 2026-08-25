@@ -118,6 +118,10 @@
                                 <span class="px-1.5 py-0.5 text-[10px] rounded font-medium uppercase"
                                       :class="categoryBadgeClass(scanner.category)"
                                       x-text="scanner.category"></span>
+                                <span class="px-1.5 py-0.5 text-[10px] rounded font-medium uppercase"
+                                      :class="maturityBadgeClass(scanner.maturity)"
+                                      :title="maturityTooltip(scanner.maturity)"
+                                      x-text="scanner.maturity || 'experimental'"></span>
                             </div>
                             <p class="text-xs text-gray-500" x-text="scanner.description"></p>
                         </div>
@@ -292,6 +296,24 @@ function mlScannersPage() {
                 multilingual: 'bg-teal-900/40 text-teal-300',
             };
             return classes[category] || 'bg-gray-700 text-gray-400';
+        },
+
+        maturityBadgeClass(maturity) {
+            const classes = {
+                ga: 'bg-emerald-900/40 text-emerald-300',
+                beta: 'bg-amber-900/40 text-amber-300',
+                experimental: 'bg-rose-900/40 text-rose-300',
+            };
+            return classes[maturity] || classes.experimental;
+        },
+
+        maturityTooltip(maturity) {
+            const tips = {
+                ga: 'GA — deterministic, tested, production-proven. Safe to run blocking.',
+                beta: 'Beta — real detection logic/model with tests, but efficacy not yet validated against an external benchmark. Prefer WARN/shadow before blocking.',
+                experimental: 'Experimental — incomplete, unvalidated, or not wired to a model. May be inert. Off by default.',
+            };
+            return tips[maturity] || tips.experimental;
         },
 
         async loadStatus() {

@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from src.config import settings
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.scanners.ml.model_manager import get_model_manager, ml_dependencies_available
-from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,7 @@ class IntentScanner(InputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="ML-based adversarial intent detection (multi-label)",
+            maturity=MaturityTier.EXPERIMENTAL,
             author="bulwark",
             priority=25,  # After regex (10), before topic (30)
         )

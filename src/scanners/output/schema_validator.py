@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
-from src.scanners.protocol import OutputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import MaturityTier, OutputScanner, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ class SchemaValidator(OutputScanner):
             version="1.0.0",
             scanner_type=ScannerType.OUTPUT_BLOCKING,
             description="JSON Schema validation for structured LLM outputs",
+            maturity=MaturityTier.EXPERIMENTAL,
             author="bulwark",
             priority=10,
         )

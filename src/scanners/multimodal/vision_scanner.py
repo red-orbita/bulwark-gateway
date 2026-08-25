@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from src.config import settings
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
-from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,7 @@ class VisionScanner(InputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="Image OCR + injection detection for multimodal inputs",
+            maturity=MaturityTier.EXPERIMENTAL,
             author="bulwark",
             priority=15,  # After language (5), before ML classifiers (20+)
         )

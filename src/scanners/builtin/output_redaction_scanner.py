@@ -12,7 +12,7 @@ from __future__ import annotations
 from src.config import settings
 from src.guardrails.output_filter import OutputFilter
 from src.models import GuardrailResult
-from src.scanners.protocol import OutputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import MaturityTier, OutputScanner, ScanContext, ScannerInfo, ScannerType
 
 
 class OutputRedactionScanner(OutputScanner):
@@ -47,6 +47,7 @@ class OutputRedactionScanner(OutputScanner):
             version="1.0.0",
             scanner_type=ScannerType.OUTPUT_BLOCKING,
             description="Secret/PII/credential redaction in LLM outputs",
+            maturity=MaturityTier.GA,
             author="bulwark",
             priority=10,  # Runs first in output pipeline
         )

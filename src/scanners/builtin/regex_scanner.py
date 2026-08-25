@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from src.guardrails.input_guardrail import InputGuardrail
 from src.models import GuardrailResult
-from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 
 class RegexInputScanner(InputScanner):
@@ -42,6 +42,7 @@ class RegexInputScanner(InputScanner):
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
             description="Regex-based prompt injection and attack detection (4600+ patterns)",
+            maturity=MaturityTier.GA,
             author="bulwark",
             priority=10,  # Runs first — fast, comprehensive
         )

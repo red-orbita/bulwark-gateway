@@ -21,6 +21,7 @@ _CONFIG_FILE = Path("data/ml_scanners_config.json")
 _DEFAULT_SCANNERS = {
     "ml_injection_classifier": {
         "name": "ml_injection_classifier",
+        "maturity": "beta",
         "display_name": "Injection Classifier",
         "description": "DeBERTa-v3 prompt injection detection (protectai/deberta-v3-base-prompt-injection-v2)",
         "model_path": "models/injection-classifier/",
@@ -34,6 +35,7 @@ _DEFAULT_SCANNERS = {
     },
     "ml_toxicity_scanner": {
         "name": "ml_toxicity_scanner",
+        "maturity": "beta",
         "display_name": "Toxicity Scanner",
         "description": "Multi-label toxicity detection (toxic, severe_toxic, threat, insult, obscene)",
         "model_path": "models/toxicity/",
@@ -47,6 +49,7 @@ _DEFAULT_SCANNERS = {
     },
     "ml_intent_scanner": {
         "name": "ml_intent_scanner",
+        "maturity": "experimental",
         "display_name": "Intent Scanner",
         "description": "Adversarial intent classification (exploitation, social_engineering, evasion, exfiltration)",
         "model_path": "models/intent-classifier/",
@@ -60,6 +63,7 @@ _DEFAULT_SCANNERS = {
     },
     "ml_topic_scanner": {
         "name": "ml_topic_scanner",
+        "maturity": "experimental",
         "display_name": "Topic Scanner",
         "description": "Off-topic detection with per-agent allowed topic lists",
         "model_path": "models/topic-classifier/",
@@ -73,6 +77,7 @@ _DEFAULT_SCANNERS = {
     },
     "memory_guard": {
         "name": "memory_guard",
+        "maturity": "beta",
         "display_name": "Memory Guard",
         "description": "Multi-turn manipulation detection: context stuffing, role confusion, prompt extraction",
         "model_path": "",
@@ -86,6 +91,7 @@ _DEFAULT_SCANNERS = {
     },
     "retrieval_scanner": {
         "name": "retrieval_scanner",
+        "maturity": "beta",
         "display_name": "RAG Retrieval Scanner",
         "description": "Scans retrieved document chunks for indirect prompt injection (poisoned RAG)",
         "model_path": "",
@@ -99,6 +105,7 @@ _DEFAULT_SCANNERS = {
     },
     "language_detector": {
         "name": "language_detector",
+        "maturity": "beta",
         "display_name": "Language Detector",
         "description": "Identifies input language (lingua/fasttext/heuristic). Enforces allowed_languages policy.",
         "model_path": "",
@@ -112,6 +119,7 @@ _DEFAULT_SCANNERS = {
     },
     "multilingual_patterns": {
         "name": "multilingual_patterns",
+        "maturity": "beta",
         "display_name": "Multilingual Patterns",
         "description": "Attack detection in 10 languages (ES, FR, DE, PT, RU, ZH, JA, KO, AR, HI). 52 patterns.",
         "model_path": "",
@@ -283,11 +291,18 @@ async def ml_scanner_status(
         if needs_ml_deps:
             ready = ready and deps_available
 
+        # Maturity tier (GA/beta/experimental): honesty signal for triage/IR.
+        # Proxy ScannerInfo is authoritative when reachable; else use admin default.
+        maturity = cfg.get("maturity", "experimental")
+        if proxy_scanner and proxy_scanner.get("maturity"):
+            maturity = proxy_scanner["maturity"]
+
         scanners.append({
             **cfg,
             "enabled": scanner_enabled,
             "model_installed": model_installed,
             "ready": ready,
+            "maturity": maturity,
             "metrics": metrics,
         })
 
