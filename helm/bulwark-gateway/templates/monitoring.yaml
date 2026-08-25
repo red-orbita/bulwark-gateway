@@ -750,7 +750,11 @@ data:
         type: prometheus
         uid: prometheus
         access: proxy
-        url: http://prometheus.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:9090
+        # Short service name (same namespace). The .svc.cluster.local FQDN does
+        # not resolve under the Grafana image's musl resolver with ndots:5 + an
+        # extra host search domain; the short name resolves via the first search
+        # domain. Matches monitoring/grafana/provisioning/datasources.yml.
+        url: http://prometheus:9090
         isDefault: true
         editable: false
         jsonData:
