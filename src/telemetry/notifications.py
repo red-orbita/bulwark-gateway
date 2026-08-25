@@ -157,6 +157,30 @@ class AlertPayload:
     source_ip: str = ""
     matched_patterns: list[str] = field(default_factory=list)
     timestamp: float = field(default_factory=time.time)
+    # Traceability / incident-response correlation keys. These travel to EVERY
+    # channel so a responder can pivot an alert back to the SIEM record and logs:
+    #   - event_id:   canonical detection id (SecurityEvent.event_id) — same value
+    #                 in the SIEM ECS event.id and the stdout log.
+    #   - request_id: correlates all detections/phases of one proxied request.
+    #   - source:     which guardrail/scanner fired (triage: trust by maturity).
+    event_id: str = ""
+    request_id: str = ""
+    source: str = ""
+
+    @property
+    def timestamp_iso(self) -> str:
+        """UTC ISO-8601 rendering of the alert time (for human-readable channels)."""
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.timestamp))
+
+    @property
+    def trace_ref(self) -> str:
+        """Compact correlation reference for footers: 'event=<id> req=<id>'."""
+        parts = []
+        if self.event_id:
+            parts.append(f"event={self.event_id}")
+        if self.request_id:
+            parts.append(f"req={self.request_id}")
+        return " ".join(parts)
 
 
 class NotificationEngine:
@@ -366,6 +390,13 @@ class NotificationEngine:
                     {"type": "mrkdwn", "text": f"*Patterns:* {patterns}"},
                 ]},
                 {"type": "section", "text": {"type": "mrkdwn", "text": f"*Description:* {alert.description[:500]}"}},
+                {"type": "context", "elements": [
+                    {"type": "mrkdwn", "text": (
+                        f"*Event ID:* `{alert.event_id or 'N/A'}`  |  "
+                        f"*Request ID:* `{alert.request_id or 'N/A'}`  |  "
+                        f"*Detector:* `{alert.source or 'N/A'}`"
+                    )},
+                ]},
             ]
         }
         client = await self._get_client()
@@ -402,6 +433,9 @@ class NotificationEngine:
                                 {"title": "Agent", "value": alert.agent_id},
                                 {"title": "Source IP", "value": alert.source_ip or "N/A"},
                                 {"title": "Patterns", "value": patterns},
+                                {"title": "Event ID", "value": alert.event_id or "N/A"},
+                                {"title": "Request ID", "value": alert.request_id or "N/A"},
+                                {"title": "Detector", "value": alert.source or "N/A"},
                             ]
                         },
                         {
@@ -433,6 +467,9 @@ class NotificationEngine:
                     {"name": "Source", "value": f"`{alert.source_ip or 'N/A'}`", "inline": True},
                     {"name": "Patterns", "value": patterns, "inline": True},
                     {"name": "Description", "value": alert.description[:500], "inline": False},
+                    {"name": "Event ID", "value": f"`{alert.event_id or 'N/A'}`", "inline": True},
+                    {"name": "Request ID", "value": f"`{alert.request_id or 'N/A'}`", "inline": True},
+                    {"name": "Detector", "value": f"`{alert.source or 'N/A'}`", "inline": True},
                 ],
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(alert.timestamp)),
             }]
@@ -455,6 +492,9 @@ class NotificationEngine:
                 "group": alert.tenant_id,
                 "class": alert.category,
                 "custom_details": {
+                    "event_id": alert.event_id,
+                    "request_id": alert.request_id,
+                    "guardrail_source": alert.source,
                     "agent_id": alert.agent_id,
                     "source_ip": alert.source_ip,
                     "matched_patterns": alert.matched_patterns,
@@ -474,6 +514,9 @@ class NotificationEngine:
             "source": "bulwark-gateway",
             "tags": ["bulwark-gateway", alert.category, alert.tenant_id],
             "details": {
+                "event_id": alert.event_id,
+                "request_id": alert.request_id,
+                "guardrail_source": alert.source,
                 "tenant_id": alert.tenant_id,
                 "agent_id": alert.agent_id,
                 "source_ip": alert.source_ip,
@@ -504,6 +547,9 @@ class NotificationEngine:
             f"\U0001f916 <b>Agent:</b> {esc(alert.agent_id)}\n"
             f"\U0001f310 <b>Source IP:</b> {esc(alert.source_ip or 'N/A')}\n"
             f"\U0001f50d <b>Patterns:</b> {esc(patterns)}\n"
+            f"\U0001f9ff <b>Event ID:</b> <code>{esc(alert.event_id or 'N/A')}</code>\n"
+            f"\U0001f517 <b>Request ID:</b> <code>{esc(alert.request_id or 'N/A')}</code>\n"
+            f"\U0001f6e1 <b>Detector:</b> {esc(alert.source or 'N/A')}\n"
             f"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
             f"<i>{esc(alert.description[:400])}</i>"
         )
@@ -528,6 +574,9 @@ class NotificationEngine:
                         {"keyValue": {"topLabel": "Tenant", "content": alert.tenant_id}},
                         {"keyValue": {"topLabel": "Agent", "content": alert.agent_id}},
                         {"keyValue": {"topLabel": "Patterns", "content": patterns}},
+                        {"keyValue": {"topLabel": "Event ID", "content": alert.event_id or "N/A"}},
+                        {"keyValue": {"topLabel": "Request ID", "content": alert.request_id or "N/A"}},
+                        {"keyValue": {"topLabel": "Detector", "content": alert.source or "N/A"}},
                         {"textParagraph": {"text": alert.description[:500]}},
                     ]
                 }]
@@ -564,6 +613,12 @@ class NotificationEngine:
         <td style="padding: 4px 0;"><code>{alert.source_ip or 'N/A'}</code></td></tr>
     <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Patterns</td>
         <td style="padding: 4px 0;">{patterns}</td></tr>
+    <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Event ID</td>
+        <td style="padding: 4px 0;"><code>{alert.event_id or 'N/A'}</code></td></tr>
+    <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Request ID</td>
+        <td style="padding: 4px 0;"><code>{alert.request_id or 'N/A'}</code></td></tr>
+    <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Detector</td>
+        <td style="padding: 4px 0;"><code>{alert.source or 'N/A'}</code></td></tr>
   </table>
   <hr style="border: none; border-top: 1px solid #ddd; margin: 12px 0;">
   <p style="color: #333; margin: 0;">{alert.description[:1000]}</p>
@@ -610,6 +665,9 @@ class NotificationEngine:
         """Generic HTTP webhook (JSON POST)."""
         body = {
             "source": "bulwark-gateway",
+            "event_id": alert.event_id,
+            "request_id": alert.request_id,
+            "guardrail_source": alert.source,
             "verdict": alert.verdict,
             "severity": alert.severity,
             "category": alert.category,
@@ -619,6 +677,7 @@ class NotificationEngine:
             "source_ip": alert.source_ip,
             "matched_patterns": alert.matched_patterns,
             "timestamp": alert.timestamp,
+            "timestamp_iso": alert.timestamp_iso,
         }
         headers = {"Content-Type": "application/json"}
         headers.update(channel.headers)

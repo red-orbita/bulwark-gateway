@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,6 +54,12 @@ class ThreatCategory(str, Enum):
 class SecurityEvent(StrictModel):
     """Structured security event for logging/SIEM."""
 
+    # Canonical, globally-unique identifier for THIS detection. Minted once at
+    # event creation and propagated UNCHANGED to every sink (stdout log, SIEM/ECS,
+    # notification channels, webhooks, admin recent-blocks). This is the primary
+    # key an incident responder pivots on to correlate an alert back to the SIEM
+    # record and the logs — it makes every event/alert traceable and triageable.
+    event_id: str = Field(default_factory=lambda: uuid4().hex, max_length=64)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tenant_id: str = Field(..., max_length=128)
     agent_id: str = Field(..., max_length=128)

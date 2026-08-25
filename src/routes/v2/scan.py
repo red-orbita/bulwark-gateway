@@ -297,6 +297,8 @@ async def _emit_scan_events(
     for event in events:
         await logger.awarn(
             "security_event",
+            event_id=event.event_id,
+            request_id=event.request_id,
             verdict=event.verdict.value,
             category=event.category.value,
             description=event.description,
@@ -315,7 +317,9 @@ async def _emit_scan_events(
             agent_id=event.agent_id,
             guardrail_layer="v2_scan",
             latency_ms=0.0,
+            request_id=event.request_id,
             confidence=1.0,
+            event_id=event.event_id,
         )
         queue.enqueue_nowait(telemetry_event)
 

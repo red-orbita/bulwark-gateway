@@ -76,6 +76,7 @@ class BulwarkFields(BaseModel):
     """Custom fields specific to Bulwark Gateway (nested under 'bulwark.')."""
 
     verdict: str  # allow, block, warn, redact
+    event_id: Optional[str] = None  # Canonical detection id — correlates across all sinks
     rule_id: Optional[str] = None
     rule_description: Optional[str] = None
     threat_category: Optional[str] = None
@@ -197,8 +198,15 @@ def from_security_event(
     confidence: float = 1.0,
     allowed_by_exception: bool = False,
     exception_scope: Optional[str] = None,
+    event_id: Optional[str] = None,
 ) -> SecurityTelemetryEvent:
-    """Factory: create telemetry event from guardrail SecurityEvent."""
+    """Factory: create telemetry event from guardrail SecurityEvent.
+
+    ``event_id`` is the canonical detection id (SecurityEvent.event_id). When
+    provided it becomes the ECS ``event.id`` AND ``bulwark.event_id`` so the SIEM
+    record shares the SAME identifier as the notification/webhook/log for the same
+    detection. When omitted (e.g. legacy callers), ECSEvent mints a uuid4 as before.
+    """
     input_hash = hashlib.sha256(raw_input.encode()).hexdigest()[:16] if raw_input else None
 
     severity = TelemetrySeverity.INFORMATIONAL
@@ -225,6 +233,7 @@ def from_security_event(
         message=message,
         tags=tags,
         event=ECSEvent(
+            **({"id": event_id} if event_id else {}),
             category=TelemetryEventCategory.INTRUSION_DETECTION,
             action=action,
             outcome=outcome,
@@ -234,6 +243,7 @@ def from_security_event(
         source=ECSSource(ip=source_ip),
         bulwark=BulwarkFields(
             verdict=verdict,
+            event_id=event_id,
             rule_id=rule_id,
             rule_description=rule_description,
             threat_category=threat_category,

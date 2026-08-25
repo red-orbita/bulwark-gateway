@@ -1555,6 +1555,8 @@ async def _log_events(events: list[SecurityEvent], source_ip: str | None = None)
         _exception_scope = _md.get("exception_scope") or _md.get("allowed_by_exception_scope")
         await logger.awarn(
             "security_event",
+            event_id=event.event_id,
+            request_id=event.request_id,
             verdict=event.verdict.value,
             category=event.category.value,
             description=event.description,
@@ -1577,9 +1579,11 @@ async def _log_events(events: list[SecurityEvent], source_ip: str | None = None)
             guardrail_layer=event.source or "unknown",
             latency_ms=0.0,
             source_ip=source_ip,
+            request_id=event.request_id,
             confidence=1.0,
             allowed_by_exception=_allowed_by_exception,
             exception_scope=_exception_scope,
+            event_id=event.event_id,
         )
         queue.enqueue_nowait(telemetry_event)
 
@@ -1607,6 +1611,9 @@ async def _fire_webhook_alert(events: list[SecurityEvent], tenant_id: str, agent
             tenant_id=tenant_id,
             agent_id=agent_id,
             matched_patterns=[event.matched_pattern] if event.matched_pattern else [],
+            event_id=event.event_id,
+            request_id=event.request_id or "",
+            source=event.source or "",
         )
         try:
             await engine.send_alert(alert)
@@ -1684,6 +1691,7 @@ def _push_recent_block(
             pattern_id = (event.matched_pattern or "").strip()
             entry = _json.dumps({
                 "ts": time.time(),
+                "event_id": event.event_id,
                 "tenant": tenant_id,
                 "agent": agent_id,
                 "category": category,
