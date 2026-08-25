@@ -57,7 +57,7 @@
                 <i data-lucide="sliders-horizontal" class="w-4 h-4 text-cyan-400"></i>
                 <h2 class="text-sm font-medium text-white">Enforcement Tuning</h2>
             </div>
-            <p class="text-[11px] text-gray-500 mb-4">Lower thresholds = more aggressive hardening (higher recall, more false positives). Decay is the risk half-life in seconds. Leave a field blank to keep its current effective value; only changed fields are written. The <span class="font-mono">correlation_enabled</span> master switch is a boot-time setting and is not tunable here.</p>
+            <p class="text-[11px] text-gray-500 mb-4">Lower thresholds = more aggressive hardening (higher recall, more false positives). Decay is the risk half-life in seconds. The <span class="font-mono">exfil confidence gate</span> (0–1) is the minimum content-corroboration score required to escalate a correlated input↔output exfiltration incident from WARN to BLOCK when blocking is on — higher = fewer, higher-confidence blocks. Leave a field blank to keep its current effective value; only changed fields are written. The <span class="font-mono">correlation_enabled</span> master switch is a boot-time setting and is not tunable here.</p>
 
             <div class="space-y-4">
                 <!-- Blocking toggle -->
@@ -125,6 +125,7 @@
                     <div class="flex justify-between"><span class="text-gray-400">BLOCK</span><span class="font-mono text-red-300" x-text="status.effective.risk_block_threshold"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">WARN</span><span class="font-mono text-amber-300" x-text="status.effective.risk_warn_threshold"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">Decay half-life</span><span class="font-mono text-gray-300" x-text="status.effective.risk_decay_seconds + 's'"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-400">Exfil confidence gate</span><span class="font-mono text-gray-300" x-text="status.effective.confidence_block_threshold"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">Bump WARN</span><span class="font-mono text-gray-300" x-text="status.effective.event_bump_warn"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">Bump BLOCK</span><span class="font-mono text-gray-300" x-text="status.effective.event_bump_block"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">High ×</span><span class="font-mono text-gray-300" x-text="status.effective.severity_high_mult"></span></div>
@@ -204,8 +205,8 @@ function correlationPage() {
         canWrite: false,
         status: {
             redis_connected: false, active_origins: 0, overridden: false,
-            effective: { blocking: false, window_seconds: 30, risk_block_threshold: 7, risk_warn_threshold: 4, risk_decay_seconds: 900, event_bump_warn: 0.5, event_bump_block: 1.0, severity_high_mult: 1.5, severity_critical_mult: 2.0 },
-            defaults: { blocking: false, window_seconds: 30, risk_block_threshold: 7, risk_warn_threshold: 4, risk_decay_seconds: 900, event_bump_warn: 0.5, event_bump_block: 1.0, severity_high_mult: 1.5, severity_critical_mult: 2.0 },
+            effective: { blocking: false, window_seconds: 30, risk_block_threshold: 7, risk_warn_threshold: 4, risk_decay_seconds: 900, confidence_block_threshold: 0.5, event_bump_warn: 0.5, event_bump_block: 1.0, severity_high_mult: 1.5, severity_critical_mult: 2.0 },
+            defaults: { blocking: false, window_seconds: 30, risk_block_threshold: 7, risk_warn_threshold: 4, risk_decay_seconds: 900, confidence_block_threshold: 0.5, event_bump_warn: 0.5, event_bump_block: 1.0, severity_high_mult: 1.5, severity_critical_mult: 2.0 },
             override: {},
         },
         origins: [],
@@ -215,6 +216,7 @@ function correlationPage() {
             { key: 'risk_warn_threshold', label: 'WARN', step: '0.1' },
             { key: 'risk_decay_seconds', label: 'Decay (s)', step: '10' },
             { key: 'window_seconds', label: 'Window (s)', step: '1' },
+            { key: 'confidence_block_threshold', label: 'Exfil confidence gate (0–1)', step: '0.05' },
         ],
         bumpFields: [
             { key: 'event_bump_warn', label: 'Bump on WARN', step: '0.1' },
@@ -280,7 +282,7 @@ function correlationPage() {
             if (Boolean(this.form.blocking) !== Boolean(this.status.effective.blocking)) {
                 out.blocking = Boolean(this.form.blocking);
             }
-            const numKeys = ['window_seconds','risk_block_threshold','risk_warn_threshold','risk_decay_seconds','event_bump_warn','event_bump_block','severity_high_mult','severity_critical_mult'];
+            const numKeys = ['window_seconds','risk_block_threshold','risk_warn_threshold','risk_decay_seconds','confidence_block_threshold','event_bump_warn','event_bump_block','severity_high_mult','severity_critical_mult'];
             for (const k of numKeys) {
                 const v = this.form[k];
                 if (v === '' || v === null || v === undefined) continue;

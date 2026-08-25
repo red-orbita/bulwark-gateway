@@ -190,8 +190,10 @@ _CORRELATION_METRIC_MAP: list[tuple[str, str, str]] = [
 ]
 
 # Inline-evaluation latency histogram. Field names + bucket bounds are duplicated
-# from src/correlation/metrics.py (the admin image cannot import the proxy's src
-# package). Keep these in lockstep with LATENCY_BUCKETS_SECONDS there.
+# from src/correlation/metrics.py rather than imported: the metrics scrape path is
+# deliberately decoupled from the proxy's correlation package so a hot, unauth-
+# adjacent endpoint never triggers its import side-effects (risk-store/Redis client
+# wiring). Keep these in lockstep with LATENCY_BUCKETS_SECONDS there.
 _CORRELATION_LATENCY_BUCKETS: tuple[float, ...] = (
     0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
 )

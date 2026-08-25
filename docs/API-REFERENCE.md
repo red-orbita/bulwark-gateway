@@ -171,8 +171,12 @@ SSE stream for real-time dashboard updates. Auth via `?token=<jwt>`.
 
 #### GET /admin/health/metrics
 
-Prometheus exposition format. Exposes global request/verdict counters and the
-`bulwark_correlation_*` counters (sourced from Redis) plus in-process gauges.
+Prometheus exposition format. Exposes global request/verdict counters, the
+`bulwark_correlation_*` counters, and the `bulwark_correlation_eval_duration_seconds`
+inline-evaluation latency histogram (all sourced from the shared Redis correlation
+hash), plus in-process gauges. The histogram measures the hot-path cost the opt-in
+correlation engine adds (origin-risk read + input↔output correlation, including
+their Redis round-trips); it renders as stable zeros when the engine has not fired.
 
 **Authentication (either):**
 
@@ -809,7 +813,8 @@ Read-only catalog of tunable fields and their numeric bounds. Requires `correlat
     "event_bump_warn": {"min": 0.0, "max": 10.0},
     "event_bump_block": {"min": 0.0, "max": 10.0},
     "severity_high_mult": {"min": 0.1, "max": 10.0},
-    "severity_critical_mult": {"min": 0.1, "max": 10.0}
+    "severity_critical_mult": {"min": 0.1, "max": 10.0},
+    "confidence_block_threshold": {"min": 0.0, "max": 1.0}
   }
 }
 ```
@@ -853,7 +858,7 @@ disable enforcement with a nonsensical value. Requires `correlation:write`.
 ```
 
 Numeric bounds: `window_seconds` 1–3600, `risk_block_threshold`/`risk_warn_threshold` >0–10,
-`risk_decay_seconds` 10–604800, `event_bump_warn`/`event_bump_block` 0–10,
+`risk_decay_seconds` 10–604800, `confidence_block_threshold` 0–1, `event_bump_warn`/`event_bump_block` 0–10,
 `severity_high_mult`/`severity_critical_mult` >0–10.
 
 #### DELETE /admin/correlation/config
