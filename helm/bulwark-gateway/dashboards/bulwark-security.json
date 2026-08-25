@@ -298,10 +298,22 @@
       ],
       "options": {
         "orientation": "horizontal",
+        "xField": "category",
         "legend": { "displayMode": "hidden" },
         "tooltip": { "mode": "single" }
       },
       "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": { "mode": "columns", "keepLabels": ["category"] }
+        },
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true }
+          }
+        },
         { "id": "sortBy", "options": { "sort": [{ "field": "Value", "desc": true }] } }
       ]
     },
