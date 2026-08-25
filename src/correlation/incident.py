@@ -319,8 +319,11 @@ class InputOutputCorrelator:
         """
         try:
             rc = get_correlation_runtime().get()
-            session_score = self._risk.get("session", f"{tenant_id}:{agent_id}")
-            tenant_score = self._risk.get("tenant", tenant_id)
+            # Single round-trip for both enforcement reads (F2): the session is
+            # the decision score; the tenant score is surfaced for context only.
+            session_score, tenant_score = self._risk.get_many(
+                [("session", f"{tenant_id}:{agent_id}"), ("tenant", tenant_id)]
+            )
             score = session_score
 
             if score >= rc.risk_block_threshold and rc.blocking:

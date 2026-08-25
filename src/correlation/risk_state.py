@@ -42,6 +42,15 @@ _MAX_SCORE = 10.0
 # Bounded in-memory fallback capacity (LRU-ish eviction).
 _MAX_LOCAL_ENTRIES = 50_000
 
+# Circuit breaker (F2): the risk read/write path sits inline in the request
+# pipeline. With ``socket_timeout=1s`` and no breaker, a slow/down Redis makes
+# *every* request pay up to 1s per call — a latency amplifier precisely when the
+# backend is already unhealthy. After this many consecutive Redis errors the
+# breaker opens and calls short-circuit straight to the in-memory fallback
+# (no socket touch, no timeout) until a cooldown elapses, then one probe re-tests.
+_CB_FAIL_THRESHOLD = 5
+_CB_COOLDOWN_SECONDS = 5.0
+
 # Atomic decay-and-bump executed server-side (Redis runs Lua scripts atomically,
 # so concurrent bumps of the *same* origin cannot lose updates — the exact race a
 # burst attack would otherwise exploit to under-count its own risk). Mirrors the
@@ -136,6 +145,9 @@ class RiskStateStore:
         self._bump_script: Optional[Any] = None
         self._local: dict[str, _LocalEntry] = {}
         self._initialized = False
+        # Circuit breaker state (F2). ``_cb_opened_at == 0.0`` ⇒ closed.
+        self._cb_failures = 0
+        self._cb_opened_at = 0.0
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -192,6 +204,45 @@ class RiskStateStore:
         factor = math.pow(0.5, elapsed / self._decay_seconds)
         return _clamp(score * factor)
 
+    # --- circuit breaker (F2) ----------------------------------------------
+
+    def _cb_should_skip(self) -> bool:
+        """True when the breaker is open — skip Redis, go straight to fallback.
+
+        Open for :data:`_CB_COOLDOWN_SECONDS` after the failure threshold is hit;
+        once the cooldown elapses this returns False so the next call becomes a
+        *half-open probe* that re-tests Redis (success closes it, failure re-opens).
+        """
+        if self._cb_opened_at == 0.0:
+            return False
+        if time.time() - self._cb_opened_at >= _CB_COOLDOWN_SECONDS:
+            return False  # half-open: allow one probe through
+        return True
+
+    def _cb_success(self) -> None:
+        if self._cb_failures or self._cb_opened_at:
+            logger.info("risk_state_circuit_closed")
+        self._cb_failures = 0
+        self._cb_opened_at = 0.0
+
+    def _cb_failure(self) -> None:
+        self._cb_failures += 1
+        if self._cb_failures >= _CB_FAIL_THRESHOLD and self._cb_opened_at == 0.0:
+            self._cb_opened_at = time.time()
+            logger.warning(
+                "risk_state_circuit_opened",
+                consecutive_failures=self._cb_failures,
+                cooldown_seconds=_CB_COOLDOWN_SECONDS,
+            )
+        elif self._cb_opened_at != 0.0:
+            # A failed half-open probe — restart the cooldown window.
+            self._cb_opened_at = time.time()
+
+    @property
+    def circuit_open(self) -> bool:
+        """Best-effort breaker state for observability/tests."""
+        return self._cb_opened_at != 0.0 and self._cb_should_skip()
+
     # --- public API --------------------------------------------------------
 
     def bump(self, scope_type: str, scope_id: str, amount: float) -> float:
@@ -203,11 +254,14 @@ class RiskStateStore:
         if not scope_id or amount == 0:
             return self.get(scope_type, scope_id)
         now = time.time()
-        if self._redis is not None:
+        if self._redis is not None and not self._cb_should_skip():
             try:
-                return self._bump_redis(scope_type, scope_id, amount, now)
+                out = self._bump_redis(scope_type, scope_id, amount, now)
+                self._cb_success()
+                return out
             except Exception as e:  # noqa: BLE001 - degrade, never break hot path
                 logger.warning("risk_state_bump_redis_error", error=str(e))
+                self._cb_failure()
         return self._bump_local(scope_type, scope_id, amount, now)
 
     def get(self, scope_type: str, scope_id: str) -> float:
@@ -215,12 +269,36 @@ class RiskStateStore:
         if not scope_id:
             return 0.0
         now = time.time()
-        if self._redis is not None:
+        if self._redis is not None and not self._cb_should_skip():
             try:
-                return self._get_redis(scope_type, scope_id, now)
+                out = self._get_redis(scope_type, scope_id, now)
+                self._cb_success()
+                return out
             except Exception as e:  # noqa: BLE001
                 logger.warning("risk_state_get_redis_error", error=str(e))
+                self._cb_failure()
         return self._get_local(scope_type, scope_id, now)
+
+    def get_many(self, scopes: list[tuple[str, str]]) -> list[float]:
+        """Decayed scores for several origins in a single round-trip (F2).
+
+        Collapses the per-request enforcement reads (session + tenant) from N
+        round-trips to one pipeline. Order-preserving; empty/absent origins read
+        as ``0.0``. Never raises — degrades to the in-memory map (and trips the
+        breaker) on any Redis error.
+        """
+        if not scopes:
+            return []
+        now = time.time()
+        if self._redis is not None and not self._cb_should_skip():
+            try:
+                out = self._get_many_redis(scopes, now)
+                self._cb_success()
+                return out
+            except Exception as e:  # noqa: BLE001
+                logger.warning("risk_state_get_many_redis_error", error=str(e))
+                self._cb_failure()
+        return [self._get_local(st, sid, now) for st, sid in scopes]
 
     # --- redis backend -----------------------------------------------------
 
@@ -250,6 +328,22 @@ class RiskStateStore:
         prev_score = float(cur.get("score", 0.0) or 0.0)
         prev_ts = float(cur.get("ts", now) or now)
         return self._decay(prev_score, now - prev_ts)
+
+    def _get_many_redis(self, scopes: list[tuple[str, str]], now: float) -> list[float]:
+        pipe = self._redis.pipeline()  # type: ignore[union-attr]
+        for scope_type, scope_id in scopes:
+            pipe.hgetall(self._redis_key(scope_type, scope_id))
+        rows = pipe.execute()
+        out: list[float] = []
+        for cur in rows:
+            cur = cur or {}
+            if not cur:
+                out.append(0.0)
+                continue
+            prev_score = float(cur.get("score", 0.0) or 0.0)
+            prev_ts = float(cur.get("ts", now) or now)
+            out.append(self._decay(prev_score, now - prev_ts))
+        return out
 
     # --- in-memory fallback ------------------------------------------------
 

@@ -51,14 +51,23 @@ class _FakePipeline:
         self._ops.append(("expire", key, ttl))
         return self
 
+    def hgetall(self, key: str):
+        self._ops.append(("hgetall", key))
+        return self
+
     def execute(self) -> list:
+        results: list = []
         for op in self._ops:
             if op[0] == "hset":
                 self._backend.hset(op[1], mapping=op[2])
+                results.append(len(op[2] or {}))
             elif op[0] == "expire":
                 self._backend.expire(op[1], op[2])
+                results.append(True)
+            elif op[0] == "hgetall":
+                results.append(self._backend.hgetall(op[1]))
         self._ops = []
-        return []
+        return results
 
 
 class _FakeRedisHash:
