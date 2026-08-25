@@ -288,6 +288,94 @@
         </div>
     </div>
 
+    <!-- Correlation Engine (adaptive origin-risk) -->
+    <div class="sg-card" x-data="correlationSummary()">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="git-merge" class="w-4 h-4 text-cyan-400"></i>
+                <h3 class="text-sm font-semibold text-white">Correlation Engine</h3>
+                <span class="sg-badge text-[10px]" x-cloak
+                      :class="effective.blocking ? 'sg-badge-danger' : 'sg-badge-warning'"
+                      x-text="effective.blocking ? 'BLOCK' : 'WARN only'"></span>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-1.5" x-show="loaded" x-cloak>
+                    <span class="sg-dot" :class="redisConnected ? 'sg-dot-success' : 'sg-dot-warning'"></span>
+                    <span class="text-[11px]" :class="redisConnected ? 'text-emerald-300' : 'text-amber-300'"
+                          x-text="redisConnected ? 'Redis live' : 'Redis down'"></span>
+                </div>
+                <a href="/correlation" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Open correlation engine tuning">
+                    <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i> Tune
+                </a>
+            </div>
+        </div>
+
+        <!-- Redis warning (active-origin visibility + shared overrides need Redis) -->
+        <div x-show="loaded && !redisConnected" x-cloak class="mb-4 rounded-lg border border-amber-900/40 bg-amber-950/10 px-3 py-2">
+            <p class="text-[11px] text-amber-200/80">Redis unreachable — active-origin visibility and shared runtime overrides are unavailable; each proxy tracks risk in-process with default thresholds.</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- KPIs -->
+            <div class="grid grid-cols-2 gap-3 lg:col-span-1 content-start">
+                <div class="rounded-lg bg-white/[0.02] px-3 py-2.5">
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider">At-Risk Origins</p>
+                    <p class="text-xl font-semibold font-mono text-white mt-0.5" x-text="activeOrigins.toLocaleString()">0</p>
+                </div>
+                <div class="rounded-lg bg-white/[0.02] px-3 py-2.5">
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider">Override</p>
+                    <p class="text-sm font-semibold mt-1.5" :class="overridden ? 'text-cyan-300' : 'text-gray-400'" x-text="overridden ? 'Active' : 'Defaults'">Defaults</p>
+                </div>
+                <div class="rounded-lg bg-white/[0.02] px-3 py-2.5">
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider">BLOCK &ge;</p>
+                    <p class="text-sm font-semibold font-mono text-red-300 mt-1.5" x-text="Number(effective.risk_block_threshold).toFixed(1)">7.0</p>
+                </div>
+                <div class="rounded-lg bg-white/[0.02] px-3 py-2.5">
+                    <p class="text-[10px] text-gray-500 uppercase tracking-wider">WARN &ge;</p>
+                    <p class="text-sm font-semibold font-mono text-amber-300 mt-1.5" x-text="Number(effective.risk_warn_threshold).toFixed(1)">4.0</p>
+                </div>
+            </div>
+
+            <!-- Top at-risk origins -->
+            <div class="lg:col-span-2">
+                <div class="flex items-center justify-between mb-2">
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wider">Top origins by decayed risk</p>
+                    <button @click="reload()" aria-label="Refresh correlation" title="Refresh" class="sg-btn sg-btn-ghost sg-btn-sm">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+
+                <!-- Loading -->
+                <div x-show="!loaded" class="space-y-2">
+                    <div class="sg-skeleton h-7 w-full"></div>
+                    <div class="sg-skeleton h-7 w-full"></div>
+                </div>
+
+                <!-- Empty -->
+                <div x-show="loaded && origins.length === 0" x-cloak class="sg-empty py-6">
+                    <i data-lucide="shield-check" class="sg-empty-icon"></i>
+                    <p class="sg-empty-title">No origins at risk</p>
+                    <p class="sg-empty-desc">Risk accrues here from WARN/BLOCK events and input&harr;output exfiltration correlations</p>
+                </div>
+
+                <!-- List -->
+                <div x-show="loaded && origins.length > 0" x-cloak class="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                    <template x-for="o in origins" :key="o.scope_type + ':' + o.digest">
+                        <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-gray-800/40">
+                            <span class="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0" :class="scopeClass(o.scope_type)" x-text="o.scope_type"></span>
+                            <span class="font-mono text-[11px] text-gray-400 truncate flex-shrink-0 w-28 sm:w-32" x-text="o.digest"></span>
+                            <div class="flex-1 h-1.5 rounded-full bg-gray-800 overflow-hidden">
+                                <div class="h-full sg-meter-fill" :class="barClass(o)" :style="`width: ${riskPct(o)}%`"></div>
+                            </div>
+                            <span class="font-mono text-xs tabular-nums flex-shrink-0 w-10 text-right" :class="scoreClass(o)" x-text="o.score.toFixed(1)"></span>
+                            <span class="font-mono text-[10px] text-gray-600 flex-shrink-0 w-12 text-right" x-text="o.ttl_seconds === null ? '\u2014' : fmtTtl(o.ttl_seconds)"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Two columns: Recent Blocks + Sandbox -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <!-- Recent Blocked Attacks -->
@@ -722,6 +810,85 @@ function sandboxWidget() {
             }
             this.loading = false;
         }
+    };
+}
+
+function correlationSummary() {
+    return {
+        loaded: false,
+        redisConnected: false,
+        overridden: false,
+        activeOrigins: 0,
+        // Seeded with built-in defaults so the card renders sensibly before the
+        // first fetch; replaced by the real effective config from /status.
+        effective: { blocking: false, risk_block_threshold: 7, risk_warn_threshold: 4 },
+        origins: [],
+        _timer: null,
+
+        init() {
+            this.reload();
+            // Correlation state is low-frequency; a 15s poll is plenty.
+            this._timer = setInterval(() => this.reload(), 15000);
+        },
+
+        async reload() {
+            await Promise.all([this.loadStatus(), this.loadOrigins()]);
+            this.loaded = true;
+            this.$nextTick(() => window.lucide && lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const r = await fetch('/admin/correlation/status');
+                if (!r.ok) return;
+                const d = await r.json();
+                this.redisConnected = !!d.redis_connected;
+                this.overridden = !!d.overridden;
+                this.activeOrigins = d.active_origins || 0;
+                if (d.effective) this.effective = d.effective;
+            } catch (e) { /* non-fatal */ }
+        },
+
+        async loadOrigins() {
+            try {
+                // The endpoint applies its limit during the scan and only sorts the
+                // gathered slice, so fetch a bounded superset and take the true top-8
+                // (by decayed score) client-side.
+                const r = await fetch('/admin/correlation/origins?limit=100');
+                if (!r.ok) { this.origins = []; return; }
+                const d = await r.json();
+                this.origins = (d.origins || []).slice(0, 8);
+            } catch (e) { this.origins = []; }
+        },
+
+        riskPct(o) {
+            const block = Number(this.effective.risk_block_threshold) || 10;
+            return Math.max(4, Math.min(100, (o.score / block) * 100));
+        },
+        scopeClass(scope) {
+            if (scope === 'tenant') return 'bg-purple-500/15 text-purple-300';
+            if (scope === 'session') return 'bg-cyan-500/15 text-cyan-300';
+            return 'bg-gray-500/15 text-gray-300';
+        },
+        scoreClass(o) {
+            const block = Number(this.effective.risk_block_threshold);
+            const warn = Number(this.effective.risk_warn_threshold);
+            if (o.score >= block) return 'text-red-400';
+            if (o.score >= warn) return 'text-amber-400';
+            return 'text-gray-300';
+        },
+        barClass(o) {
+            const block = Number(this.effective.risk_block_threshold);
+            const warn = Number(this.effective.risk_warn_threshold);
+            if (o.score >= block) return 'bg-red-500';
+            if (o.score >= warn) return 'bg-amber-500';
+            return 'bg-emerald-500';
+        },
+        fmtTtl(s) {
+            if (s >= 3600) return (s / 3600).toFixed(1) + 'h';
+            if (s >= 60) return Math.round(s / 60) + 'm';
+            return s + 's';
+        },
     };
 }
 </script>
