@@ -386,15 +386,22 @@ data:
       - name: bulwark_slo_recording
         interval: 30s
         rules:
+          # NOTE: aggregate with max() to collapse the per-target instance/job
+          # labels into a single cluster-wide series. max() is the correct
+          # service-availability aggregation ("was at least one target up",
+          # matching load-balanced routing) and is robust to a stale `instance`
+          # series left behind by a scrape-config/FQDN change, which would drag
+          # an avg() down. Without aggregation the duplicate series also break
+          # the single-value SLO gauges.
           - record: bulwark:slo:availability:ratio_30d
             expr: |
-              avg_over_time(up{job="bulwark-admin"}[30d])
+              max(avg_over_time(up{job="bulwark-admin"}[30d]))
           - record: bulwark:slo:availability:ratio_7d
             expr: |
-              avg_over_time(up{job="bulwark-admin"}[7d])
+              max(avg_over_time(up{job="bulwark-admin"}[7d]))
           - record: bulwark:slo:availability:ratio_1h
             expr: |
-              avg_over_time(up{job="bulwark-admin"}[1h])
+              max(avg_over_time(up{job="bulwark-admin"}[1h]))
           # Latency SLO — fraction of time the proxy p95 stayed under the 100ms
           # objective. Derived from the real bulwark_proxy_latency_p95_ms gauge
           # (sourced from the proxy /health/stats percentiles; no per-request
@@ -402,13 +409,13 @@ data:
           # not a per-request bucket ratio.
           - record: bulwark:slo:latency:ratio_30d
             expr: |
-              avg_over_time((bulwark_proxy_latency_p95_ms <= bool 100)[30d:1m])
+              avg_over_time((max(bulwark_proxy_latency_p95_ms) <= bool 100)[30d:1m])
           - record: bulwark:slo:latency:ratio_7d
             expr: |
-              avg_over_time((bulwark_proxy_latency_p95_ms <= bool 100)[7d:1m])
+              avg_over_time((max(bulwark_proxy_latency_p95_ms) <= bool 100)[7d:1m])
           - record: bulwark:slo:latency:ratio_1h
             expr: |
-              avg_over_time((bulwark_proxy_latency_p95_ms <= bool 100)[1h:1m])
+              avg_over_time((max(bulwark_proxy_latency_p95_ms) <= bool 100)[1h:1m])
           - record: bulwark:error_budget:availability:remaining
             expr: |
               1 - (
@@ -430,7 +437,7 @@ data:
               (1 - 0.999)
           - record: bulwark:error_budget:availability:burn_rate_6h
             expr: |
-              (1 - avg_over_time(up{job="bulwark-admin"}[6h]))
+              (1 - max(avg_over_time(up{job="bulwark-admin"}[6h])))
               /
               (1 - 0.999)
           - record: bulwark:error_budget:latency:burn_rate_1h
