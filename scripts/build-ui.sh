@@ -21,6 +21,7 @@ declare -A EXPECTED_HASHES=(
     ["htmx-sse.js"]="sha384-"
     ["lucide.min.js"]="sha384-"
     ["qrcode.min.js"]="sha384-"
+    ["apexcharts.min.js"]="sha384-KNaFJ+EK516RuHsoycvreec5pD7BkTKJEkjMrVSQWu9KGTl7En4dhIDv7t1DFJ+g"
 )
 
 verify_hash() {
@@ -67,6 +68,11 @@ verify_hash "$VENDOR_JS/lucide.min.js"
 # qrcodejs (MFA QR code rendering) — vendored for air-gap (was jsdelivr CDN)
 curl -sL "https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js" -o "$VENDOR_JS/qrcode.min.js"
 verify_hash "$VENDOR_JS/qrcode.min.js"
+
+# ApexCharts (in-UI dashboards) — vendored for air-gap. Does NOT require
+# 'unsafe-eval' (SVG rendering, no Function()/eval on the hot path).
+curl -sL "https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js" -o "$VENDOR_JS/apexcharts.min.js"
+verify_hash "$VENDOR_JS/apexcharts.min.js"
 
 echo "==> Vendoring self-hosted fonts (Inter + JetBrains Mono)..."
 # Air-gap: download the Google Fonts CSS with a modern UA (yields woff2),

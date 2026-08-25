@@ -219,6 +219,17 @@ spec:
       ports:
         - port: 55000
           protocol: TCP
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Prometheus query API — the admin dashboards page runs the ported Grafana
+    # PromQL against Prometheus for in-UI charts (falls back to Redis if blocked).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
+    {{- end }}
     # DNS — H-06 fix: restrict to kube-dns in kube-system namespace only
     - to:
         - namespaceSelector:
@@ -254,6 +265,14 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: grafana
+      ports:
+        - port: 9090
+          protocol: TCP
+    # Admin dashboards page queries the Prometheus HTTP API for in-UI charts.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin
       ports:
         - port: 9090
           protocol: TCP

@@ -341,3 +341,75 @@ Applies to the three barcharts: overview "Top Detected Categories", security
   curl -s -H "Authorization: Bearer $TOKEN" \
     http://admin:8090/admin/health/metrics | grep '^bulwark_'
   ```
+
+---
+
+## 9. In-UI Dashboards (Admin, no Grafana required)
+
+The four Grafana dashboards from §6 are also rendered natively inside the admin
+UI (`/dashboard`), so operators without Grafana access still get the same
+panels. This is **additive** — Grafana remains the source of truth for the JSON
+definitions; the in-UI catalog mirrors their PromQL.
+
+### Layout
+
+The admin dashboard page is a **tab bar**:
+
+| Tab | Content |
+|-----|---------|
+| **Live** | The pre-existing curated admin dashboard (SSE metrics, recent blocks, tenant usage). Unchanged. |
+| **Overview / Security / SLO / Correlation** | The four Grafana dashboards, rendered from the server-side catalog. |
+
+Grafana panels render on a 24-column CSS grid matching each dashboard's Grafana
+`gridPos`, with a mobile 2-column fallback. A range selector (`1h/6h/24h/7d/30d`)
+drives `$timerange`/`$__range` substitution. Charts use vendored **ApexCharts
+3.54.1** (`admin/static/js/vendor/apexcharts.min.js`, SRI-pinned) — no CDN, no
+`eval` (CSP-compatible).
+
+### Data source — hybrid (Prometheus, else Redis)
+
+Each panel resolves in this order:
+
+1. **Prometheus** at `BULWARK_PROMETHEUS_URL` (default `http://prometheus:9090`,
+   the only address that resolves in-cluster — see §1). Queried server-side via
+   `httpx` (no new dependency). Instant panels use `/api/v1/query`; timeseries
+   use `/api/v1/query_range`.
+2. **Redis instant fallback** — only for panels whose value is a *flat cumulative
+   counter* that also lives in Redis (`fallback="…"` in the catalog). Nine keys
+   are wired: global verdicts/requests, per-tenant verdicts/blocks/blocking,
+   detections by category/pattern, and correlation counters.
+3. **Unavailable** — panels backed by `rate()`/`increase()`/recording rules set
+   `requires_prometheus=True`. When Prometheus is unreachable they render an
+   explicit "Requires Prometheus" note rather than a fabricated value. **The
+   entire SLO dashboard is Prometheus-only** (recording rules have no Redis
+   equivalent).
+
+This honesty rule is deliberate: Redis holds cumulative counters, not rated
+series, so only counter-style panels can be truthfully backed by the fallback.
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/admin/dashboards/status` | `admin:read` | Prometheus reachability + dashboard/panel inventory |
+| GET | `/admin/dashboards/{uid}?range=6h` | `admin:read` | Render-ready panel JSON for one dashboard |
+
+`{uid}` ∈ `bulwark-overview`, `bulwark-security`, `bulwark-slo`,
+`bulwark-correlation`. A single panel failing never 500s the dashboard — it
+degrades to the `unavailable` shape.
+
+### NetworkPolicy
+
+Reaching Prometheus from admin requires an egress rule (admin → `prometheus:9090`)
+plus the matching ingress on Prometheus. Both are added in
+`network-policies.yaml`, gated on `.Values.monitoring.prometheus.enabled`. With
+monitoring disabled the admin dashboards fall back to Redis automatically.
+
+### Source files
+
+| File | Role |
+|------|------|
+| `admin/services/prometheus_query.py` | Async `httpx` Prometheus client + result parsing |
+| `admin/services/dashboard_catalog.py` | Server-side catalog (4 dashboards, PromQL, grid, fallback map) |
+| `admin/routes/dashboards.py` | Endpoints + Prometheus/Redis resolution & panel shaping |
+| `admin/templates/pages/dashboard.html` | Tab bar + Grafana-region grid + ApexCharts render |

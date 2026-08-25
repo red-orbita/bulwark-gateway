@@ -37,6 +37,7 @@ from .routes import policies, guardrails, siem, audit, health, validate, auth, u
 from .routes import (
     plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment,
     events, gdpr, virtual_keys, quotas, cost, cache, sessions, correlation,
+    dashboards,
 )
 
 logger = logging.getLogger("bulwark.admin")
@@ -340,6 +341,7 @@ app.include_router(cost.router, prefix="/admin/cost", tags=["cost"])
 app.include_router(cache.router, prefix="/admin/cache", tags=["cache"])
 app.include_router(sessions.router, prefix="/admin/sessions", tags=["sessions"])
 app.include_router(correlation.router, prefix="/admin/correlation", tags=["correlation"])
+app.include_router(dashboards.router, prefix="/admin/dashboards", tags=["dashboards"])
 
 
 @app.get("/", response_class=HTMLResponse)

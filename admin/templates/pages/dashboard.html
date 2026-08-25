@@ -2,7 +2,26 @@
 {% block title %}Dashboard — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Dashboard{% endblock %}
 {% block content %}
-<div x-data="dashboardPage()" class="space-y-6">
+<div x-data="dashboardShell()" class="space-y-6">
+
+    <!-- Dashboard tab bar: curated Live view + the four ported Grafana dashboards -->
+    <div class="border-b border-white/5">
+        <nav class="flex flex-wrap gap-1 -mb-px" aria-label="Dashboards">
+            <button type="button" @click="setTab('live')"
+                    class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-t-lg border-b-2 transition-colors"
+                    :class="tabClass('live')">
+                <i data-lucide="activity" class="w-3.5 h-3.5"></i> Live
+            </button>
+            <template x-for="d in dashboards" :key="d.uid">
+                <button type="button" @click="setTab(d.uid)"
+                        class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-t-lg border-b-2 transition-colors"
+                        :class="tabClass(d.uid)" x-text="d.title"></button>
+            </template>
+        </nav>
+    </div>
+
+    <!-- ══════════ LIVE TAB — curated real-time SSE dashboard ══════════ -->
+    <div x-show="activeTab === 'live'" x-data="dashboardPage()" class="space-y-6">
 
     <!-- Page header with live connection status -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -550,9 +569,348 @@
             <pre x-show="taskOutput" x-cloak class="mt-2 p-3 bg-gray-900 rounded-lg text-[11px] font-mono text-gray-300 max-h-40 overflow-auto" x-text="taskOutput"></pre>
         </div>
     </div>
-</div>
+    </div><!-- /live tab -->
+
+    <!-- ══════════ GRAFANA-PORTED TABS — rendered with ApexCharts ══════════ -->
+    <div x-show="activeTab !== 'live'" x-cloak class="space-y-4">
+        <style>
+            .gdash-grid{display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:1rem}
+            @media (max-width:1024px){.gdash-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.gdash-panel{grid-column:span 2 !important}}
+        </style>
+
+        <!-- Header: title + range selector + source pill -->
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div class="min-w-0">
+                <h1 class="text-xl font-semibold text-white" x-text="current ? current.title : '…'"></h1>
+                <p class="text-sm text-gray-400 mt-0.5" x-text="current ? current.description : ''"></p>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-800/60 border border-white/5" x-show="current" x-cloak>
+                    <span class="sg-dot" :class="current && current.degraded ? 'sg-dot-warning' : 'sg-dot-success'"></span>
+                    <span class="text-xs font-medium" :class="current && current.degraded ? 'text-amber-300' : 'text-emerald-300'"
+                          x-text="current && current.prometheus_available ? 'Prometheus' : 'Degraded (Redis)'"></span>
+                </div>
+                <div class="flex items-center rounded-lg bg-gray-800/60 border border-white/5 p-0.5">
+                    <template x-for="rp in ranges" :key="rp.key">
+                        <button type="button" @click="setRange(rp.key)"
+                                class="px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors"
+                                :class="range === rp.key ? 'bg-brand-500/20 text-brand-200' : 'text-gray-400 hover:text-gray-200'"
+                                x-text="rp.label"></button>
+                    </template>
+                </div>
+                <button @click="loadDashboard(activeTab)" title="Refresh" aria-label="Refresh dashboard" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Degraded banner -->
+        <div x-show="current && current.degraded" x-cloak class="rounded-lg border border-amber-900/40 bg-amber-950/10 px-3 py-2">
+            <p class="text-[11px] text-amber-200/80">
+                Prometheus is unreachable — panels backed by a cumulative counter show live totals from Redis;
+                rate, percentile and recording-rule panels require Prometheus and are shown as unavailable rather than estimated.
+            </p>
+        </div>
+
+        <!-- Loading skeleton -->
+        <div x-show="loading" class="gdash-grid">
+            <template x-for="i in 6" :key="i"><div class="gdash-panel sg-skeleton h-44" style="grid-column:span 8"></div></template>
+        </div>
+
+        <!-- Error -->
+        <div x-show="error" x-cloak class="sg-error py-8">
+            <div class="sg-error-icon"><i data-lucide="alert-triangle" class="w-5 h-5"></i></div>
+            <p class="sg-error-title">Couldn't load dashboard</p>
+            <p class="sg-error-desc" x-text="error"></p>
+            <div class="sg-error-action">
+                <button @click="loadDashboard(activeTab)" class="sg-btn sg-btn-ghost sg-btn-sm"><i data-lucide="refresh-cw" class="w-4 h-4"></i> Retry</button>
+            </div>
+        </div>
+
+        <!-- Panels -->
+        <div x-show="current && !loading" x-cloak class="gdash-grid">
+            <template x-for="panel in (current ? current.panels : [])" :key="panel.id">
+                <div class="gdash-panel sg-card !p-0 overflow-hidden flex flex-col" :style="`grid-column: span ${panel.grid.w}`">
+                    <div class="flex items-start justify-between px-4 pt-3 pb-2 gap-2">
+                        <div class="min-w-0">
+                            <h3 class="text-xs font-semibold text-gray-200 truncate" x-text="panel.title"></h3>
+                            <p class="text-[10px] text-gray-500 truncate" x-show="panel.description" x-text="panel.description"></p>
+                        </div>
+                        <span class="text-[9px] px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5"
+                              :class="panel.source === 'prometheus' ? 'bg-emerald-500/10 text-emerald-300' : (panel.source === 'redis' ? 'bg-amber-500/10 text-amber-300' : 'bg-gray-600/20 text-gray-400')"
+                              x-text="panel.source === 'prometheus' ? 'live' : (panel.source === 'redis' ? 'Redis' : 'n/a')"></span>
+                    </div>
+                    <div class="px-4 pb-4 flex-1">
+                        <!-- unavailable -->
+                        <template x-if="panel.source === 'unavailable'">
+                            <div class="sg-empty py-6">
+                                <i data-lucide="cloud-off" class="sg-empty-icon"></i>
+                                <p class="sg-empty-desc" x-text="panel.note || 'Metrics source unavailable'"></p>
+                            </div>
+                        </template>
+                        <!-- stat -->
+                        <template x-if="panel.source !== 'unavailable' && panel.type === 'stat'">
+                            <div>
+                                <p class="text-3xl font-semibold font-mono text-white" x-text="fmtValue(panel.value, panel.unit)"></p>
+                                <div class="mt-2 space-y-1" x-show="panel.items && panel.items.length > 1">
+                                    <template x-for="it in panel.items" :key="it.label">
+                                        <div class="flex items-center justify-between text-[11px]">
+                                            <span class="text-gray-400 truncate mr-2" x-text="it.label"></span>
+                                            <span class="font-mono text-gray-200" x-text="fmtValue(it.value, panel.unit)"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                        <!-- table -->
+                        <template x-if="panel.source !== 'unavailable' && panel.type === 'table'">
+                            <div class="overflow-x-auto max-h-72 overflow-y-auto">
+                                <table class="w-full text-[11px]">
+                                    <thead><tr class="text-gray-500 uppercase tracking-wider">
+                                        <template x-for="col in panel.columns" :key="col"><th class="text-left font-medium py-1.5 px-2" x-text="col"></th></template>
+                                    </tr></thead>
+                                    <tbody>
+                                        <template x-for="(row, ri) in panel.rows" :key="ri">
+                                            <tr class="border-t border-white/5">
+                                                <template x-for="col in panel.columns" :key="col">
+                                                    <td class="py-1.5 px-2 font-mono text-gray-300" x-text="fmtCell(row[col])"></td>
+                                                </template>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                                <div x-show="!panel.rows || panel.rows.length === 0" class="sg-empty py-4"><p class="sg-empty-desc">No rows</p></div>
+                            </div>
+                        </template>
+                        <!-- chart types (rendered by ApexCharts) -->
+                        <template x-if="panel.source !== 'unavailable' && ['timeseries','gauge','piechart','barchart'].includes(panel.type)">
+                            <div :id="'gpanel-' + panel.id" class="w-full"></div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+</div><!-- /dashboardShell -->
 
 <script nonce="{{ csp_nonce() }}">
+function dashboardShell() {
+    return {
+        activeTab: 'live',
+        dashboards: [],
+        ranges: [],
+        range: '6h',
+        promAvailable: null,
+        loading: false,
+        error: null,
+        current: null,
+        _charts: {},
+
+        async init() {
+            try {
+                const r = await fetch('/admin/dashboards/status');
+                if (r.ok) {
+                    const d = await r.json();
+                    this.dashboards = d.dashboards || [];
+                    this.ranges = d.ranges || [];
+                    this.promAvailable = d.prometheus_available;
+                }
+            } catch (e) { /* tab bar still renders with just Live */ }
+            this.$nextTick(() => window.lucide && lucide.createIcons());
+        },
+
+        tabClass(tab) {
+            return this.activeTab === tab
+                ? 'border-brand-400 text-white'
+                : 'border-transparent text-gray-400 hover:text-gray-200';
+        },
+
+        setTab(tab) {
+            this.activeTab = tab;
+            if (tab !== 'live' && (!this.current || this.current.uid !== tab)) {
+                this.loadDashboard(tab);
+            } else {
+                this.$nextTick(() => window.lucide && lucide.createIcons());
+            }
+        },
+
+        setRange(key) {
+            if (this.range === key) return;
+            this.range = key;
+            if (this.activeTab !== 'live') this.loadDashboard(this.activeTab);
+        },
+
+        destroyCharts() {
+            Object.values(this._charts).forEach(c => { try { c.destroy(); } catch (e) {} });
+            this._charts = {};
+        },
+
+        async loadDashboard(uid) {
+            this.loading = true;
+            this.error = null;
+            this.destroyCharts();
+            try {
+                const r = await fetch(`/admin/dashboards/${encodeURIComponent(uid)}?range=${encodeURIComponent(this.range)}`);
+                if (!r.ok) throw new Error('Failed to load dashboard (HTTP ' + r.status + ')');
+                this.current = await r.json();
+                this.$nextTick(() => this.renderPanels());
+            } catch (e) {
+                this.error = e.message;
+                this.current = null;
+            }
+            this.loading = false;
+        },
+
+        renderPanels() {
+            if (!this.current) return;
+            const CHARTED = ['timeseries', 'gauge', 'piechart', 'barchart'];
+            for (const panel of this.current.panels) {
+                if (panel.source !== 'unavailable' && CHARTED.includes(panel.type)) {
+                    this.renderChart(panel);
+                }
+            }
+            window.lucide && lucide.createIcons();
+        },
+
+        renderChart(panel) {
+            if (typeof ApexCharts === 'undefined') return;
+            const el = document.getElementById('gpanel-' + panel.id);
+            if (!el) return;
+            const opts = this.chartOptions(panel);
+            if (!opts) return;
+            try {
+                const chart = new ApexCharts(el, opts);
+                chart.render();
+                this._charts[panel.id] = chart;
+            } catch (e) { /* one bad panel shouldn't break the grid */ }
+        },
+
+        chartHeight(panel) {
+            const h = (panel.grid && panel.grid.h) ? panel.grid.h : 8;
+            return Math.max(150, Math.min(320, h * 26));
+        },
+
+        baseChart(panel, type) {
+            return {
+                chart: {
+                    type: type,
+                    height: this.chartHeight(panel),
+                    background: 'transparent',
+                    foreColor: '#94a3b8',
+                    toolbar: { show: false },
+                    animations: { enabled: false },
+                    fontFamily: 'inherit',
+                },
+                theme: { mode: 'dark' },
+                colors: ['#22d3ee', '#a855f7', '#f59e0b', '#ef4444', '#10b981', '#3b82f6', '#ec4899', '#84cc16'],
+                grid: { borderColor: 'rgba(255,255,255,0.06)', strokeDashArray: 3 },
+                tooltip: { theme: 'dark' },
+                dataLabels: { enabled: false },
+            };
+        },
+
+        chartOptions(panel) {
+            if (panel.type === 'timeseries') return this.timeseriesOpts(panel);
+            if (panel.type === 'gauge') return this.gaugeOpts(panel);
+            if (panel.type === 'piechart') return this.pieOpts(panel);
+            if (panel.type === 'barchart') return this.barOpts(panel);
+            return null;
+        },
+
+        timeseriesOpts(panel) {
+            const series = (panel.series || []).map(s => ({ name: s.name, data: s.points || [] }));
+            const opts = this.baseChart(panel, 'area');
+            opts.series = series;
+            opts.stroke = { curve: 'smooth', width: 2 };
+            opts.fill = { type: 'gradient', gradient: { opacityFrom: 0.25, opacityTo: 0.02 } };
+            opts.xaxis = { type: 'datetime', labels: { datetimeUTC: false, style: { fontSize: '10px' } } };
+            opts.yaxis = { labels: { formatter: (v) => this.fmtAxis(v, panel.unit), style: { fontSize: '10px' } } };
+            opts.legend = { show: series.length > 1, position: 'bottom', fontSize: '10px' };
+            opts.tooltip = { theme: 'dark', x: { format: 'MMM dd HH:mm' }, y: { formatter: (v) => this.fmtValue(v, panel.unit) } };
+            return opts;
+        },
+
+        gaugeOpts(panel) {
+            const raw = (panel.value === null || panel.value === undefined) ? 0 : panel.value;
+            const pct = panel.unit === 'percentunit' ? raw * 100 : raw;
+            const opts = this.baseChart(panel, 'radialBar');
+            opts.series = [Math.max(0, Math.min(100, pct))];
+            opts.labels = [panel.title];
+            opts.plotOptions = { radialBar: {
+                hollow: { size: '58%' },
+                track: { background: 'rgba(255,255,255,0.06)' },
+                dataLabels: {
+                    name: { show: false },
+                    value: { fontSize: '20px', color: '#f8fafc', offsetY: 6, formatter: () => this.fmtValue(panel.value, panel.unit) },
+                },
+            } };
+            return opts;
+        },
+
+        pieOpts(panel) {
+            const items = (panel.items || []).filter(i => (i.value || 0) > 0);
+            const opts = this.baseChart(panel, 'donut');
+            opts.series = items.map(i => i.value || 0);
+            opts.labels = items.map(i => i.label);
+            opts.legend = { position: 'bottom', fontSize: '10px' };
+            opts.plotOptions = { pie: { donut: { size: '65%' } } };
+            opts.tooltip = { theme: 'dark', y: { formatter: (v) => this.fmtValue(v, panel.unit) } };
+            return opts;
+        },
+
+        barOpts(panel) {
+            const items = panel.items || [];
+            const horizontal = items.length > 6;
+            const opts = this.baseChart(panel, 'bar');
+            opts.series = [{ name: 'value', data: items.map(i => i.value || 0) }];
+            opts.xaxis = { categories: items.map(i => i.label), labels: { style: { fontSize: '10px' } } };
+            opts.plotOptions = { bar: { horizontal: horizontal, borderRadius: 3, columnWidth: '62%' } };
+            opts.tooltip = { theme: 'dark', y: { formatter: (v) => this.fmtValue(v, panel.unit) } };
+            return opts;
+        },
+
+        // ── Value formatting ────────────────────────────────────────────────
+        fmtShort(v) {
+            const a = Math.abs(v);
+            if (a >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+            if (a >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+            if (a >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+            return Number.isInteger(v) ? String(v) : v.toFixed(2);
+        },
+
+        fmtValue(v, unit) {
+            if (v === null || v === undefined || (typeof v === 'number' && isNaN(v))) return '—';
+            switch (unit) {
+                case 'percentunit': return (v * 100).toFixed(2) + '%';
+                case 'ms': return this.fmtShort(v) + ' ms';
+                case 'reqps': return v.toFixed(2) + '/s';
+                case 'evt/s': return v.toFixed(2) + '/s';
+                case 'cpm': return this.fmtShort(v) + '/min';
+                case 'h': return v.toFixed(2) + ' h';
+                case 'updown': return v >= 1 ? 'Up' : 'Down';
+                default: return this.fmtShort(v);
+            }
+        },
+
+        fmtAxis(v, unit) {
+            if (v === null || v === undefined || isNaN(v)) return '';
+            if (unit === 'percentunit') return (v * 100).toFixed(0) + '%';
+            if (unit === 'ms') return this.fmtShort(v);
+            return this.fmtShort(v);
+        },
+
+        fmtCell(v) {
+            if (v === null || v === undefined) return '—';
+            if (typeof v === 'number') {
+                if (isNaN(v)) return '—';
+                return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(4);
+            }
+            return String(v);
+        },
+    };
+}
+
 function dashboardPage() {
     return {
         sparklines: { latency: Array(20).fill(0), rps: Array(20).fill(0), blocked: Array(20).fill(0), detection: Array(20).fill(0) },
