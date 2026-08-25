@@ -398,6 +398,65 @@ data:
               summary: "End-to-end P95 latency SLO breach (>1s)"
               description: "Total request P95 latency exceeds 1s SLO target."
 
+      # ======================================================================
+      # CORRELATION ENGINE — Inline correlation observability (opt-in feature)
+      # Sourced from the shared Redis correlation counters (bulwark:correlation:*)
+      # via the admin exposition. These stay flat (no fire) unless
+      # BULWARK_CORRELATION_ENABLED is set on the proxy.
+      # ======================================================================
+      - name: bulwark_correlation
+        rules:
+          - alert: BulwarkCorrelatedExfiltration
+            expr: |
+              sum(increase(bulwark_correlation_incidents_total[15m])) > 0
+            for: 1m
+            labels:
+              severity: warning
+              team: security
+              mitre_attack: "T1041,T1048"
+            annotations:
+              summary: "Correlated input-output exfiltration detected"
+              description: "A suspicious input was paired with a sensitive output in the same request. Review source=correlation_engine events."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/incident-guardrail-bypass"
+
+          - alert: BulwarkOriginRiskBlocking
+            expr: |
+              sum(increase(bulwark_correlation_origin_risk_blocked_total[15m])) > 0
+            for: 2m
+            labels:
+              severity: warning
+              team: security
+              mitre_attack: "T1190"
+            annotations:
+              summary: "Adaptive origin-risk enforcement is blocking requests"
+              description: "Requests blocked from accumulated (decayed) origin risk, not the current input alone — likely multi-request probing or a decomposition attack."
+
+          - alert: BulwarkCorrelationTapDropping
+            expr: |
+              sum(rate(bulwark_correlation_tap_events_dropped_total[5m])) > 0
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Correlation event tap is dropping events"
+              description: "Origin-risk accrual is under-counting, weakening adaptive enforcement. Likely a saturated consumer — check proxy CPU and Redis latency."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/correlation-tap-drops"
+
+          - alert: BulwarkCorrelationEvaluationSlow
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(bulwark_correlation_eval_duration_seconds_bucket[5m])) by (le)
+              ) > 0.025
+            for: 10m
+            labels:
+              severity: warning
+              team: platform
+            annotations:
+              summary: "Correlation inline-evaluation P95 latency above 25ms"
+              description: "The opt-in correlation engine's hot-path cost (origin-risk read + input/output correlation, dominated by Redis round-trips) is elevated. Check Redis latency and proxy CPU."
+              runbook_url: "https://bulwark-gateway.internal/runbooks/correlation-eval-latency"
+
   recording-rules.yml: |
     # SLO Recording Rules — Pre-computed metrics for dashboard performance
     groups:

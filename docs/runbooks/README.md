@@ -25,6 +25,10 @@ These runbooks are linked directly from Prometheus alert rules (`prometheus/rule
 | `BulwarkBackendErrorRateHigh` | Critical | [alert-backend-errors.md](alert-backend-errors.md) | Platform |
 | `BulwarkGuardrailLatencyHigh` | Critical | [alert-guardrail-latency.md](alert-guardrail-latency.md) | Platform |
 | `BulwarkCertificateExpiringSoon` | Critical | [alert-certificate-expiry.md](alert-certificate-expiry.md) | Platform |
+| `BulwarkCorrelatedExfiltration` | Warning | [alert-correlation-engine.md](alert-correlation-engine.md) | Security |
+| `BulwarkOriginRiskBlocking` | Warning | [alert-correlation-engine.md](alert-correlation-engine.md) | Security |
+| `BulwarkCorrelationTapDropping` | Warning | [alert-correlation-engine.md](alert-correlation-engine.md) | Platform |
+| `BulwarkCorrelationEvaluationSlow` | Warning | [alert-correlation-engine.md](alert-correlation-engine.md) | Platform |
 
 ## Evidence Collection
 

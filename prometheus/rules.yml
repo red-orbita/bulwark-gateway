@@ -631,3 +631,30 @@ groups:
             weakening adaptive enforcement. Likely a saturated consumer under load —
             check proxy CPU and Redis latency.
           runbook_url: "https://bulwark-gateway.internal/runbooks/correlation-tap-drops"
+
+      # --- Inline Evaluation Latency ---
+      # The correlation engine's promise is "cheap when enabled". This histogram
+      # measures the hot-path cost the inline evaluation adds (origin-risk read at
+      # PHASE 1r + input<->output correlation at PHASE 5c), including their Redis
+      # round-trips. A rising P95 means the feature is taxing the request path —
+      # usually Redis latency or regex cost — and should be investigated before it
+      # shows up as end-to-end latency.
+      - alert: BulwarkCorrelationEvaluationSlow
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(bulwark_correlation_eval_duration_seconds_bucket[5m])) by (le)
+          ) > 0.025
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Correlation inline-evaluation P95 latency above 25ms"
+          description: |
+            Inline correlation evaluation P95 is {{ printf "%.0f" (mulf $value 1000) }}ms
+            (threshold: 25ms) over the last 5 minutes. This is the cost the opt-in
+            correlation engine adds to the hot path, dominated by its Redis round-trips.
+            Check Redis latency and proxy CPU; if sustained, consider tuning or
+            disabling BULWARK_CORRELATION_ENABLED until the underlying cause is fixed.
+          runbook_url: "https://bulwark-gateway.internal/runbooks/correlation-eval-latency"
+          dashboard_url: "/grafana/d/bulwark-correlation/bulwark-gateway-correlation-engine"
