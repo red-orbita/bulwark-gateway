@@ -110,6 +110,9 @@ data:
   BULWARK_KEY_ENCRYPTION_KEY_FILE: "/run/secrets/key-encryption-key"
   BULWARK_PROXY_API_KEY_FILE: "/run/secrets/api-keys"
   BULWARK_NOTIFICATIONS_FILE: "/app/shared/notifications/channels.json"
+  # Prometheus scrape token — gates /admin/health/metrics with a dedicated
+  # least-privilege bearer (empty => endpoint stays admin:read JWT only).
+  BULWARK_METRICS_SCRAPE_TOKEN_FILE: "/run/secrets/metrics-scrape-token"
   {{- if .Values.admin.gdpr }}
   # GDPR Art.30 RoPA controller / DPO identity (mandatory when set;
   # unset fields are honestly reported as "NOT CONFIGURED").

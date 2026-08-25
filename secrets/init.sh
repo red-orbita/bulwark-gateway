@@ -51,6 +51,11 @@ generate_if_missing "auditor_password.txt"     "printf '%s%s' \$(openssl rand -b
 # API keys (hex, 48 chars)
 generate_if_missing "api_keys.txt"             "openssl rand -hex 24"
 
+# Prometheus scrape token for /admin/health/metrics (hex, 64 chars)
+# Least-privilege static bearer used ONLY by Prometheus to scrape the admin
+# metrics endpoint. Verified with hmac.compare_digest; revocable via this file.
+generate_if_missing "metrics_scrape_token.txt" "openssl rand -hex 32"
+
 # Prometheus password + web.yml with bcrypt hash
 generate_if_missing "prometheus_password.txt"  "openssl rand -base64 24"
 

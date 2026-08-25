@@ -7,6 +7,7 @@ Addresses HIGH-05: replaces custom HMAC JWT implementation with PyJWT.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 import sys
 import time
@@ -38,6 +39,13 @@ JWT_EXPIRY_HOURS = int(os.getenv("ADMIN_JWT_EXPIRY_HOURS", "8"))
 SESSION_IDLE_TIMEOUT_MINUTES = int(os.getenv("ADMIN_SESSION_IDLE_TIMEOUT", "30"))
 JWT_ISSUER = "bulwark-admin"
 JWT_AUDIENCE = "bulwark-admin"
+
+# Optional static bearer token that lets Prometheus scrape the metrics endpoint
+# (/admin/health/metrics) without a user session. Read from a Docker/K8s secret
+# file (BULWARK_METRICS_SCRAPE_TOKEN_FILE) or env var. Empty by default, which
+# DISABLES the scrape-token path entirely — there is no insecure default, and
+# the metrics endpoint then requires an admin:read JWT like any other endpoint.
+METRICS_SCRAPE_TOKEN = read_secret("BULWARK_METRICS_SCRAPE_TOKEN", default="")
 
 # Validate JWT secret at import time (skip in tests)
 _INSECURE_SECRETS = {"bulwark-admin-change-me-in-production", "", "secret", "test", "dev", "change-me"}
@@ -236,5 +244,46 @@ def require_permission(permission: str):
         user_perms = ROLE_PERMISSIONS.get(user.role, set())
         if permission not in user_perms:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Missing permission: {permission}")
+        return user
+    return _check
+
+
+def require_permission_or_scrape_token(permission: str):
+    """Dependency factory for the Prometheus metrics endpoint.
+
+    Accepts EITHER:
+      * a valid session/JWT that carries ``permission`` (normal admin auth), OR
+      * the dedicated static scrape token in ``METRICS_SCRAPE_TOKEN`` presented
+        as ``Authorization: Bearer <token>``.
+
+    The scrape-token branch is inert when no token is configured (empty), so
+    there is no insecure default — the endpoint then behaves exactly like
+    ``require_permission(permission)``. The token is compared in constant time
+    (``hmac.compare_digest``) and grants access to the metrics endpoint ONLY
+    (this dependency is not wired anywhere else).
+    """
+    async def _check(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    ) -> TokenPayload:
+        token = METRICS_SCRAPE_TOKEN
+        if token and credentials is not None:
+            presented = credentials.credentials or ""
+            if hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
+                now = datetime.now(timezone.utc)
+                return TokenPayload(
+                    sub="prometheus-scraper",
+                    role=UserRole.VIEWER,
+                    exp=now + timedelta(minutes=1),
+                    iat=now,
+                )
+        # Fall back to the standard JWT/session validation + permission check.
+        user = await get_current_user(request, credentials)
+        user_perms = ROLE_PERMISSIONS.get(user.role, set())
+        if permission not in user_perms:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: {permission}",
+            )
         return user
     return _check

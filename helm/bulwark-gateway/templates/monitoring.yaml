@@ -32,6 +32,12 @@ data:
           - targets: ["admin.{{ include "bulwark-gateway.namespace" . }}.svc.cluster.local:8090"]
         metrics_path: "/admin/health/metrics"
         scrape_interval: 10s
+        # /admin/health/metrics is gated by a dedicated least-privilege bearer
+        # (verified server-side with hmac.compare_digest). The token is projected
+        # from bulwark-admin-secrets (key metrics-scrape-token) into the pod.
+        authorization:
+          type: Bearer
+          credentials_file: /etc/prometheus/secrets/metrics-scrape-token
 
   rules.yml: |
     # Bulwark Gateway - Prometheus Alerting Rules
@@ -582,6 +588,12 @@ spec:
             - name: prometheus-config
               mountPath: /etc/prometheus
               readOnly: true
+            # Least-privilege bearer used to scrape /admin/health/metrics.
+            # subPath keeps it a single file alongside the config mount.
+            - name: metrics-scrape-token
+              mountPath: /etc/prometheus/secrets/metrics-scrape-token
+              subPath: metrics-scrape-token
+              readOnly: true
             - name: tmp
               mountPath: /tmp
           livenessProbe:
@@ -600,6 +612,12 @@ spec:
         - name: prometheus-config
           configMap:
             name: prometheus-config
+        - name: metrics-scrape-token
+          secret:
+            secretName: bulwark-admin-secrets
+            items:
+              - key: metrics-scrape-token
+                path: metrics-scrape-token
         - name: tmp
           emptyDir:
             medium: Memory

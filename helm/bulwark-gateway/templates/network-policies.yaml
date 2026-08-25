@@ -169,6 +169,16 @@ spec:
       ports:
         - port: 8090
           protocol: TCP
+    {{- if .Values.monitoring.prometheus.enabled }}
+    # Prometheus scrapes /admin/health/metrics (bearer-gated) over 8090.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 8090
+          protocol: TCP
+    {{- end }}
   egress:
     # Redis
     {{- if .Values.redis.enabled }}

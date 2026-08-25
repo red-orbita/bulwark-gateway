@@ -44,6 +44,12 @@ This creates random, cryptographically secure secrets for:
 - Redis password
 - Database encryption key
 - API keys for proxy authentication
+- Prometheus metrics scrape token (`metrics_scrape_token.txt`) — a dedicated
+  least-privilege bearer that gates `GET /admin/health/metrics` so Prometheus can
+  scrape it without an admin session (verified with `hmac.compare_digest`). Leave
+  the file empty to keep the endpoint JWT-only (the scrape would then require an
+  `admin:read` token). In Kubernetes this is stored in `bulwark-admin-secrets`
+  (key `metrics-scrape-token`) and projected into Prometheus.
 - Empty threat intel keys (you fill in your own)
 
 ### Step 2: Build Docker Images

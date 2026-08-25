@@ -557,6 +557,11 @@ secrets:
   # -- Virtual-key vault encryption key (encrypts backend API keys at rest).
   # Shared by proxy + admin, must differ from jwtSecret. Auto-generated if empty.
   keyEncryptionKey: ""
+  # -- Prometheus metrics scrape token. Least-privilege static bearer that gates
+  # /admin/health/metrics (verified with hmac.compare_digest); auto-generated if
+  # empty. Reused by the in-cluster Prometheus scrape config. Leave empty and the
+  # endpoint falls back to admin:read JWT auth (Prometheus scrape would 401).
+  metricsScrapeToken: ""
 
 # -- Persistent volume configuration
 persistence:

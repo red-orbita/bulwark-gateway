@@ -21,6 +21,13 @@ scrape_configs:
       - targets: ["admin:8090"]
     metrics_path: "/admin/health/metrics"
     scrape_interval: 10s
+    # /admin/health/metrics is gated by a dedicated least-privilege bearer
+    # (verified with hmac.compare_digest). The token is mounted as a docker
+    # secret; if the secret file is empty the endpoint falls back to admin:read
+    # JWT auth and this scrape would 401 — populate secrets/metrics_scrape_token.txt.
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics_scrape_token
 
   - job_name: "bulwark-redis"
     static_configs:

@@ -48,6 +48,10 @@ secrets:
     file: ./secrets/otx_key.txt
   abuseipdb_key:
     file: ./secrets/abuseipdb_key.txt
+  # Least-privilege static bearer used ONLY by Prometheus to scrape the admin
+  # /admin/health/metrics endpoint (verified with hmac.compare_digest).
+  metrics_scrape_token:
+    file: ./secrets/metrics_scrape_token.txt
 
 services:
   # ── Proxy (Hot Path) ─────────────────────────────────────
@@ -232,6 +236,9 @@ services:
       DB_ENCRYPTION_KEY_FILE: /run/secrets/db_encryption_key
       BULWARK_KEY_ENCRYPTION_KEY_FILE: /run/secrets/key_encryption_key
       BULWARK_PROXY_API_KEY_FILE: /run/secrets/api_keys
+      # Prometheus scrape token — gates /admin/health/metrics with a dedicated
+      # least-privilege bearer (empty file => endpoint remains admin:read only).
+      BULWARK_METRICS_SCRAPE_TOKEN_FILE: /run/secrets/metrics_scrape_token
     secrets:
       - admin_jwt_secret
       - admin_password
@@ -241,6 +248,7 @@ services:
       - key_encryption_key
       - api_keys
       - redis_password
+      - metrics_scrape_token
     volumes:
       - policies:/app/config/policies
       - ./config/siem:/app/config/siem:ro
@@ -349,6 +357,10 @@ services:
       - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
       - prometheus_data:/prometheus
+    secrets:
+      # Bearer token for scraping the admin metrics endpoint
+      # (referenced by prometheus.yml -> authorization.credentials_file).
+      - metrics_scrape_token
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}'

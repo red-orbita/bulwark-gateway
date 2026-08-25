@@ -630,6 +630,7 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_CORRELATION_RISK_WARN_THRESHOLD` | float | `4.0` | Origin risk score at/above which requests are flagged WARN. Runtime-tunable |
 | `BULWARK_CORRELATION_RISK_DECAY_SECONDS` | float | `900.0` | Half-life for decaying accumulated origin risk. Runtime-tunable |
 | `BULWARK_CORRELATION_WINDOW_SECONDS` | float | `30.0` | Input↔output pairing window (guards clock skew). Runtime-tunable |
+| `BULWARK_METRICS_SCRAPE_TOKEN` | str | `""` | **Admin-side** (read via `read_secret`, `*_FILE` supported). Dedicated least-privilege bearer that gates `GET /admin/health/metrics` for Prometheus (`hmac.compare_digest`). Empty ⇒ scrape-token path inert, endpoint requires `admin:read` JWT |
 
 ### Docker Secrets Support
 
@@ -760,6 +761,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | GET | `/admin/health` | Session | Basic health check |
 | GET | `/admin/health/detailed` | Session | Redis, pods, latency |
 | GET | `/admin/health/sse` | Session | Real-time metrics stream (SSE) |
+| GET | `/admin/health/metrics` | Scrape token OR `admin:read` | Prometheus exposition (global + `bulwark_correlation_*` counters). Accepts a dedicated least-privilege bearer (`BULWARK_METRICS_SCRAPE_TOKEN`, `hmac.compare_digest`) so Prometheus scrapes without a session; inert/JWT-only when the token is empty |
 | GET | `/admin/health/recent-blocks` | Session | Last N blocked requests |
 | GET/POST | `/admin/guardrails/*` | Session | Pattern CRUD (add/disable/test) |
 | GET/POST | `/admin/policies/*` | Session | Policy management + reload |

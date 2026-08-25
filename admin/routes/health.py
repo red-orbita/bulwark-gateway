@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from ..models.auth import TokenPayload, ROLE_PERMISSIONS
-from ..services.auth_service import AuthService, require_permission
+from ..services.auth_service import AuthService, require_permission, require_permission_or_scrape_token
 from ..services.prometheus_client import get_metrics
 
 router = APIRouter()
@@ -141,7 +141,7 @@ async def health_detailed(_user: TokenPayload = Depends(require_permission("admi
 
 
 @router.get("/metrics")
-async def prometheus_metrics(_user: TokenPayload = Depends(require_permission("admin:read"))):
+async def prometheus_metrics(_user: TokenPayload = Depends(require_permission_or_scrape_token("admin:read"))):
     """Prometheus exposition format endpoint — requires auth.
 
     Emits three metric families:

@@ -171,7 +171,22 @@ SSE stream for real-time dashboard updates. Auth via `?token=<jwt>`.
 
 #### GET /admin/health/metrics
 
-Prometheus exposition format.
+Prometheus exposition format. Exposes global request/verdict counters and the
+`bulwark_correlation_*` counters (sourced from Redis) plus in-process gauges.
+
+**Authentication (either):**
+
+1. **Metrics scrape token** — a dedicated least-privilege static bearer:
+   `Authorization: Bearer <token>`. The token is read from
+   `BULWARK_METRICS_SCRAPE_TOKEN` (or `..._FILE`); it is verified server-side with
+   `hmac.compare_digest`. When the token is unset/empty the scrape-token path is
+   **inert** (no insecure default) and this endpoint requires a JWT instead.
+2. **Admin JWT** with the `admin:read` permission (session fallback).
+
+This is the only admin endpoint that accepts the scrape token; it grants no other
+access. Rotate/revoke by changing the secret. In-cluster deployments project the
+token from `bulwark-admin-secrets` (key `metrics-scrape-token`) into Prometheus,
+which references it via `authorization.credentials_file`.
 
 ---
 
