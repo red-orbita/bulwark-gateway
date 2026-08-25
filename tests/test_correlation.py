@@ -424,11 +424,36 @@ def _tap(monkeypatch, blocking=False):
 
 def test_tap_apply_bumps_session_and_tenant(monkeypatch):
     t = _tap(monkeypatch)
-    # WARN high: 0.5 * 1.5 = 0.75 session; tenant fraction 0.25 → 0.1875
-    t._apply(("acme", "bot", "warn", "high"))
+    # WARN high: 0.5 * 1.5 = 0.75 session; tenant fraction 0.25 → 0.1875. No
+    # subject (anonymous) → subject scope untouched.
+    t._apply(("acme", "bot", "warn", "high", ""))
     assert t._risk.get("session", "acme:bot") == pytest.approx(0.75, abs=0.01)
     assert t._risk.get("tenant", "acme") == pytest.approx(0.1875, abs=0.01)
+    assert t._risk.get("subject", "acme:") == 0.0
     assert t.processed == 1
+
+
+def test_tap_apply_bumps_subject_when_authenticated(monkeypatch):
+    """F3: an authenticated actor accrues to the subject scope (the BLOCK scope).
+
+    The session/tenant still accrue (WARN visibility) but the subject carries the
+    full weight so the individual actor — not the shared agent — escalates.
+    """
+    t = _tap(monkeypatch)
+    t._apply(("acme", "bot", "warn", "high", "user-42"))
+    assert t._risk.get("subject", "acme:user-42") == pytest.approx(0.75, abs=0.01)
+    assert t._risk.get("session", "acme:bot") == pytest.approx(0.75, abs=0.01)
+    assert t._risk.get("tenant", "acme") == pytest.approx(0.1875, abs=0.01)
+
+
+def test_tap_apply_two_subjects_do_not_cross_pollute(monkeypatch):
+    """F3 blast-radius: risk from one subject must not land on another subject."""
+    t = _tap(monkeypatch)
+    t._apply(("acme", "bot", "block", "critical", "attacker"))
+    t._apply(("acme", "bot", "block", "critical", "attacker"))
+    # A different actor on the same agent/session has zero subject risk.
+    assert t._risk.get("subject", "acme:attacker") > 0.0
+    assert t._risk.get("subject", "acme:victim") == 0.0
 
 
 def test_tap_block_bumps_more_than_warn(monkeypatch):
@@ -442,7 +467,7 @@ def test_tap_block_bumps_more_than_warn(monkeypatch):
 
 def test_tap_apply_without_agent_only_tenant(monkeypatch):
     t = _tap(monkeypatch)
-    t._apply(("acme", "", "block", "medium"))
+    t._apply(("acme", "", "block", "medium", ""))
     assert t._risk.get("session", "acme:") == 0.0
     assert t._risk.get("tenant", "acme") > 0.0
 
@@ -557,6 +582,100 @@ def test_origin_risk_assessment_to_security_event(correlator, monkeypatch):
     assert ev.metadata["origin_risk_score"] == pytest.approx(5.0, abs=0.5)
     assert ev.metadata["origin_tenant_score"] == pytest.approx(2.0, abs=0.5)
     assert isinstance(ev.metadata["threshold"], (int, float))
+
+
+# ─── evaluate_origin_risk — subject scope / blast-radius (F3) ────────────────
+
+
+def test_origin_risk_subject_scope_decides_block(correlator, monkeypatch):
+    """F3: with a subject present, BLOCK keys on the subject's own accrued risk."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "correlation_blocking", True, raising=False)
+    correlator._risk.bump("subject", "acme:user-1", 8.0)  # >=7 block
+    a = correlator.evaluate_origin_risk(
+        tenant_id="acme", agent_id="bot", subject_id="user-1"
+    )
+    assert a is not None
+    assert a.verdict == Verdict.BLOCK
+    assert a.scope == "subject"
+    assert a.score == pytest.approx(8.0, abs=0.05)
+
+
+def test_origin_risk_shared_session_does_not_block_other_subject(correlator, monkeypatch):
+    """F3 blast-radius: one actor poisoning the shared session must NOT hard-block
+    a *different* authenticated actor on the same agent."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "correlation_blocking", True, raising=False)
+    # Attacker has driven the shared session over the block threshold...
+    correlator._risk.bump("session", "acme:bot", 9.0)
+    # ...but a clean victim (own subject scope empty) is only WARNed, never BLOCKed.
+    a = correlator.evaluate_origin_risk(
+        tenant_id="acme", agent_id="bot", subject_id="victim"
+    )
+    assert a is not None
+    assert a.verdict == Verdict.WARN  # session-driven visibility, not a block
+    assert a.scope == "subject"
+    assert a.score == pytest.approx(0.0, abs=0.05)  # victim's own risk is clean
+    assert a.session_score == pytest.approx(9.0, abs=0.1)
+
+
+def test_origin_risk_guilty_subject_blocks_while_session_high(correlator, monkeypatch):
+    """The abusive subject itself is blocked once its own risk crosses threshold."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "correlation_blocking", True, raising=False)
+    correlator._risk.bump("session", "acme:bot", 9.0)
+    correlator._risk.bump("subject", "acme:attacker", 8.0)
+    a = correlator.evaluate_origin_risk(
+        tenant_id="acme", agent_id="bot", subject_id="attacker"
+    )
+    assert a is not None
+    assert a.verdict == Verdict.BLOCK
+    assert a.scope == "subject"
+
+
+def test_origin_risk_anonymous_falls_back_to_session(correlator, monkeypatch):
+    """No subject_id (anonymous/legacy) → session is the most-specific decision scope."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "correlation_blocking", True, raising=False)
+    correlator._risk.bump("session", "acme:bot", 8.0)
+    a = correlator.evaluate_origin_risk(tenant_id="acme", agent_id="bot")
+    assert a is not None
+    assert a.verdict == Verdict.BLOCK
+    assert a.scope == "session"
+
+
+def test_origin_risk_subject_event_metadata_scope(correlator, monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "correlation_blocking", False, raising=False)
+    correlator._risk.bump("subject", "acme:user-1", 5.0)
+    correlator._risk.bump("session", "acme:bot", 1.0)
+    a = correlator.evaluate_origin_risk(
+        tenant_id="acme", agent_id="bot", subject_id="user-1"
+    )
+    ev = a.to_security_event()
+    assert ev.metadata["decision_scope"] == "subject"
+    assert ev.metadata["origin_risk_score"] == pytest.approx(5.0, abs=0.5)
+    assert "origin_session_score" in ev.metadata
+
+
+def test_evaluate_bumps_subject_scope_when_present(correlator):
+    """The synchronous input↔output path accrues to the subject when authenticated."""
+    incident = correlator.evaluate(
+        input_events=[_event(ThreatCategory.PROMPT_INJECTION)],
+        output_events=[_event(ThreatCategory.CREDENTIAL_ACCESS)],
+        tenant_id="acme",
+        agent_id="bot",
+        subject_id="user-9",
+    )
+    assert incident is not None
+    assert correlator._risk.get("subject", "acme:user-9") > 0.0
+    # A different subject on the same agent is unaffected.
+    assert correlator._risk.get("subject", "acme:other") == 0.0
 
 
 # ─── Correlation metrics (Phase 4a observability) ────────────────────────────

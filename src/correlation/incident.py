@@ -68,9 +68,12 @@ _CRITICAL_OUTPUT: frozenset[ThreatCategory] = frozenset({
     ThreatCategory.MODEL_THEFT,
 })
 
-# Risk bumps applied to the origin on a confirmed correlation. Session (per
-# tenant+agent) carries the most weight; the content fingerprint and tenant get
-# smaller bumps so a single origin escalates faster than a whole tenant.
+# Risk bumps applied to the origin on a confirmed correlation. The subject (the
+# specific authenticated actor) and the session (per tenant+agent) carry the most
+# weight; the content fingerprint and tenant get smaller bumps so a single origin
+# escalates faster than a whole tenant. The subject is the primary hardening
+# target (F3): risk must accumulate there because enforcement BLOCKs on it.
+_RISK_BUMP_SUBJECT = 4.0
 _RISK_BUMP_SESSION = 4.0
 _RISK_BUMP_INPUT = 3.0
 _RISK_BUMP_TENANT = 1.5
@@ -142,15 +145,23 @@ class OriginRiskAssessment(StrictModel):
     threshold. It hardens the *current* request even if that request's own input
     looked clean. WARN below the block threshold; BLOCK at/above it (and only when
     ``blocking`` is enabled).
+
+    F3 (blast-radius): the BLOCK decision is taken on the most-specific identity —
+    the ``subject`` (authenticated actor) when known, otherwise the ``session``.
+    ``scope`` records which was used; ``session_score``/``tenant_score`` are
+    surfaced for context. A BLOCK therefore hardens the individual actor, not
+    every user that shares the agent session.
     """
 
     tenant_id: str
     agent_id: str
     verdict: Verdict
     score: float
+    session_score: float
     tenant_score: float
     threshold: float
     reason: str
+    scope: str = "session"
     request_id: str | None = None
 
     def to_security_event(self) -> SecurityEvent:
@@ -172,7 +183,9 @@ class OriginRiskAssessment(StrictModel):
             metadata={
                 "correlation": True,
                 "adaptive_enforcement": True,
+                "decision_scope": self.scope,
                 "origin_risk_score": round(self.score, 2),
+                "origin_session_score": round(self.session_score, 2),
                 "origin_tenant_score": round(self.tenant_score, 2),
                 "threshold": round(self.threshold, 2),
             },
@@ -218,6 +231,7 @@ class InputOutputCorrelator:
         input_detected_at: float | None = None,
         input_text: str | None = None,
         output_text: str | None = None,
+        subject_id: str | None = None,
     ) -> Optional[Incident]:
         """Return an :class:`Incident` when input↔output exfiltration is confirmed.
 
@@ -230,6 +244,10 @@ class InputOutputCorrelator:
         that confidence to reach ``confidence_block_threshold``; without
         corroborating content a bare category co-occurrence stays WARN even when
         ``blocking`` is on, so the engine does not manufacture a false hard-block.
+
+        ``subject_id`` (F3) is the authenticated actor. When present the confirmed
+        risk is accrued primarily to the *subject* scope (the origin enforcement
+        BLOCKs on) so the individual actor escalates, not the shared agent session.
         """
         # Master switch stays a process-level settings flag (the event tap is
         # started at boot); the *enforcement* knobs (window/blocking) are read
@@ -267,12 +285,21 @@ class InputOutputCorrelator:
             block = blocking and confidence >= float(rc.confidence_block_threshold)
             verdict = Verdict.BLOCK if block else Verdict.WARN
 
-            # Elevate the origin's risk state. The session (tenant+agent) is the
-            # primary origin; the content hash and tenant get smaller bumps.
+            # Elevate the origin's risk state. The subject (authenticated actor)
+            # is the primary origin when known — enforcement BLOCKs on it (F3);
+            # otherwise the session (tenant+agent) is the most-specific origin. The
+            # content hash and tenant get smaller bumps. The incident records the
+            # decision-scope score so the meter reflects what would be blocked.
+            subject_score: float | None = None
+            if subject_id:
+                subject_score = self._risk.bump(
+                    "subject", f"{tenant_id}:{subject_id}", _RISK_BUMP_SUBJECT
+                )
             if input_hash:
                 self._risk.bump("input", input_hash, _RISK_BUMP_INPUT)
-            risk_score = self._risk.bump("session", f"{tenant_id}:{agent_id}", _RISK_BUMP_SESSION)
+            session_score = self._risk.bump("session", f"{tenant_id}:{agent_id}", _RISK_BUMP_SESSION)
             self._risk.bump("tenant", tenant_id, _RISK_BUMP_TENANT)
+            risk_score = subject_score if subject_score is not None else session_score
 
             in_desc = ", ".join(sorted(c.value for c in in_cats))
             out_desc = ", ".join(sorted(c.value for c in out_cats))
@@ -307,52 +334,76 @@ class InputOutputCorrelator:
         tenant_id: str,
         agent_id: str,
         request_id: str | None = None,
+        subject_id: str | None = None,
     ) -> Optional[OriginRiskAssessment]:
         """Assess an origin's accumulated risk and return a hardening decision.
 
-        Reads the decayed risk score for the request's *session* (tenant+agent) —
-        the most specific origin — and compares it to the runtime thresholds. The
-        tenant-wide score is surfaced for context but is deliberately *not* the
-        decision score, so one noisy session cannot escalate a whole tenant.
+        F3 (blast-radius): the BLOCK decision is taken on the most-specific
+        identity — the ``subject`` (authenticated actor) when a ``subject_id`` is
+        supplied, otherwise the ``session`` (tenant+agent). The broader session and
+        tenant scores are read for context and can raise a (non-blocking) WARN, but
+        never a BLOCK, so one abusive actor cannot hard-block every user that shares
+        the agent. All scope reads are a single round-trip.
 
         Returns ``None`` when the origin is below the WARN threshold. Never raises.
         """
         try:
             rc = get_correlation_runtime().get()
-            # Single round-trip for both enforcement reads (F2): the session is
-            # the decision score; the tenant score is surfaced for context only.
-            session_score, tenant_score = self._risk.get_many(
-                [("session", f"{tenant_id}:{agent_id}"), ("tenant", tenant_id)]
-            )
-            score = session_score
+            # Single round-trip for every enforcement read (F2). When the actor is
+            # authenticated the subject score is the decision score; otherwise the
+            # session is the most-specific identity and becomes the decision score.
+            if subject_id:
+                subject_score, session_score, tenant_score = self._risk.get_many(
+                    [
+                        ("subject", f"{tenant_id}:{subject_id}"),
+                        ("session", f"{tenant_id}:{agent_id}"),
+                        ("tenant", tenant_id),
+                    ]
+                )
+                decision_score = subject_score
+                scope = "subject"
+            else:
+                session_score, tenant_score = self._risk.get_many(
+                    [("session", f"{tenant_id}:{agent_id}"), ("tenant", tenant_id)]
+                )
+                decision_score = session_score
+                scope = "session"
 
-            if score >= rc.risk_block_threshold and rc.blocking:
+            if decision_score >= rc.risk_block_threshold and rc.blocking:
                 return OriginRiskAssessment(
                     tenant_id=tenant_id,
                     agent_id=agent_id,
                     verdict=Verdict.BLOCK,
-                    score=score,
+                    score=decision_score,
+                    session_score=session_score,
                     tenant_score=tenant_score,
                     threshold=rc.risk_block_threshold,
+                    scope=scope,
                     request_id=request_id,
                     reason=(
-                        f"Adaptive enforcement: origin risk {score:.1f} >= block "
+                        f"Adaptive enforcement: {scope} risk {decision_score:.1f} >= block "
                         f"threshold {rc.risk_block_threshold:.1f}, accumulated from "
                         f"prior correlated/suspicious activity. Request hardened to BLOCK."
                     ),
                 )
-            if score >= rc.risk_warn_threshold:
+            # WARN can be driven by the decision scope OR the (broader) session —
+            # the session flag gives cross-actor visibility without hard-blocking.
+            warn_score = max(decision_score, session_score)
+            if warn_score >= rc.risk_warn_threshold:
                 return OriginRiskAssessment(
                     tenant_id=tenant_id,
                     agent_id=agent_id,
                     verdict=Verdict.WARN,
-                    score=score,
+                    score=decision_score,
+                    session_score=session_score,
                     tenant_score=tenant_score,
                     threshold=rc.risk_warn_threshold,
+                    scope=scope,
                     request_id=request_id,
                     reason=(
-                        f"Adaptive enforcement: origin risk {score:.1f} >= warn "
-                        f"threshold {rc.risk_warn_threshold:.1f}. Origin flagged as elevated."
+                        f"Adaptive enforcement: {scope} risk {decision_score:.1f} / "
+                        f"session risk {session_score:.1f} >= warn threshold "
+                        f"{rc.risk_warn_threshold:.1f}. Origin flagged as elevated."
                     ),
                 )
             return None

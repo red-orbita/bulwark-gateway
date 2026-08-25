@@ -9,8 +9,10 @@ Every ``SecurityEvent`` the proxy logs is *published* to this tap fire-and-forge
 (``publish`` is non-blocking — one ``put_nowait`` into a bounded queue). A single
 background consumer drains the queue and folds each WARN/BLOCK event into the
 shared :class:`~src.correlation.risk_state.RiskStateStore`, keyed by the event's
-*origin* (session = tenant+agent, plus a smaller tenant-wide bump). Subsequent
-requests read that decayed score via
+*origin*: the authenticated subject (when known — the primary target, so a single
+abusive actor is hardened without penalising the shared agent), the session
+(tenant+agent), plus a smaller tenant-wide bump. Subsequent requests read that
+decayed score via
 :meth:`~src.correlation.incident.InputOutputCorrelator.evaluate_origin_risk` and
 can be hardened.
 
@@ -106,12 +108,18 @@ class CorrelationEventTap:
 
     # --- producer ----------------------------------------------------------
 
-    def publish(self, event) -> None:
+    def publish(self, event, subject_id: str | None = None) -> None:
         """Enqueue a security event fire-and-forget. Non-blocking; never raises.
 
         Skips events that would double-count (correlation-engine output) or carry
         no risk signal (ALLOW). Drops (and counts) on a full queue rather than
         awaiting, so a saturated consumer can never stall the request path.
+
+        ``subject_id`` (F3) is the authenticated actor the event is attributed to.
+        When present the risk is accrued primarily to the *subject* scope so a
+        single abusive actor is hardened without escalating every other user that
+        shares the same agent session. It is server-derived and hashed downstream;
+        it is never taken from the event body (which is never allowed to carry it).
         """
         q = self._queue
         if q is None:
@@ -130,6 +138,7 @@ class CorrelationEventTap:
                 event.agent_id or "",
                 verdict,
                 event.severity or "medium",
+                subject_id or "",
             )
             q.put_nowait(item)
             self.published += 1
@@ -190,11 +199,17 @@ class CorrelationEventTap:
             mult = 1.0
         return base * mult
 
-    def _apply(self, item: tuple[str, str, str, str]) -> None:
-        tenant_id, agent_id, verdict, severity = item
+    def _apply(self, item: tuple[str, str, str, str, str]) -> None:
+        tenant_id, agent_id, verdict, severity, subject_id = item
         amount = self._bump_amount(verdict, severity)
         if amount <= 0:
             return
+        # F3 (blast-radius): the subject scope is the primary accrual target when
+        # the actor is authenticated — enforcement BLOCKs on the subject, so risk
+        # must accumulate there. The session/tenant scopes still accrue (they drive
+        # WARN-level visibility) but never hard-BLOCK a whole agent for one actor.
+        if subject_id:
+            self._risk.bump("subject", f"{tenant_id}:{subject_id}", amount)
         if agent_id:
             self._risk.bump("session", f"{tenant_id}:{agent_id}", amount)
         if tenant_id:

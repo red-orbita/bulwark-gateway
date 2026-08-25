@@ -1,10 +1,11 @@
 """Decaying per-origin risk state (Redis-backed, in-memory fallback).
 
 An *origin* is a stable, server-derived identity that a request can be attributed
-to: the tenant, the (tenant, agent) session, or the content fingerprint
-(``input_hash``). When a correlation confirms suspicious behaviour, we ``bump``
-the origin's risk score. Subsequent requests read the (time-decayed) score via
-``get`` and can be hardened — e.g. escalating a borderline WARN to a BLOCK.
+to: the specific authenticated subject, the tenant, the (tenant, agent) session,
+or the content fingerprint (``input_hash``). When a correlation confirms
+suspicious behaviour, we ``bump`` the origin's risk score. Subsequent requests
+read the (time-decayed) score via ``get`` and can be hardened — e.g. escalating a
+borderline WARN to a BLOCK.
 
 Design notes / lessons carried over from ``session_tracker``:
 
@@ -131,9 +132,16 @@ class RiskStateStore:
 
     Scopes (``scope_type``):
 
+    * ``subject`` — ``scope_id = f"{tenant_id}:{subject_id}"`` where ``subject_id``
+      is the authenticated actor (JWT ``sub`` or an API-key digest). This is the
+      most-specific origin: hardening a subject bounds the blast radius so one
+      abusive actor does not BLOCK every other user sharing the agent (F3).
     * ``tenant``  — ``scope_id = tenant_id``
     * ``session`` — ``scope_id = f"{tenant_id}:{agent_id}"``
     * ``input``   — ``scope_id = input_hash`` (sha256[:16] of the request content)
+
+    ``scope_id`` values are hashed before they become Redis keys, so a raw
+    ``subject_id`` (which may be PII) never reaches the datastore.
     """
 
     def __init__(self, decay_seconds: float = 900.0):

@@ -22,6 +22,7 @@ import json
 import os
 import socket
 import time
+from contextvars import ContextVar
 from urllib.parse import urlparse
 
 import httpx
@@ -55,6 +56,15 @@ from src.telemetry.notifications import get_notification_engine, AlertPayload
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+# F3 (blast-radius): the authenticated subject for the request currently being
+# handled, propagated to the correlation event tap without threading it through
+# every ``_log_events`` call site. A ContextVar is task-local and is copied into
+# child tasks spawned via ``asyncio.create_task`` (streaming / fire-and-forget
+# enrichment) at creation time, so background risk accrual still attributes to the
+# right subject. It is set from ``request.state.subject_id`` (server-derived,
+# hashed downstream) and is NEVER written to logs or SIEM.
+_request_subject: ContextVar[str | None] = ContextVar("bulwark_request_subject", default=None)
 
 input_guardrail = InputGuardrail()
 output_filter = OutputFilter(
@@ -373,6 +383,12 @@ async def chat_completions(request: Request):
     _counters = get_counters()
     tenant_id = getattr(request.state, "tenant_id", "default")
     agent_id = getattr(request.state, "agent_id", "default")
+    # F3 (blast-radius): the authenticated actor (JWT sub / API-key digest). Used
+    # only as a correlation risk scope; hardening keys on the subject so one
+    # abusive actor does not block every user sharing the agent. Published to the
+    # event tap via a ContextVar (task-local, inherited by child tasks).
+    subject_id = getattr(request.state, "subject_id", None)
+    _request_subject.set(subject_id)
     source_ip = request.client.host if request.client else None
 
     # Parse request body
@@ -539,6 +555,7 @@ async def chat_completions(request: Request):
             tenant_id=tenant_id,
             agent_id=agent_id,
             request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
+            subject_id=subject_id,
         )
         observe_correlation_latency(time.perf_counter() - _risk_t0)
         if _risk_assessment is not None:
@@ -1059,6 +1076,7 @@ async def chat_completions(request: Request):
             request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
             input_text=_corr_input,
             output_text=_corr_output,
+            subject_id=subject_id,
         )
         observe_correlation_latency(time.perf_counter() - _corr_t0)
         if incident is not None:
@@ -1567,9 +1585,12 @@ async def _log_events(events: list[SecurityEvent], source_ip: str | None = None)
 
         # Feed the correlation event tap (feedback loop) fire-and-forget. Only
         # active when correlation is enabled; publish() is non-blocking and drops
-        # on back-pressure, so this can never stall the response path.
+        # on back-pressure, so this can never stall the response path. The subject
+        # (F3) is read from the request-scoped ContextVar so risk accrues to the
+        # specific actor without threading it through every call site or ever
+        # writing it into the event/SIEM record.
         if settings.correlation_enabled:
-            get_event_tap().publish(event)
+            get_event_tap().publish(event, subject_id=_request_subject.get())
 
 
 async def _fire_webhook_alert(events: list[SecurityEvent], tenant_id: str, agent_id: str):

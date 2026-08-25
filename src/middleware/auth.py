@@ -207,6 +207,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         tenant_id = request.headers.get("X-Tenant-ID", "default")
         agent_id = request.headers.get("X-Agent-ID", "default")
         auth_header = request.headers.get("Authorization", "")
+        # F3 (blast-radius): the *subject* is the specific authenticated actor
+        # (JWT ``sub`` claim, or a stable non-reversible digest of the API key).
+        # It is server-derived and never taken from a client header, so it cannot
+        # be spoofed. It is used only as a correlation risk *scope* (hashed
+        # downstream) so a single abusive actor is hardened without blocking every
+        # other user sharing the same agent/session. Remains ``None`` for
+        # anonymous/legacy callers, in which case enforcement falls back to the
+        # session scope. NEVER logged or exported (may be PII).
+        subject_id: str | None = None
 
         # Validate auth
         if settings.api_keys_enabled:
@@ -264,6 +273,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         )
                     tenant_id = payload["tenant_id"]
                     agent_id = payload.get("agent_id", agent_id)
+                    # F3: derive the subject from the authenticated ``sub`` claim
+                    # (absent ⇒ falls back to session-scoped enforcement).
+                    subject_id = payload.get("sub") or None
                     # SECURITY FIX (RC-07): Store jti for streaming re-validation
                     request.state._auth_jti = jti
                 except JWTError:
@@ -279,13 +291,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     # Otherwise, try as API key
                     # SECURITY FIX (CRIT-01): Use bound tenant from API key,
                     # ignoring X-Tenant-ID header to prevent impersonation.
-                    bound_tenant = self._validate_api_key(token)
-                    if bound_tenant is None:
+                    api_key_result = self._validate_api_key(token)
+                    if api_key_result is None:
                         return JSONResponse(
                             status_code=401,
                             content={"error": "Invalid token or API key"},
                         )
-                    tenant_id = bound_tenant
+                    # F3: each distinct API key is its own subject, identified by a
+                    # stable non-reversible digest (never the raw key).
+                    tenant_id, subject_id = api_key_result
                 except JWTKeyError as e:
                     # Asymmetric key loading failed — fail-closed
                     logger.error(
@@ -328,6 +342,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     )
                     tenant_id = payload.get("tenant_id", tenant_id)
                     agent_id = payload.get("agent_id", agent_id)
+                    subject_id = payload.get("sub") or None
                 except (JWTError, JWTKeyError):
                     pass  # In non-auth mode, invalid tokens are ignored
 
@@ -358,6 +373,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Attach context to request state
         request.state.tenant_id = tenant_id
         request.state.agent_id = agent_id
+        # F3 (blast-radius): the most-specific authenticated identity, bounded to a
+        # sane length. Consumed by the correlation engine as a risk *scope* only
+        # (hashed before it reaches Redis); never emitted to logs/SIEM.
+        request.state.subject_id = subject_id[:128] if subject_id else None
         # SECURITY FIX (RC-07): Store auth metadata for streaming re-validation.
         # During long-lived streaming responses, the token must be periodically
         # re-checked for revocation to limit the window of access after revocation.
@@ -365,16 +384,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
-    def _validate_api_key(self, key: str) -> str | None:
-        """Validate API key and return its bound tenant_id.
+    def _validate_api_key(self, key: str) -> tuple[str, str] | None:
+        """Validate an API key and return ``(bound_tenant_id, subject_digest)``.
 
         SECURITY FIX (CRIT-01): Returns the tenant_id that this API key is
-        bound to, or None if the key is invalid. The caller MUST use the
-        returned tenant_id (ignoring X-Tenant-ID header) to prevent
-        cross-tenant impersonation.
+        bound to. The caller MUST use the returned tenant_id (ignoring
+        X-Tenant-ID header) to prevent cross-tenant impersonation.
+
+        F3 (blast-radius): also returns a stable, non-reversible per-key subject
+        digest (the SHA-256 of the key, truncated) so the correlation engine can
+        attribute risk to the *specific* key rather than the shared session. The
+        raw key is never returned or stored.
 
         Returns:
-            Bound tenant_id if key is valid, None otherwise.
+            ``(bound_tenant_id, subject_digest)`` if the key is valid, else None.
         """
         if not _API_KEY_BINDINGS:
             # No API keys configured — reject API key auth attempts
@@ -387,5 +410,5 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Use constant-time comparison against each stored hash
         for stored_hash, bound_tenant in _API_KEY_BINDINGS.items():
             if hmac.compare_digest(key_hash, stored_hash):
-                return bound_tenant
+                return bound_tenant, key_hash[:16]
         return None

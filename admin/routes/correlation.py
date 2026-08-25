@@ -21,8 +21,10 @@ Redis keys read/managed here:
   bulwark:risk:{scope_type}:{16-hex}   — per-origin risk HASH {score, ts}
   bulwark:correlation:config           — runtime override HASH
 
-Risk keys are irreversible SHA-256 digests (never a raw tenant/agent/IP), so they
-are shown as-is and cannot be mapped back to an identity.
+Risk keys are irreversible SHA-256 digests (never a raw subject/tenant/agent/IP),
+so they are shown as-is and cannot be mapped back to an identity. The ``subject``
+scope keys the specific authenticated actor (the origin BLOCK decisions are taken
+on) so hardening bounds the blast radius to that actor, not the shared session.
 
 Reads require ``correlation:read`` (all roles); mutations require
 ``correlation:write`` (admin + security).
@@ -49,7 +51,7 @@ _RISK_PREFIX = "bulwark:risk:"
 
 # Risk scope digests are sha256()[:16] hex.
 _DIGEST_RE = re.compile(r"^[0-9a-f]{16}$")
-_VALID_SCOPES = ("tenant", "session", "input")
+_VALID_SCOPES = ("subject", "tenant", "session", "input")
 
 # Boolean tunable handled specially; numeric bounds mirror src.correlation.runtime.
 _BOOL_FIELDS = ("blocking",)
