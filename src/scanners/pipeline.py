@@ -399,6 +399,28 @@ class ScannerPipeline:
                 results[name] = False
         return results
 
+    async def unhealthy_blocking_scanners(self) -> list[str]:
+        """Return names of ENABLED blocking scanners that are not operational.
+
+        A blocking scanner whose ``health()`` is False (e.g. an ML scanner whose
+        model failed to load or failed integrity verification) is a critical
+        condition: such a scanner fails-closed and would BLOCK EVERY request that
+        reaches it. Startup uses this to refuse to boot (fail_mode=closed) or to
+        disable the degraded scanner (fail_mode=open) — see
+        ``resolve_blocking_readiness`` — instead of silently blocking all traffic.
+        """
+        degraded: list[str] = []
+        for registered in (*self._input_blocking, *self._output_blocking):
+            if not registered.enabled:
+                continue
+            try:
+                healthy = await registered.scanner.health()
+            except Exception:
+                healthy = False
+            if not healthy:
+                degraded.append(registered.info.name)
+        return degraded
+
     @property
     def input_blocking_count(self) -> int:
         return len([s for s in self._input_blocking if s.enabled])
@@ -442,6 +464,42 @@ class ScannerPipeline:
                     "ml_scanner_config_applied",
                     extra={"name": name, "enabled": new_enabled},
                 )
+
+
+def resolve_blocking_readiness(degraded: list[str], fail_mode: str) -> tuple[str, str]:
+    """Decide what to do when blocking scanners fail readiness at startup.
+
+    Pure decision function (no side effects) so the policy is unit-testable
+    without booting the app. Given the list of degraded blocking scanner names
+    and the configured fail mode, returns ``(action, message)`` where action is:
+
+      - ``"ok"``      : nothing degraded, proceed normally.
+      - ``"refuse"``  : fail_mode=closed — caller must refuse to start. A blocking
+                        control that cannot serve must NOT be papered over by
+                        silently blocking (or allowing) all traffic; surface a
+                        clear, actionable boot error instead.
+      - ``"degrade"`` : fail_mode=open — caller should disable the degraded
+                        scanners and continue serving on the remaining (regex)
+                        floor, emitting a critical alert.
+    """
+    if not degraded:
+        return ("ok", "")
+    names = ", ".join(sorted(degraded))
+    if fail_mode == "closed":
+        return (
+            "refuse",
+            "Blocking scanner(s) failed readiness (model not loaded / integrity "
+            f"failed): {names}. These would fail-closed and BLOCK ALL traffic. "
+            "Provision models with scripts/download-models.py, verify "
+            "config/model_manifest.json, or set BULWARK_ML_ENABLED=false "
+            "(or BULWARK_FAIL_MODE=open to degrade instead of refusing to start).",
+        )
+    return (
+        "degrade",
+        f"Disabling degraded blocking scanner(s) (BULWARK_FAIL_MODE=open): {names}. "
+        "Serving continues on remaining scanners (regex floor). Provision the "
+        "missing models to restore full coverage.",
+    )
 
 
 # === Singleton ===

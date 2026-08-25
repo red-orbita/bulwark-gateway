@@ -107,6 +107,38 @@ def ml_dependencies_available() -> bool:
     return _NUMPY_AVAILABLE and _ORT_AVAILABLE and _TOKENIZERS_AVAILABLE
 
 
+def model_files_present(model_subdir: str, model_dir: Path | None = None) -> bool:
+    """Check whether a model's required files exist on disk (no loading).
+
+    Used at scanner-registration time to decide whether an ML scanner should
+    be registered AT ALL. This prevents registering a *blocking* scanner whose
+    model is not provisioned — which would otherwise fail-closed and BLOCK ALL
+    TRAFFIC (P0 landmine): a blocking scanner with ``_model_loaded=False`` returns
+    BLOCK for every request.
+
+    This is a cheap filesystem existence check only. It does NOT verify integrity
+    (that happens fail-closed at load time in ``_verify_model_integrity``); a model
+    whose files exist but whose hash is untrusted will still be refused at load,
+    and the post-startup readiness check is the backstop for that case.
+
+    Returns False on any path-traversal attempt or missing file (fail-safe).
+    """
+    if model_dir is None:
+        from src.config import settings
+        model_dir = settings.ml_model_dir
+
+    try:
+        base_resolved = Path(model_dir).resolve()
+        target = (base_resolved / model_subdir).resolve()
+        # Prevent path traversal via model_subdir (blocks ../../etc).
+        if not str(target).startswith(str(base_resolved) + os.sep) and target != base_resolved:
+            return False
+    except (OSError, ValueError):
+        return False
+
+    return (target / "model.onnx").exists() and (target / "tokenizer.json").exists()
+
+
 @dataclass
 class LoadedModel:
     """A loaded ONNX model ready for inference."""

@@ -10,11 +10,11 @@ Modes:
   2. Sidecar mode: called by the agent framework before/after tool execution
 """
 
-from contextlib import asynccontextmanager
 import asyncio
+from contextlib import asynccontextmanager
 
-import uvicorn
 import structlog
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
         await logger.ainfo("correlation_event_tap_started")
 
     # Register enrichment scanners (async, background only)
-    from src.enrichment.manager import get_enrichment_manager, ENRICHMENT_ENABLED
+    from src.enrichment.manager import ENRICHMENT_ENABLED, get_enrichment_manager
 
     if ENRICHMENT_ENABLED:
         enrichment_mgr = get_enrichment_manager()
@@ -150,9 +150,9 @@ async def lifespan(app: FastAPI):
                              note="Replay DB recording active without ML enrichment")
 
     # Initialize Scanner Pipeline (pluggable scanner framework)
-    from src.scanners.pipeline import get_scanner_pipeline
-    from src.scanners.builtin import RegexInputScanner, OutputRedactionScanner, ToolPolicyScanner
+    from src.scanners.builtin import OutputRedactionScanner, RegexInputScanner, ToolPolicyScanner
     from src.scanners.discovery import discover_all_scanners, instantiate_scanner
+    from src.scanners.pipeline import get_scanner_pipeline
 
     pipeline = get_scanner_pipeline()
 
@@ -165,13 +165,50 @@ async def lifespan(app: FastAPI):
     pipeline.register(tool_policy_scanner)
 
     # Register ML scanners (async by default, no latency impact unless ml_blocking=true)
+    #
+    # P0 landmine fix: only register an ML scanner if its model is actually
+    # provisioned on disk. A blocking scanner with no loaded model fails-closed
+    # and would BLOCK EVERY request — so registering topic/intent (which have no
+    # model and no download path) while ml_blocking=True would brick the gateway.
+    # Missing-model scanners are skipped (with a loud warning) instead.
     if settings.ml_enabled:
-        from src.scanners.ml import InjectionClassifier, ToxicityScanner, TopicScanner, IntentScanner
-        pipeline.register(InjectionClassifier())
-        pipeline.register(ToxicityScanner())
-        pipeline.register(TopicScanner())
-        pipeline.register(IntentScanner())
-        await logger.ainfo("ml_scanners_registered", blocking=settings.ml_blocking)
+        from src.scanners.ml import InjectionClassifier, IntentScanner, TopicScanner, ToxicityScanner
+        from src.scanners.ml.model_manager import ml_dependencies_available, model_files_present
+
+        # (model subdir, scanner class) — subdir matches each scanner's MODEL_NAME
+        ml_specs = [
+            ("injection-classifier", InjectionClassifier),
+            ("toxicity", ToxicityScanner),
+            ("topic-classifier", TopicScanner),
+            ("intent-classifier", IntentScanner),
+        ]
+
+        if not ml_dependencies_available():
+            await logger.awarn(
+                "ml_scanners_skipped",
+                reason="ML dependencies not installed (numpy/onnxruntime/tokenizers)",
+            )
+        else:
+            registered_ml: list[str] = []
+            skipped_ml: list[str] = []
+            for subdir, scanner_cls in ml_specs:
+                if model_files_present(subdir):
+                    pipeline.register(scanner_cls())
+                    registered_ml.append(subdir)
+                else:
+                    skipped_ml.append(subdir)
+            if skipped_ml:
+                await logger.awarn(
+                    "ml_scanners_unavailable",
+                    skipped=skipped_ml,
+                    reason="model files not provisioned — run scripts/download-models.py",
+                )
+            if registered_ml:
+                await logger.ainfo(
+                    "ml_scanners_registered",
+                    registered=registered_ml,
+                    blocking=settings.ml_blocking,
+                )
 
     # Register RAG Guard scanners (memory manipulation + retrieval poisoning)
     if settings.rag_enabled:
@@ -201,6 +238,29 @@ async def lifespan(app: FastAPI):
 
     # Start all scanners (load models, warm caches)
     await pipeline.startup()
+
+    # P0 backstop: after startup, no ENABLED blocking scanner may be unhealthy.
+    # A blocking scanner whose model failed to load (e.g. integrity/hash failure
+    # on a present-but-untrusted model) fails-closed and would BLOCK ALL traffic.
+    # Turn that silent, total outage into an explicit boot decision driven by
+    # BULWARK_FAIL_MODE: "closed" refuses to start with an actionable error;
+    # "open" disables the degraded scanner(s) and serves on the regex floor.
+    from src.scanners.pipeline import resolve_blocking_readiness
+
+    degraded_blocking = await pipeline.unhealthy_blocking_scanners()
+    action, message = resolve_blocking_readiness(degraded_blocking, settings.fail_mode)
+    if action == "refuse":
+        await logger.aerror("blocking_scanner_readiness_failed", degraded=degraded_blocking)
+        raise RuntimeError(message)
+    if action == "degrade":
+        for _name in degraded_blocking:
+            pipeline.disable(_name)
+        await logger.aerror(
+            "blocking_scanner_degraded",
+            degraded=degraded_blocking,
+            note=message,
+        )
+
     app.state.scanner_pipeline = pipeline
 
     await logger.ainfo(
@@ -216,6 +276,7 @@ async def lifespan(app: FastAPI):
     async def _ml_config_sync_loop():
         """Periodically check Redis for ML scanner config changes."""
         import json as _json
+
         import redis as _redis
         last_version = 0
         r = None
