@@ -107,6 +107,20 @@ data:
   {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls .Values.externalRedis.tlsInsecure }}
   BULWARK_REDIS_TLS_INSECURE: "true"
   {{- end }}
+  {{- if .Values.proxy.correlation.enabled }}
+  # Correlation enforcement config — mirrored from the SAME proxy.correlation.*
+  # source of truth so the admin's read-only /admin/correlation status view
+  # reports the exact effective config the proxy enforces (default_config()
+  # reads these via src.config.settings). The admin does NOT run the engine or
+  # start the event tap — BULWARK_CORRELATION_ENABLED is intentionally omitted;
+  # these are display-parity values only. Rendered only when the engine is on;
+  # when off, both processes fall back to identical built-in defaults.
+  BULWARK_CORRELATION_BLOCKING: {{ .Values.proxy.correlation.blocking | quote }}
+  BULWARK_CORRELATION_WINDOW_SECONDS: {{ .Values.proxy.correlation.windowSeconds | quote }}
+  BULWARK_CORRELATION_RISK_DECAY_SECONDS: {{ .Values.proxy.correlation.riskDecaySeconds | quote }}
+  BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD: {{ .Values.proxy.correlation.riskBlockThreshold | quote }}
+  BULWARK_CORRELATION_RISK_WARN_THRESHOLD: {{ .Values.proxy.correlation.riskWarnThreshold | quote }}
+  {{- end }}
   # IOC database — admin persists to its writable /app/data mount; the proxy
   # reads the same admin-data PVC at /app/shared/admin/iocs.json (see proxy-config).
   BULWARK_IOC_PATH: "/app/data/iocs.json"
