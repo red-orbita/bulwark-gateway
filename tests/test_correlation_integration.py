@@ -29,7 +29,7 @@ import pytest
 
 from src.correlation.event_tap import CorrelationEventTap
 from src.correlation.incident import InputOutputCorrelator
-from src.correlation.risk_state import RiskStateStore
+from src.correlation.risk_state import RiskStateStore, _apply_bump
 from src.correlation.runtime import CorrelationRuntimeConfig
 from src.models import SecurityEvent, ThreatCategory, Verdict
 
@@ -98,6 +98,34 @@ class _FakeRedisHash:
         if self.fail:
             raise ConnectionError("no redis")
         return _FakePipeline(self)
+
+    def register_script(self, _src: str):
+        """Emulate the atomic ``_LUA_BUMP`` via the shared pure reference.
+
+        Mirrors the real server-side script byte-for-byte (same ``_apply_bump``),
+        so the Redis code path and the in-memory fallback stay observably
+        identical. Raises when ``fail`` is set so the degrade-to-memory path is
+        still exercised.
+        """
+
+        def _script(keys, args):
+            if self.fail:
+                raise ConnectionError("no redis")
+            key = keys[0]
+            now = float(args[0])
+            amount = float(args[1])
+            half_life = float(args[2])
+            max_score = float(args[3])
+            ttl = int(args[4])
+            cur = self.store.get(key, {})
+            prev_score = float(cur.get("score", 0.0) or 0.0)
+            prev_ts = float(cur.get("ts", now) or now)
+            new_score = _apply_bump(prev_score, prev_ts, now, amount, half_life, max_score)
+            self.hset(key, mapping={"score": new_score, "ts": now})
+            self.expire(key, ttl)
+            return str(new_score)
+
+        return _script
 
 
 def _redis_store(decay_seconds: float = 900.0, fail: bool = False) -> RiskStateStore:

@@ -26,7 +26,7 @@ import hashlib
 import math
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import structlog
 
@@ -42,6 +42,38 @@ _MAX_SCORE = 10.0
 # Bounded in-memory fallback capacity (LRU-ish eviction).
 _MAX_LOCAL_ENTRIES = 50_000
 
+# Atomic decay-and-bump executed server-side (Redis runs Lua scripts atomically,
+# so concurrent bumps of the *same* origin cannot lose updates — the exact race a
+# burst attack would otherwise exploit to under-count its own risk). Mirrors the
+# pure ``_apply_bump`` reference below byte-for-byte so the in-memory fallback and
+# the tests share one algorithm.
+#   KEYS[1] = risk key (hash: {score, ts})
+#   ARGV[1] = now, ARGV[2] = amount, ARGV[3] = half_life,
+#   ARGV[4] = max_score, ARGV[5] = ttl_seconds
+# Returns the new (decayed + amount, clamped) score as a string (preserves the
+# float; Redis would otherwise truncate a Lua number to an integer on return).
+_LUA_BUMP = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local amount = tonumber(ARGV[2])
+local half_life = tonumber(ARGV[3])
+local max_score = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+local prev_score = tonumber(redis.call('HGET', key, 'score')) or 0
+local prev_ts = tonumber(redis.call('HGET', key, 'ts')) or now
+local elapsed = now - prev_ts
+local decayed = prev_score
+if elapsed > 0 and prev_score > 0 then
+  decayed = prev_score * math.pow(0.5, elapsed / half_life)
+end
+local new_score = decayed + amount
+if new_score < 0 then new_score = 0 end
+if new_score > max_score then new_score = max_score end
+redis.call('HSET', key, 'score', new_score, 'ts', now)
+redis.call('EXPIRE', key, ttl)
+return tostring(new_score)
+"""
+
 
 def _clamp(score: float) -> float:
     if score < 0.0:
@@ -49,6 +81,32 @@ def _clamp(score: float) -> float:
     if score > _MAX_SCORE:
         return _MAX_SCORE
     return score
+
+
+def _apply_bump(
+    prev_score: float,
+    prev_ts: float,
+    now: float,
+    amount: float,
+    half_life: float,
+    max_score: float,
+) -> float:
+    """Pure reference for the decay-then-add-then-clamp bump.
+
+    This is the single source of truth for the risk arithmetic: the Redis Lua
+    script (:data:`_LUA_BUMP`) and the in-memory fallback both compute exactly
+    this, so all three paths stay observably identical.
+    """
+    decayed = prev_score
+    elapsed = now - prev_ts
+    if elapsed > 0 and prev_score > 0:
+        decayed = prev_score * math.pow(0.5, elapsed / half_life)
+    new_score = decayed + amount
+    if new_score < 0.0:
+        return 0.0
+    if new_score > max_score:
+        return max_score
+    return new_score
 
 
 @dataclass
@@ -72,7 +130,10 @@ class RiskStateStore:
     def __init__(self, decay_seconds: float = 900.0):
         # Half-life of the exponential decay, in seconds.
         self._decay_seconds = max(1.0, float(decay_seconds))
-        self._redis = None
+        self._redis: Optional[Any] = None
+        # Registered ``_LUA_BUMP`` handle (redis-py ``Script``). Lazily (re)bound
+        # so tests that assign ``store._redis`` directly still take the Lua path.
+        self._bump_script: Optional[Any] = None
         self._local: dict[str, _LocalEntry] = {}
         self._initialized = False
 
@@ -98,9 +159,12 @@ class RiskStateStore:
                     kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
                 self._redis = redis.from_url(redis_url, **kwargs)
                 self._redis.ping()
+                # Pre-register the atomic bump script (EVALSHA on the hot path).
+                self._bump_script = self._redis.register_script(_LUA_BUMP)
             except Exception as e:  # noqa: BLE001 - degrade to in-memory
                 logger.warning("risk_state_redis_unavailable", error=str(e))
                 self._redis = None
+                self._bump_script = None
         self._initialized = True
 
     @property
@@ -162,22 +226,25 @@ class RiskStateStore:
 
     def _bump_redis(self, scope_type: str, scope_id: str, amount: float, now: float) -> float:
         key = self._redis_key(scope_type, scope_id)
-        cur = self._redis.hgetall(key) or {}
-        prev_score = float(cur.get("score", 0.0) or 0.0)
-        prev_ts = float(cur.get("ts", now) or now)
-        decayed = self._decay(prev_score, now - prev_ts)
-        new_score = _clamp(decayed + amount)
         # TTL a few half-lives out: once fully decayed the key is worthless.
         ttl = int(self._decay_seconds * 8) + 60
-        pipe = self._redis.pipeline()
-        pipe.hset(key, mapping={"score": new_score, "ts": now})
-        pipe.expire(key, ttl)
-        pipe.execute()
-        return new_score
+        script = self._bump_script
+        if script is None:
+            # Lazily (re)register — covers direct ``store._redis = fake`` in tests
+            # and a reconnect that missed ``initialize``.
+            script = self._redis.register_script(_LUA_BUMP)  # type: ignore[union-attr]
+            self._bump_script = script
+        # Atomic server-side decay+bump: one round-trip, no lost updates under
+        # concurrent bumps of the same origin (F1).
+        raw = script(
+            keys=[key],
+            args=[now, amount, self._decay_seconds, _MAX_SCORE, ttl],
+        )
+        return float(raw)
 
     def _get_redis(self, scope_type: str, scope_id: str, now: float) -> float:
         key = self._redis_key(scope_type, scope_id)
-        cur = self._redis.hgetall(key) or {}
+        cur = self._redis.hgetall(key) or {}  # type: ignore[union-attr]
         if not cur:
             return 0.0
         prev_score = float(cur.get("score", 0.0) or 0.0)
@@ -198,8 +265,14 @@ class RiskStateStore:
         if entry is None:
             new_score = _clamp(amount)
         else:
-            decayed = self._decay(entry.score, now - entry.updated_at)
-            new_score = _clamp(decayed + amount)
+            new_score = _apply_bump(
+                prev_score=entry.score,
+                prev_ts=entry.updated_at,
+                now=now,
+                amount=amount,
+                half_life=self._decay_seconds,
+                max_score=_MAX_SCORE,
+            )
         self._local[k] = _LocalEntry(score=new_score, updated_at=now)
         return new_score
 
