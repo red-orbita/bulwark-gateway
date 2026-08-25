@@ -1,0 +1,293 @@
+{
+  "id": null,
+  "uid": "bulwark-correlation",
+  "title": "Bulwark Gateway — Correlation Engine",
+  "description": "Inline correlation engine observability: confirmed input-output exfiltration incidents, adaptive origin-risk enforcement, and event-tap health. All panels use only metrics the engine actually emits (bulwark_correlation_*). Empty panels mean no correlated activity, not missing data. The engine is opt-in (BULWARK_CORRELATION_ENABLED); when disabled these counters stay flat at zero.",
+  "tags": ["bulwark", "security", "correlation", "exfiltration"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "graphTooltip": 1,
+  "links": [
+    {
+      "title": "Security Operations",
+      "url": "/grafana/d/bulwark-security/bulwark-gateway-security-operations",
+      "type": "link",
+      "icon": "bolt",
+      "targetBlank": false
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "timerange",
+        "type": "interval",
+        "query": "1m,5m,15m,30m,1h,6h,12h,1d",
+        "current": { "text": "5m", "value": "5m" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Correlated Exfiltration Incidents (24h)",
+      "description": "Confirmed input-output exfiltration correlations: a suspicious input paired with a sensitive output in the same request.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        { "expr": "sum(increase(bulwark_correlation_incidents_total[24h]))", "refId": "A" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Incidents Blocked (24h)",
+      "description": "Correlated incidents that were hardened to BLOCK (only when correlation blocking mode is enabled).",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        { "expr": "sum(increase(bulwark_correlation_incidents_blocked_total[24h]))", "refId": "A" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Origin-Risk Assessments (24h)",
+      "description": "Cross-request adaptive enforcement: requests hardened purely because their origin (session/tenant) accrued enough decayed risk, even when the current input looked clean.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } }
+      },
+      "targets": [
+        { "expr": "sum(increase(bulwark_correlation_origin_risk_assessments_total[24h]))", "refId": "A" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Event-Tap Drops (24h)",
+      "description": "Risk telemetry lost because the event-tap queue was full. Sustained drops mean accrued origin-risk under-counts and adaptive enforcement weakens.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 100 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        { "expr": "sum(increase(bulwark_correlation_tap_events_dropped_total[24h]))", "refId": "A" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Correlation Activity Rate",
+      "description": "Per-minute rate of incidents and origin-risk assessments over the selected window.",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "spanNulls": false,
+            "showPoints": "auto",
+            "pointSize": 5
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(bulwark_correlation_incidents_total[$timerange])) * 60",
+          "legendFormat": "Exfiltration incidents",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(bulwark_correlation_origin_risk_warned_total[$timerange])) * 60",
+          "legendFormat": "Origin-risk WARN",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(bulwark_correlation_origin_risk_blocked_total[$timerange])) * 60",
+          "legendFormat": "Origin-risk BLOCK",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Event-Tap Throughput & Loss",
+      "description": "Events accepted vs folded into risk state vs dropped. A gap between published and processed that is not explained by drops indicates consumer lag.",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "evt/s",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Dropped" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(bulwark_correlation_tap_events_published_total[$timerange]))",
+          "legendFormat": "Published",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(bulwark_correlation_tap_events_processed_total[$timerange]))",
+          "legendFormat": "Processed",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(bulwark_correlation_tap_events_dropped_total[$timerange]))",
+          "legendFormat": "Dropped",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Enforcement Mix (selected window)",
+      "description": "Breakdown of adaptive origin-risk verdicts and incident blocks. Helps tune thresholds: many WARNs and few BLOCKs suggests headroom to enable blocking mode.",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "sum(increase(bulwark_correlation_origin_risk_warned_total[$__range]))",
+          "legendFormat": "Origin-risk WARN",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(bulwark_correlation_origin_risk_blocked_total[$__range]))",
+          "legendFormat": "Origin-risk BLOCK",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(increase(bulwark_correlation_incidents_blocked_total[$__range]))",
+          "legendFormat": "Incident BLOCK",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Correlation Counters (cumulative)",
+      "description": "Raw cumulative counter values from the shared Redis hash. Cluster-wide, survive restarts.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "align": "left" } } },
+      "targets": [
+        { "expr": "bulwark_correlation_incidents_total", "legendFormat": "Incidents", "refId": "A", "instant": true },
+        { "expr": "bulwark_correlation_incidents_blocked_total", "legendFormat": "Incidents blocked", "refId": "B", "instant": true },
+        { "expr": "bulwark_correlation_origin_risk_assessments_total", "legendFormat": "Origin-risk assessments", "refId": "C", "instant": true },
+        { "expr": "bulwark_correlation_origin_risk_warned_total", "legendFormat": "Origin-risk WARN", "refId": "D", "instant": true },
+        { "expr": "bulwark_correlation_origin_risk_blocked_total", "legendFormat": "Origin-risk BLOCK", "refId": "E", "instant": true },
+        { "expr": "bulwark_correlation_tap_events_dropped_total", "legendFormat": "Tap drops", "refId": "F", "instant": true }
+      ],
+      "options": {
+        "showHeader": true,
+        "footer": { "show": false }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "verdict": true },
+            "renameByName": { "Value": "Count" }
+          }
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
+  }
+}

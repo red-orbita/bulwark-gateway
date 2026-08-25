@@ -58,16 +58,15 @@ class PrometheusMetrics:
     def to_prometheus_text(self) -> str:
         """Prometheus exposition format (text/plain)."""
         s = self.snapshot()
+        # NOTE: request/block/warn totals are intentionally NOT emitted here.
+        # This in-process recorder's record_request() is never wired into the
+        # proxy hot path, so those counters were permanently zero. The
+        # authoritative, cluster-wide equivalents (bulwark_requests_total and
+        # bulwark_verdicts_total) are sourced from the shared Redis
+        # bulwark:global:* counters in health._render_redis_prometheus().
+        # Emitting a second, always-zero bulwark_requests_total here would be a
+        # duplicate series (two # TYPE lines) and break the Prometheus scrape.
         lines = [
-            "# HELP bulwark_requests_total Total requests processed",
-            "# TYPE bulwark_requests_total counter",
-            f"bulwark_requests_total {s.requests_total}",
-            "# HELP bulwark_blocks_total Total requests blocked",
-            "# TYPE bulwark_blocks_total counter",
-            f"bulwark_blocks_total {s.events_blocked}",
-            "# HELP bulwark_warns_total Total requests warned",
-            "# TYPE bulwark_warns_total counter",
-            f"bulwark_warns_total {s.events_warned}",
             "# HELP bulwark_latency_p95_ms Request latency p95 in ms",
             "# TYPE bulwark_latency_p95_ms gauge",
             f"bulwark_latency_p95_ms {s.latency_p95_ms:.2f}",

@@ -66,6 +66,14 @@ class CorrelationEventTap:
         self.published = 0
         self.dropped = 0
         self.processed = 0
+        # Cumulative values already mirrored to the shared Redis counter hash, so
+        # the consumer can flush *deltas* (replica-safe HINCRBY) off the hot path.
+        self._flushed_published = 0
+        self._flushed_dropped = 0
+        self._flushed_processed = 0
+        # Flush cadence: every N processed items (bounds Redis writes to the
+        # off-hot-path consumer, never the producer).
+        self._flush_every = 25
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -86,6 +94,10 @@ class CorrelationEventTap:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
             self._task = None
+        # Flush any remaining stat deltas so a graceful shutdown does not lose the
+        # tail of tap telemetry.
+        with contextlib.suppress(Exception):
+            self._flush_stats()
         self._queue = None
 
     @property
@@ -140,6 +152,32 @@ class CorrelationEventTap:
                 logger.warning("correlation_tap_apply_error", error=str(e))
             finally:
                 queue.task_done()
+            # Off-hot-path: periodically mirror stat deltas to the shared counter
+            # hash so operators get cross-process tap health (drops = risk loss).
+            if self.processed - self._flushed_processed >= self._flush_every:
+                self._flush_stats()
+
+    def _flush_stats(self) -> None:
+        """Mirror published/processed/dropped *deltas* to the shared Redis hash.
+
+        Deltas (not absolutes) keep the counters replica-safe: N proxy workers
+        each contribute their own increments and Redis sums them. Best effort —
+        a Redis failure just defers the mirror to the next flush.
+        """
+        from src.correlation.metrics import record_correlation_metric
+
+        d_pub = self.published - self._flushed_published
+        d_proc = self.processed - self._flushed_processed
+        d_drop = self.dropped - self._flushed_dropped
+        if d_pub:
+            record_correlation_metric("tap_published", d_pub)
+            self._flushed_published = self.published
+        if d_proc:
+            record_correlation_metric("tap_processed", d_proc)
+            self._flushed_processed = self.processed
+        if d_drop:
+            record_correlation_metric("tap_dropped", d_drop)
+            self._flushed_dropped = self.dropped
 
     def _bump_amount(self, verdict: str, severity: str) -> float:
         cfg = self._runtime.get()

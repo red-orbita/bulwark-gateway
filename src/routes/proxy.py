@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.config import settings
 from src.correlation.event_tap import get_event_tap
 from src.correlation.incident import get_correlator
+from src.correlation.metrics import record_correlation_metric
 from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
@@ -540,6 +541,7 @@ async def chat_completions(request: Request):
         )
         if _risk_assessment is not None:
             _risk_event = _risk_assessment.to_security_event()
+            record_correlation_metric("origin_risk_total")
             await _log_events([_risk_event], source_ip)
             _risk_snippet = " ".join(
                 m.get("content", "")
@@ -553,6 +555,7 @@ async def chat_completions(request: Request):
                 asyncio.create_task(
                     _fire_webhook_alert([_risk_event], tenant_id, agent_id)
                 )
+                record_correlation_metric("origin_risk_blocked")
                 _counters.record("block", (time.perf_counter() - _req_start) * 1000)
                 _record_tenant_usage(tenant_id, "block")
                 return JSONResponse(
@@ -565,6 +568,7 @@ async def chat_completions(request: Request):
                         }
                     },
                 )
+            record_correlation_metric("origin_risk_warned")
             _record_tenant_usage(tenant_id, "warn")
 
     # === PHASE 1a: Multi-turn decomposition check ===
@@ -1044,6 +1048,7 @@ async def chat_completions(request: Request):
         )
         if incident is not None:
             _corr_event = incident.to_security_event()
+            record_correlation_metric("incidents_total")
             await _log_events([_corr_event], source_ip)
             asyncio.create_task(_fire_webhook_alert([_corr_event], tenant_id, agent_id))
             _push_recent_block([_corr_event], tenant_id, agent_id, snippet_source=_corr_input)
@@ -1057,6 +1062,7 @@ async def chat_completions(request: Request):
                             "correlated exfiltration detected]"
                         )
                     _msg.pop("tool_calls", None)
+                record_correlation_metric("incidents_blocked")
                 _counters.record("block", (time.perf_counter() - _req_start) * 1000)
                 _record_tenant_usage(tenant_id, "block")
                 return JSONResponse(content=response_data)

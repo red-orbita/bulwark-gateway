@@ -103,6 +103,15 @@ class RiskStateStore:
                 self._redis = None
         self._initialized = True
 
+    @property
+    def redis(self):
+        """The shared Redis client (or ``None`` in in-memory fallback mode).
+
+        Exposed so sibling correlation components (metrics, event tap) can reuse
+        the single already-initialised connection instead of opening their own.
+        """
+        return self._redis
+
     # --- key derivation ----------------------------------------------------
 
     @staticmethod

@@ -496,3 +496,109 @@ def test_origin_risk_assessment_to_security_event(correlator, monkeypatch):
     assert ev.metadata["origin_risk_score"] == pytest.approx(5.0, abs=0.5)
     assert ev.metadata["origin_tenant_score"] == pytest.approx(2.0, abs=0.5)
     assert isinstance(ev.metadata["threshold"], (int, float))
+
+
+# ─── Correlation metrics (Phase 4a observability) ────────────────────────────
+
+
+class _FakeRedis:
+    """Minimal hash-only fake supporting the ops the metrics sink uses."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, dict[str, int]] = {}
+
+    def hincrby(self, key: str, field: str, amount: int) -> int:
+        h = self.store.setdefault(key, {})
+        h[field] = h.get(field, 0) + amount
+        return h[field]
+
+    def hgetall(self, key: str) -> dict:
+        return dict(self.store.get(key, {}))
+
+
+def _fresh_metrics():
+    from src.correlation.metrics import _CorrelationMetrics
+    return _CorrelationMetrics()
+
+
+def test_metrics_in_memory_fallback(monkeypatch):
+    """With no Redis on the risk store, counters accrue in-process."""
+    from src.correlation import metrics as m
+
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: _mem_store())
+    cm = _fresh_metrics()
+    cm.record("incidents_total")
+    cm.record("incidents_total", 2)
+    cm.record("tap_dropped", 5)
+    snap = cm.snapshot()
+    # Full canonical field set is always present (stable Prometheus exposition).
+    assert set(snap) == set(m.FIELDS)
+    assert snap["incidents_total"] == 3
+    assert snap["tap_dropped"] == 5
+    assert snap["origin_risk_total"] == 0  # untouched → zero, not missing
+
+
+def test_metrics_uses_redis_when_available(monkeypatch):
+    """When the risk store has a client, counters go to the shared hash."""
+    from src.correlation import metrics as m
+
+    store = _mem_store()
+    store._redis = _FakeRedis()
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: store)
+
+    cm = _fresh_metrics()
+    cm.record("origin_risk_blocked")
+    cm.record("origin_risk_blocked")
+    assert store._redis.store[m.COUNTER_KEY]["origin_risk_blocked"] == 2
+    assert cm.snapshot()["origin_risk_blocked"] == 2
+
+
+def test_metrics_record_never_raises(monkeypatch):
+    """A broken Redis client must degrade, not propagate."""
+    from src.correlation import metrics as m
+
+    class _Boom:
+        def hincrby(self, *a, **k):
+            raise RuntimeError("redis down")
+
+        def hgetall(self, *a, **k):
+            raise RuntimeError("redis down")
+
+    store = _mem_store()
+    store._redis = _Boom()
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: store)
+
+    cm = _fresh_metrics()
+    cm.record("incidents_total")  # must not raise
+    # Falls back to in-process, and snapshot also degrades to the local view.
+    assert cm.snapshot()["incidents_total"] == 1
+
+
+def test_tap_flush_mirrors_deltas(monkeypatch):
+    """The consumer flush pushes published/processed/dropped deltas exactly once."""
+    from src.correlation import metrics as m
+
+    recorded: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        m, "record_correlation_metric",
+        lambda field, amount=1: recorded.append((field, amount)),
+    )
+    # event_tap imports the symbol lazily inside _flush_stats, so patching the
+    # module attribute is what the flush will resolve.
+    t = _tap(monkeypatch)
+    t.published, t.processed, t.dropped = 10, 8, 2
+    t._flush_stats()
+    assert ("tap_published", 10) in recorded
+    assert ("tap_processed", 8) in recorded
+    assert ("tap_dropped", 2) in recorded
+
+    # A second flush with no change emits nothing (deltas are zero).
+    recorded.clear()
+    t._flush_stats()
+    assert recorded == []
+
+    # Only the new delta is emitted on the next change.
+    t.dropped = 5
+    t._flush_stats()
+    assert recorded == [("tap_dropped", 3)]
+

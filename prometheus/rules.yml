@@ -549,3 +549,73 @@ groups:
           description: |
             Total request P95 latency is {{ printf "%.2f" $value }}s.
             SLO target is P95 < 1s (excluding LLM backend time).
+
+  # ============================================================================
+  # CORRELATION ENGINE — Inline correlation observability (opt-in feature)
+  # Metrics are emitted by the admin /admin/health/metrics endpoint sourced from
+  # the shared Redis correlation counters (bulwark:correlation:*). These alerts
+  # only fire when BULWARK_CORRELATION_ENABLED is set; when the engine is
+  # disabled the counters stay flat and none of these rules trigger.
+  # ============================================================================
+  - name: bulwark_correlation
+    rules:
+      # --- Confirmed Exfiltration Correlations ---
+      # A suspicious input paired with a sensitive output in the SAME request is a
+      # high-confidence exfiltration signal.
+      # MITRE ATT&CK: T1041 (Exfiltration Over C2 Channel)
+      - alert: BulwarkCorrelatedExfiltration
+        expr: |
+          sum(increase(bulwark_correlation_incidents_total[15m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: security
+          mitre_attack: "T1041,T1048"
+        annotations:
+          summary: "Correlated input-output exfiltration detected"
+          description: |
+            {{ printf "%.0f" $value }} confirmed exfiltration correlation(s) in the last 15 minutes.
+            The correlation engine paired a suspicious input with a sensitive output
+            in the same request. Review the correlated events in the admin Security
+            Events viewer (source = correlation_engine).
+          runbook_url: "https://bulwark-gateway.internal/runbooks/incident-guardrail-bypass"
+          dashboard_url: "/grafana/d/bulwark-correlation/bulwark-gateway-correlation-engine"
+
+      # --- Adaptive Origin-Risk Blocks ---
+      # Requests hardened to BLOCK purely from accumulated (decayed) origin risk —
+      # i.e. a slow, distributed attack the per-request guardrail alone would miss.
+      - alert: BulwarkOriginRiskBlocking
+        expr: |
+          sum(increase(bulwark_correlation_origin_risk_blocked_total[15m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+          team: security
+          mitre_attack: "T1190"
+        annotations:
+          summary: "Adaptive origin-risk enforcement is blocking requests"
+          description: |
+            {{ printf "%.0f" $value }} request(s) blocked in 15 minutes by accumulated
+            origin risk, not by the current input alone. This indicates a session or
+            tenant that has tripped repeated WARN/BLOCK signals — likely a
+            multi-request probing or decomposition attack.
+          dashboard_url: "/grafana/d/bulwark-correlation/bulwark-gateway-correlation-engine"
+
+      # --- Event-Tap Dropping Risk Telemetry ---
+      # The tap folds WARN/BLOCK events into origin risk state. Drops mean risk is
+      # under-counted and adaptive enforcement silently weakens.
+      - alert: BulwarkCorrelationTapDropping
+        expr: |
+          sum(rate(bulwark_correlation_tap_events_dropped_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Correlation event tap is dropping events"
+          description: |
+            The correlation event tap has been dropping events for 5 minutes
+            ({{ printf "%.2f" $value }}/s). Origin-risk accrual is under-counting,
+            weakening adaptive enforcement. Likely a saturated consumer under load —
+            check proxy CPU and Redis latency.
+          runbook_url: "https://bulwark-gateway.internal/runbooks/correlation-tap-drops"

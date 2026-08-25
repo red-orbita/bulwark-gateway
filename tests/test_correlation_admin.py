@@ -336,3 +336,119 @@ class TestCorrelationRbacWiring:
 
         assert "correlation:read" in ALL_PERMISSIONS
         assert "correlation:write" in ALL_PERMISSIONS
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Prometheus /metrics rendering (correlation + Redis-sourced globals)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _MetricsPipe:
+    """Minimal non-transactional pipeline: records mget/hgetall, replays on execute."""
+
+    def __init__(self, globals_row, corr_hash):
+        self._globals_row = globals_row
+        self._corr_hash = corr_hash
+        self._ops: list[str] = []
+
+    def mget(self, *keys):
+        self._ops.append("mget")
+        return self
+
+    def hgetall(self, key):
+        self._ops.append("hgetall")
+        return self
+
+    def execute(self):
+        out = []
+        for op in self._ops:
+            out.append(self._globals_row if op == "mget" else self._corr_hash)
+        return out
+
+
+class _MetricsRedis:
+    def __init__(self, globals_row, corr_hash):
+        self._globals_row = globals_row
+        self._corr_hash = corr_hash
+
+    def pipeline(self, transaction=False):
+        return _MetricsPipe(self._globals_row, self._corr_hash)
+
+
+class TestPrometheusMetricsRendering:
+    """Locks in a valid Prometheus exposition format for /admin/health/metrics.
+
+    Regression guard: the in-process recorder must NOT emit a second
+    ``bulwark_requests_total`` (its record_request() is never wired), because a
+    duplicate metric name + duplicate ``# TYPE`` line makes Prometheus reject the
+    whole scrape. The authoritative series come from the shared Redis counters.
+    """
+
+    def _combined(self, monkeypatch, globals_row, corr_hash):
+        import admin.routes.health as health
+        import admin.services.redis_sync as redis_sync
+        from admin.services.prometheus_client import get_metrics
+
+        monkeypatch.setattr(
+            redis_sync,
+            "get_redis_client",
+            lambda *a, **k: _MetricsRedis(globals_row, corr_hash),
+        )
+        return get_metrics().to_prometheus_text() + health._render_redis_prometheus()
+
+    def test_no_duplicate_type_lines(self, monkeypatch):
+        body = self._combined(
+            monkeypatch,
+            [b"279", b"172", b"101", b"6", b"0"],
+            {"origin_risk_total": "6", "tap_published": "75"},
+        )
+        type_lines = [ln for ln in body.splitlines() if ln.startswith("# TYPE ")]
+        assert len(type_lines) == len(set(type_lines)), "duplicate # TYPE line"
+
+    def test_requests_total_emitted_exactly_once(self, monkeypatch):
+        body = self._combined(
+            monkeypatch,
+            [b"279", b"172", b"101", b"6", b"0"],
+            {},
+        )
+        samples = [
+            ln for ln in body.splitlines()
+            if ln.startswith("bulwark_requests_total ")
+        ]
+        assert len(samples) == 1
+        assert samples[0] == "bulwark_requests_total 279"
+
+    def test_in_process_recorder_drops_dead_counters(self):
+        from admin.services.prometheus_client import get_metrics
+
+        text = get_metrics().to_prometheus_text()
+        # These were permanently zero (record_request never wired) and are now
+        # superseded by the Redis-sourced authoritative series.
+        assert "bulwark_requests_total" not in text
+        assert "bulwark_blocks_total" not in text
+        assert "bulwark_warns_total" not in text
+
+    def test_correlation_and_verdict_families_present(self, monkeypatch):
+        body = self._combined(
+            monkeypatch,
+            [b"279", b"172", b"101", b"6", b"0"],
+            {
+                "origin_risk_total": "6",
+                "origin_risk_blocked": "6",
+                "tap_published": "75",
+                "tap_processed": "75",
+            },
+        )
+        assert 'bulwark_verdicts_total{verdict="block"} 172' in body
+        assert "bulwark_correlation_origin_risk_assessments_total 6" in body
+        assert "bulwark_correlation_origin_risk_blocked_total 6" in body
+        assert "bulwark_correlation_tap_events_published_total 75" in body
+        # Unfired counters still render as a stable zero.
+        assert "bulwark_correlation_incidents_total 0" in body
+
+    def test_redis_unavailable_yields_empty_extra(self, monkeypatch):
+        import admin.routes.health as health
+        import admin.services.redis_sync as redis_sync
+
+        monkeypatch.setattr(redis_sync, "get_redis_client", lambda *a, **k: None)
+        assert health._render_redis_prometheus() == ""

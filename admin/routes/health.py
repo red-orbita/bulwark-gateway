@@ -142,12 +142,106 @@ async def health_detailed(_user: TokenPayload = Depends(require_permission("admi
 
 @router.get("/metrics")
 async def prometheus_metrics(_user: TokenPayload = Depends(require_permission("admin:read"))):
-    """Prometheus exposition format endpoint — requires auth."""
+    """Prometheus exposition format endpoint — requires auth.
+
+    Emits three metric families:
+
+      * the admin service's own in-process gauges (uptime, queue depth), and
+      * the authoritative cluster-wide verdict totals from the shared Redis
+        ``bulwark:global:*`` counters (``bulwark_requests_total`` /
+        ``bulwark_verdicts_total``), and
+      * the correlation-engine counters from ``bulwark:correlation:counters``
+        (``bulwark_correlation_*``).
+
+    The Redis-sourced blocks are best effort: if Redis is unreachable they are
+    simply omitted rather than failing the scrape.
+    """
     metrics = get_metrics()
+    body = metrics.to_prometheus_text()
+    extra = await asyncio.get_event_loop().run_in_executor(
+        None, _render_redis_prometheus
+    )
     return Response(
-        content=metrics.to_prometheus_text(),
+        content=body + extra,
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
+
+
+# Correlation counter hash fields → Prometheus counter names. Kept local (no
+# import from the proxy's ``src`` package, which is not present in the admin
+# image) and emitted as a stable zero when a counter has not fired yet.
+_CORRELATION_METRIC_MAP: list[tuple[str, str, str]] = [
+    ("incidents_total", "bulwark_correlation_incidents_total",
+     "Confirmed input-output exfiltration correlations"),
+    ("incidents_blocked", "bulwark_correlation_incidents_blocked_total",
+     "Correlated exfiltration incidents hardened to BLOCK"),
+    ("origin_risk_total", "bulwark_correlation_origin_risk_assessments_total",
+     "Adaptive origin-risk assessments that fired"),
+    ("origin_risk_blocked", "bulwark_correlation_origin_risk_blocked_total",
+     "Origin-risk assessments hardened to BLOCK"),
+    ("origin_risk_warned", "bulwark_correlation_origin_risk_warned_total",
+     "Origin-risk assessments flagged WARN"),
+    ("tap_published", "bulwark_correlation_tap_events_published_total",
+     "Security events accepted into the correlation event tap"),
+    ("tap_processed", "bulwark_correlation_tap_events_processed_total",
+     "Events folded into origin risk state by the tap consumer"),
+    ("tap_dropped", "bulwark_correlation_tap_events_dropped_total",
+     "Events dropped on a full tap queue (risk telemetry loss)"),
+]
+
+
+def _render_redis_prometheus() -> str:
+    """Render Redis-sourced global + correlation metrics (best effort, sync).
+
+    Returns an empty string when Redis is unavailable so the scrape still
+    succeeds with the admin in-process metrics alone.
+    """
+    try:
+        from ..services.redis_sync import get_redis_client
+        r = get_redis_client(timeout=0.5)
+        if r is None:
+            return ""
+
+        pipe = r.pipeline(transaction=False)
+        pipe.mget(
+            "bulwark:global:requests_total",
+            "bulwark:global:block",
+            "bulwark:global:allow",
+            "bulwark:global:warn",
+            "bulwark:global:redact",
+        )
+        pipe.hgetall("bulwark:correlation:counters")
+        globals_raw, corr_raw = pipe.execute()
+    except Exception:
+        return ""
+
+    globals_raw = globals_raw or [None] * 5
+    corr_raw = corr_raw or {}
+
+    def _i(v) -> int:
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    lines: list[str] = [
+        "# HELP bulwark_requests_total Total proxy requests (cluster-wide, from Redis)",
+        "# TYPE bulwark_requests_total counter",
+        f"bulwark_requests_total {_i(globals_raw[0])}",
+        "# HELP bulwark_verdicts_total Proxy verdicts by type (cluster-wide, from Redis)",
+        "# TYPE bulwark_verdicts_total counter",
+        f'bulwark_verdicts_total{{verdict="block"}} {_i(globals_raw[1])}',
+        f'bulwark_verdicts_total{{verdict="allow"}} {_i(globals_raw[2])}',
+        f'bulwark_verdicts_total{{verdict="warn"}} {_i(globals_raw[3])}',
+        f'bulwark_verdicts_total{{verdict="redact"}} {_i(globals_raw[4])}',
+    ]
+
+    for field, metric, help_text in _CORRELATION_METRIC_MAP:
+        lines.append(f"# HELP {metric} {help_text}")
+        lines.append(f"# TYPE {metric} counter")
+        lines.append(f"{metric} {_i(corr_raw.get(field))}")
+
+    return "\n".join(lines) + "\n"
 
 
 @router.get("/stream")
