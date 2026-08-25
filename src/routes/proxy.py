@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.config import settings
 from src.correlation.event_tap import get_event_tap
 from src.correlation.incident import get_correlator
-from src.correlation.metrics import record_correlation_metric
+from src.correlation.metrics import observe_correlation_latency, record_correlation_metric
 from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
@@ -534,11 +534,13 @@ async def chat_completions(request: Request):
     # the block threshold; BLOCK at/above it (only when correlation_blocking is
     # on). Zero cost when correlation is disabled.
     if settings.correlation_enabled and input_result.verdict != Verdict.BLOCK:
+        _risk_t0 = time.perf_counter()
         _risk_assessment = get_correlator().evaluate_origin_risk(
             tenant_id=tenant_id,
             agent_id=agent_id,
             request_id=f"{tenant_id}:{agent_id}:{int(time.time() * 1000)}",
         )
+        observe_correlation_latency(time.perf_counter() - _risk_t0)
         if _risk_assessment is not None:
             _risk_event = _risk_assessment.to_security_event()
             record_correlation_metric("origin_risk_total")
@@ -1047,6 +1049,7 @@ async def chat_completions(request: Request):
             if isinstance(_c.get("message", {}).get("content"), str)
             and _c.get("message", {}).get("content")
         )
+        _corr_t0 = time.perf_counter()
         incident = get_correlator().evaluate(
             input_events=input_result.events,
             output_events=_output_events_corr,
@@ -1057,6 +1060,7 @@ async def chat_completions(request: Request):
             input_text=_corr_input,
             output_text=_corr_output,
         )
+        observe_correlation_latency(time.perf_counter() - _corr_t0)
         if incident is not None:
             _corr_event = incident.to_security_event()
             record_correlation_metric("incidents_total")

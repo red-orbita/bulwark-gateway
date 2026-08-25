@@ -562,6 +562,23 @@ def test_origin_risk_assessment_to_security_event(correlator, monkeypatch):
 # ─── Correlation metrics (Phase 4a observability) ────────────────────────────
 
 
+class _FakePipe:
+    """Buffers HINCRBY calls and applies them atomically on execute()."""
+
+    def __init__(self, parent: "_FakeRedis") -> None:
+        self._parent = parent
+        self._ops: list[tuple[str, str, int]] = []
+
+    def hincrby(self, key: str, field: str, amount: int) -> "_FakePipe":
+        self._ops.append((key, field, amount))
+        return self
+
+    def execute(self) -> list[int]:
+        results = [self._parent.hincrby(*op) for op in self._ops]
+        self._ops.clear()
+        return results
+
+
 class _FakeRedis:
     """Minimal hash-only fake supporting the ops the metrics sink uses."""
 
@@ -575,6 +592,9 @@ class _FakeRedis:
 
     def hgetall(self, key: str) -> dict:
         return dict(self.store.get(key, {}))
+
+    def pipeline(self, transaction: bool = False) -> _FakePipe:
+        return _FakePipe(self)
 
 
 def _fresh_metrics():
@@ -633,6 +653,119 @@ def test_metrics_record_never_raises(monkeypatch):
     cm.record("incidents_total")  # must not raise
     # Falls back to in-process, and snapshot also degrades to the local view.
     assert cm.snapshot()["incidents_total"] == 1
+
+
+def test_latency_bucketing_in_memory(monkeypatch):
+    """Observations land in the smallest bucket whose upper bound they satisfy."""
+    from src.correlation import metrics as m
+
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: _mem_store())
+    cm = _fresh_metrics()
+
+    cm.observe_latency(0.0003)   # <= 0.0005
+    cm.observe_latency(0.0008)   # <= 0.001
+    cm.observe_latency(0.0008)   # <= 0.001 (again)
+    cm.observe_latency(5.0)      # over 1.0 → inf
+
+    snap = cm.latency_snapshot()
+    assert snap["count"] == 4
+    assert snap["0.0005"] == 1
+    assert snap["0.001"] == 2
+    assert snap["inf"] == 1
+    # sum in micros: 300 + 800 + 800 + 5_000_000
+    assert snap["sum_us"] == 300 + 800 + 800 + 5_000_000
+
+
+def test_latency_boundary_is_inclusive(monkeypatch):
+    """An observation exactly on a bucket bound falls INTO that bucket (<=)."""
+    from src.correlation import metrics as m
+
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: _mem_store())
+    cm = _fresh_metrics()
+
+    cm.observe_latency(0.001)  # exactly the 0.001 bound
+    snap = cm.latency_snapshot()
+    assert snap["0.001"] == 1
+    assert snap["0.0005"] == 0
+    assert snap["count"] == 1
+
+
+def test_latency_snapshot_shape_and_zero(monkeypatch):
+    """A fresh snapshot exposes every bucket boundary plus count/sum_us/inf as 0."""
+    from src.correlation import metrics as m
+
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: _mem_store())
+    cm = _fresh_metrics()
+
+    snap = cm.latency_snapshot()
+    expected = {"count", "sum_us", "inf"} | {
+        str(le) for le in m.LATENCY_BUCKETS_SECONDS
+    }
+    assert set(snap) == expected
+    assert all(v == 0 for v in snap.values())
+
+
+def test_latency_uses_redis_pipeline(monkeypatch):
+    """With a client, one observation is a single replica-safe pipeline of deltas."""
+    from src.correlation import metrics as m
+
+    store = _mem_store()
+    store._redis = _FakeRedis()
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: store)
+
+    cm = _fresh_metrics()
+    cm.observe_latency(0.002)  # <= 0.0025
+
+    hash_ = store._redis.store[m.COUNTER_KEY]
+    assert hash_[m.LAT_COUNT_FIELD] == 1
+    assert hash_[m.LAT_SUM_US_FIELD] == 2000
+    assert hash_[m.latency_bucket_field(0.0025)] == 1
+    # Snapshot reads the same shared hash back.
+    assert cm.latency_snapshot()["0.0025"] == 1
+
+
+def test_latency_negative_clamped(monkeypatch):
+    """A negative reading (clock skew) is clamped to 0, never a negative bucket."""
+    from src.correlation import metrics as m
+
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: _mem_store())
+    cm = _fresh_metrics()
+
+    cm.observe_latency(-1.0)
+    snap = cm.latency_snapshot()
+    assert snap["count"] == 1
+    assert snap["sum_us"] == 0
+    assert snap["0.0005"] == 1  # 0.0 falls into the smallest bucket
+
+
+def test_latency_observe_never_raises(monkeypatch):
+    """A Redis pipeline failure degrades to the in-process map, never propagates."""
+    from src.correlation import metrics as m
+
+    class _BoomPipe:
+        def hincrby(self, *a, **k):
+            return self
+
+        def execute(self):
+            raise RuntimeError("redis down")
+
+    class _BoomRedis:
+        def pipeline(self, transaction: bool = False):
+            return _BoomPipe()
+
+        def hgetall(self, *a, **k):
+            raise RuntimeError("redis down")
+
+    store = _mem_store()
+    store._redis = _BoomRedis()
+    monkeypatch.setattr(m, "get_risk_state_store", lambda: store)
+
+    cm = _fresh_metrics()
+    cm.observe_latency(0.003)  # must not raise
+    # Degraded to in-process; snapshot also degrades past the broken hgetall.
+    snap = cm.latency_snapshot()
+    assert snap["count"] == 1
+    assert snap["0.005"] == 1
 
 
 def test_tap_flush_mirrors_deltas(monkeypatch):

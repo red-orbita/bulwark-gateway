@@ -53,6 +53,38 @@ FIELDS: tuple[str, ...] = (
     "tap_dropped",              # events dropped on a full queue (risk telemetry loss)
 )
 
+# --- Inline-evaluation latency histogram -------------------------------------
+#
+# The correlation engine's whole premise is "zero cost when disabled, cheap when
+# enabled". This histogram lets an operator *prove* the hot-path cost the inline
+# evaluation adds (origin-risk read at PHASE 1r + input↔output correlation at
+# PHASE 5c), including the Redis round-trips those paths make.
+#
+# It is stored in the SAME hash as the counters, under distinct field names, so a
+# single ``hgetall`` fetches everything. The pieces are all monotonic counters
+# (bucket counts, total count, summed microseconds) → HINCRBY deltas sum correctly
+# across replicas, exactly like the other counters. Per-process gauges that cannot
+# be summed (e.g. live queue depth) are still deliberately excluded; ``tap_dropped``
+# already signals queue saturation replica-safely.
+#
+# Buckets are upper bounds in SECONDS. Chosen to straddle the expected range: a
+# pure in-process assessment (tens of microseconds) through a Redis round-trip
+# (~1-10 ms) up to a pathological 1 s outlier.
+LATENCY_BUCKETS_SECONDS: tuple[float, ...] = (
+    0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
+)
+
+# Hash field names for the histogram (kept in sync with the admin exposition,
+# which cannot import this module — see admin/routes/health.py).
+LAT_COUNT_FIELD = "eval_lat_count"        # total observations
+LAT_SUM_US_FIELD = "eval_lat_sum_us"      # summed latency in integer microseconds
+LAT_BUCKET_INF_FIELD = "eval_lat_bucket_inf"  # observations over the largest bound
+
+
+def latency_bucket_field(le: float) -> str:
+    """Hash field holding the (non-cumulative) count for the ``<= le`` bucket."""
+    return f"eval_lat_bucket_{le}"
+
 
 class _CorrelationMetrics:
     """Process-wide best-effort counter sink for the correlation engine."""
@@ -82,6 +114,74 @@ class _CorrelationMetrics:
                 logger.warning("correlation_metrics_redis_error", field=field, error=str(e))
         with self._lock:
             self._local[field] = self._local.get(field, 0) + amount
+
+    def _bucket_field_for(self, seconds: float) -> str:
+        """Return the histogram bucket field a ``seconds`` observation falls into."""
+        for le in LATENCY_BUCKETS_SECONDS:
+            if seconds <= le:
+                return latency_bucket_field(le)
+        return LAT_BUCKET_INF_FIELD
+
+    def observe_latency(self, seconds: float) -> None:
+        """Record one inline-evaluation latency observation (best effort, never raises).
+
+        Increments the matching bucket, the total count, and the summed
+        microseconds — all monotonic counters, so replicas sum correctly via
+        HINCRBY. A Redis failure degrades to the in-process map.
+        """
+        if seconds < 0.0:
+            seconds = 0.0
+        micros = int(seconds * 1_000_000)
+        bucket_field = self._bucket_field_for(seconds)
+        r = self._redis()
+        if r is not None:
+            try:
+                pipe = r.pipeline(transaction=False)
+                pipe.hincrby(COUNTER_KEY, LAT_COUNT_FIELD, 1)
+                pipe.hincrby(COUNTER_KEY, LAT_SUM_US_FIELD, micros)
+                pipe.hincrby(COUNTER_KEY, bucket_field, 1)
+                pipe.execute()
+                return
+            except Exception as e:  # noqa: BLE001 - degrade to in-process
+                logger.warning("correlation_metrics_latency_error", error=str(e))
+        with self._lock:
+            self._local[LAT_COUNT_FIELD] = self._local.get(LAT_COUNT_FIELD, 0) + 1
+            self._local[LAT_SUM_US_FIELD] = self._local.get(LAT_SUM_US_FIELD, 0) + micros
+            self._local[bucket_field] = self._local.get(bucket_field, 0) + 1
+
+    def latency_snapshot(self) -> dict[str, int]:
+        """Return the histogram state: count, summed micros, and per-bucket counts.
+
+        Keys: ``count``, ``sum_us``, and one entry per bucket boundary (as a float
+        key) plus ``inf``. Reads Redis when available, else the in-process view.
+        Never raises.
+        """
+        bucket_fields = {
+            le: latency_bucket_field(le) for le in LATENCY_BUCKETS_SECONDS
+        }
+        out: dict[str, int] = {"count": 0, "sum_us": 0}
+        for le in LATENCY_BUCKETS_SECONDS:
+            out[str(le)] = 0
+        out["inf"] = 0
+
+        def _fill(getter) -> None:
+            out["count"] = int(getter(LAT_COUNT_FIELD) or 0)
+            out["sum_us"] = int(getter(LAT_SUM_US_FIELD) or 0)
+            for le, field in bucket_fields.items():
+                out[str(le)] = int(getter(field) or 0)
+            out["inf"] = int(getter(LAT_BUCKET_INF_FIELD) or 0)
+
+        r = self._redis()
+        if r is not None:
+            try:
+                raw = r.hgetall(COUNTER_KEY) or {}
+                _fill(lambda f: raw.get(f, 0))
+                return out
+            except Exception as e:  # noqa: BLE001
+                logger.warning("correlation_metrics_latency_snapshot_error", error=str(e))
+        with self._lock:
+            _fill(lambda f: self._local.get(f, 0))
+        return out
 
     def snapshot(self) -> dict[str, int]:
         """Return all counters (Redis if available, else the in-process view).
@@ -119,3 +219,8 @@ def get_correlation_metrics() -> _CorrelationMetrics:
 def record_correlation_metric(field: str, amount: int = 1) -> None:
     """Convenience wrapper: increment a single correlation counter (best effort)."""
     get_correlation_metrics().record(field, amount)
+
+
+def observe_correlation_latency(seconds: float) -> None:
+    """Convenience wrapper: record one inline-evaluation latency observation."""
+    get_correlation_metrics().observe_latency(seconds)

@@ -189,6 +189,42 @@ _CORRELATION_METRIC_MAP: list[tuple[str, str, str]] = [
      "Events dropped on a full tap queue (risk telemetry loss)"),
 ]
 
+# Inline-evaluation latency histogram. Field names + bucket bounds are duplicated
+# from src/correlation/metrics.py (the admin image cannot import the proxy's src
+# package). Keep these in lockstep with LATENCY_BUCKETS_SECONDS there.
+_CORRELATION_LATENCY_BUCKETS: tuple[float, ...] = (
+    0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
+)
+_CORRELATION_LAT_COUNT_FIELD = "eval_lat_count"
+_CORRELATION_LAT_SUM_US_FIELD = "eval_lat_sum_us"
+_CORRELATION_LAT_INF_FIELD = "eval_lat_bucket_inf"
+_CORRELATION_LAT_METRIC = "bulwark_correlation_eval_duration_seconds"
+
+
+def _render_correlation_latency(corr_raw: dict, _i) -> list[str]:
+    """Render the inline-evaluation latency histogram from the counter hash.
+
+    Emits a Prometheus histogram: cumulative ``_bucket{le=...}`` lines (bucket
+    counts are stored non-cumulatively, summed here), ``_sum`` (seconds, from
+    integer microseconds), and ``_count``. Always emitted so the series exist
+    from t=0.
+    """
+    lines: list[str] = [
+        f"# HELP {_CORRELATION_LAT_METRIC} Inline correlation evaluation latency "
+        "(origin-risk + input-output), including Redis round-trips",
+        f"# TYPE {_CORRELATION_LAT_METRIC} histogram",
+    ]
+    cumulative = 0
+    for le in _CORRELATION_LATENCY_BUCKETS:
+        cumulative += _i(corr_raw.get(f"eval_lat_bucket_{le}"))
+        lines.append(f'{_CORRELATION_LAT_METRIC}_bucket{{le="{le}"}} {cumulative}')
+    total = cumulative + _i(corr_raw.get(_CORRELATION_LAT_INF_FIELD))
+    lines.append(f'{_CORRELATION_LAT_METRIC}_bucket{{le="+Inf"}} {total}')
+    sum_seconds = _i(corr_raw.get(_CORRELATION_LAT_SUM_US_FIELD)) / 1_000_000.0
+    lines.append(f"{_CORRELATION_LAT_METRIC}_sum {sum_seconds}")
+    lines.append(f"{_CORRELATION_LAT_METRIC}_count {_i(corr_raw.get(_CORRELATION_LAT_COUNT_FIELD))}")
+    return lines
+
 
 def _render_redis_prometheus() -> str:
     """Render Redis-sourced global + correlation metrics (best effort, sync).
@@ -240,6 +276,8 @@ def _render_redis_prometheus() -> str:
         lines.append(f"# HELP {metric} {help_text}")
         lines.append(f"# TYPE {metric} counter")
         lines.append(f"{metric} {_i(corr_raw.get(field))}")
+
+    lines.extend(_render_correlation_latency(corr_raw, _i))
 
     return "\n".join(lines) + "\n"
 

@@ -452,3 +452,40 @@ class TestPrometheusMetricsRendering:
 
         monkeypatch.setattr(redis_sync, "get_redis_client", lambda *a, **k: None)
         assert health._render_redis_prometheus() == ""
+
+    def test_correlation_latency_histogram_rendered(self, monkeypatch):
+        # Non-cumulative bucket counts 3 + 2 + inf 1 = 6 total observations.
+        body = self._combined(
+            monkeypatch,
+            [b"279", b"172", b"101", b"6", b"0"],
+            {
+                "eval_lat_count": "6",
+                "eval_lat_sum_us": "12345",
+                "eval_lat_bucket_0.0005": "3",
+                "eval_lat_bucket_0.001": "2",
+                "eval_lat_bucket_inf": "1",
+            },
+        )
+        assert "# TYPE bulwark_correlation_eval_duration_seconds histogram" in body
+        # Buckets are cumulative: le=0.0005 -> 3, le=0.001 -> 5, unchanged to 1.0.
+        assert 'bulwark_correlation_eval_duration_seconds_bucket{le="0.0005"} 3' in body
+        assert 'bulwark_correlation_eval_duration_seconds_bucket{le="0.001"} 5' in body
+        assert 'bulwark_correlation_eval_duration_seconds_bucket{le="1.0"} 5' in body
+        # +Inf includes the overflow bucket → total observations.
+        assert 'bulwark_correlation_eval_duration_seconds_bucket{le="+Inf"} 6' in body
+        assert "bulwark_correlation_eval_duration_seconds_sum 0.012345" in body
+        assert "bulwark_correlation_eval_duration_seconds_count 6" in body
+
+    def test_correlation_latency_histogram_stable_zero(self, monkeypatch):
+        # With no latency fields, the histogram still renders (zeros) so the
+        # series exist from t=0 and Prometheus never sees a vanishing metric.
+        body = self._combined(
+            monkeypatch,
+            [b"279", b"172", b"101", b"6", b"0"],
+            {},
+        )
+        assert 'bulwark_correlation_eval_duration_seconds_bucket{le="+Inf"} 0' in body
+        assert "bulwark_correlation_eval_duration_seconds_count 0" in body
+        # No duplicate TYPE lines introduced by the histogram.
+        type_lines = [ln for ln in body.splitlines() if ln.startswith("# TYPE ")]
+        assert len(type_lines) == len(set(type_lines))
