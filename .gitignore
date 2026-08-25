@@ -39,6 +39,11 @@ credentials.json
 # --- Runtime data (generated at runtime) ---
 data/
 shared/
+# Test datasets/fixtures are SOURCE, not runtime data — the correlation FP/FN
+# corpus is imported by committed tests, so it must stay tracked despite `data/`.
+!tests/data/
+!tests/data/**
+tests/data/**/__pycache__/
 # Internal reports stay private (pentest / redteam / qa / benchmarks),
 # except the launch-facing blog evidence which is intentionally published.
 reports/*

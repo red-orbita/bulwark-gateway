@@ -31,6 +31,13 @@ Signals (summed, then clamped to ``[0, 1]``):
 * **Critical output category** (weight :data:`_W_CRITICAL`): a
   CREDENTIAL_ACCESS / MODEL_THEFT output is inherently more decisive than a lone
   PII match.
+* **PII multiplicity in the output** (weight :data:`_W_PII_VOLUME`): several
+  *distinct* structured identifiers (SSNs, emails, phones, card numbers) in one
+  response is the signature of a *bulk* PII dump, not the incidental single
+  phone/email a benign answer might contain. A lone credential blob has entropy;
+  a bulk-PII leak has volume — this signal gives the correlator block-recall on
+  pure-PII exfiltration (which carries no high-entropy token and no critical
+  category) while an incidental single identifier stays below the threshold.
 * **Lexical linkage** (weight :data:`_W_LEXICAL`, scaled by containment): the
   output echoes distinctive tokens that appeared in the suspicious input — the
   injection referenced material that then reappears in the response.
@@ -69,12 +76,35 @@ _SECRET_CANDIDATE_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 _SECRET_MIN_LEN = 20
 _SECRET_MIN_ENTROPY = 3.5
 
+# Structured-PII patterns for the multiplicity signal. Deliberately narrow and
+# anchored (no nested quantifiers ⇒ no ReDoS) and only ever run over the bounded
+# prefix, so the added cost is O(bounded). Each is counted by *distinct* match so
+# a single value repeated cannot inflate the tally.
+_PII_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),                 # US SSN
+    re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),  # email
+    re.compile(r"(?<!\d)\d{3}-\d{4}(?!\d)"),              # phone (555-0142 style)
+    re.compile(r"\b\d{4}(?:[ -]\d{4}){2,3}\b"),           # card-number style
+)
+
+# A response carrying at least this many *distinct* structured identifiers is
+# treated as a bulk PII dump (a benign answer carries at most one incidental
+# identifier). Chosen so single/paired incidental PII never triggers the signal.
+_PII_VOLUME_MIN = 3
+
+# Upper bound on distinct identifiers counted (caps the set work regardless of a
+# pathologically PII-dense response).
+_PII_VOLUME_CAP = 64
+
 # Signal weights. Deliberately sum to > 1.0 so several weak-to-moderate signals
 # combine, but the result is clamped to 1.0. Chosen so that a genuine credential
 # leak (entropy + critical) clears the default 0.5 block threshold, while a bare
-# category co-occurrence does not.
+# category co-occurrence does not. The PII-volume weight is sized so that a bulk
+# PII dump (which lacks entropy and a critical category) clears the threshold once
+# combined with the always-present corroboration signal (0.45 + 0.10 = 0.55).
 _W_ENTROPY = 0.40
 _W_CRITICAL = 0.30
+_W_PII_VOLUME = 0.45
 _W_LEXICAL = 0.20
 _W_CORROBORATION = 0.10
 
@@ -101,6 +131,22 @@ def _has_secret_like_token(text: str) -> bool:
         if len(tok) >= _SECRET_MIN_LEN and _shannon_entropy(tok) >= _SECRET_MIN_ENTROPY:
             return True
     return False
+
+
+def _distinct_pii_count(text: str) -> int:
+    """Number of *distinct* structured PII identifiers in ``text`` (capped).
+
+    Distinct per pattern *and* across patterns: a single value repeated many
+    times counts once, so the signal reflects how many different people's
+    identifiers are leaving the gateway rather than how noisy the text is.
+    """
+    seen: set[str] = set()
+    for pat in _PII_PATTERNS:
+        for m in pat.finditer(text):
+            seen.add(m.group(0))
+            if len(seen) >= _PII_VOLUME_CAP:
+                return len(seen)
+    return len(seen)
 
 
 def _significant_tokens(text: str) -> set[str]:
@@ -165,6 +211,13 @@ def correlation_confidence(
         # Category signal: a critical output category is inherently decisive.
         if critical:
             confidence += _W_CRITICAL
+
+        # Content signal: several distinct structured identifiers in the output is
+        # a bulk-PII-dump signature (a benign answer carries at most one). Gives
+        # block-recall on pure-PII exfiltration, which has neither entropy nor a
+        # critical category to fire the signals above.
+        if out_text and _distinct_pii_count(out_text) >= _PII_VOLUME_MIN:
+            confidence += _W_PII_VOLUME
 
         # Content signal: the output echoes the suspicious input's vocabulary.
         if in_text and out_text:

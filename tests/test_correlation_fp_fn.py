@@ -13,10 +13,14 @@ These tests turn that requirement into an evidence-closed contract:
 * **High block-recall on real credential leaks** — a genuine high-entropy secret
   leaving the gateway reliably clears the gate.
 * **Clean separation** — every credential leak scores above every benign sample.
-* **Honest false-negatives** — pure-PII leaks stay WARN by design, but are *not*
-  silently passed: :meth:`InputOutputCorrelator.evaluate` still emits a WARN
-  incident and accrues origin risk (repetition escalates to a BLOCK via the
-  adaptive path).
+* **Bulk-PII recall (R6)** — a dump of several distinct *structured* identifiers
+  (SSNs, emails, phones, cards) trips the PII-multiplicity signal and clears the
+  block gate end-to-end, without costing a single benign false positive.
+* **Honest residual false-negatives** — leaks of purely *unstructured* PII (street
+  addresses, dates of birth) carry no regex-recognisable identifier and stay WARN
+  by design, but are *not* silently passed:
+  :meth:`InputOutputCorrelator.evaluate` still emits a WARN incident and accrues
+  origin risk (repetition escalates to a BLOCK via the adaptive path).
 * **Threshold/FP tradeoff** — lowering the tunable threshold below the benign
   band reintroduces false positives; the shipped 0.5 default is defended by data.
 
@@ -26,6 +30,7 @@ Targets (asserted below):
 |--------------------------------|---------------|
 | Benign false-positive rate     | == 0          |
 | Credential leak block-recall   | >= 0.90       |
+| Bulk-PII leak block-recall     | >= 0.70       |
 | Credential↔benign separation   | > 0           |
 """
 
@@ -43,10 +48,11 @@ from tests.data.correlation_corpus import (
     score,
 )
 
-# ─── Acceptance targets (documented in the audit doc, finding F5) ──────────────
+# ─── Acceptance targets (documented in the audit doc, finding F5 + R6) ─────────
 
 _MAX_BENIGN_FALSE_POSITIVES = 0
 _MIN_CREDENTIAL_BLOCK_RECALL = 0.90
+_MIN_PII_BLOCK_RECALL = 0.70
 
 
 def test_corpus_threshold_matches_shipped_default():
@@ -198,13 +204,52 @@ def test_end_to_end_benign_stays_warn(blocking_correlator):
     assert incident.verdict == Verdict.WARN  # …but does not hard-block a legit user
 
 
-def test_pii_leak_is_warn_tier_not_silently_passed(blocking_correlator):
-    """A pure-PII leak stays WARN (block-gate FN) yet still accrues origin risk."""
-    report = evaluate_corpus()
-    # Documented behaviour: the FP-safe gate does not hard-block pure-PII leaks.
-    assert report.pii_block_recall < _MIN_CREDENTIAL_BLOCK_RECALL
+def test_bulk_pii_leaks_meet_block_recall_target():
+    """R6: a corpus of bulk structured-PII dumps clears the block gate at target.
 
-    sample = next(s for s in corpus() if s.subset == "attack_pii")
+    The PII-multiplicity signal lifts genuine multi-identifier dumps over the
+    threshold. This pins the recall gain as data (>= 0.70) so a future weight
+    change that silently regresses it fails CI — while the FP test above proves
+    the gain costs zero benign false positives.
+    """
+    report = evaluate_corpus()
+    assert report.pii_block_recall >= _MIN_PII_BLOCK_RECALL
+
+
+def test_bulk_structured_pii_leak_blocks_end_to_end(blocking_correlator):
+    """A bulk structured-PII dump, run through evaluate(), hard-BLOCKs (R6)."""
+    # Selected by score, not by name, so the test tracks the shipped heuristic.
+    sample = next(
+        s
+        for s in corpus()
+        if s.subset == "attack_pii" and score(s) >= DEFAULT_BLOCK_THRESHOLD
+    )
+    incident = blocking_correlator.evaluate(
+        input_events=[_event(ThreatCategory.EXFILTRATION)],
+        output_events=[_event(ThreatCategory.PII_LEAK)],
+        tenant_id="acme",
+        agent_id="bot",
+        input_text=sample.input_text,
+        output_text=sample.output_text,
+        subject_id="user-8",
+    )
+    assert incident is not None
+    assert incident.verdict == Verdict.BLOCK
+
+
+def test_unstructured_pii_leak_is_warn_tier_not_silently_passed(blocking_correlator):
+    """An unstructured-PII leak stays WARN (residual FN) yet still accrues risk."""
+    report = evaluate_corpus()
+    # Honest limit: recall is strong but not perfect — some unstructured PII
+    # (addresses, DoB) has no regex-recognisable identifier to count.
+    assert report.pii_block_recall < 1.0
+
+    # Selected by score: a genuine PII leak that the gate does NOT hard-block.
+    sample = next(
+        s
+        for s in corpus()
+        if s.subset == "attack_pii" and score(s) < DEFAULT_BLOCK_THRESHOLD
+    )
     before = blocking_correlator._risk.get("subject", "acme:user-9")
     incident = blocking_correlator.evaluate(
         input_events=[_event(ThreatCategory.EXFILTRATION)],

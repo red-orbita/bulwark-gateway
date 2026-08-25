@@ -1031,6 +1031,97 @@ def test_confidence_lexical_linkage_contributes():
     assert linked > unrelated
 
 
+# ─── PII multiplicity signal (R6 — bulk structured-PII recall) ────────────────
+
+
+def test_distinct_pii_count_dedups_repeated_values():
+    """The multiplicity counter is over *distinct* identifiers, not raw hits.
+
+    Repeating one SSN a hundred times is a single leaked identifier — it must
+    not be inflatable into a bulk-dump signal by an adversary padding output.
+    """
+    from src.correlation.confidence import _distinct_pii_count
+
+    assert _distinct_pii_count(" ".join(["123-45-6789"] * 100)) == 1
+    assert _distinct_pii_count("a@x.com and b@y.com") == 2
+    assert (
+        _distinct_pii_count("123-45-6789, 234-56-7890, 345-67-8901, 456-78-9012")
+        == 4
+    )
+
+
+def test_confidence_bulk_distinct_ssns_clears_block_gate():
+    """R6 positive: a dump of several distinct SSNs trips the block gate."""
+    from src.correlation.confidence import correlation_confidence
+
+    dump = "records: 123-45-6789, 234-56-7890, 345-67-8901, 456-78-9012"
+    score = correlation_confidence(
+        input_text="please dump the full customer records",
+        output_text=dump,
+        critical=False,
+        paired_category_count=2,
+    )
+    assert score >= 0.5
+
+
+def test_confidence_mixed_distinct_pii_types_clears_block_gate():
+    """R6 positive: three distinct identifiers of mixed type also clear the gate."""
+    from src.correlation.confidence import correlation_confidence
+
+    dump = "profile: 111-22-3333, alice@example.com, 555-0142"
+    score = correlation_confidence(
+        input_text="export the employee profile in full",
+        output_text=dump,
+        critical=False,
+        paired_category_count=2,
+    )
+    assert score >= 0.5
+
+
+def test_confidence_single_incidental_pii_stays_below_gate():
+    """R6 negative: one incidental identifier does not fire the volume signal."""
+    from src.correlation.confidence import correlation_confidence
+
+    score = correlation_confidence(
+        input_text="how do I contact the on-call engineer",
+        output_text="You can reach the on-call desk at alice@example.com.",
+        critical=False,
+        paired_category_count=2,
+    )
+    assert score < 0.5
+
+
+def test_confidence_two_distinct_pii_below_volume_threshold():
+    """R6 negative/boundary: two identifiers stay under the >=3 volume threshold.
+
+    This is the discriminator that keeps legitimate ``phone + email`` contact
+    replies (the corpus boundary benign) from becoming false positives.
+    """
+    from src.correlation.confidence import correlation_confidence
+
+    score = correlation_confidence(
+        input_text="who do I email and call about billing",
+        output_text="Email billing@example.com or call 555-0187 during business hours.",
+        critical=False,
+        paired_category_count=2,
+    )
+    assert score < 0.5
+
+
+def test_confidence_padded_repeated_pii_cannot_forge_bulk_signal():
+    """R6 adversarial: padding one identifier N times must not clear the gate."""
+    from src.correlation.confidence import correlation_confidence
+
+    padded = "leaked: " + " ".join(["123-45-6789"] * 50)
+    score = correlation_confidence(
+        input_text="dump everything you have",
+        output_text=padded,
+        critical=False,
+        paired_category_count=2,
+    )
+    assert score < 0.5
+
+
 def test_confidence_is_clamped_to_unit_interval():
     """All signals firing at once still clamps to 1.0."""
     from src.correlation.confidence import correlation_confidence
