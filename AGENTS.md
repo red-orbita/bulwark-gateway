@@ -629,7 +629,7 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD` | float | `7.0` | Origin risk score (0–10) at/above which requests are hardened to BLOCK. Runtime-tunable |
 | `BULWARK_CORRELATION_RISK_WARN_THRESHOLD` | float | `4.0` | Origin risk score at/above which requests are flagged WARN. Runtime-tunable |
 | `BULWARK_CORRELATION_RISK_DECAY_SECONDS` | float | `900.0` | Half-life for decaying accumulated origin risk. Runtime-tunable |
-| `BULWARK_CORRELATION_WINDOW_SECONDS` | float | `30.0` | Input↔output pairing window (guards clock skew). Runtime-tunable |
+| `BULWARK_CORRELATION_WINDOW_SECONDS` | float | `30.0` | **Latent/reserved — not currently enforced.** Same-request input↔output pairing needs no time window; retained (accepted, bounded) for a future cross-request/async correlator. Wiring it to the backend round-trip would false-negative on slow LLM responses. Admin UI shows it read-only |
 | `BULWARK_CORRELATION_CONFIDENCE_BLOCK_THRESHOLD` | float | `0.5` | Min content-corroboration confidence (0–1) to escalate a correlated exfiltration incident from WARN to BLOCK (only when blocking is on). Runtime-tunable |
 | `BULWARK_METRICS_SCRAPE_TOKEN` | str | `""` | **Admin-side** (read via `read_secret`, `*_FILE` supported). Dedicated least-privilege bearer that gates `GET /admin/health/metrics` for Prometheus (`hmac.compare_digest`). Empty ⇒ scrape-token path inert, endpoint requires `admin:read` JWT |
 

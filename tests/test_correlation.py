@@ -243,6 +243,14 @@ def test_benign_output_no_correlation(correlator):
 
 
 def test_stale_input_outside_window_no_correlation(correlator):
+    """The window guard still fires *iff* a caller explicitly supplies a timestamp.
+
+    This is the latent/reserved path (F4): the production proxy never passes
+    ``input_detected_at`` (correlation is same-request — see the two tests below),
+    but a future cross-request/async correlator that *does* supply one must still
+    be able to reject a stale pairing. This pins that the guard code remains
+    functional for that future use.
+    """
     incident = correlator.evaluate(
         input_events=[_event(ThreatCategory.PROMPT_INJECTION)],
         output_events=[_event(ThreatCategory.PII_LEAK)],
@@ -251,6 +259,48 @@ def test_stale_input_outside_window_no_correlation(correlator):
         input_detected_at=time.time() - 120.0,  # 2 min ago, window is 30s
     )
     assert incident is None
+
+
+def test_same_request_correlation_ignores_window(correlator, monkeypatch):
+    """F4: with no ``input_detected_at`` (the real proxy path), the window is inert.
+
+    Even with the window driven to its minimum, a same-request pairing still
+    confirms — proving ``window_seconds`` has no enforcement effect on the code
+    path the proxy actually uses. Wiring the timestamp would instead make a slow
+    backend silently skip correlation, which this design deliberately avoids.
+    """
+    from src.config import settings
+
+    # Tiny window; if it were consulted on the same-request path this would drop
+    # every correlation. It must not, because no timestamp is supplied.
+    monkeypatch.setattr(settings, "correlation_window_seconds", 1.0, raising=False)
+    incident = correlator.evaluate(
+        input_events=[_event(ThreatCategory.PROMPT_INJECTION)],
+        output_events=[_event(ThreatCategory.PII_LEAK)],
+        tenant_id="acme",
+        agent_id="bot",
+        input_hash="deadbeef",
+        # input_detected_at intentionally omitted — mirrors the proxy call site.
+    )
+    assert incident is not None
+    assert incident.verdict == Verdict.WARN
+
+
+def test_window_seconds_is_a_latent_field():
+    """F4: ``window_seconds`` is accepted/bounded but flagged latent (not enforced)."""
+    from src.correlation.runtime import (
+        TUNABLE_FIELDS,
+        latent_fields,
+        numeric_field_bounds,
+    )
+
+    latent = latent_fields()
+    assert "window_seconds" in latent
+    # Still accepted & bounded for backward-compat / future async correlator.
+    assert "window_seconds" in numeric_field_bounds()
+    assert "window_seconds" in TUNABLE_FIELDS
+    # No live enforcement knob is (yet) latent — only the window.
+    assert latent == frozenset({"window_seconds"})
 
 
 def test_incident_to_security_event_shape(correlator):

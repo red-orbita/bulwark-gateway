@@ -263,8 +263,17 @@ class InputOutputCorrelator:
 
             rc = get_correlation_runtime().get()
 
-            # Window guard: input↔output is same-request/synchronous, so this only
-            # rejects pathological clock skew or mis-wired async ordering.
+            # LATENT window guard (F4). This correlator is strictly *same-request*:
+            # ``input_events`` and ``output_events`` come from one request, so they
+            # are inherently paired and need no time window to decide the pairing.
+            # The proxy therefore deliberately does NOT pass ``input_detected_at``
+            # (it stays None ⇒ this branch is skipped). Wiring it naively would make
+            # the window measure the backend LLM round-trip (up to the backend
+            # timeout, default 120s), so any response slower than ``window_seconds``
+            # would silently *skip* correlation — a false-negative. The guard is kept
+            # only to reject pathological clock skew / a future async correlator that
+            # explicitly supplies a timestamp; ``window_seconds`` is a reserved knob
+            # (see src.correlation.runtime), not a live enforcement control.
             window = float(rc.window_seconds)
             if input_detected_at is not None and (time.time() - input_detected_at) > window:
                 return None

@@ -815,9 +815,18 @@ Read-only catalog of tunable fields and their numeric bounds. Requires `correlat
     "severity_high_mult": {"min": 0.1, "max": 10.0},
     "severity_critical_mult": {"min": 0.1, "max": 10.0},
     "confidence_block_threshold": {"min": 0.0, "max": 1.0}
-  }
+  },
+  "latent_fields": ["window_seconds"]
 }
 ```
+
+> **`window_seconds` is latent/reserved — not currently enforced.** The input↔output
+> correlator is strictly *same-request*: a request's input and its own output are
+> inherently paired, so no time window is needed and the proxy deliberately does not
+> feed the correlator a detection timestamp. The field is still accepted and bounded
+> (so existing overrides don't break and a future cross-request/async correlator can
+> adopt it) but changing it has **no effect on enforcement today**. The admin UI shows
+> it read-only and omits it from the live tuning form.
 
 #### GET /admin/correlation/origins
 
@@ -857,7 +866,8 @@ disable enforcement with a nonsensical value. Requires `correlation:write`.
 {"message": "Correlation override updated", "override": {"blocking": true, "risk_block_threshold": 6.0, "risk_decay_seconds": 1200.0}}
 ```
 
-Numeric bounds: `window_seconds` 1–3600, `risk_block_threshold`/`risk_warn_threshold` >0–10,
+Numeric bounds: `window_seconds` 1–3600 (**latent/reserved — not enforced**, see above),
+`risk_block_threshold`/`risk_warn_threshold` >0–10,
 `risk_decay_seconds` 10–604800, `confidence_block_threshold` 0–1, `event_bump_warn`/`event_bump_block` 0–10,
 `severity_high_mult`/`severity_critical_mult` >0–10.
 

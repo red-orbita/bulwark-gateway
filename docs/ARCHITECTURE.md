@@ -203,8 +203,12 @@ delegated to the downstream SIEM, which already receives every event.
    score is compared to thresholds: `≥ warn` → verdict hardened to WARN; `≥ block` → BLOCK (category
    `POLICY_VIOLATION`). Blocking is gated by `BULWARK_CORRELATION_BLOCKING` (default off → WARN only).
 4. **Exfiltration correlation** — after output filtering, the input↔output correlator pairs the
-   request's input signals with response signals inside `BULWARK_CORRELATION_WINDOW_SECONDS`
-   (default 30s) and emits a correlated incident when an exfiltration pattern spans both sides.
+   request's input signals with that same response's signals (a strictly *same-request* pairing) and
+   emits a correlated incident when an exfiltration pattern spans both sides.
+   `BULWARK_CORRELATION_WINDOW_SECONDS` (default 30s) is a **latent/reserved** knob: same-request
+   input and output are inherently paired, so no time window is enforced today (wiring one to the
+   backend round-trip would false-negative on slow LLM responses). It is retained for a future
+   cross-request/async correlator.
 
 ### Emitted Events
 

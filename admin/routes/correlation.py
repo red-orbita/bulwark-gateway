@@ -65,6 +65,9 @@ class CorrelationConfigUpdate(BaseModel):
     """
 
     blocking: bool | None = None
+    # LATENT/reserved: accepted and bounded for backward-compat but not currently
+    # enforced (same-request correlation needs no pairing window). See
+    # src.correlation.runtime. The UI renders it read-only.
     window_seconds: float | None = Field(default=None, ge=1, le=3600)
     risk_block_threshold: float | None = Field(default=None, gt=0, le=10)
     risk_warn_threshold: float | None = Field(default=None, gt=0, le=10)
@@ -126,6 +129,21 @@ def _numeric_bounds() -> dict:
         return numeric_field_bounds()
     except Exception:
         return {}
+
+
+def _latent_fields() -> list[str]:
+    """Tunables accepted for backward-compat but not currently enforced.
+
+    ``window_seconds`` is inert under same-request correlation (see
+    ``src.correlation.runtime``); the admin UI renders these as reserved rather
+    than live knobs so an operator is never misled that they change behaviour.
+    """
+    try:
+        from src.correlation.runtime import latent_fields
+
+        return sorted(latent_fields())
+    except Exception:
+        return ["window_seconds"]
 
 
 def _read_override(r) -> dict:
@@ -253,6 +271,9 @@ async def correlation_config_fields(
     return {
         "boolean_fields": list(_BOOL_FIELDS),
         "numeric_fields": {name: {"min": lo, "max": hi} for name, (lo, hi) in bounds.items()},
+        # Fields accepted for backward-compat but NOT currently enforced (latent).
+        # The UI must render these as reserved, not as live enforcement knobs.
+        "latent_fields": _latent_fields(),
     }
 
 

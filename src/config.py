@@ -208,9 +208,12 @@ class Settings(BaseSettings):
     # response (replaces leaking content). When False, it only WARNs + records the
     # incident and elevates risk state (observe-first rollout). WARN-before-BLOCK.
     correlation_blocking: bool = False
-    # Sliding window (seconds) linking a request's INPUT verdict to its OUTPUT
-    # detections. Input↔output correlation is same-request/synchronous, so this is
-    # a tight bound guarding against clock skew and async event ordering.
+    # LATENT/reserved (F4): input↔output correlation is strictly same-request, so a
+    # request's input and its own output are inherently paired and NO time window is
+    # enforced today (the proxy does not feed the correlator a detection timestamp).
+    # Wiring one to the backend round-trip would false-negative on slow LLM responses
+    # (elapsed ≈ backend latency, up to the backend timeout). Retained — accepted and
+    # bounded — for a future cross-request/async correlator. See src/correlation/runtime.py.
     correlation_window_seconds: float = 30.0
     # Risk-state decay half-life (seconds). Elevated origin risk decays over time
     # so a single bad request does not permanently penalise a tenant/session.

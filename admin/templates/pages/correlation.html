@@ -121,7 +121,7 @@
                 </div>
                 <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                     <div class="flex justify-between"><span class="text-gray-400">Blocking</span><span class="font-mono" :class="status.effective.blocking ? 'text-red-300' : 'text-amber-300'" x-text="status.effective.blocking ? 'on' : 'off'"></span></div>
-                    <div class="flex justify-between"><span class="text-gray-400">Window</span><span class="font-mono text-gray-300" x-text="status.effective.window_seconds + 's'"></span></div>
+                    <div class="flex justify-between"><span class="text-gray-500">Window <span class="text-[10px] text-gray-600">(reserved)</span></span><span class="font-mono text-gray-500" x-text="status.effective.window_seconds + 's'" title="Reserved/latent: not enforced under same-request correlation"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">BLOCK</span><span class="font-mono text-red-300" x-text="status.effective.risk_block_threshold"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">WARN</span><span class="font-mono text-amber-300" x-text="status.effective.risk_warn_threshold"></span></div>
                     <div class="flex justify-between"><span class="text-gray-400">Decay half-life</span><span class="font-mono text-gray-300" x-text="status.effective.risk_decay_seconds + 's'"></span></div>
@@ -215,7 +215,9 @@ function correlationPage() {
             { key: 'risk_block_threshold', label: 'BLOCK', step: '0.1' },
             { key: 'risk_warn_threshold', label: 'WARN', step: '0.1' },
             { key: 'risk_decay_seconds', label: 'Decay (s)', step: '10' },
-            { key: 'window_seconds', label: 'Window (s)', step: '1' },
+            // NOTE: window_seconds is intentionally NOT a live tuning field — it is
+            // latent/reserved (inert under same-request correlation). It is shown
+            // read-only in "Effective Config" above. See src/correlation/runtime.py.
             { key: 'confidence_block_threshold', label: 'Exfil confidence gate (0–1)', step: '0.05' },
         ],
         bumpFields: [
@@ -282,7 +284,8 @@ function correlationPage() {
             if (Boolean(this.form.blocking) !== Boolean(this.status.effective.blocking)) {
                 out.blocking = Boolean(this.form.blocking);
             }
-            const numKeys = ['window_seconds','risk_block_threshold','risk_warn_threshold','risk_decay_seconds','confidence_block_threshold','event_bump_warn','event_bump_block','severity_high_mult','severity_critical_mult'];
+            // window_seconds is omitted: it is latent/reserved and not a live knob.
+            const numKeys = ['risk_block_threshold','risk_warn_threshold','risk_decay_seconds','confidence_block_threshold','event_bump_warn','event_bump_block','severity_high_mult','severity_critical_mult'];
             for (const k of numKeys) {
                 const v = this.form[k];
                 if (v === '' || v === null || v === undefined) continue;

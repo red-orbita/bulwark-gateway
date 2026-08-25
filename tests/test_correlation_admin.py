@@ -237,6 +237,10 @@ class TestCorrelationEndpoints:
         out = await correlation.correlation_config_fields(user=_admin())
         assert "blocking" in out["boolean_fields"]
         assert out["numeric_fields"]["risk_block_threshold"] == {"min": 0.1, "max": 10.0}
+        # F4: window_seconds is surfaced as latent (accepted but not enforced) so the
+        # UI can render it read-only rather than as a live enforcement knob.
+        assert out["latent_fields"] == ["window_seconds"]
+        assert "window_seconds" in out["numeric_fields"]  # still bounded for compat
 
     async def test_origins_sorted_by_score(self, wired):
         correlation, _, _ = wired

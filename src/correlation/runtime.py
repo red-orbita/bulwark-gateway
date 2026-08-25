@@ -1,9 +1,21 @@
 """Runtime-tunable configuration for the correlation feedback loop.
 
 The correlation engine's *enforcement* behaviour (WARN/BLOCK thresholds, event→
-risk bump weights, decay, window) must be adjustable **without a restart** so an
-operator can tighten or loosen the adaptive loop during an incident. This mirrors
+risk bump weights, decay) must be adjustable **without a restart** so an operator
+can tighten or loosen the adaptive loop during an incident. This mirrors
 :mod:`src.guardrails.session_tracker`'s runtime-override pattern:
+
+.. note::
+   ``window_seconds`` is a **latent/reserved** tunable (see :data:`_LATENT_FIELDS`).
+   The input↔output correlator is strictly *same-request*: a request's input signals
+   and that same request's output signals are inherently paired, so no time window is
+   needed to decide the pairing, and the proxy deliberately does **not** feed the
+   correlator an ``input_detected_at`` timestamp. Wiring one naively would make the
+   window measure the backend LLM round-trip latency (up to the backend timeout,
+   default 120s) and any response slower than the window would silently *skip*
+   correlation — a false-negative. The field is kept (parsed, bounded, accepted) so
+   existing overrides don't break and so a future *cross-request / asynchronous*
+   correlator can adopt it, but it currently has **no enforcement effect**.
 
 * Defaults come live from :mod:`src.config` ``settings`` (so with no override the
   behaviour equals the static configuration and unit tests stay deterministic).
@@ -62,6 +74,12 @@ _NUMERIC_FIELDS: dict[str, tuple[float, float]] = {
     "confidence_block_threshold": (0.0, 1.0),
 }
 
+# Latent/reserved tunables: accepted and bounded (so existing overrides keep
+# working and the admin surface can flag them) but currently NOT enforced. See
+# the module docstring — ``window_seconds`` is inert for same-request correlation
+# and is reserved for a future cross-request/async correlator.
+_LATENT_FIELDS: frozenset[str] = frozenset({"window_seconds"})
+
 # Every tunable field name (numeric + the boolean), for the admin surface.
 TUNABLE_FIELDS: tuple[str, ...] = ("blocking",) + tuple(_NUMERIC_FIELDS)
 
@@ -69,6 +87,17 @@ TUNABLE_FIELDS: tuple[str, ...] = ("blocking",) + tuple(_NUMERIC_FIELDS)
 def numeric_field_bounds() -> dict[str, tuple[float, float]]:
     """Return the (min, max) bounds for each numeric tunable (for admin validation)."""
     return dict(_NUMERIC_FIELDS)
+
+
+def latent_fields() -> frozenset[str]:
+    """Return tunables that are accepted but not currently enforced.
+
+    The admin surface uses this to render such fields read-only / reserved rather
+    than as live enforcement knobs (honesty: an operator must not believe a knob
+    changes behaviour when it does not). See the module docstring for why
+    ``window_seconds`` is latent under same-request correlation.
+    """
+    return _LATENT_FIELDS
 
 
 @dataclass(frozen=True)
