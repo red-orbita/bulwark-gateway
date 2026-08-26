@@ -181,6 +181,17 @@ class Settings(BaseSettings):
     # core runtime dependency, so no extra install is required.
     schema_validation_enabled: bool = False
 
+    # Embedding-based output relevance scoring (opt-in, default off).
+    # When enabled, the RelevanceScanner (OUTPUT_ASYNC, fire-and-forget) is
+    # registered in the scanner pipeline. It computes cosine similarity between
+    # the user's question and the LLM response using the provisioned
+    # `sentence-embeddings` ONNX model (no LLM call, off the hot path). It is
+    # INERT (returns ALLOW) unless BOTH the model is provisioned AND the agent
+    # declares `output_validation.relevance_check: true` in its policy, so
+    # enabling the flag alone has no behavioural effect. Requires the
+    # `sentence-embeddings` model (scripts/download-models.py --embeddings).
+    relevance_scanning_enabled: bool = False
+
     # mTLS (inter-service communication: proxy ↔ admin)
     # When enabled, internal endpoints require a valid client certificate
     # signed by the trusted CA. External endpoints continue using JWT/API key.

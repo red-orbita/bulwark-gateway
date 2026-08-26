@@ -497,6 +497,122 @@ class TestRelevanceScanner:
 
 
 # ==============================================================================
+# Relevance Scanner — REAL forward pass (measured, model-gated)
+# ==============================================================================
+class TestRelevanceRealInference:
+    """End-to-end inference against the REAL sentence-embeddings ONNX model.
+
+    These tests run an actual ONNX forward pass — NOT a mock — so they only
+    execute when the ML runtime deps are installed AND the provisioned model
+    files are present (and pass integrity verification). They skip cleanly
+    otherwise so CI without models stays green.
+
+    This is what justifies the BETA maturity claim: the mean-pool + cosine
+    logic is exercised on measured embeddings, proving related Q/A pairs score
+    materially higher than unrelated ones and that the default 0.4 threshold
+    cleanly separates them.
+    """
+
+    @staticmethod
+    def _model_available() -> bool:
+        from src.scanners.ml.model_manager import (
+            ml_dependencies_available,
+            model_files_present,
+        )
+
+        return ml_dependencies_available() and model_files_present(
+            "sentence-embeddings", Path("models")
+        )
+
+    def test_related_scores_higher_than_unrelated(self):
+        """Measured cosine: on-topic answer >> off-topic answer, and the
+        related pair clears the default 0.4 threshold while the unrelated
+        pair falls below it. A silent tokenizer/pooling regression breaks this."""
+        if not self._model_available():
+            pytest.skip("sentence-embeddings model or ML deps not present")
+
+        from src.scanners.ml.model_manager import get_model_manager
+        from src.scanners.output.relevance_scanner import RelevanceScanner
+
+        # _compute_similarity resolves the model via the singleton
+        # (get_model_manager()), so load into that same instance.
+        manager = get_model_manager()
+        loaded = manager.load_model("sentence-embeddings")
+        assert loaded is not None, "model failed to load (integrity or files)"
+
+        scanner = RelevanceScanner(relevance_threshold=0.4)
+
+        question = "What is the capital of France?"
+        related = scanner._compute_similarity(
+            question, "The capital of France is Paris."
+        )
+        unrelated = scanner._compute_similarity(
+            question, "Preheat the oven to 350F and grease the cake pan."
+        )
+
+        assert related is not None and unrelated is not None
+        # Cosine is bounded and semantically ordered.
+        assert -1.0 <= unrelated <= 1.0 and -1.0 <= related <= 1.0
+        assert related > unrelated
+        # Clean separation around the default threshold.
+        assert related >= 0.4
+        assert unrelated < 0.4
+
+    @pytest.mark.asyncio
+    async def test_scanner_end_to_end_warns_off_topic(self):
+        """Full scanner path (startup → scan) with the real model: an off-topic
+        response to the user's question is flagged WARN when relevance_check is on."""
+        if not self._model_available():
+            pytest.skip("sentence-embeddings model or ML deps not present")
+
+        from src.scanners.output.relevance_scanner import RelevanceScanner
+
+        with patch("src.scanners.output.relevance_scanner.settings") as mock_settings:
+            mock_settings.ml_enabled = True
+            scanner = RelevanceScanner(relevance_threshold=0.4)
+            await scanner.startup()
+            if not scanner._model_loaded:
+                pytest.skip("model did not load (integrity check)")
+
+            ctx = _make_context(
+                messages=[
+                    {"role": "user", "content": "What is the capital of France?"},
+                ],
+                metadata={"output_validation": {"relevance_check": True}},
+            )
+            result = await scanner.scan(
+                "Preheat the oven to 350F and grease the cake pan.", ctx
+            )
+            assert result.verdict == Verdict.WARN
+            assert result.events
+            assert result.events[0].source == "relevance_checker"
+
+    @pytest.mark.asyncio
+    async def test_scanner_end_to_end_allows_on_topic(self):
+        """Full scanner path with the real model: an on-topic answer is ALLOWed."""
+        if not self._model_available():
+            pytest.skip("sentence-embeddings model or ML deps not present")
+
+        from src.scanners.output.relevance_scanner import RelevanceScanner
+
+        with patch("src.scanners.output.relevance_scanner.settings") as mock_settings:
+            mock_settings.ml_enabled = True
+            scanner = RelevanceScanner(relevance_threshold=0.4)
+            await scanner.startup()
+            if not scanner._model_loaded:
+                pytest.skip("model did not load (integrity check)")
+
+            ctx = _make_context(
+                messages=[
+                    {"role": "user", "content": "What is the capital of France?"},
+                ],
+                metadata={"output_validation": {"relevance_check": True}},
+            )
+            result = await scanner.scan("The capital of France is Paris.", ctx)
+            assert result.verdict == Verdict.ALLOW
+
+
+# ==============================================================================
 # Pipeline Integration
 # ==============================================================================
 class TestOutputPipelineIntegration:

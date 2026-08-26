@@ -7,18 +7,19 @@ question and the LLM response. Low relevance indicates potential:
   - Model confusion
   - Injection-induced topic drift
 
-Model: Sentence embedding model (e.g., all-MiniLM-L6-v2, ONNX)
+Model: Sentence embedding model (all-MiniLM-L6-v2, ONNX)
 Expected path: models/sentence-embeddings/model.onnx
 
-SHIPPED STATE (honesty): this ``sentence-embeddings`` ONNX model is NOT
-provisioned by default (no ``model_manifest.json`` entry, no download path in
-``scripts/download-models.py``), so the scanner is INERT — ``scan()`` returns
-ALLOW unconditionally until a model is loaded. Declared
-``MaturityTier.EXPERIMENTAL``; not registered in the default proxy pipeline
-(SDK-accessible only). The cosine-similarity decision logic is real and
-unit-tested against a mocked model, but its efficacy is unproven until a model is
-provisioned. Provision it like the injection / toxicity models (export -> ONNX ->
-manifest + download-models.py -> real forward-pass tests). No LLM call is involved.
+SHIPPED STATE (honesty): the ``sentence-embeddings`` ONNX model IS provisioned
+(``model_manifest.json`` entry with a pinned SHA-256; download path in
+``scripts/download-models.py --embeddings``). The mean-pool + cosine-similarity
+decision logic runs a real ONNX forward pass and is verified by measured tests
+(related vs. unrelated Q/A separation) that skip cleanly when the model bytes are
+absent. Declared ``MaturityTier.BETA``. Registered in the proxy pipeline only when
+``BULWARK_RELEVANCE_SCANNING_ENABLED=true`` (OUTPUT_ASYNC, fire-and-forget, off
+the response hot path); otherwise SDK-accessible only. The scanner stays INERT
+(``scan()`` returns ALLOW) until BOTH the model is loaded AND the agent declares
+``output_validation.relevance_check: true``. No LLM call is involved.
 """
 
 from __future__ import annotations
@@ -73,7 +74,7 @@ class RelevanceScanner(OutputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="Embedding-based relevance scoring for LLM responses",
-            maturity=MaturityTier.EXPERIMENTAL,
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=30,
         )

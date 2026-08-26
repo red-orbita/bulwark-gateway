@@ -233,6 +233,17 @@ async def lifespan(app: FastAPI):
         pipeline.register(SchemaValidator())
         await logger.ainfo("schema_validator_registered")
 
+    # Register embedding-based Relevance Scanner (opt-in, default off).
+    # OUTPUT_ASYNC (fire-and-forget) scanner backed by the provisioned
+    # `sentence-embeddings` ONNX model — no LLM call, runs off the response hot
+    # path. It stays inert (ALLOW) for any agent without an
+    # `output_validation.relevance_check` policy, and no-ops entirely if the
+    # model is not provisioned, so enabling the flag alone carries no cost.
+    if settings.relevance_scanning_enabled:
+        from src.scanners.output.relevance_scanner import RelevanceScanner
+        pipeline.register(RelevanceScanner())
+        await logger.ainfo("relevance_scanner_registered")
+
     # Discover and register third-party plugins
     if settings.scanners_dir.exists():
         discovered = discover_all_scanners(settings.scanners_dir)

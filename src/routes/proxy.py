@@ -1149,12 +1149,20 @@ async def chat_completions(request: Request):
             message = choice.get("message", {})
             content = message.get("content")
             if content:
+                # Thread the agent's opt-in output_validation config (e.g.
+                # relevance_check) into the async scan context, mirroring the
+                # OUTPUT_BLOCKING path. Inert for agents without the policy block.
+                _async_meta: dict = {}
+                _async_policy = policy_engine.get_policy(tenant_id, agent_id)
+                if _async_policy is not None and _async_policy.output_validation:
+                    _async_meta["output_validation"] = _async_policy.output_validation
                 _out_ctx = ScanContext(
                     tenant_id=tenant_id,
                     agent_id=agent_id,
                     request_id=_scan_ctx.request_id if settings.scanners_pipeline_enabled else "",
                     messages=messages,
                     source_ip=source_ip,
+                    metadata=_async_meta,
                 )
                 asyncio.create_task(_run_output_async_scanners(content, _out_ctx, tenant_id, agent_id))
 

@@ -2,11 +2,12 @@
 """Download ML models for Bulwark Gateway async scanner pipeline.
 
 Usage:
-    python scripts/download-models.py [--all | --injection | --toxicity]
+    python scripts/download-models.py [--all | --injection | --toxicity | --embeddings]
 
 Models:
     injection-classifier: DeBERTa-v3 prompt injection detector (~700MB)
     toxicity: RoBERTa toxicity classifier (~250MB)
+    sentence-embeddings: all-MiniLM-L6-v2 embeddings for RelevanceScanner (~90MB)
 
 Requirements:
     pip install huggingface-hub
@@ -145,11 +146,35 @@ def download_toxicity(model_dir: Path) -> bool:
     return ok
 
 
+def download_embeddings(model_dir: Path) -> bool:
+    """Download sentence-embedding model (all-MiniLM-L6-v2 ONNX, ~90MB).
+
+    Powers the RelevanceScanner (embedding cosine similarity between the user's
+    question and the LLM response). The scanner expects mean-pooled token
+    embeddings, so we download the plain fp32 ONNX export (``onnx/model.onnx``)
+    whose output is the last hidden state (1, seq_len, hidden_dim).
+    """
+    dest = model_dir / "sentence-embeddings"
+    ok = download_model(
+        repo_id="sentence-transformers/all-MiniLM-L6-v2",
+        files=[
+            ("onnx/model.onnx", "model.onnx"),
+            ("tokenizer.json", "tokenizer.json"),
+            ("config.json", "config.json"),
+        ],
+        dest=dest,
+    )
+    if ok:
+        ok = update_manifest(dest / "model.onnx", "sentence-embeddings/model.onnx")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download ML models for Bulwark Gateway")
     parser.add_argument("--all", action="store_true", help="Download all models")
     parser.add_argument("--injection", action="store_true", help="Download injection classifier")
     parser.add_argument("--toxicity", action="store_true", help="Download toxicity classifier")
+    parser.add_argument("--embeddings", action="store_true", help="Download sentence-embedding model")
     parser.add_argument(
         "--model-dir",
         type=Path,
@@ -158,7 +183,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if not any([args.all, args.injection, args.toxicity]):
+    if not any([args.all, args.injection, args.toxicity, args.embeddings]):
         args.all = True
 
     model_dir = args.model_dir
@@ -170,6 +195,10 @@ def main():
 
     if args.all or args.toxicity:
         if not download_toxicity(model_dir):
+            success = False
+
+    if args.all or args.embeddings:
+        if not download_embeddings(model_dir):
             success = False
 
     if success:
