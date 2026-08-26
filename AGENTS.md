@@ -161,7 +161,7 @@ bulwark-gateway/
 │   │   ├── redis_sync.py         # get_redis_client(), pattern sync, version tracking
 │   │   ├── auth_service.py       # Password hashing, JWT, sessions
 │   │   ├── guardrails_store.py   # Pattern CRUD operations
-│   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (138 patterns, 5-stage pipeline)
+│   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (5-stage pipeline; default ~77 patterns / 4 active stages, stage 1 optional)
 │   │   ├── mcp_poisoning.py      # MCP Tool Poisoning detection (TP1-TP4, 20 patterns)
 │   │   ├── mcp_privilege.py      # MCP Least Privilege analysis (LP1-LP4, 29 patterns)
 │   │   ├── tenant_manager.py     # Tenant CRUD + agent assignment
@@ -438,16 +438,19 @@ Scans LLM responses BEFORE returning to user:
 Pre-deployment security scanner for AI agent skills and MCP servers. Accessible
 via admin UI (`/skills`) and API (`/admin/skills/scan/*`). Version 2.1.0-bulwark.
 
-**5-stage pipeline**:
+**Pipeline** (Stage 1 runs ONLY when the optional NVIDIA `skillspector` package
+is installed; the default deployment does NOT bundle it → 4 active stages):
 ```
-Stage 1: NVIDIA SkillSpector     (64 patterns, if installed)
+Stage 1: NVIDIA SkillSpector     (OPTIONAL — skipped when package absent)
 Stage 2a: MCP Tool Poisoning     (20 patterns — always runs)
 Stage 2b: MCP Least Privilege    (29 patterns — always runs)
-Stage 3: Bulwark Overlay        (25 patterns — always runs)
+Stage 3: Bulwark Overlay        (28 rules — always runs)
 Stage 4: Structural Checks       (RBAC/agency validation)
 ```
 
-**Total patterns**: 138 (64 + 49 + 25)
+**Total patterns (default, `skillspector` absent)**: ~77 (0 + 20 + 29 + 28).
+Installing `skillspector` adds its own pattern set on top (mode
+`skillspector+bulwark`). `skill_scanner.status()` reports live counts + mode.
 
 **MCP Tool Poisoning** (`admin/services/mcp_poisoning.py`):
 | Rule | Severity | Description |
@@ -465,7 +468,7 @@ Stage 4: Structural Checks       (RBAC/agency validation)
 | BWK-MCP-LP3 | medium | Missing permissions — no declaration but code has capabilities |
 | BWK-MCP-LP4 | low | Overdeclared permission — declared but unused (suspicious) |
 
-**Bulwark Overlay** (25 rules, `BWK-TP-*` through `BWK-PV-*`):
+**Bulwark Overlay** (28 rules, `BWK-TP-*` through `BWK-PV-*`):
 - Tool abuse (shell exec, file write, code eval, DB modification)
 - Privilege escalation (sudo, sandbox bypass, wildcard permissions)
 - Data exfiltration (external URLs, upload tools, DNS exfil)
@@ -929,7 +932,7 @@ Security-critical files — review carefully before modifying:
 | `src/guardrails/input_guardrail.py` | Detection patterns (4600+ lines, regex) |
 | `src/guardrails/output_filter.py` | Secret redaction patterns |
 | `src/routes/proxy.py` | Main request pipeline, SSRF protection |
-| `admin/services/skill_scanner.py` | SkillSpector hybrid engine (138 patterns, scoring) |
+| `admin/services/skill_scanner.py` | SkillSpector hybrid engine (5-stage pipeline; default ~77 patterns / 4 active stages, stage 1 optional) |
 | `admin/services/mcp_poisoning.py` | MCP tool poisoning detection (20 patterns) |
 | `admin/services/mcp_privilege.py` | MCP least privilege analysis (29 patterns) |
 | `helm/bulwark-gateway/templates/secrets.yaml` | Secret generation |

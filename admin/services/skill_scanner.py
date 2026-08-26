@@ -1,8 +1,20 @@
 """
 Bulwark Skill Scanner — SkillSpector integration + Bulwark-specific patterns.
 
-Architecture:
-  1. Primary engine: NVIDIA SkillSpector (64 patterns, AST, taint tracking, YARA, OSV.dev)
+SHIPPED STATE (default deployment):
+  The NVIDIA `skillspector` package is an OPTIONAL dependency and is NOT bundled.
+  When it is absent (the default), stage 1 is skipped and the scanner runs in
+  "bulwark-builtin" mode with 4 active stages and ~77 patterns:
+    - MCP Tool Poisoning: 20 patterns
+    - MCP Least Privilege: 29 patterns
+    - Bulwark overlay: 28 rules (`_BULWARK_RULES`)
+  Install the `skillspector` package to unlock stage 1 (adds its pattern set,
+  AST/taint/YARA/OSV.dev analysis) and "skillspector+bulwark" mode. The live
+  counts and mode are always reported honestly by `status()` — do not rely on
+  this docstring for exact totals.
+
+Architecture (full pipeline, stage 1 only when `skillspector` is installed):
+  1. Primary engine: NVIDIA SkillSpector (AST, taint tracking, YARA, OSV.dev) — OPTIONAL
   2. MCP Security: Tool Poisoning detection (hidden instructions, unicode, injection)
   3. MCP Security: Least Privilege analysis (declared permissions vs actual code)
   4. Overlay: Bulwark-specific patterns (IOC, credential, policy, cross-agent)
