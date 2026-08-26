@@ -244,6 +244,20 @@ async def lifespan(app: FastAPI):
         pipeline.register(RelevanceScanner())
         await logger.ainfo("relevance_scanner_registered")
 
+    # Register NLI-based output scanners (opt-in, default off). Both share the
+    # provisioned nli-classifier ONNX model and run OUTPUT_ASYNC (fire-and-forget,
+    # off the hot path). They stay inert (ALLOW) until the model loads and the
+    # agent opts in, so enabling the flag alone carries no behavioural cost.
+    if settings.hallucination_scanning_enabled:
+        from src.scanners.output.hallucination_scanner import HallucinationScanner
+        pipeline.register(HallucinationScanner())
+        await logger.ainfo("hallucination_scanner_registered")
+
+    if settings.grounding_scanning_enabled:
+        from src.scanners.output.grounding_scanner import GroundingScanner
+        pipeline.register(GroundingScanner())
+        await logger.ainfo("grounding_scanner_registered")
+
     # Discover and register third-party plugins
     if settings.scanners_dir.exists():
         discovered = discover_all_scanners(settings.scanners_dir)

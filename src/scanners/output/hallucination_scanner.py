@@ -10,21 +10,21 @@ Strategies:
   2. Claim extraction + per-claim verification
   3. Configurable: threshold, per-agent enable
 
-Model: DeBERTa-v3-style NLI classifier (3-class: contradiction / neutral / entailment).
+Model: DeBERTa-v3 cross-encoder NLI classifier (3-class). Label order is
+model-driven (contradiction / entailment / neutral for the shipped model).
 Expected path: models/nli-classifier/model.onnx
 
 SHIPPED STATE (honesty — read before relying on this scanner):
-  This model is NOT provisioned in the default distribution. It has no entry in
-  ``config/model_manifest.json`` and no download path in
-  ``scripts/download-models.py``, so ``startup()`` never loads a model and
-  ``scan()`` returns ALLOW unconditionally — the scanner is INERT by default. It
-  is declared ``MaturityTier.EXPERIMENTAL`` and is not registered in the default
-  proxy pipeline (SDK-accessible only). The decision logic below (claim
-  extraction + entailment thresholds) is real and unit-tested against a mocked
-  model, but its efficacy is unproven until a model is provisioned. To make it
-  live, follow the injection-classifier / toxicity path: source/export an NLI
-  model to ONNX -> add it to ``download-models.py`` + ``model_manifest.json`` ->
-  add real forward-pass tests. No LLM call is involved (pure ONNX; hot-path safe).
+  The ``nli-classifier`` ONNX model IS provisioned (``model_manifest.json`` entry
+  with a pinned SHA-256; download path in ``scripts/download-models.py --nli``).
+  Class order is derived from the model's own ``id2label`` (never hardcoded), and
+  the premise/hypothesis are encoded as a proper NLI text pair. The claim
+  extraction + entailment logic runs a real ONNX forward pass and is verified by
+  measured tests (contradiction vs. entailment separation). Declared
+  ``MaturityTier.BETA``. Registered in the proxy pipeline only when
+  ``BULWARK_HALLUCINATION_SCANNING_ENABLED=true`` (OUTPUT_ASYNC, fire-and-forget,
+  off the response hot path); otherwise SDK-accessible only. INERT (``scan()``
+  returns ALLOW) until the model loads. No LLM call is involved (pure ONNX).
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ class HallucinationScanner(OutputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="NLI-based hallucination detection for LLM outputs",
-            maturity=MaturityTier.EXPERIMENTAL,
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=20,
         )
@@ -103,7 +103,10 @@ class HallucinationScanner(OutputScanner):
             return
 
         manager = get_model_manager()
-        model = manager.load_model(MODEL_NAME, labels=["contradiction", "neutral", "entailment"])
+        # Labels are model-driven (derived from the model's own id2label by the
+        # loader) so the class order is never hardcoded — an NLI label swap would
+        # otherwise silently invert entailment vs. contradiction.
+        model = manager.load_model(MODEL_NAME)
         self._model_loaded = model is not None
         if self._model_loaded:
             logger.info("hallucination_scanner_ready")
@@ -237,24 +240,27 @@ class HallucinationScanner(OutputScanner):
         try:
             import numpy as np
 
-            # NLI format: premise [SEP] hypothesis
-            nli_input = f"{reference[:500]} [SEP] {claim}"
-
-            encoding = model.tokenizer.encode(nli_input)
+            # Cross-encoder NLI: encode (premise, hypothesis) as a proper text
+            # PAIR so the tokenizer inserts the real separator + segment ids,
+            # rather than splicing a literal " [SEP] " into one string.
+            encoding = model.tokenizer.encode(reference[:500], claim)
             input_ids = np.array([encoding.ids], dtype=np.int64)
             attention_mask = np.array([encoding.attention_mask], dtype=np.int64)
 
             feeds: dict = {"input_ids": input_ids, "attention_mask": attention_mask}
             if "token_type_ids" in model.input_names:
-                feeds["token_type_ids"] = np.zeros_like(input_ids)
+                feeds["token_type_ids"] = np.array([encoding.type_ids], dtype=np.int64)
 
             outputs = model.session.run(None, feeds)
             logits = outputs[0][0]
 
-            # Softmax
-            probs = np.exp(logits) / np.exp(logits).sum()
+            # Softmax (numerically stabilised)
+            shifted = logits - np.max(logits)
+            probs = np.exp(shifted) / np.exp(shifted).sum()
 
-            labels = model.labels or ["contradiction", "neutral", "entailment"]
+            # Resolve class names by the model's OWN label order (never a
+            # hardcoded index). Fallback matches the shipped nli-classifier.
+            labels = model.labels or ["contradiction", "entailment", "neutral"]
             return {labels[i]: float(probs[i]) for i in range(min(len(labels), len(probs)))}
 
         except Exception as e:

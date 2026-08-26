@@ -613,6 +613,169 @@ class TestRelevanceRealInference:
 
 
 # ==============================================================================
+# Hallucination + Grounding — REAL NLI forward pass (measured, model-gated)
+# ==============================================================================
+class TestNLIRealInference:
+    """End-to-end inference against the REAL nli-classifier ONNX model.
+
+    Runs an actual cross-encoder NLI forward pass — NOT a mock — so these only
+    execute when the ML runtime deps are installed AND the provisioned model
+    files are present (and pass integrity verification). They skip cleanly
+    otherwise so CI without models stays green.
+
+    This justifies the BETA claim for both HallucinationScanner and
+    GroundingScanner: it proves the model-driven label ordering is correct
+    (a swap would invert every verdict) and that contradiction / entailment
+    pairs separate decisively on measured probabilities.
+    """
+
+    @staticmethod
+    def _model_available() -> bool:
+        from src.scanners.ml.model_manager import (
+            ml_dependencies_available,
+            model_files_present,
+        )
+
+        return ml_dependencies_available() and model_files_present(
+            "nli-classifier", Path("models")
+        )
+
+    def test_label_order_is_model_driven_and_separates(self):
+        """The loader derives labels from the model's own id2label, and a
+        contradiction pair scores contradiction highest while an entailment pair
+        scores entailment highest. Pins the security-critical class ordering."""
+        if not self._model_available():
+            pytest.skip("nli-classifier model or ML deps not present")
+
+        from src.scanners.ml.model_manager import get_model_manager
+        from src.scanners.output.hallucination_scanner import HallucinationScanner
+
+        manager = get_model_manager()
+        loaded = manager.load_model("nli-classifier")
+        assert loaded is not None, "model failed to load (integrity or files)"
+        # Model-driven order for the shipped cross-encoder NLI model.
+        assert loaded.labels == ["contradiction", "entailment", "neutral"]
+
+        scanner = HallucinationScanner()
+        reference = (
+            "The Q4 budget is fifty thousand dollars. "
+            "The company was founded in 2020."
+        )
+        contra = scanner._check_entailment(
+            "The Q4 budget is one hundred thousand dollars.", reference
+        )
+        entail = scanner._check_entailment(
+            "The company was founded in 2020.", reference
+        )
+
+        assert contra is not None and entail is not None
+        # Distributions over exactly the 3 NLI classes.
+        assert set(contra) == {"contradiction", "entailment", "neutral"}
+        assert abs(sum(contra.values()) - 1.0) < 1e-4
+        # Decisive, correctly-ordered separation.
+        assert contra["contradiction"] > 0.5
+        assert contra["contradiction"] == max(contra.values())
+        assert entail["entailment"] > 0.5
+        assert entail["entailment"] == max(entail.values())
+
+    def test_grounding_score_resolves_entailment_by_name(self):
+        """Grounding score = entailment probability, resolved by label NAME.
+
+        This is the regression guard for the old hardcoded ``entailment_idx = 2``
+        bug: for this model index 2 is *neutral*, so a grounded claim would have
+        scored ~0. A grounded claim must now score high, an ungrounded one low."""
+        if not self._model_available():
+            pytest.skip("nli-classifier model or ML deps not present")
+
+        from src.scanners.ml.model_manager import get_model_manager
+        from src.scanners.output.grounding_scanner import GroundingScanner
+
+        get_model_manager().load_model("nli-classifier")
+        scanner = GroundingScanner()
+
+        doc = (
+            "The Eiffel Tower is 330 metres tall and located in Paris. "
+            "It was completed in 1889."
+        )
+        grounded = scanner._score_grounding("The Eiffel Tower is in Paris.", doc)
+        ungrounded = scanner._score_grounding(
+            "The tower is made entirely of gold.", doc
+        )
+
+        assert grounded is not None and ungrounded is not None
+        assert grounded > 0.7
+        assert ungrounded < 0.3
+        assert grounded > ungrounded
+
+    @pytest.mark.asyncio
+    async def test_hallucination_end_to_end_warns_on_contradiction(self):
+        """Full scanner path (startup → scan) with the real model: an output that
+        contradicts the input context is flagged."""
+        if not self._model_available():
+            pytest.skip("nli-classifier model or ML deps not present")
+
+        from src.scanners.output.hallucination_scanner import HallucinationScanner
+
+        with patch(
+            "src.scanners.output.hallucination_scanner.settings"
+        ) as mock_settings:
+            mock_settings.ml_enabled = True
+            scanner = HallucinationScanner(contradiction_threshold=0.7)
+            await scanner.startup()
+            if not scanner._model_loaded:
+                pytest.skip("model did not load (integrity check)")
+
+            ctx = _make_context(
+                messages=[
+                    {"role": "system", "content": "The Q4 budget is fifty thousand dollars."},
+                    {"role": "user", "content": "What is the Q4 budget?"},
+                ]
+            )
+            result = await scanner.scan(
+                "The Q4 budget is one hundred thousand dollars.", ctx
+            )
+            assert result.verdict in (Verdict.WARN, Verdict.BLOCK)
+            assert result.events
+            assert result.events[0].source == "hallucination_detector"
+
+    @pytest.mark.asyncio
+    async def test_grounding_end_to_end_blocks_ungrounded_allows_grounded(self):
+        """Full scanner path with the real model: an ungrounded answer is blocked,
+        a grounded answer is allowed."""
+        if not self._model_available():
+            pytest.skip("nli-classifier model or ML deps not present")
+
+        from src.scanners.output.grounding_scanner import GroundingScanner
+
+        doc = (
+            "The Eiffel Tower is 330 metres tall and located in Paris. "
+            "It was completed in 1889."
+        )
+        with patch("src.scanners.output.grounding_scanner.settings") as mock_settings:
+            mock_settings.ml_enabled = True
+            scanner = GroundingScanner(grounding_threshold=0.7)
+            await scanner.startup()
+            if not scanner._model_loaded:
+                pytest.skip("model did not load (integrity check)")
+
+            ctx = _make_context(
+                messages=[{"role": "user", "content": "Tell me about the tower."}],
+                metadata={"rag_context": [doc]},
+            )
+            ungrounded = await scanner.scan(
+                "The tower is made entirely of gold and floats above the ocean.", ctx
+            )
+            grounded = await scanner.scan(
+                "The Eiffel Tower is located in Paris and is 330 metres tall.", ctx
+            )
+
+            assert ungrounded.verdict in (Verdict.WARN, Verdict.BLOCK)
+            assert ungrounded.events
+            assert ungrounded.events[0].source == "grounding_checker"
+            assert grounded.verdict == Verdict.ALLOW
+
+
+# ==============================================================================
 # Pipeline Integration
 # ==============================================================================
 class TestOutputPipelineIntegration:

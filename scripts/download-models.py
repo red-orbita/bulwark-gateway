@@ -2,12 +2,13 @@
 """Download ML models for Bulwark Gateway async scanner pipeline.
 
 Usage:
-    python scripts/download-models.py [--all | --injection | --toxicity | --embeddings]
+    python scripts/download-models.py [--all | --injection | --toxicity | --embeddings | --nli]
 
 Models:
     injection-classifier: DeBERTa-v3 prompt injection detector (~700MB)
     toxicity: RoBERTa toxicity classifier (~250MB)
     sentence-embeddings: all-MiniLM-L6-v2 embeddings for RelevanceScanner (~90MB)
+    nli-classifier: DeBERTa-v3 NLI for Hallucination/Grounding scanners (~540MB)
 
 Requirements:
     pip install huggingface-hub
@@ -169,12 +170,40 @@ def download_embeddings(model_dir: Path) -> bool:
     return ok
 
 
+def download_nli(model_dir: Path) -> bool:
+    """Download NLI classifier (cross-encoder/nli-deberta-v3-small ONNX, ~540MB).
+
+    Shared by the HallucinationScanner (claim vs. input-context entailment) and
+    the GroundingScanner (RAG-claim vs. source-chunk entailment). This is a
+    3-class cross-encoder NLI model. IMPORTANT: its label order is
+    ``["contradiction", "entailment", "neutral"]`` (from the model's own
+    ``id2label``) — NOT the SNLI/MNLI ``entailment/neutral/contradiction``
+    ordering. The ONNX loader reads ``id2label`` straight from ``config.json`` so
+    the ordering is model-driven and tamper-evident; the scanners resolve classes
+    by NAME, never by a hardcoded index.
+    """
+    dest = model_dir / "nli-classifier"
+    ok = download_model(
+        repo_id="cross-encoder/nli-deberta-v3-small",
+        files=[
+            ("onnx/model.onnx", "model.onnx"),
+            ("tokenizer.json", "tokenizer.json"),
+            ("config.json", "config.json"),
+        ],
+        dest=dest,
+    )
+    if ok:
+        ok = update_manifest(dest / "model.onnx", "nli-classifier/model.onnx")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download ML models for Bulwark Gateway")
     parser.add_argument("--all", action="store_true", help="Download all models")
     parser.add_argument("--injection", action="store_true", help="Download injection classifier")
     parser.add_argument("--toxicity", action="store_true", help="Download toxicity classifier")
     parser.add_argument("--embeddings", action="store_true", help="Download sentence-embedding model")
+    parser.add_argument("--nli", action="store_true", help="Download NLI classifier (hallucination/grounding)")
     parser.add_argument(
         "--model-dir",
         type=Path,
@@ -183,7 +212,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if not any([args.all, args.injection, args.toxicity, args.embeddings]):
+    if not any([args.all, args.injection, args.toxicity, args.embeddings, args.nli]):
         args.all = True
 
     model_dir = args.model_dir
@@ -199,6 +228,10 @@ def main():
 
     if args.all or args.embeddings:
         if not download_embeddings(model_dir):
+            success = False
+
+    if args.all or args.nli:
+        if not download_nli(model_dir):
             success = False
 
     if success:

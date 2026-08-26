@@ -1,6 +1,7 @@
 {
   "_comment": "SHA-256 integrity manifest for ML models (security control H-08/H-12). Maps each model's path (relative to BULWARK_ML_MODEL_DIR) to its trusted SHA-256. The ONNX loader (src/scanners/ml/model_manager.py) fails closed if a model is missing from this manifest or its hash does not match. Regenerate/verify with: python scripts/download-models.py --all",
   "injection-classifier/model.onnx": "f0ea7f239f765aedbde7c9e163a7cb38a79c5b8853d3f76db5152172047b228c",
+  "nli-classifier/model.onnx": "59fd8dd78926e15907ab419303179e4196bdedd710e888773e2f0143fe430897",
   "sentence-embeddings/model.onnx": "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452",
   "toxicity/model.onnx": "bf78dc86addc6be09ace75ce95b846da7424f990f74fa450445c9ddb258e546d"
 }

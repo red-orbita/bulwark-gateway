@@ -192,6 +192,15 @@ class Settings(BaseSettings):
     # `sentence-embeddings` model (scripts/download-models.py --embeddings).
     relevance_scanning_enabled: bool = False
 
+    # NLI-based output validation (opt-in, default off). Both scanners share the
+    # provisioned `nli-classifier` ONNX model and run as OUTPUT_ASYNC
+    # (fire-and-forget, off the hot path, no LLM call). Each stays INERT (ALLOW)
+    # until the model loads AND the agent opts in via its output_validation policy
+    # (hallucination_check / a RAG context for grounding). Requires the
+    # nli-classifier model (scripts/download-models.py --nli).
+    hallucination_scanning_enabled: bool = False
+    grounding_scanning_enabled: bool = False
+
     # mTLS (inter-service communication: proxy ↔ admin)
     # When enabled, internal endpoints require a valid client certificate
     # signed by the trusted CA. External endpoints continue using JWT/API key.

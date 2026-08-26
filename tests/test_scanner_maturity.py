@@ -65,12 +65,15 @@ def test_default_maturity_is_experimental():
         # download-models.py --embeddings), mean-pool + cosine logic verified by
         # measured forward-pass tests. Opt-in (BULWARK_RELEVANCE_SCANNING_ENABLED).
         (RelevanceScanner, MaturityTier.BETA),
+        # Beta — shared `nli-classifier` ONNX model provisioned (manifest +
+        # download-models.py --nli). Model-driven label order + real NLI forward
+        # pass verified by measured tests. Opt-in (BULWARK_*_SCANNING_ENABLED).
+        (HallucinationScanner, MaturityTier.BETA),
+        (GroundingScanner, MaturityTier.BETA),
         # Experimental — real decision logic but the required model/deps are NOT
         # provisioned by default, so these scanners are INERT (return ALLOW) in
         # the shipped distribution. They must never masquerade as GA/BETA until a
         # model is provisioned + real-inference tests land (see ROADMAP §3.4/§4).
-        (HallucinationScanner, MaturityTier.EXPERIMENTAL),
-        (GroundingScanner, MaturityTier.EXPERIMENTAL),
         (VisionScanner, MaturityTier.EXPERIMENTAL),
     ],
 )
@@ -84,7 +87,7 @@ def test_unprovisioned_model_scanners_are_never_ga():
     """Scanners whose ONNX model / native deps are NOT provisioned in the default
     distribution must stay EXPERIMENTAL — they are inert (return ALLOW) until a
     model is provisioned, so a GA/BETA claim would overstate real coverage."""
-    for cls in (HallucinationScanner, GroundingScanner, VisionScanner):
+    for cls in (VisionScanner,):
         assert cls().info.maturity is MaturityTier.EXPERIMENTAL
 
 

@@ -280,7 +280,7 @@ class ModelManager:
             tokenizer.enable_truncation(max_length=max_length)
             tokenizer.enable_padding(length=max_length)
 
-            # Read version from config if available
+            # Read version + labels from config if available
             version = "1.0.0"
             config_path = model_path / "config.json"
             if config_path.exists():
@@ -289,7 +289,20 @@ class ModelManager:
                     config = json.load(f)
                     version = config.get("version", version)
                     if not labels:
+                        # Prefer an explicit `labels` list; otherwise derive the
+                        # label order from the model's own `id2label` map (ordered
+                        # by integer id). This keeps class ordering MODEL-DRIVEN and
+                        # tamper-evident — critical for NLI/classifier models whose
+                        # label order varies (a silent swap inverts every verdict).
                         labels = config.get("labels", [])
+                        if not labels and isinstance(config.get("id2label"), dict):
+                            try:
+                                id2label = {
+                                    int(k): v for k, v in config["id2label"].items()
+                                }
+                                labels = [id2label[i] for i in sorted(id2label)]
+                            except (ValueError, KeyError, TypeError):
+                                labels = []
 
             loaded = LoadedModel(
                 name=name,

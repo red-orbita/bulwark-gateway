@@ -11,12 +11,16 @@ that can be traced back to the source documents.
 Model: shares the ``nli-classifier`` ONNX model with HallucinationScanner.
 Expected path: models/nli-classifier/model.onnx
 
-SHIPPED STATE (honesty): that model is NOT provisioned by default (no
-``model_manifest.json`` entry, no download path), so this scanner is INERT —
-``scan()`` returns ALLOW unconditionally until a model is loaded. Declared
-``MaturityTier.EXPERIMENTAL``; not registered in the default proxy pipeline
-(SDK-accessible only). Provision it exactly like the injection / toxicity models
-(export NLI -> ONNX -> manifest + download-models.py -> real forward-pass tests).
+SHIPPED STATE (honesty): the ``nli-classifier`` model IS provisioned
+(``model_manifest.json`` entry with a pinned SHA-256; download path in
+``scripts/download-models.py --nli``). The grounding score is the entailment
+probability of (context ⊨ claim); the entailment class is resolved by NAME from
+the model's own ``id2label`` (never a hardcoded index) and the pair is encoded as
+a proper NLI text pair. Verified by measured forward-pass tests (grounded vs.
+ungrounded claims). Declared ``MaturityTier.BETA``. Registered in the proxy
+pipeline only when ``BULWARK_GROUNDING_SCANNING_ENABLED=true`` (OUTPUT_ASYNC,
+fire-and-forget, off the hot path); otherwise SDK-accessible only. INERT
+(``scan()`` returns ALLOW) until the model loads AND a RAG context is present.
 No LLM call is involved.
 """
 
@@ -79,7 +83,7 @@ class GroundingScanner(OutputScanner):
             version="1.0.0",
             scanner_type=scanner_type,
             description="RAG faithfulness — checks output is grounded in context",
-            maturity=MaturityTier.EXPERIMENTAL,
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=25,
         )
@@ -91,7 +95,10 @@ class GroundingScanner(OutputScanner):
             return
 
         manager = get_model_manager()
-        model = manager.load_model(MODEL_NAME, labels=["contradiction", "neutral", "entailment"])
+        # Labels are model-driven (derived from the model's own id2label by the
+        # loader); the entailment class is resolved by NAME in _score_grounding,
+        # never by a hardcoded index.
+        model = manager.load_model(MODEL_NAME)
         self._model_loaded = model is not None
         if self._model_loaded:
             logger.info("grounding_scanner_ready")
@@ -212,22 +219,33 @@ class GroundingScanner(OutputScanner):
         try:
             import numpy as np
 
-            nli_input = f"{context[:500]} [SEP] {claim}"
-
-            encoding = model.tokenizer.encode(nli_input)
+            # Cross-encoder NLI: context = premise, claim = hypothesis, encoded
+            # as a proper text PAIR (real separator + segment ids).
+            encoding = model.tokenizer.encode(context[:500], claim)
             input_ids = np.array([encoding.ids], dtype=np.int64)
             attention_mask = np.array([encoding.attention_mask], dtype=np.int64)
 
             feeds: dict = {"input_ids": input_ids, "attention_mask": attention_mask}
             if "token_type_ids" in model.input_names:
-                feeds["token_type_ids"] = np.zeros_like(input_ids)
+                feeds["token_type_ids"] = np.array([encoding.type_ids], dtype=np.int64)
 
             outputs = model.session.run(None, feeds)
             logits = outputs[0][0]
-            probs = np.exp(logits) / np.exp(logits).sum()
+            shifted = logits - np.max(logits)
+            probs = np.exp(shifted) / np.exp(shifted).sum()
 
-            # entailment is the last class
-            entailment_idx = 2 if len(probs) == 3 else -1
+            # Grounding score = entailment probability. Resolve the entailment
+            # class by NAME from the model's own label order — a hardcoded index
+            # would read the wrong class for models whose id2label differs (the
+            # shipped nli-classifier orders labels contradiction/entailment/neutral,
+            # so entailment is index 1, NOT 2).
+            labels = model.labels or ["contradiction", "entailment", "neutral"]
+            try:
+                entailment_idx = labels.index("entailment")
+            except ValueError:
+                entailment_idx = -1
+            if entailment_idx >= len(probs):
+                return None
             return float(probs[entailment_idx])
 
         except Exception as e:
