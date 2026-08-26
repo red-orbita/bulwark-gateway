@@ -629,6 +629,35 @@ report regex-only numbers as the full defense.
 
 Quick scan with 5 attacks per category across all supported categories.
 
+#### POST /admin/evaluation/corpus
+
+Evaluate the guardrail pipeline against the **external labeled corpora** (ground
+truth) rather than gateway-authored attacks. The corpora ship in the image
+(`src/evaluation/data/`: AdvBench, HarmBench, jailbreak / regular in-the-wild),
+so the benchmark is defensible — the labels were not written by Bulwark. Same
+delegation + `BULWARK_FAIL_MODE` semantics as `/run` (proxy's real pipeline via
+`POST /internal/evaluation/corpus`; degrade to labeled regex floor when `open`,
+503 when `closed`).
+
+**Body** (all optional):
+```json
+{
+  "sources": ["advbench", "harmbench"],
+  "limit_per_source": 50,
+  "include_external_dir": true
+}
+```
+
+`sources` restricts to specific bundled corpora (default: all). `limit_per_source`
+caps samples per source for fast smoke runs. `include_external_dir=false` forces
+the hermetic bundled floor, ignoring `$BULWARK_EVAL_DATASET_DIR`. A
+misconfigured/empty corpus (e.g. an unknown source name) returns 400 rather than
+a silent zero-sample benchmark.
+
+**Response**: EvaluationReport (verdict-scored `confusion_block`/`confusion_flag`
+matrices) plus `corpus_stats` (per-source provenance, licenses) and `per_source`
+recall.
+
 #### GET /admin/evaluation/attacks/preview
 
 Preview generated attacks (query params: categories, count).

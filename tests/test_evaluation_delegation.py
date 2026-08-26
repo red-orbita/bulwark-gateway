@@ -323,3 +323,169 @@ class TestStatusHonesty:
         # Only enabled input-blocking scanners; output + disabled excluded.
         assert names == ["regex_input"]
         assert captured["get_url"].endswith("/internal/scanners/status")
+
+
+# ---------------------------------------------------------------------------
+# External-corpus evaluation: proxy endpoint + admin delegation
+# ---------------------------------------------------------------------------
+
+
+class TestProxyCorpusEndpoint:
+    def _client(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import src.scanners.pipeline as pipeline_mod
+        from src.routes import health
+
+        pipeline = _regex_pipeline()
+        monkeypatch.setattr(pipeline_mod, "get_scanner_pipeline", lambda: pipeline)
+
+        app = FastAPI()
+        app.include_router(health.router)
+        return TestClient(app)
+
+    def test_corpus_returns_full_pipeline_report(self, monkeypatch):
+        client = self._client(monkeypatch)
+        # limit_per_source keeps the bundled-corpus run fast.
+        resp = client.post(
+            "/internal/evaluation/corpus",
+            json={"limit_per_source": 5, "include_external_dir": False},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["pipeline_source"] == "proxy-full-pipeline"
+        assert data["scanners_evaluated"] == ["regex_input"]
+        # Corpus provenance + per-source recall are attached.
+        assert "corpus_stats" in data
+        assert isinstance(data["per_source"], list) and data["per_source"]
+
+    def test_corpus_defaults_with_empty_body(self, monkeypatch):
+        client = self._client(monkeypatch)
+        resp = client.post("/internal/evaluation/corpus", json={})
+        assert resp.status_code == 200
+        assert "corpus_stats" in resp.json()
+
+    def test_corpus_rejects_bad_sources(self, monkeypatch):
+        client = self._client(monkeypatch)
+        resp = client.post(
+            "/internal/evaluation/corpus", json={"sources": [123, "advbench"]}
+        )
+        assert resp.status_code == 400
+
+    def test_corpus_rejects_bad_limit(self, monkeypatch):
+        client = self._client(monkeypatch)
+        resp = client.post(
+            "/internal/evaluation/corpus", json={"limit_per_source": 0}
+        )
+        assert resp.status_code == 400
+
+    def test_corpus_unknown_source_is_empty_400(self, monkeypatch):
+        client = self._client(monkeypatch)
+        # A source name that matches no bundled corpus yields an empty run, which
+        # the endpoint surfaces as 400 (never a silent zero-sample benchmark).
+        resp = client.post(
+            "/internal/evaluation/corpus",
+            json={"sources": ["does_not_exist"], "include_external_dir": False},
+        )
+        assert resp.status_code == 400
+
+
+class TestAdminCorpusDelegation:
+    @pytest.mark.asyncio
+    async def test_delegate_success_returns_proxy_report(self, monkeypatch):
+        import admin.routes.evaluation as ev
+
+        captured = _install_fake_httpx(
+            monkeypatch,
+            post_response=_FakeResponse(
+                200, {"total_attacks": 360, "pipeline_source": "proxy-full-pipeline"}
+            ),
+        )
+        out = await ev._delegate_corpus_to_proxy(
+            ["advbench"], limit_per_source=10, include_external_dir=False
+        )
+        assert out["total_attacks"] == 360
+        assert captured["post_url"].endswith("/internal/evaluation/corpus")
+        assert captured["post_json"]["sources"] == ["advbench"]
+        assert captured["post_json"]["limit_per_source"] == 10
+        assert captured["post_json"]["include_external_dir"] is False
+
+    @pytest.mark.asyncio
+    async def test_delegate_400_raises_not_degrades(self, monkeypatch):
+        from fastapi import HTTPException
+
+        import admin.routes.evaluation as ev
+
+        # A 400 (empty/misconfigured corpus) is a real client error — it must be
+        # surfaced, never masked by the regex fallback.
+        _install_fake_httpx(
+            monkeypatch,
+            post_response=_FakeResponse(400, {"detail": "corpus is empty"}, text="corpus is empty"),
+        )
+        with pytest.raises(HTTPException) as exc:
+            await ev._delegate_corpus_to_proxy(None, None, True)
+        assert exc.value.status_code == 400
+        assert "empty" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_delegate_non_200_returns_none(self, monkeypatch):
+        import admin.routes.evaluation as ev
+
+        _install_fake_httpx(monkeypatch, post_response=_FakeResponse(500, None, text="boom"))
+        out = await ev._delegate_corpus_to_proxy(None, None, True)
+        assert out is None
+
+    @pytest.mark.asyncio
+    async def test_delegate_exception_returns_none(self, monkeypatch):
+        import admin.routes.evaluation as ev
+
+        _install_fake_httpx(monkeypatch, raise_exc=RuntimeError("connrefused"))
+        out = await ev._delegate_corpus_to_proxy(None, None, True)
+        assert out is None
+
+    @pytest.mark.asyncio
+    async def test_perform_corpus_prefers_proxy(self, monkeypatch):
+        import admin.routes.evaluation as ev
+
+        async def _fake_delegate(sources, limit, include_ext):
+            return {"total_attacks": 360, "detected": 47}
+
+        monkeypatch.setattr(ev, "_delegate_corpus_to_proxy", _fake_delegate)
+        result = await ev.perform_corpus_evaluation()
+        assert result["total_attacks"] == 360
+        assert result["pipeline_source"] == "proxy-full-pipeline"
+
+    @pytest.mark.asyncio
+    async def test_fallback_regex_when_open(self, monkeypatch):
+        import admin.routes.evaluation as ev
+
+        async def _down(sources, limit, include_ext):
+            return None
+
+        monkeypatch.setattr(ev, "_delegate_corpus_to_proxy", _down)
+        monkeypatch.setenv("BULWARK_FAIL_MODE", "open")
+
+        result = await ev.perform_corpus_evaluation(
+            limit_per_source=5, include_external_dir=False
+        )
+        assert result["pipeline_source"] == "admin-local-regex-only"
+        assert result["scanners_evaluated"] == ["regex_input"]
+        assert "corpus_stats" in result
+
+    @pytest.mark.asyncio
+    async def test_fallback_refuses_when_closed(self, monkeypatch):
+        from fastapi import HTTPException
+
+        import admin.routes.evaluation as ev
+
+        async def _down(sources, limit, include_ext):
+            return None
+
+        monkeypatch.setattr(ev, "_delegate_corpus_to_proxy", _down)
+        monkeypatch.setenv("BULWARK_FAIL_MODE", "closed")
+
+        with pytest.raises(HTTPException) as exc:
+            await ev.perform_corpus_evaluation()
+        assert exc.value.status_code == 503
+        assert "regex-only" in exc.value.detail

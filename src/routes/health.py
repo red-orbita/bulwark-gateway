@@ -248,6 +248,85 @@ async def internal_evaluation_run(request: Request):
     return JSONResponse(content=result)
 
 
+@router.post("/internal/evaluation/corpus")
+async def internal_evaluation_corpus(request: Request):
+    """Internal endpoint: evaluate the REAL pipeline against the EXTERNAL labeled
+    corpora (ground truth), not gateway-authored attacks.
+
+    Same trust model as /internal/evaluation/run — no auth, network-isolated by
+    K8s NetworkPolicies. The corpora ship in the image (src/evaluation/data/), so
+    the proxy always has a hermetic floor; an operator can widen it with
+    $BULWARK_EVAL_DATASET_DIR.
+
+    Body (all optional):
+      {
+        "sources": ["advbench", ...] | null,   # null = all bundled sources
+        "limit_per_source": 50 | null,          # null = no cap
+        "include_external_dir": true            # false = bundled floor only
+      }
+
+    Returns the serialized corpus report (verdict-scored confusion matrices +
+    corpus_stats provenance + per_source recall), stamped with
+    pipeline_source="proxy-full-pipeline". Returns 400 if the corpus is empty
+    (misconfigured dataset dir) so a caller never sees a benchmark that ran on
+    nothing.
+    """
+    from src.evaluation.harness import run_corpus_report
+    from src.scanners.pipeline import get_scanner_pipeline
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    raw_sources = body.get("sources")
+    sources: list[str] | None
+    if raw_sources is None:
+        sources = None
+    elif isinstance(raw_sources, list) and all(isinstance(s, str) for s in raw_sources):
+        sources = raw_sources
+    else:
+        raise HTTPException(
+            status_code=400, detail="sources must be a list of strings or null"
+        )
+
+    raw_limit = body.get("limit_per_source")
+    limit_per_source: int | None
+    if raw_limit is None:
+        limit_per_source = None
+    else:
+        try:
+            limit_per_source = int(raw_limit)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="limit_per_source must be an integer or null"
+            ) from None
+        if limit_per_source < 1:
+            raise HTTPException(
+                status_code=400, detail="limit_per_source must be >= 1"
+            )
+
+    # include_external_dir=false forces the hermetic bundled floor (external_dir=None);
+    # true (default) honors $BULWARK_EVAL_DATASET_DIR via the sentinel default.
+    include_external_dir = bool(body.get("include_external_dir", True))
+    external_dir = ... if include_external_dir else None
+
+    pipeline = get_scanner_pipeline()
+    try:
+        result = await run_corpus_report(
+            pipeline,
+            sources=sources,
+            limit_per_source=limit_per_source,
+            external_dir=external_dir,  # type: ignore[arg-type]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    result["pipeline_source"] = "proxy-full-pipeline"
+    return JSONResponse(content=result)
+
+
 @router.post("/health/redteam")
 async def redteam_test(request: Request):
     """

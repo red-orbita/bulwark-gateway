@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
 from src.evaluation.attacks import AttackGenerator
-from src.evaluation.harness import run_evaluation_report
+from src.evaluation.harness import run_corpus_report, run_evaluation_report
 from src.evaluation.runner import EvaluationRunner, EvaluationReport
 from src.evaluation.datasets import STANDARD_BENIGN
 from src.models import ThreatCategory, Verdict
@@ -84,6 +84,23 @@ class QuickEvaluationRequest(BaseModel):
     """Preset quick evaluation (5 per category)."""
     categories: Optional[list[str]] = Field(
         None, description="Threat categories to test. Defaults to all supported."
+    )
+
+
+class RunCorpusRequest(BaseModel):
+    """Request to evaluate against the EXTERNAL labeled corpora (ground truth)."""
+    sources: Optional[list[str]] = Field(
+        None, description="Restrict to these corpus source names. Default: all bundled."
+    )
+    limit_per_source: Optional[int] = Field(
+        None, ge=1, le=5000, description="Cap samples per source (for fast smoke runs)."
+    )
+    include_external_dir: bool = Field(
+        True,
+        description=(
+            "Honor $BULWARK_EVAL_DATASET_DIR on the proxy. False = bundled floor "
+            "only (hermetic run)."
+        ),
     )
 
 
@@ -197,6 +214,54 @@ async def _delegate_evaluation_to_proxy(
         return None
 
 
+async def _delegate_corpus_to_proxy(
+    sources: list[str] | None,
+    limit_per_source: int | None,
+    include_external_dir: bool,
+) -> dict | None:
+    """Run the EXTERNAL-corpus evaluation on the proxy's real pipeline.
+
+    Uses POST /internal/evaluation/corpus (no auth — network-isolated, same trust
+    model as /internal/evaluation/run). Returns the serialized report, or None if
+    the proxy is unreachable / errors, so the caller can decide how to degrade.
+
+    A 400 from the proxy (empty/misconfigured corpus) is surfaced as an
+    HTTPException — that is a real client error, not a transport degrade, so we
+    must NOT silently fall back to the regex floor and mask it.
+    """
+    import httpx
+
+    payload = {
+        "sources": sources,
+        "limit_per_source": limit_per_source,
+        "include_external_dir": include_external_dir,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_PROXY_INTERNAL_TIMEOUT) as client:
+            resp = await client.post(
+                f"{_proxy_url()}/internal/evaluation/corpus", json=payload
+            )
+        if resp.status_code == 200:
+            return resp.json()
+        if resp.status_code == 400:
+            detail = "corpus evaluation rejected by proxy"
+            try:
+                detail = resp.json().get("detail", detail)
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail=detail)
+        logger.warning(
+            "proxy_corpus_non_200 status=%d body=%s",
+            resp.status_code, resp.text[:200],
+        )
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - unreachable proxy is an expected degrade path
+        logger.warning("proxy_corpus_unreachable error=%s", str(e))
+        return None
+
+
 async def _query_proxy_input_scanners() -> list[str] | None:
     """Return the proxy's enabled input-blocking scanner names, or None if down."""
     import httpx
@@ -269,6 +334,67 @@ async def perform_evaluation(
         count_per_category=count_per_category,
         include_benign=include_benign,
     )
+    result["pipeline_source"] = "admin-local-regex-only"
+    return result
+
+
+async def perform_corpus_evaluation(
+    sources: list[str] | None = None,
+    limit_per_source: int | None = None,
+    include_external_dir: bool = True,
+) -> dict:
+    """Core external-corpus evaluation logic (no auth) — reusable by routes.
+
+    Grades the pipeline against static, externally-sourced labeled samples (see
+    ``src/evaluation/corpora.py``) — the defensible benchmark, since the labels
+    were not authored by Bulwark. Delegates to the proxy's real pipeline; if the
+    proxy is unreachable, honors ``BULWARK_FAIL_MODE`` exactly like
+    ``perform_evaluation``:
+
+      * ``closed`` → refuse (503): do not pass off regex-only numbers as the full
+        defense.
+      * ``open``   → degrade: run the admin-local regex floor against the bundled
+        corpus, labeled ``pipeline_source="admin-local-regex-only"``.
+
+    A misconfigured/empty corpus surfaces as 400 (the proxy already validates
+    this; the local fallback re-checks). ``include_external_dir=False`` forces the
+    hermetic bundled floor.
+    """
+    proxy_result = await _delegate_corpus_to_proxy(
+        sources, limit_per_source, include_external_dir
+    )
+    if proxy_result is not None:
+        proxy_result.setdefault("pipeline_source", "proxy-full-pipeline")
+        return proxy_result
+
+    fail_mode = os.environ.get("BULWARK_FAIL_MODE", "closed").strip().lower()
+    if fail_mode == "closed":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Cannot evaluate the corpus against the full guardrail pipeline: "
+                "the proxy is unreachable and the admin pod has no ML models. "
+                "Refusing to report regex-only results as the full defense "
+                "(BULWARK_FAIL_MODE=closed). Restore proxy connectivity, or set "
+                "BULWARK_FAIL_MODE=open to evaluate the regex floor instead."
+            ),
+        )
+
+    logger.warning(
+        "corpus_evaluation_degraded_regex_only reason=proxy_unreachable fail_mode=open"
+    )
+    pipeline = _build_pipeline()
+    # external_dir sentinel: `...` reads $BULWARK_EVAL_DATASET_DIR; None = bundled only.
+    external_dir = ... if include_external_dir else None
+    try:
+        result = await run_corpus_report(
+            pipeline,
+            sources=sources,
+            limit_per_source=limit_per_source,
+            external_dir=external_dir,  # type: ignore[arg-type]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     result["pipeline_source"] = "admin-local-regex-only"
     return result
 
@@ -380,6 +506,43 @@ async def run_quick_evaluation(
     except Exception as e:
         logger.exception("quick_evaluation_failed error=%s", str(e))
         raise HTTPException(status_code=500, detail=f"Quick evaluation failed: {str(e)}")
+
+
+@router.post("/corpus")
+async def run_corpus_evaluation(
+    req: RunCorpusRequest = RunCorpusRequest(),
+    user: TokenPayload = Depends(require_permission("guardrails:test")),
+) -> dict:
+    """Evaluate the guardrail pipeline against the EXTERNAL labeled corpora.
+
+    Unlike ``/run`` (which grades gateway-authored attacks), this scores the
+    pipeline against static, externally-sourced malicious+benign samples with
+    provenance — the defensible benchmark. Same delegation semantics as ``/run``:
+    delegates to the proxy's real pipeline, falling back to the admin-local regex
+    floor only when the proxy is unreachable and BULWARK_FAIL_MODE=open.
+
+    Returns the serialized report plus ``corpus_stats`` (provenance) and
+    ``per_source`` recall.
+    """
+    try:
+        result = await perform_corpus_evaluation(
+            sources=req.sources,
+            limit_per_source=req.limit_per_source,
+            include_external_dir=req.include_external_dir,
+        )
+        logger.info(
+            "corpus_evaluation_completed source=%s total=%d detected=%d rate=%.2f",
+            result.get("pipeline_source", "unknown"),
+            result.get("total_attacks", 0),
+            result.get("detected", 0),
+            result.get("detection_rate", 0.0),
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("corpus_evaluation_failed error=%s", str(e))
+        raise HTTPException(status_code=500, detail=f"Corpus evaluation failed: {str(e)}")
 
 
 @router.get("/attacks/preview", response_model=AttackPreviewResponse)
