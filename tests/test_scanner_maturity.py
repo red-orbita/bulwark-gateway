@@ -20,6 +20,8 @@ from src.scanners.builtin.regex_scanner import RegexInputScanner
 from src.scanners.builtin.tool_policy_scanner import ToolPolicyScanner
 from src.scanners.ml.injection_classifier import InjectionClassifier
 from src.scanners.ml.toxicity_scanner import ToxicityScanner
+from src.scanners.multilingual.language_detector import LanguageDetector
+from src.scanners.multilingual.patterns import MultilingualPatterns
 from src.scanners.multimodal.vision_scanner import VisionScanner
 from src.scanners.output.grounding_scanner import GroundingScanner
 from src.scanners.output.hallucination_scanner import HallucinationScanner
@@ -33,6 +35,8 @@ from src.scanners.protocol import (
     ScannerInfo,
     ScannerType,
 )
+from src.scanners.rag.memory_guard import MemoryGuard
+from src.scanners.rag.retrieval_scanner import RetrievalScanner
 
 
 def test_default_maturity_is_experimental():
@@ -70,6 +74,18 @@ def test_default_maturity_is_experimental():
         # pass verified by measured tests. Opt-in (BULWARK_*_SCANNING_ENABLED).
         (HallucinationScanner, MaturityTier.BETA),
         (GroundingScanner, MaturityTier.BETA),
+        # Beta — model-free, deterministic regex scanners. Real logic + tests,
+        # but they stay inert until the request carries the metadata they act on
+        # (rag_chunks / conversation history), so efficacy is context-dependent.
+        (RetrievalScanner, MaturityTier.BETA),
+        (MemoryGuard, MaturityTier.BETA),
+        # Beta — language ID + localized attack patterns. Real + tested, but
+        # coverage is honestly degraded without the optional `multilingual` extra:
+        # the heuristic fallback collapses every Latin-script input to "en", so the
+        # es/fr/de/pt pattern sets are unreachable by default (documented in each
+        # scanner's docstring). Not GA precisely because default coverage is partial.
+        (LanguageDetector, MaturityTier.BETA),
+        (MultilingualPatterns, MaturityTier.BETA),
         # Experimental — the VisionScanner ships real, tested, zero-dependency
         # deterministic guards (allow_images policy gate, DoS size limit, base64
         # + magic-byte format validation over inline data:image URIs), but its
