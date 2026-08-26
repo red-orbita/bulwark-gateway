@@ -1,0 +1,19 @@
+Bulwark Gateway — vendored evaluation corpora
+=============================================
+
+The JSONL files in this directory contain small, deterministically-sampled
+subsets of the following third-party datasets, redistributed under their
+respective licenses for the purpose of guardrail evaluation. Each retains
+its original license; see manifest.json for per-source detail.
+
+* advbench: AdvBench harmful behaviors — Zou et al. 2023 (llm-attacks/llm-attacks)
+    license: MIT  |  source: https://github.com/llm-attacks/llm-attacks
+
+* harmbench: HarmBench standard text behaviors — Mazeika et al. 2024 (centerforaisafety/HarmBench)
+    license: MIT  |  source: https://github.com/centerforaisafety/HarmBench
+
+* jailbreak_inthewild: In-The-Wild Jailbreak Prompts — Shen et al. 2024 (verazuo/jailbreak_llms)
+    license: MIT  |  source: https://github.com/verazuo/jailbreak_llms
+
+* regular_inthewild: In-The-Wild regular (benign) prompts — Shen et al. 2024 (verazuo/jailbreak_llms)
+    license: MIT  |  source: https://github.com/verazuo/jailbreak_llms

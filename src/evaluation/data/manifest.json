@@ -1,0 +1,49 @@
+{
+  "generated_by": "scripts/fetch-eval-corpora.py",
+  "generated_on": "2026-08-26",
+  "seed": 20240101,
+  "max_chars": 2000,
+  "note": "Vendored reproducible subset. Point BULWARK_EVAL_DATASET_DIR at a full download to evaluate at scale. See corpora.py for the schema.",
+  "sources": {
+    "advbench": {
+      "label": "malicious",
+      "category": "harmful",
+      "license": "MIT",
+      "attribution": "AdvBench harmful behaviors — Zou et al. 2023 (llm-attacks/llm-attacks)",
+      "url": "https://github.com/llm-attacks/llm-attacks",
+      "count": 120,
+      "file": "advbench.jsonl",
+      "sha256": "1a37435b1dc6e708c08bdb407a53ea539cb27c904296349f2d9cb94aa46104ff"
+    },
+    "harmbench": {
+      "label": "malicious",
+      "category": "harmful",
+      "license": "MIT",
+      "attribution": "HarmBench standard text behaviors — Mazeika et al. 2024 (centerforaisafety/HarmBench)",
+      "url": "https://github.com/centerforaisafety/HarmBench",
+      "count": 120,
+      "file": "harmbench.jsonl",
+      "sha256": "c5b8138b0ba4dda4d141fd0491812abd5ed45d06c60f56b962c289aa82177300"
+    },
+    "jailbreak_inthewild": {
+      "label": "malicious",
+      "category": "jailbreak",
+      "license": "MIT",
+      "attribution": "In-The-Wild Jailbreak Prompts — Shen et al. 2024 (verazuo/jailbreak_llms)",
+      "url": "https://github.com/verazuo/jailbreak_llms",
+      "count": 120,
+      "file": "jailbreak_inthewild.jsonl",
+      "sha256": "a031cbf4a14069055026828ba0a2844ddf0b846751b30e410eb4a4bb88dbea5a"
+    },
+    "regular_inthewild": {
+      "label": "benign",
+      "category": null,
+      "license": "MIT",
+      "attribution": "In-The-Wild regular (benign) prompts — Shen et al. 2024 (verazuo/jailbreak_llms)",
+      "url": "https://github.com/verazuo/jailbreak_llms",
+      "count": 250,
+      "file": "regular_inthewild.jsonl",
+      "sha256": "8e35f7a10885abaf02d93282ef986f4b1482fc97edeaf2074d8e900a4c5453bd"
+    }
+  }
+}

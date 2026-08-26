@@ -19,8 +19,9 @@ from __future__ import annotations
 import dataclasses
 
 from src.evaluation.attacks import AttackGenerator
+from src.evaluation.corpora import CorpusStats, load_corpus, split_samples
 from src.evaluation.datasets import STANDARD_BENIGN
-from src.evaluation.runner import EvaluationRunner
+from src.evaluation.runner import EvaluationReport, EvaluationRunner
 from src.models import ThreatCategory
 from src.scanners.pipeline import ScannerPipeline
 
@@ -50,6 +51,63 @@ def input_scanner_names(pipeline: ScannerPipeline) -> list[str]:
         if s.get("type") == "input_blocking" and s.get("enabled", False):
             names.append(s["name"])
     return names
+
+
+def _serialize_report(report: EvaluationReport, pipeline: ScannerPipeline) -> dict:
+    """Serialize an EvaluationReport with the frontend array + scanner provenance.
+
+    Shared by every evaluation entrypoint so the admin API / UI contract does not
+    depend on whether the attacks came from the generator or an external corpus.
+    """
+    result = dataclasses.asdict(report)
+    result["categories"] = [
+        {
+            "name": cat,
+            "total": data["total"],
+            "detected": data["detected"],
+            "missed": data["missed"],
+            "rate": data["detection_rate"],
+            "avg_latency_ms": data.get("latency_p50", 0),
+        }
+        for cat, data in report.category_breakdown.items()
+    ]
+    result["scanners_evaluated"] = input_scanner_names(pipeline)
+    return result
+
+
+def _per_source_recall(report: EvaluationReport) -> list[dict]:
+    """Derive per-dataset recall from the attack log (technique = corpus/<source>).
+
+    External corpora collapse several sources onto the same ThreatCategory, so
+    the category rollup alone hides which dataset the pipeline is weak on. This
+    reconstructs source-level detection from ``attack_log`` entries, which for the
+    bundled subset fully cover the malicious set (the log is capped at 500, so
+    for very large operator-supplied corpora this is a lower-bound sample).
+    """
+    buckets: dict[str, dict[str, int]] = {}
+    for entry in report.attack_log:
+        technique = entry.technique or ""
+        if not technique.startswith("corpus/"):
+            continue
+        source = technique.split("/", 1)[1]
+        b = buckets.setdefault(source, {"total": 0, "detected": 0, "blocked": 0})
+        b["total"] += 1
+        if entry.detected:
+            b["detected"] += 1
+        if entry.verdict in ("block", "redact"):
+            b["blocked"] += 1
+    out: list[dict] = []
+    for source, b in sorted(buckets.items()):
+        total = b["total"]
+        out.append({
+            "source": source,
+            "total": total,
+            "detected": b["detected"],
+            "blocked": b["blocked"],
+            "recall_flag": round(b["detected"] / total, 4) if total else 0.0,
+            "recall_block": round(b["blocked"] / total, 4) if total else 0.0,
+        })
+    return out
 
 
 async def run_evaluation_report(
@@ -85,17 +143,50 @@ async def run_evaluation_report(
     benign_samples = STANDARD_BENIGN if include_benign else None
     report = await runner.run_evaluation(attacks, benign_samples=benign_samples)
 
-    result = dataclasses.asdict(report)
-    result["categories"] = [
-        {
-            "name": cat,
-            "total": data["total"],
-            "detected": data["detected"],
-            "missed": data["missed"],
-            "rate": data["detection_rate"],
-            "avg_latency_ms": data.get("latency_p50", 0),
-        }
-        for cat, data in report.category_breakdown.items()
-    ]
-    result["scanners_evaluated"] = input_scanner_names(pipeline)
+    return _serialize_report(report, pipeline)
+
+
+async def run_corpus_report(
+    pipeline: ScannerPipeline,
+    sources: list[str] | None = None,
+    limit_per_source: int | None = None,
+    external_dir: str | None = ...,  # type: ignore[assignment]
+) -> dict:
+    """Evaluate ``pipeline`` against the EXTERNAL labeled corpora (ground truth).
+
+    Unlike ``run_evaluation_report`` (which grades attacks the gateway authored),
+    this loads static, externally-sourced malicious+benign samples with
+    provenance (see ``corpora.py``) and scores the pipeline against them. This is
+    the defensible benchmark: the labels were not written by Bulwark.
+
+    Args:
+        pipeline: scanner pipeline to evaluate.
+        sources: restrict to these corpus source names (default: all bundled).
+        limit_per_source: cap samples per source (for fast smoke runs).
+        external_dir: sentinel ``...`` reads ``$BULWARK_EVAL_DATASET_DIR``; pass
+            ``None`` to force the bundled floor only (hermetic runs).
+
+    Returns:
+        The serialized report plus ``corpus_stats`` (provenance) and
+        ``per_source`` recall. Raises ``ValueError`` if the corpus is empty so a
+        caller never reports a benchmark that silently ran on nothing.
+    """
+    samples, stats = load_corpus(
+        sources=sources,
+        limit_per_source=limit_per_source,
+        external_dir=external_dir,
+    )
+    if not samples:
+        raise ValueError(
+            "evaluation corpus is empty: no samples loaded from the bundled data "
+            "dir or $BULWARK_EVAL_DATASET_DIR. Run scripts/fetch-eval-corpora.py."
+        )
+
+    attacks, benign = split_samples(samples)
+    runner = EvaluationRunner(pipeline=pipeline)
+    report = await runner.run_evaluation(attacks, benign_samples=benign or None)
+
+    result = _serialize_report(report, pipeline)
+    result["corpus_stats"] = stats.as_dict() if isinstance(stats, CorpusStats) else stats
+    result["per_source"] = _per_source_recall(report)
     return result
