@@ -8,7 +8,8 @@ intent matching.
 Features:
   - YAML-defined dialog flows (trigger → allowed/denied intents → response)
   - Session state tracking (in-memory, keyed by session_id)
-  - Keyword-based intent matching (ML intent scanner handles real classification)
+  - Keyword-based intent matching (deterministic; no ML model — the earlier
+    "ML intent scanner" was removed, so matching is keyword-only by design)
   - Three possible actions: allow, redirect (canned response), block
 
 YAML format example:

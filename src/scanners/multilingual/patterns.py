@@ -490,6 +490,19 @@ class MultilingualPatterns(InputScanner):
 
     Only runs patterns for the detected language (avoids cross-language FPs).
     English patterns are handled by the existing InputGuardrail.
+
+    SHIPPED STATE (honesty — coverage depends on the detector backend):
+      Pattern sets ship for 10 languages (es, fr, de, pt, ru, zh, ja, ko, ar, hi),
+      but a set only fires if LanguageDetector labels the input with that code.
+      With the optional ``multilingual`` extra (lingua) ABSENT — the default — the
+      detector falls back to a Unicode-script heuristic that resolves every
+      Latin-script input to ``"en"`` (see language_detector._detect_heuristic).
+      Consequence: the four Latin-script sets (es/fr/de/pt = 23 patterns) are
+      effectively UNREACHABLE by default; only script-distinguishable languages
+      (zh, ja, ko, ar, ru, hi) are detected and scanned out of the box. Install the
+      ``multilingual`` extra to activate Latin-script detection. This scanner is
+      also gated behind ``BULWARK_MULTILINGUAL_ENABLED`` (default off) and is not
+      registered in the default pipeline.
     """
 
     def __init__(self) -> None:
@@ -502,7 +515,7 @@ class MultilingualPatterns(InputScanner):
             name="multilingual_patterns",
             version="1.0.0",
             scanner_type=ScannerType.INPUT_BLOCKING,
-            description="Language-specific attack pattern detection (10 languages)",
+            description="Language-specific attack patterns (10 langs; es/fr/de/pt need the 'multilingual' extra)",
             maturity=MaturityTier.BETA,
             author="bulwark",
             priority=8,  # After language detector (5), before English regex (10)

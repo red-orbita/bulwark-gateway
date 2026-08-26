@@ -9,6 +9,18 @@ Detection backends (in preference order):
   2. fasttext-langdetect (fast, requires model download)
   3. Simple heuristic fallback (script-based detection for CJK/Arabic/Cyrillic)
 
+SHIPPED STATE (honesty): backends 1 and 2 are OPTIONAL — they require the
+``multilingual`` extra (``pip install bulwark-gateway[multilingual]``), which is
+NOT installed by default (fasttext also needs a model with no download path). In
+the default distribution only the script heuristic runs, and it resolves every
+Latin-script input to ``"en"`` at reduced confidence (``_detect_heuristic``). This
+means Latin-script languages (es/fr/de/pt/…) are NOT distinguished by default:
+downstream Latin-script pattern sets stay dormant, and an ``allowed_languages``
+policy that excludes English may under-block Latin-script text labelled "en".
+Script-distinguishable languages (CJK, Arabic, Cyrillic, Devanagari) are detected
+reliably. The active backend is recorded in
+``context.metadata["language_backend"]`` and logged at startup.
+
 Policy enforcement:
   - allowed_languages: list of ISO 639-1 codes permitted for this agent
   - block_unknown_language: whether to block undetectable language (default: false)

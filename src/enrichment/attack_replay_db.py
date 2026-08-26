@@ -11,6 +11,17 @@ Key capabilities:
 - Auto-generate regex candidates from flagged payloads
 - Feed new patterns back to InputGuardrail (pending review)
 - Provide replay capability for regression testing
+
+SHIPPED STATE (honesty): raw payload recording and replay are always functional,
+but *evasion detection* and *auto-regex generation* are driven exclusively by the
+EmbeddingScanner (the only enrichment source that emits THREAT/SUSPICIOUS). That
+scanner requires the optional ``sentence-transformers`` package (absent by
+default) and the whole enrichment layer is gated behind
+``BULWARK_ENRICHMENT_ENABLED`` (default off). Without both, ``is_evasion`` is
+never set, so ``_handle_evasion`` and the auto-pattern path are inert — the DB
+records payloads but generates no evasion candidates. Provision the embedding
+model via ``scripts/download-enrichment-model.py`` and enable enrichment to
+activate these capabilities.
 """
 
 from __future__ import annotations
