@@ -599,11 +599,20 @@ Run security audit on plugin source code. Returns list of security warnings (eva
 
 #### GET /admin/evaluation/status
 
-Return framework status: available categories, scanner count, dataset sizes.
+Return framework status. Reports what an evaluation would run against *right now*:
+the proxy's live input-blocking scanners (`pipeline_source=proxy-full-pipeline`,
+`scanner_names`, `proxy_reachable=true`) when the proxy is reachable, or the
+admin-local regex floor otherwise.
 
 #### POST /admin/evaluation/run
 
-Run adversarial evaluation against the scanner pipeline.
+Run adversarial evaluation against the **real** guardrail pipeline. The admin
+delegates to the proxy's internal endpoint (`POST /internal/evaluation/run`,
+network-isolated, no auth) so ML/multilingual/RAG scanners are actually
+exercised. If the proxy is unreachable the admin honors `BULWARK_FAIL_MODE`:
+`open` degrades to a labeled regex-only local run
+(`pipeline_source=admin-local-regex-only`), `closed` returns 503 rather than
+report regex-only numbers as the full defense.
 
 **Body**:
 ```json

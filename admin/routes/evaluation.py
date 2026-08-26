@@ -5,8 +5,8 @@ Consolidates: red teaming, QA validation, and performance benchmarking.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
+import os
 import time
 from typing import Optional
 
@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
 from src.evaluation.attacks import AttackGenerator
+from src.evaluation.harness import run_evaluation_report
 from src.evaluation.runner import EvaluationRunner, EvaluationReport
 from src.evaluation.datasets import STANDARD_BENIGN
 from src.models import ThreatCategory, Verdict
@@ -24,6 +25,14 @@ from src.scanners.pipeline import ScannerPipeline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/evaluation", tags=["evaluation"])
+
+# The proxy owns the real scanner pipeline (ML/multilingual/RAG models are
+# loaded there, not in the admin pod). Evaluation is delegated to the proxy's
+# internal endpoint so the benchmark measures the defense that actually runs in
+# production; the admin only falls back to a regex-only local run when the proxy
+# is unreachable AND the deployment is configured to degrade (see
+# perform_evaluation).
+_PROXY_INTERNAL_TIMEOUT = 300.0  # generous: a full-pipeline run is admin-triggered, not hot-path
 
 
 # --- Available categories for attack generation ---
@@ -40,13 +49,22 @@ _SUPPORTED_CATEGORIES: list[str] = [
 
 
 class EvaluationStatusResponse(BaseModel):
-    """Evaluation framework status."""
+    """Evaluation framework status.
+
+    ``pipeline_source`` and ``scanner_names`` reflect what an evaluation would
+    actually run against RIGHT NOW: the proxy's full pipeline when reachable, or
+    the admin-local regex floor otherwise. The legacy hardcoded
+    ``scanner_count=1``/``regex_input`` claim was misleading — the proxy may have
+    ML/multilingual/RAG scanners registered.
+    """
     available: bool = True
     supported_categories: list[str]
     scanner_count: int
-    scanner_name: str = "regex_input"
+    scanner_names: list[str] = []
+    pipeline_source: str = "unknown"
+    proxy_reachable: bool = False
     benign_dataset_size: int
-    description: str = "Red-team evaluation framework using regex-based guardrail scanner"
+    description: str = "Red-team evaluation framework"
 
 
 class RunEvaluationRequest(BaseModel):
@@ -129,10 +147,74 @@ def _resolve_categories(raw: list[str] | None) -> list[ThreatCategory]:
 
 
 def _build_pipeline() -> ScannerPipeline:
-    """Create a fresh ScannerPipeline with the RegexInputScanner registered."""
+    """Create a fresh regex-only ScannerPipeline for the admin-local fallback.
+
+    The admin pod has no ML models, so this only exercises the regex floor. It is
+    used exclusively when the proxy is unreachable and BULWARK_FAIL_MODE=open.
+    """
     pipeline = ScannerPipeline()
     pipeline.register(RegexInputScanner())
     return pipeline
+
+
+def _proxy_url() -> str:
+    return os.environ.get("BULWARK_PROXY_URL", "http://proxy:8080")
+
+
+async def _delegate_evaluation_to_proxy(
+    categories: list[ThreatCategory] | None,
+    count_per_category: int,
+    include_benign: bool,
+) -> dict | None:
+    """Run the evaluation on the proxy's real pipeline via its internal endpoint.
+
+    Uses POST /internal/evaluation/run (no auth — network-isolated via K8s
+    NetworkPolicies, same trust model as /internal/scanners/status). Returns the
+    serialized report, or None if the proxy is unreachable / errors, so the
+    caller can decide how to degrade.
+    """
+    import httpx
+
+    payload = {
+        "categories": [c.value for c in categories] if categories else None,
+        "count_per_category": count_per_category,
+        "include_benign": include_benign,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_PROXY_INTERNAL_TIMEOUT) as client:
+            resp = await client.post(
+                f"{_proxy_url()}/internal/evaluation/run", json=payload
+            )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning(
+            "proxy_evaluation_non_200 status=%d body=%s",
+            resp.status_code, resp.text[:200],
+        )
+        return None
+    except Exception as e:  # noqa: BLE001 - unreachable proxy is an expected degrade path
+        logger.warning("proxy_evaluation_unreachable error=%s", str(e))
+        return None
+
+
+async def _query_proxy_input_scanners() -> list[str] | None:
+    """Return the proxy's enabled input-blocking scanner names, or None if down."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{_proxy_url()}/internal/scanners/status")
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except Exception:
+        return None
+
+    names: list[str] = []
+    for s in data.get("scanners", []):
+        if s.get("type") == "input_blocking" and s.get("enabled", False):
+            names.append(s["name"])
+    return names
 
 
 async def perform_evaluation(
@@ -142,32 +224,52 @@ async def perform_evaluation(
 ) -> dict:
     """Core red-team evaluation logic (no auth) — reusable by routes/orchestrator.
 
-    Generates adversarial attacks across the requested categories, runs them
-    through a fresh RegexInputScanner pipeline, and returns a serialized report
-    with a frontend-friendly ``categories`` array.
+    Delegates to the proxy's real scanner pipeline (ML/multilingual/RAG loaded
+    there). If the proxy is unreachable, honors ``BULWARK_FAIL_MODE`` — the same
+    precedent the proxy uses for degraded blocking scanners:
+
+      * ``closed`` → refuse: do NOT report regex-only numbers as if they were the
+        full defense. Raises 503 with an actionable message.
+      * ``open``   → degrade: run the admin-local regex floor, clearly labeled
+        with ``pipeline_source="admin-local-regex-only"``.
+
+    The returned dict always carries a ``pipeline_source`` provenance field and a
+    frontend-friendly ``categories`` array.
     """
     if categories is None:
         categories = _resolve_categories(None)
 
-    generator = AttackGenerator(seed=42)
-    attacks = generator.generate_attacks(
+    proxy_result = await _delegate_evaluation_to_proxy(
+        categories, count_per_category, include_benign
+    )
+    if proxy_result is not None:
+        proxy_result.setdefault("pipeline_source", "proxy-full-pipeline")
+        return proxy_result
+
+    fail_mode = os.environ.get("BULWARK_FAIL_MODE", "closed").strip().lower()
+    if fail_mode == "closed":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Cannot evaluate the full guardrail pipeline: the proxy is "
+                "unreachable and the admin pod has no ML models. Refusing to "
+                "report regex-only results as the full defense "
+                "(BULWARK_FAIL_MODE=closed). Restore proxy connectivity, or set "
+                "BULWARK_FAIL_MODE=open to evaluate the regex floor instead."
+            ),
+        )
+
+    logger.warning(
+        "evaluation_degraded_regex_only reason=proxy_unreachable fail_mode=open"
+    )
+    pipeline = _build_pipeline()
+    result = await run_evaluation_report(
+        pipeline,
         categories=categories,
         count_per_category=count_per_category,
+        include_benign=include_benign,
     )
-
-    pipeline = _build_pipeline()
-    runner = EvaluationRunner(pipeline=pipeline)
-
-    benign_samples = STANDARD_BENIGN if include_benign else None
-    report = await runner.run_evaluation(attacks, benign_samples=benign_samples)
-
-    result = dataclasses.asdict(report)
-    result["categories"] = [
-        {"name": cat, "total": data["total"], "detected": data["detected"],
-         "missed": data["missed"], "rate": data["detection_rate"],
-         "avg_latency_ms": data.get("latency_p50", 0)}
-        for cat, data in report.category_breakdown.items()
-    ]
+    result["pipeline_source"] = "admin-local-regex-only"
     return result
 
 
@@ -175,17 +277,44 @@ async def perform_evaluation(
 
 
 @router.get("/status", response_model=EvaluationStatusResponse)
-def evaluation_status(
+async def evaluation_status(
     user: TokenPayload = Depends(require_permission("admin:read")),
 ) -> EvaluationStatusResponse:
-    """Get evaluation framework status and capabilities."""
+    """Get evaluation framework status and capabilities.
+
+    Reports what an evaluation would actually run against right now: the proxy's
+    real input-blocking scanners when reachable, or the admin-local regex floor
+    otherwise. This replaces the previous hardcoded ``scanner_count=1`` claim.
+    """
+    proxy_scanners = await _query_proxy_input_scanners()
+    if proxy_scanners is not None:
+        return EvaluationStatusResponse(
+            available=True,
+            supported_categories=_SUPPORTED_CATEGORIES,
+            scanner_count=len(proxy_scanners),
+            scanner_names=proxy_scanners,
+            pipeline_source="proxy-full-pipeline",
+            proxy_reachable=True,
+            benign_dataset_size=len(STANDARD_BENIGN),
+            description=(
+                "Red-team evaluation against the proxy's live input-blocking "
+                "pipeline (delegated to /internal/evaluation/run)"
+            ),
+        )
+
+    # Proxy unreachable: report the honest fallback surface.
     return EvaluationStatusResponse(
         available=True,
         supported_categories=_SUPPORTED_CATEGORIES,
         scanner_count=1,
-        scanner_name="regex_input",
+        scanner_names=["regex_input"],
+        pipeline_source="admin-local-regex-only",
+        proxy_reachable=False,
         benign_dataset_size=len(STANDARD_BENIGN),
-        description="Red-team evaluation framework using regex-based guardrail scanner",
+        description=(
+            "Proxy unreachable — evaluation would run the admin-local regex "
+            "floor only (BULWARK_FAIL_MODE=open) or refuse (closed)"
+        ),
     )
 
 
@@ -194,51 +323,27 @@ async def run_evaluation(
     req: RunEvaluationRequest,
     user: TokenPayload = Depends(require_permission("guardrails:test")),
 ) -> dict:
-    """Run a full red-team evaluation against the guardrail scanner.
+    """Run a full red-team evaluation against the real guardrail pipeline.
 
-    Creates a fresh ScannerPipeline with RegexInputScanner, generates adversarial
-    attacks across requested categories, and returns a complete EvaluationReport.
+    Delegates to the proxy (ML/multilingual/RAG loaded there); falls back to the
+    admin-local regex floor only when the proxy is unreachable and
+    BULWARK_FAIL_MODE=open (otherwise 503). See ``perform_evaluation``.
     """
     try:
         categories = _resolve_categories(req.categories)
-
-        # Generate attacks
-        generator = AttackGenerator(seed=42)
-        attacks = generator.generate_attacks(
+        result = await perform_evaluation(
             categories=categories,
             count_per_category=req.count_per_category,
+            include_benign=req.include_benign,
         )
-
-        # Build pipeline and runner
-        pipeline = _build_pipeline()
-        runner = EvaluationRunner(pipeline=pipeline)
-
-        # Determine benign samples
-        benign_samples: list[str] | None = None
-        if req.include_benign:
-            benign_samples = STANDARD_BENIGN
-
-        # Run evaluation
-        report = await runner.run_evaluation(attacks, benign_samples=benign_samples)
-
         logger.info(
-            "evaluation_completed total=%d detected=%d rate=%.2f",
-            report.total_attacks,
-            report.detected,
-            report.detection_rate,
+            "evaluation_completed source=%s total=%d detected=%d rate=%.2f",
+            result.get("pipeline_source", "unknown"),
+            result.get("total_attacks", 0),
+            result.get("detected", 0),
+            result.get("detection_rate", 0.0),
         )
-
-        # Serialize report; transform category_breakdown to array for frontend
-        result = dataclasses.asdict(report)
-        result["categories"] = [
-            {"name": cat, "total": data["total"], "detected": data["detected"],
-             "missed": data["missed"], "rate": data["detection_rate"],
-             "avg_latency_ms": data.get("latency_p50", 0)}
-            for cat, data in report.category_breakdown.items()
-        ]
-
         return result
-
     except HTTPException:
         raise
     except Exception as e:
@@ -253,42 +358,23 @@ async def run_quick_evaluation(
 ) -> dict:
     """Quick evaluation with 5 attacks per category (preset).
 
-    Lightweight evaluation for fast feedback. Includes benign samples.
+    Same delegation semantics as ``/run``; includes benign samples.
     """
     try:
         categories = _resolve_categories(req.categories)
-
-        # Generate attacks — 5 per category
-        generator = AttackGenerator(seed=42)
-        attacks = generator.generate_attacks(
+        result = await perform_evaluation(
             categories=categories,
             count_per_category=5,
+            include_benign=True,
         )
-
-        # Build pipeline and runner
-        pipeline = _build_pipeline()
-        runner = EvaluationRunner(pipeline=pipeline)
-
-        # Run with benign samples
-        report = await runner.run_evaluation(attacks, benign_samples=STANDARD_BENIGN)
-
         logger.info(
-            "quick_evaluation_completed total=%d detected=%d rate=%.2f",
-            report.total_attacks,
-            report.detected,
-            report.detection_rate,
+            "quick_evaluation_completed source=%s total=%d detected=%d rate=%.2f",
+            result.get("pipeline_source", "unknown"),
+            result.get("total_attacks", 0),
+            result.get("detected", 0),
+            result.get("detection_rate", 0.0),
         )
-
-        result = dataclasses.asdict(report)
-        result["categories"] = [
-            {"name": cat, "total": data["total"], "detected": data["detected"],
-             "missed": data["missed"], "rate": data["detection_rate"],
-             "avg_latency_ms": data.get("latency_p50", 0)}
-            for cat, data in report.category_breakdown.items()
-        ]
-
         return result
-
     except HTTPException:
         raise
     except Exception as e:

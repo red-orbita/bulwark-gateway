@@ -175,6 +175,79 @@ async def internal_scanner_status(request: Request):
     })
 
 
+@router.post("/internal/evaluation/run")
+async def internal_evaluation_run(request: Request):
+    """Internal endpoint for the admin pod to run a red-team evaluation against
+    the REAL scanner pipeline (with ML/multilingual/RAG models loaded).
+
+    No auth required — network-level isolation enforced by K8s NetworkPolicies,
+    identical to /internal/scanners/status. Only admin pods can reach this via
+    the ClusterIP service.
+
+    The admin pod has no ML dependencies or models, so evaluating there only ever
+    exercises the regex floor. Delegating here lets the benchmark measure the
+    defense that actually protects production traffic.
+
+    Body (all optional):
+      {
+        "categories": ["prompt_injection", ...] | null,   # null = default set
+        "count_per_category": 5,
+        "include_benign": true
+      }
+
+    Returns the serialized EvaluationReport (same shape the admin API returns),
+    stamped with pipeline_source="proxy-full-pipeline".
+    """
+    from src.evaluation.harness import run_evaluation_report
+    from src.models import ThreatCategory
+    from src.scanners.pipeline import get_scanner_pipeline
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    # Resolve requested categories; unknown names are rejected explicitly so a
+    # typo does not silently shrink the tested surface.
+    raw_categories = body.get("categories")
+    categories: list[ThreatCategory] | None
+    if raw_categories is None:
+        categories = None
+    else:
+        if not isinstance(raw_categories, list):
+            raise HTTPException(status_code=400, detail="categories must be a list or null")
+        categories = []
+        for name in raw_categories:
+            try:
+                categories.append(ThreatCategory(name))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown category: '{name}'"
+                ) from None
+
+    # Bound count so a caller cannot request an unbounded generation workload.
+    try:
+        count = int(body.get("count_per_category", 5))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400, detail="count_per_category must be an integer"
+        ) from None
+    count = max(1, min(count, 200))
+    include_benign = bool(body.get("include_benign", True))
+
+    pipeline = get_scanner_pipeline()
+    result = await run_evaluation_report(
+        pipeline,
+        categories=categories,
+        count_per_category=count,
+        include_benign=include_benign,
+    )
+    result["pipeline_source"] = "proxy-full-pipeline"
+    return JSONResponse(content=result)
+
+
 @router.post("/health/redteam")
 async def redteam_test(request: Request):
     """
