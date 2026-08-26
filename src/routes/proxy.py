@@ -1042,12 +1042,20 @@ async def chat_completions(request: Request):
         if content:
             # Use scanner pipeline for output filtering if available
             if _pipeline.output_blocking_count > 0 and settings.scanners_pipeline_enabled:
+                # Thread the agent's opt-in structured-output validation config into
+                # the scan context so SchemaValidator can resolve a schema. Inert for
+                # agents without an `output_validation` policy block (empty dict).
+                _out_meta: dict = {}
+                _agent_policy = policy_engine.get_policy(tenant_id, agent_id)
+                if _agent_policy is not None and _agent_policy.output_validation:
+                    _out_meta["output_validation"] = _agent_policy.output_validation
                 _out_ctx = ScanContext(
                     tenant_id=tenant_id,
                     agent_id=agent_id,
                     request_id=_scan_ctx.request_id if settings.scanners_pipeline_enabled else "",
                     messages=messages,
                     source_ip=source_ip,
+                    metadata=_out_meta,
                 )
                 filter_result = await _pipeline.run_output_blocking(content, _out_ctx)
             else:

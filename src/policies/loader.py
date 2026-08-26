@@ -89,6 +89,7 @@ class PolicyLoader:
             allow_file_write=data.get("allow_file_write", False),
             allow_network_access=data.get("allow_network_access", True),
             sandbox_level=data.get("sandbox_level", "standard"),
+            output_validation=data.get("output_validation", {}) or {},
         )
 
     async def reload(self):

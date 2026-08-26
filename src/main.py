@@ -224,6 +224,15 @@ async def lifespan(app: FastAPI):
         pipeline.register(MultilingualPatterns())
         await logger.ainfo("multilingual_scanners_registered")
 
+    # Register structured-output Schema Validator (opt-in, default off).
+    # Model-free OUTPUT_BLOCKING scanner (jsonschema is a core dep). It stays inert
+    # (ALLOW) for any agent without an `output_validation` policy block, so the only
+    # cost of enabling it is a per-request dict lookup on agents that opt in.
+    if settings.schema_validation_enabled:
+        from src.scanners.output.schema_validator import SchemaValidator
+        pipeline.register(SchemaValidator())
+        await logger.ainfo("schema_validator_registered")
+
     # Discover and register third-party plugins
     if settings.scanners_dir.exists():
         discovered = discover_all_scanners(settings.scanners_dir)

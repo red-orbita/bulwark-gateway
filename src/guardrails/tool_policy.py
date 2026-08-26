@@ -307,6 +307,11 @@ class AgentPolicy:
     allow_file_write: bool = False
     allow_network_access: bool = True
     sandbox_level: str = "standard"  # "minimal", "standard", "strict"
+    # Optional structured-output validation config (consumed by SchemaValidator in
+    # the output pipeline). Empty dict = no validation for this agent. Supported keys:
+    #   output_schema (inline dict) | output_schema_path (str) | on_schema_fail
+    #   (block|warn|repair) | require_json (bool).
+    output_validation: dict = field(default_factory=dict)
 
 
 class ToolPolicyEngine:

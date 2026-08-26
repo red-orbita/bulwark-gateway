@@ -15,10 +15,12 @@ SHIPPED STATE (honesty): unlike the NLI / embedding output scanners, this one is
 model-free and FUNCTIONAL in every distribution — ``jsonschema`` is a core runtime
 dependency (see pyproject.toml). Its validation is deterministic and unit-tested,
 so it is declared ``MaturityTier.BETA`` (real logic + tests; efficacy not yet
-benchmark-validated, and it is not wired into the default proxy pipeline — enable
-it deliberately per agent). The optional ``repair`` mode uses the ``json_repair``
-package when it is installed (it is not a declared dependency) and otherwise falls
-back to a conservative regex repair (trailing commas / single quotes).
+benchmark-validated). It is opt-in: registered in the proxy output pipeline only
+when ``BULWARK_SCHEMA_VALIDATION_ENABLED=true`` and, even then, stays inert (ALLOW)
+for any agent that does not declare an ``output_validation`` block in its policy.
+The optional ``repair`` mode uses the ``json_repair`` package when it is installed
+(it is not a declared dependency) and otherwise falls back to a conservative regex
+repair (trailing commas / single quotes).
 """
 
 from __future__ import annotations

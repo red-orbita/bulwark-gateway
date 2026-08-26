@@ -173,6 +173,14 @@ class Settings(BaseSettings):
     # Multilingual Detection (Phase 3)
     multilingual_enabled: bool = False  # Master switch for language detection + multilingual patterns
 
+    # Structured-output schema validation (opt-in, default off).
+    # When enabled, the model-free SchemaValidator (OUTPUT_BLOCKING) is registered
+    # in the scanner pipeline. It is INERT (returns ALLOW) for any agent that does
+    # not declare `output_validation` in its policy — enabling the flag alone has
+    # no behavioural effect until a per-agent schema is configured. jsonschema is a
+    # core runtime dependency, so no extra install is required.
+    schema_validation_enabled: bool = False
+
     # mTLS (inter-service communication: proxy ↔ admin)
     # When enabled, internal endpoints require a valid client certificate
     # signed by the trusted CA. External endpoints continue using JWT/API key.
