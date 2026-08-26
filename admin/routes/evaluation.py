@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
-from src.evaluation.attacks import AttackGenerator
+from src.evaluation.attacks import SUPPORTED_CATEGORIES, AttackGenerator
 from src.evaluation.harness import run_corpus_report, run_evaluation_report
 from src.evaluation.runner import EvaluationRunner, EvaluationReport
 from src.evaluation.datasets import STANDARD_BENIGN
@@ -37,12 +37,11 @@ _PROXY_INTERNAL_TIMEOUT = 300.0  # generous: a full-pipeline run is admin-trigge
 
 # --- Available categories for attack generation ---
 
-_SUPPORTED_CATEGORIES: list[str] = [
-    ThreatCategory.PROMPT_INJECTION.value,
-    ThreatCategory.JAILBREAK.value,
-    ThreatCategory.EXFILTRATION.value,
-    ThreatCategory.CREDENTIAL_ACCESS.value,
-]
+# Advertise exactly what the generator can author (derived from its template
+# registry), so the status endpoint and error messages never drift from reality.
+# The DEFAULT set applied when a caller omits categories stays the original four
+# (see _resolve_categories) to keep /run's default behaviour stable.
+_SUPPORTED_CATEGORIES: list[str] = [c.value for c in SUPPORTED_CATEGORIES]
 
 
 # --- Request/Response models ---
@@ -154,12 +153,24 @@ def _resolve_categories(raw: list[str] | None) -> list[ThreatCategory]:
     categories: list[ThreatCategory] = []
     for name in raw:
         try:
-            categories.append(ThreatCategory(name))
+            category = ThreatCategory(name)
         except ValueError:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unknown category: '{name}'. Supported: {_SUPPORTED_CATEGORIES}",
             )
+        # A valid enum member is not enough: the generator only has payload
+        # templates for the input-attack surface. Reject anything without
+        # templates so a run never silently produces zero attacks.
+        if category not in SUPPORTED_CATEGORIES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Category '{name}' has no attack templates. "
+                    f"Supported: {_SUPPORTED_CATEGORIES}"
+                ),
+            )
+        categories.append(category)
     return categories
 
 

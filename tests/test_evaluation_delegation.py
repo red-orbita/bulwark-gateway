@@ -174,6 +174,28 @@ class TestProxyInternalEndpoint:
         )
         assert resp.status_code == 400
 
+    def test_run_rejects_untemplated_category(self, monkeypatch):
+        # A valid ThreatCategory with no attack templates (e.g. rate_limit) must
+        # be rejected, not silently produce zero attacks.
+        client = self._client(monkeypatch)
+        resp = client.post(
+            "/internal/evaluation/run",
+            json={"categories": ["rate_limit"]},
+        )
+        assert resp.status_code == 400
+        assert "no attack templates" in resp.json()["detail"]
+
+    def test_run_accepts_expanded_category(self, monkeypatch):
+        # A newly supported category (reverse_shell) must be accepted and yield
+        # attacks through the real pipeline.
+        client = self._client(monkeypatch)
+        resp = client.post(
+            "/internal/evaluation/run",
+            json={"categories": ["reverse_shell"], "count_per_category": 4},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total_attacks"] >= 4
+
     def test_count_is_bounded(self, monkeypatch):
         client = self._client(monkeypatch)
         # Absurd count is clamped, not honored verbatim (DoS guard).
@@ -192,6 +214,47 @@ class TestProxyInternalEndpoint:
 
 
 class TestAdminDelegation:
+    def test_resolve_categories_default_is_stable(self):
+        import admin.routes.evaluation as ev
+
+        # Default (None) must stay the original four regardless of how many
+        # categories the generator now supports, so /run behaviour is unchanged.
+        assert ev._resolve_categories(None) == [
+            ThreatCategory.PROMPT_INJECTION,
+            ThreatCategory.JAILBREAK,
+            ThreatCategory.EXFILTRATION,
+            ThreatCategory.CREDENTIAL_ACCESS,
+        ]
+
+    def test_resolve_categories_accepts_expanded(self):
+        import admin.routes.evaluation as ev
+
+        resolved = ev._resolve_categories(["reverse_shell", "memory_manipulation"])
+        assert resolved == [
+            ThreatCategory.REVERSE_SHELL,
+            ThreatCategory.MEMORY_MANIPULATION,
+        ]
+
+    def test_resolve_categories_rejects_unknown(self):
+        from fastapi import HTTPException
+
+        import admin.routes.evaluation as ev
+
+        with pytest.raises(HTTPException) as exc:
+            ev._resolve_categories(["definitely_not_real"])
+        assert exc.value.status_code == 400
+
+    def test_resolve_categories_rejects_untemplated(self):
+        from fastapi import HTTPException
+
+        import admin.routes.evaluation as ev
+
+        # rate_limit is a valid ThreatCategory but has no attack templates.
+        with pytest.raises(HTTPException) as exc:
+            ev._resolve_categories(["rate_limit"])
+        assert exc.value.status_code == 400
+        assert "no attack templates" in exc.value.detail
+
     @pytest.mark.asyncio
     async def test_delegate_success_returns_proxy_report(self, monkeypatch):
         import admin.routes.evaluation as ev

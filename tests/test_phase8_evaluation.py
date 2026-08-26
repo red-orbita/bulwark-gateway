@@ -121,6 +121,89 @@ class TestAttackGenerator:
         )
         assert has_encoding
 
+    def test_supported_categories_expanded(self):
+        from src.evaluation.attacks import _TEMPLATES, SUPPORTED_CATEGORIES
+
+        # The generator now covers the full input-payload threat surface, not
+        # just the original four. Every supported category must have templates.
+        assert len(SUPPORTED_CATEGORIES) == 14
+        assert set(SUPPORTED_CATEGORIES) == set(_TEMPLATES.keys())
+        # Spot-check the categories added for red-team depth.
+        for cat in (
+            ThreatCategory.REVERSE_SHELL,
+            ThreatCategory.TOOL_ABUSE,
+            ThreatCategory.MALICIOUS_DOMAIN,
+            ThreatCategory.DENIAL_OF_SERVICE,
+            ThreatCategory.EXCESSIVE_AGENCY,
+            ThreatCategory.MODEL_THEFT,
+            ThreatCategory.PRIVACY_ATTACK,
+            ThreatCategory.PLAN_CORRUPTION,
+            ThreatCategory.CROSS_AGENT_INJECTION,
+            ThreatCategory.MEMORY_MANIPULATION,
+        ):
+            assert cat in SUPPORTED_CATEGORIES
+
+    def test_every_supported_category_generates(self):
+        from src.evaluation.attacks import SUPPORTED_CATEGORIES, AttackGenerator
+
+        gen = AttackGenerator(seed=42)
+        for cat in SUPPORTED_CATEGORIES:
+            attacks = gen.generate_attacks(categories=[cat], count_per_category=8)
+            assert len(attacks) >= 8, f"no attacks for {cat.value}"
+            assert all(a.category == cat for a in attacks)
+            assert all(len(a.payload) > 10 for a in attacks), (
+                f"placeholder payloads for {cat.value}"
+            )
+
+    def test_semantic_technique_present(self):
+        from src.evaluation.attacks import AttackGenerator
+
+        gen = AttackGenerator(seed=42)
+        attacks = gen.generate_attacks(
+            categories=[ThreatCategory.PROMPT_INJECTION], count_per_category=12
+        )
+        techniques = {a.technique.split("/")[0] for a in attacks}
+        # All four strategy families should be represented.
+        assert {"template", "semantic", "mutation", "encoding"} <= techniques
+
+    def test_semantic_attacks_are_paraphrased(self):
+        from src.evaluation.attacks import _TEMPLATES, AttackGenerator
+
+        # Raw template surface forms (all variable fills) for comparison.
+        raw_templates = {
+            t["template"] for t in _TEMPLATES[ThreatCategory.JAILBREAK]
+        }
+
+        gen = AttackGenerator(seed=42)
+        attacks = gen.generate_attacks(
+            categories=[ThreatCategory.JAILBREAK], count_per_category=30
+        )
+        semantic = [a for a in attacks if a.technique.startswith("semantic/")]
+        assert semantic, "expected at least one semantic attack"
+        # At least one semantic payload must have been reworded/reframed away
+        # from every raw template string — proving it is not a verbatim copy.
+        assert any(
+            all(tmpl not in a.payload for tmpl in raw_templates) or a.payload not in raw_templates
+            for a in semantic
+        )
+        # Semantic attacks are labelled with a concrete paraphrase strategy.
+        for a in semantic:
+            label = a.technique.split("/", 1)[1]
+            assert label in {"paraphrase", "synonym", "reframe", "identity"}
+
+    def test_slices_sum_to_requested_count(self):
+        from src.evaluation.attacks import AttackGenerator
+
+        # The four strategy slices must always sum to exactly the requested
+        # per-category count, so downstream corpus/report totals stay exact.
+        gen = AttackGenerator(seed=7)
+        for count in (1, 2, 5, 8, 13, 30):
+            attacks = gen.generate_attacks(
+                categories=[ThreatCategory.EXFILTRATION], count_per_category=count
+            )
+            assert len(attacks) == count, f"count={count} produced {len(attacks)}"
+
+
 
 # =============================================================================
 # Evaluation Runner

@@ -198,6 +198,7 @@ async def internal_evaluation_run(request: Request):
     Returns the serialized EvaluationReport (same shape the admin API returns),
     stamped with pipeline_source="proxy-full-pipeline".
     """
+    from src.evaluation.attacks import SUPPORTED_CATEGORIES
     from src.evaluation.harness import run_evaluation_report
     from src.models import ThreatCategory
     from src.scanners.pipeline import get_scanner_pipeline
@@ -221,11 +222,19 @@ async def internal_evaluation_run(request: Request):
         categories = []
         for name in raw_categories:
             try:
-                categories.append(ThreatCategory(name))
+                category = ThreatCategory(name)
             except ValueError:
                 raise HTTPException(
                     status_code=400, detail=f"Unknown category: '{name}'"
                 ) from None
+            # Reject valid-but-untemplated categories too: the generator would
+            # skip them and silently shrink the tested surface otherwise.
+            if category not in SUPPORTED_CATEGORIES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Category '{name}' has no attack templates",
+                ) from None
+            categories.append(category)
 
     # Bound count so a caller cannot request an unbounded generation workload.
     try:
