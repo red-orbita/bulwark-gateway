@@ -19,8 +19,6 @@ from src.scanners.builtin.output_redaction_scanner import OutputRedactionScanner
 from src.scanners.builtin.regex_scanner import RegexInputScanner
 from src.scanners.builtin.tool_policy_scanner import ToolPolicyScanner
 from src.scanners.ml.injection_classifier import InjectionClassifier
-from src.scanners.ml.intent_scanner import IntentScanner
-from src.scanners.ml.topic_scanner import TopicScanner
 from src.scanners.ml.toxicity_scanner import ToxicityScanner
 from src.scanners.pipeline import ScannerPipeline
 from src.scanners.protocol import (
@@ -55,9 +53,6 @@ def test_default_maturity_is_experimental():
         # Beta — real model + tests, efficacy not yet benchmark-validated
         (InjectionClassifier, MaturityTier.BETA),
         (ToxicityScanner, MaturityTier.BETA),
-        # Experimental — no provisioned model / not wired
-        (TopicScanner, MaturityTier.EXPERIMENTAL),
-        (IntentScanner, MaturityTier.EXPERIMENTAL),
     ],
 )
 def test_declared_maturity_tiers(scanner_cls, expected):
@@ -69,7 +64,7 @@ def test_declared_maturity_tiers(scanner_cls, expected):
 def test_ml_scanners_are_never_ga():
     """ML scanners must not claim GA — their efficacy is unproven vs an
     adaptive adversary until Fase 1 benchmarking lands."""
-    for cls in (InjectionClassifier, ToxicityScanner, TopicScanner, IntentScanner):
+    for cls in (InjectionClassifier, ToxicityScanner):
         assert cls().info.maturity is not MaturityTier.GA
 
 

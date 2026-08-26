@@ -168,19 +168,17 @@ async def lifespan(app: FastAPI):
     #
     # P0 landmine fix: only register an ML scanner if its model is actually
     # provisioned on disk. A blocking scanner with no loaded model fails-closed
-    # and would BLOCK EVERY request — so registering topic/intent (which have no
-    # model and no download path) while ml_blocking=True would brick the gateway.
-    # Missing-model scanners are skipped (with a loud warning) instead.
+    # and would BLOCK EVERY request — so registering a scanner whose model has no
+    # download path while ml_blocking=True would brick the gateway. Missing-model
+    # scanners are skipped (with a loud warning) instead.
     if settings.ml_enabled:
-        from src.scanners.ml import InjectionClassifier, IntentScanner, TopicScanner, ToxicityScanner
+        from src.scanners.ml import InjectionClassifier, ToxicityScanner
         from src.scanners.ml.model_manager import ml_dependencies_available, model_files_present
 
         # (model subdir, scanner class) — subdir matches each scanner's MODEL_NAME
         ml_specs = [
             ("injection-classifier", InjectionClassifier),
             ("toxicity", ToxicityScanner),
-            ("topic-classifier", TopicScanner),
-            ("intent-classifier", IntentScanner),
         ]
 
         if not ml_dependencies_available():

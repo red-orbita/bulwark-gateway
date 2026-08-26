@@ -42,7 +42,7 @@ _MODEL_DIR = Path(os.environ.get("BULWARK_ML_MODEL_DIR",
                                   str(Path(__file__).parent.parent.parent.parent / "models")))
 
 
-def _verify_model_integrity(model_path: Path) -> bool:
+def _verify_model_integrity(model_path: Path, model_dir: Path | None = None) -> bool:
     """Verify model file matches expected hash from manifest.
 
     SECURITY FIX (H-12): Removed BULWARK_ML_SKIP_INTEGRITY bypass.
@@ -53,6 +53,16 @@ def _verify_model_integrity(model_path: Path) -> bool:
 
     This prevents an attacker with container access from replacing ONNX models
     with backdoored versions (e.g., always returning ALLOW).
+
+    ``model_dir`` is the base directory the caller used to build ``model_path``
+    (the ModelManager's own ``self._model_dir``). It MUST be passed by real
+    callers so the manifest key is computed against the same base that
+    constructed the path. Both the base and the model path are resolved to
+    absolute form before comparison — otherwise a relative ``model_dir`` (the
+    default, ``Path("models")``) would never be ``is_relative_to`` the absolute
+    module-level ``_MODEL_DIR``, the key would silently fall back to the bare
+    filename, miss the ``subdir/model.onnx`` manifest entry, and fail closed —
+    bricking ML with the default configuration.
     """
     if not _MODEL_MANIFEST_PATH.exists():
         logger.error("model_manifest_missing_blocked",
@@ -64,15 +74,21 @@ def _verify_model_integrity(model_path: Path) -> bool:
     # SECURITY (L-11 fix): Use relative path from model directory as key
     # instead of just filename to prevent hash collisions when models with
     # the same name exist in different subdirectories.
-    model_key = str(model_path.resolve().relative_to(_MODEL_DIR.resolve())) \
-        if model_path.is_relative_to(_MODEL_DIR) else model_path.name
+    #
+    # Resolve BOTH the base and the model path so the relative-vs-absolute
+    # mismatch between settings.ml_model_dir (relative default) and the
+    # module-level _MODEL_DIR (absolute default) cannot break key derivation.
+    base_resolved = (model_dir or _MODEL_DIR).resolve()
+    model_resolved = model_path.resolve()
+    model_key = str(model_resolved.relative_to(base_resolved)) \
+        if model_resolved.is_relative_to(base_resolved) else model_path.name
     expected_hash = manifest.get(model_key) or manifest.get(model_path.name)
     if not expected_hash:
         logger.error("model_hash_missing_blocked", extra={"model": model_key,
                     "note": "Model not in manifest — cannot verify integrity"})
         return False  # Fail-closed: unknown model = untrusted
 
-    actual_hash = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    actual_hash = hashlib.sha256(model_resolved.read_bytes()).hexdigest()
     if actual_hash != expected_hash:
         logger.critical("model_integrity_failed", extra={"model": model_path.name,
                        "expected": expected_hash[:16], "actual": actual_hash[:16]})
@@ -238,8 +254,11 @@ class ModelManager:
             return None
 
         try:
-            # SECURITY FIX (H-08): Verify model integrity before loading
-            if not _verify_model_integrity(onnx_path):
+            # SECURITY FIX (H-08): Verify model integrity before loading.
+            # Pass this manager's own base dir so the manifest key is derived
+            # against the same base that built onnx_path (fixes the relative
+            # vs absolute mismatch that would otherwise brick the default config).
+            if not _verify_model_integrity(onnx_path, self._model_dir):
                 logger.error("model_load_blocked", extra={"model": name,
                             "reason": "integrity_check_failed"})
                 return None

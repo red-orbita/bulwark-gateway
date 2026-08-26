@@ -40,13 +40,11 @@ ml = [
     "onnxruntime>=1.17",
     "tokenizers>=0.15",
     "numpy>=1.26",
-    "scikit-learn>=1.4",
 ]
 ml-gpu = [
     "onnxruntime-gpu>=1.17",
     "tokenizers>=0.15",
     "numpy>=1.26",
-    "scikit-learn>=1.4",
 ]
 multilingual = [
     "lingua-language-detector>=2.0",

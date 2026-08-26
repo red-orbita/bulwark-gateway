@@ -28,8 +28,6 @@ Requirements:
 Models exported:
     models/injection-classifier/    DeBERTa-v3 fine-tuned on prompt injection
     models/toxicity-classifier/     Multi-label toxicity (Jigsaw-based)
-    models/intent-classifier/       Multi-label adversarial intent
-    models/topic-classifier/        NLI-based zero-shot (bart-large-mnli)
     models/language-detector/       Language identification (Phase 3)
 """
 
@@ -74,27 +72,6 @@ MODEL_REGISTRY: dict[str, dict] = {
             "identity_attack",
         ],
         "description": "Multi-label toxicity classifier (BERT-based)",
-        "max_length": 512,
-    },
-    "intent-classifier": {
-        "hf_model": "facebook/bart-large-mnli",
-        "task": "zero-shot-classification",
-        "labels": [
-            "benign",
-            "social_engineering",
-            "manipulation",
-            "escalation_attempt",
-            "evasion",
-        ],
-        "description": "Adversarial intent detector (fine-tune from MNLI)",
-        "max_length": 512,
-        "note": "For production, fine-tune on labeled adversarial intent data",
-    },
-    "topic-classifier": {
-        "hf_model": "facebook/bart-large-mnli",
-        "task": "zero-shot-classification",
-        "labels": [],  # Dynamic: topics come from policy config
-        "description": "Zero-shot NLI topic classifier (BART-large-MNLI)",
         "max_length": 512,
     },
     "language-detector": {

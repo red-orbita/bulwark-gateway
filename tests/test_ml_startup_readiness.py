@@ -106,21 +106,21 @@ def test_model_files_present_true_when_both_files_exist(tmp_path):
 
 
 def test_model_files_present_false_when_onnx_missing(tmp_path):
-    sub = tmp_path / "intent-classifier"
+    sub = tmp_path / "toxicity"
     sub.mkdir()
     (sub / "tokenizer.json").write_text("{}")  # only tokenizer, no model.onnx
-    assert model_files_present("intent-classifier", model_dir=tmp_path) is False
+    assert model_files_present("toxicity", model_dir=tmp_path) is False
 
 
 def test_model_files_present_false_when_tokenizer_missing(tmp_path):
-    sub = tmp_path / "topic-classifier"
+    sub = tmp_path / "injection-classifier"
     sub.mkdir()
     (sub / "model.onnx").write_bytes(b"\x00")  # only model, no tokenizer
-    assert model_files_present("topic-classifier", model_dir=tmp_path) is False
+    assert model_files_present("injection-classifier", model_dir=tmp_path) is False
 
 
 def test_model_files_present_false_when_dir_missing(tmp_path):
-    # Directory does not exist at all (the topic/intent real-world case).
+    # Directory does not exist at all (unprovisioned-model real-world case).
     assert model_files_present("does-not-exist", model_dir=tmp_path) is False
 
 
@@ -194,16 +194,16 @@ def test_resolve_ok_when_nothing_degraded():
 
 
 def test_resolve_closed_refuses_to_start():
-    action, message = resolve_blocking_readiness(["ml_intent_detector"], "closed")
+    action, message = resolve_blocking_readiness(["ml_injection_classifier"], "closed")
     assert action == "refuse"
-    assert "ml_intent_detector" in message
+    assert "ml_injection_classifier" in message
     assert "BLOCK ALL traffic" in message
 
 
 def test_resolve_open_degrades():
-    action, message = resolve_blocking_readiness(["ml_intent_detector"], "open")
+    action, message = resolve_blocking_readiness(["ml_injection_classifier"], "open")
     assert action == "degrade"
-    assert "ml_intent_detector" in message
+    assert "ml_injection_classifier" in message
 
 
 def test_resolve_message_lists_all_degraded_sorted():

@@ -378,7 +378,7 @@ class TestStatusHonesty:
             "scanners": [
                 {"name": "regex_input", "type": "input_blocking", "enabled": True},
                 {"name": "output_redaction", "type": "output_blocking", "enabled": True},
-                {"name": "ml_topic", "type": "input_blocking", "enabled": False},
+                {"name": "ml_toxicity", "type": "input_blocking", "enabled": False},
             ]
         }
         captured = _install_fake_httpx(monkeypatch, get_response=_FakeResponse(200, payload))

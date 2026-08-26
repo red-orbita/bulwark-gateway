@@ -52,8 +52,6 @@ _SCANNER_REGISTRY: dict[str, tuple[str, str]] = {
     # ML scanners
     "ml_injection": ("src.scanners.ml.injection_classifier", "InjectionClassifier"),
     "ml_toxicity": ("src.scanners.ml.toxicity_scanner", "ToxicityScanner"),
-    "ml_topic": ("src.scanners.ml.topic_scanner", "TopicScanner"),
-    "ml_intent": ("src.scanners.ml.intent_scanner", "IntentScanner"),
     # Output scanners
     "hallucination": ("src.scanners.output.hallucination_scanner", "HallucinationScanner"),
     "relevance": ("src.scanners.output.relevance_scanner", "RelevanceScanner"),

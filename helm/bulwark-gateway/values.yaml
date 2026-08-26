@@ -109,7 +109,7 @@ proxy:
     # -- ML model storage size (PVC)
     storage: 2Gi
     # -- Models to download (used by init-container)
-    # Available: injection-classifier, toxicity, topic-classifier, intent-classifier
+    # Available: injection-classifier, toxicity
     models:
       - injection-classifier
       - toxicity

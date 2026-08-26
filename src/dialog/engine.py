@@ -261,8 +261,7 @@ class DialogEngine:
     def _detect_intent(self, message: str) -> str | None:
         """Detect intent from message using keyword matching.
 
-        This is a basic keyword-based approach. The ML IntentScanner
-        provides real classification for production use.
+        This is a basic keyword-based approach used for dialog-flow routing.
 
         Returns the name of the first matched intent (flow node name
         whose trigger keywords match), or None.

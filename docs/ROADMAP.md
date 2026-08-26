@@ -284,6 +284,16 @@ class SemanticSimilarityScanner(InputScanner):
 
 ### 2.5 Topic Classification Scanner
 
+> **Status: not shipped (future work).** Earlier dead stubs were removed — they
+> had no provisioned model, no download path, no manifest entry, and only
+> mock-based tests, so they violated the "no capability ships without a real
+> model + real-inference tests" bar. The correct way to add this later is
+> **identical to `injection-classifier` / `toxicity`**: source/train a model →
+> export to ONNX → add it to `scripts/download-models.py` + `config/model_manifest.json`
+> → add real forward-pass tests (gated on `ml_dependencies_available()` +
+> `model_files_present`). This is a normal ONNX classifier — it does **NOT**
+> require an LLM call in the hot path.
+
 Create `src/scanners/ml/topic_scanner.py`:
 
 ```python
@@ -299,6 +309,9 @@ class TopicScanner(InputScanner):
 ```
 
 ### 2.6 Sentiment/Intent Detector
+
+> **Status: not shipped (future work).** Same rationale and same correct path as
+> §2.5 — a real ONNX model + real-inference tests, no LLM in the hot path.
 
 Create `src/scanners/ml/intent_scanner.py`:
 
