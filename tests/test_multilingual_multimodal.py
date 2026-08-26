@@ -543,6 +543,111 @@ class TestVisionScanner:
         results = scanner._extract_data_uris(content)
         assert len(results) <= 5  # Max 5 per message
 
+    # --- Deterministic guards WITHOUT OCR -----------------------------------
+    # These prove the shipped (no pillow / no OCR backend) capability: the
+    # scanner runs its zero-dependency guards over inline data:image URIs even
+    # when self._available is False (the default in a stock distroless image).
+
+    @pytest.mark.asyncio
+    async def test_policy_gate_blocks_data_uri_in_text_without_ocr(self):
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner()
+        assert scanner._available is False  # no OCR backend — shipped default
+        img = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20).decode()
+        content = f"please view data:image/png;base64,{img}"
+
+        ctx = _make_context(metadata={"multimodal": {"allow_images": False}})
+        result = await scanner.scan(content, ctx)
+
+        assert result.verdict == Verdict.BLOCK
+        assert result.events[0].category.value == "policy_violation"
+        assert "not allowed" in result.events[0].description
+
+    @pytest.mark.asyncio
+    async def test_oversized_data_uri_in_text_blocks_without_ocr(self):
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner(max_image_size_mb=0.001)  # 1 KB limit
+        assert scanner._available is False
+        img = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 2000).decode()
+        content = f"here: data:image/png;base64,{img}"
+
+        result = await scanner.scan(content, _make_context())
+
+        assert result.verdict == Verdict.BLOCK
+        assert result.events[0].category.value == "denial_of_service"
+        assert "too large" in result.events[0].description
+
+    @pytest.mark.asyncio
+    async def test_format_signature_mismatch_warns_without_ocr(self):
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner()
+        assert scanner._available is False
+        # Declares PNG but the bytes are a JPEG (MIME confusion / polyglot).
+        jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 20
+        img = base64.b64encode(jpeg_bytes).decode()
+        content = f"look: data:image/png;base64,{img}"
+
+        result = await scanner.scan(content, _make_context())
+
+        assert result.verdict == Verdict.WARN
+        ev = result.events[0]
+        assert ev.category.value == "policy_violation"
+        assert ev.metadata["declared_format"] == "png"
+        assert ev.metadata["actual_format"] == "jpeg"
+
+    @pytest.mark.asyncio
+    async def test_disguised_payload_warns_without_ocr(self):
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner()
+        assert scanner._available is False
+        # Declares an image but carries a shell script (no image signature).
+        payload = b"#!/bin/sh\nrm -rf / --no-preserve-root\n" + b"A" * 40
+        img = base64.b64encode(payload).decode()
+        content = f"image data:image/png;base64,{img}"
+
+        result = await scanner.scan(content, _make_context())
+
+        assert result.verdict == Verdict.WARN
+        ev = result.events[0]
+        assert ev.metadata["actual_format"] is None
+        assert "no valid image signature" in ev.description
+
+    @pytest.mark.asyncio
+    async def test_valid_png_data_uri_allows_without_ocr(self):
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner()
+        assert scanner._available is False
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 30  # real PNG signature
+        img = base64.b64encode(png_bytes).decode()
+        content = f"a photo data:image/png;base64,{img}"
+
+        result = await scanner.scan(content, _make_context())
+
+        # Correct signature, within size, OCR inert → nothing to flag.
+        assert result.verdict == Verdict.ALLOW
+
+    @pytest.mark.asyncio
+    async def test_plain_text_allows_without_ocr(self):
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner()
+        assert scanner._available is False
+        result = await scanner.scan("no images here, just words", _make_context())
+        assert result.verdict == Verdict.ALLOW
+
+    @pytest.mark.asyncio
+    async def test_health_ok_without_ocr_backend(self):
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner()
+        # Deterministic guards always operate → healthy even with no OCR backend.
+        assert await scanner.health() is True
+
 
 # ==============================================================================
 # Integration: Language → Multilingual Patterns Pipeline

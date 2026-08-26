@@ -70,10 +70,14 @@ def test_default_maturity_is_experimental():
         # pass verified by measured tests. Opt-in (BULWARK_*_SCANNING_ENABLED).
         (HallucinationScanner, MaturityTier.BETA),
         (GroundingScanner, MaturityTier.BETA),
-        # Experimental — real decision logic but the required model/deps are NOT
-        # provisioned by default, so these scanners are INERT (return ALLOW) in
-        # the shipped distribution. They must never masquerade as GA/BETA until a
-        # model is provisioned + real-inference tests land (see ROADMAP §3.4/§4).
+        # Experimental — the VisionScanner ships real, tested, zero-dependency
+        # deterministic guards (allow_images policy gate, DoS size limit, base64
+        # + magic-byte format validation over inline data:image URIs), but its
+        # EPONYMOUS capability — OCR-based image content analysis — stays INERT:
+        # pillow + an OCR backend are unprovisioned and do not fit the distroless
+        # / no-torch runtime. It must never claim GA/BETA on the hygiene guards
+        # alone until OCR is provisioned + real-inference tests land (ROADMAP
+        # §3.4/§4).
         (VisionScanner, MaturityTier.EXPERIMENTAL),
     ],
 )
@@ -84,9 +88,11 @@ def test_declared_maturity_tiers(scanner_cls, expected):
 
 
 def test_unprovisioned_model_scanners_are_never_ga():
-    """Scanners whose ONNX model / native deps are NOT provisioned in the default
-    distribution must stay EXPERIMENTAL — they are inert (return ALLOW) until a
-    model is provisioned, so a GA/BETA claim would overstate real coverage."""
+    """Scanners whose headline ONNX model / native deps are NOT provisioned in
+    the default distribution must stay EXPERIMENTAL. The VisionScanner runs real
+    deterministic hygiene guards, but its eponymous OCR content-analysis layer is
+    inert until an OCR backend is installed, so a GA/BETA claim would overstate
+    real coverage of the capability the scanner advertises."""
     for cls in (VisionScanner,):
         assert cls().info.maturity is MaturityTier.EXPERIMENTAL
 

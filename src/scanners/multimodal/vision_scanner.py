@@ -18,13 +18,28 @@ Dependencies (optional):
 
 Default mode: async (fire-and-forget enrichment)
 
-SHIPPED STATE (honesty): the [vision] extra is not installed in the default
-distribution and no OCR backend ships, so ``startup()`` leaves the scanner
-unavailable and ``scan()`` returns ALLOW — INERT by default. It is also NOT
-registered in the default proxy pipeline (``src/main.py``), so it is doubly inert
-in a stock deployment. Declared ``MaturityTier.EXPERIMENTAL``. The
-OCR-to-injection decision logic is real, but its efficacy is unproven; enable it
-deliberately by installing pillow + an OCR backend and wiring the scanner in.
+SHIPPED STATE (honesty): the scanner is split into two capability tiers.
+
+  * Deterministic guards — data-URI extraction, base64 decode validation, the
+    DoS size limit, the ``allow_images`` policy gate, and magic-byte
+    format-signature validation — need NO extra dependencies and run in the
+    default distribution. They are real, active, and covered by measured
+    deterministic tests. Enable them opt-in via ``BULWARK_VISION_SCANNING_ENABLED``
+    (default off); once registered they operate on inline ``data:image/...;base64``
+    URIs embedded in text content, with zero OCR backend required.
+
+  * OCR-based image *content* analysis (extract text from pixels → injection
+    scan) is the scanner's headline capability and remains INERT: the [vision]
+    extra (pillow) is not installed in the default distribution and no OCR
+    backend (easyocr / pytesseract) ships — and neither fits the distroless,
+    no-torch runtime — so ``startup()`` leaves ``self._available`` False and the
+    OCR path never runs. Its efficacy is unproven.
+
+Because the eponymous vision capability (OCR) is unprovisioned and unproven, the
+scanner deliberately stays ``MaturityTier.EXPERIMENTAL`` — it must never claim
+BETA/GA on the strength of the deterministic hygiene guards alone. To enable OCR,
+install pillow + an OCR backend deliberately (understanding it will not load in a
+stock distroless image).
 """
 
 from __future__ import annotations
@@ -55,6 +70,27 @@ DATA_URI_PATTERN = re.compile(
 DATA_URI_INLINE_PATTERN = re.compile(
     r"data:image/(png|jpeg|jpg|gif|webp|bmp);base64,([A-Za-z0-9+/=]+)"
 )
+
+
+def _sniff_image_format(image_bytes: bytes) -> str | None:
+    """Return the true image format from magic bytes, or None if unrecognised.
+
+    Zero-dependency signature sniffing — does NOT require pillow/OCR. Used to
+    corroborate the format a ``data:image/<fmt>`` URI *declares* against the
+    bytes it actually carries (MIME-confusion / polyglot / disguised-payload
+    detection). Formats mirror ``DATA_URI_PATTERN`` (jpg normalised to jpeg).
+    """
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if image_bytes[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "webp"
+    if image_bytes.startswith(b"BM"):
+        return "bmp"
+    return None
 
 
 def _vision_deps_available() -> bool:
@@ -171,41 +207,45 @@ class VisionScanner(InputScanner):
         This scanner is called with the full message content. For multimodal
         messages, the content may be a JSON-encoded list of content blocks,
         or the images may already be extracted and available in context.metadata.
+
+        The deterministic guards below (image gathering, ``allow_images`` policy
+        gate, DoS size limit, format-signature validation) run WITHOUT any OCR
+        backend — they are the shipped, tested capability. OCR text extraction is
+        an additional layer that only engages when ``self._available`` is set (an
+        OCR backend loaded during ``startup()``), and is inert by default.
         """
-        if not self._available:
-            return GuardrailResult(verdict=Verdict.ALLOW)
-
-        # Check if multimodal is allowed for this agent
-        multimodal_config = context.metadata.get("multimodal", {})
-        if not multimodal_config.get("allow_images", True):
-            # Check if there are images in the request
-            images = context.metadata.get("image_contents", [])
-            if images:
-                return GuardrailResult(
-                    verdict=Verdict.BLOCK,
-                    events=[
-                        SecurityEvent(
-                            tenant_id=context.tenant_id,
-                            agent_id=context.agent_id,
-                            verdict=Verdict.BLOCK,
-                            category=ThreatCategory.POLICY_VIOLATION,
-                            description="Images not allowed for this agent",
-                            source="ml_vision_scanner",
-                            severity="medium",
-                        )
-                    ],
-                )
-
-        # Get images from context (pre-extracted by proxy route)
+        # Gather images: pre-extracted by the proxy route, else inline data URIs
+        # embedded in the text content. No OCR/pillow required for either path.
         image_contents = context.metadata.get("image_contents", [])
         if not image_contents:
-            # Try to extract from content (base64 data URIs in text)
             image_contents = self._extract_data_uris(content)
 
         if not image_contents:
+            # No images anywhere — nothing for this scanner to do.
             return GuardrailResult(verdict=Verdict.ALLOW)
 
-        # Process each image
+        # Policy gate (deterministic): images present but disallowed for this agent.
+        multimodal_config = context.metadata.get("multimodal", {})
+        if not multimodal_config.get("allow_images", True):
+            return GuardrailResult(
+                verdict=Verdict.BLOCK,
+                events=[
+                    SecurityEvent(
+                        tenant_id=context.tenant_id,
+                        agent_id=context.agent_id,
+                        verdict=Verdict.BLOCK,
+                        category=ThreatCategory.POLICY_VIOLATION,
+                        description=(
+                            f"Images not allowed for this agent "
+                            f"({len(image_contents)} detected)"
+                        ),
+                        source="ml_vision_scanner",
+                        severity="medium",
+                    )
+                ],
+            )
+
+        # Process each image (deterministic checks always; OCR only if available)
         all_events: list[SecurityEvent] = []
         for i, image_data in enumerate(image_contents):
             events = await self._scan_image(image_data, context, index=i)
@@ -274,8 +314,17 @@ class VisionScanner(InputScanner):
             )
             return events
 
-        # OCR extraction
-        if context.metadata.get("multimodal", {}).get("ocr_scan", True):
+        # Format-signature validation (deterministic, zero-dep): when the source
+        # is a data URI declaring a format, corroborate it against the real magic
+        # bytes. A mismatch — or bytes that carry no valid image signature at all
+        # — flags MIME confusion / a payload disguised as an image.
+        fmt_event = self._check_format_signature(image_data, image_bytes, context, index)
+        if fmt_event is not None:
+            events.append(fmt_event)
+
+        # OCR extraction (only engages when an OCR backend loaded at startup;
+        # inert by default in the shipped distroless / no-torch distribution).
+        if self._available and context.metadata.get("multimodal", {}).get("ocr_scan", True):
             loop = asyncio.get_event_loop()
             extracted_text = await loop.run_in_executor(
                 self._executor, self._ocr_extract, image_bytes
@@ -294,6 +343,61 @@ class VisionScanner(InputScanner):
                 events.extend(injection_events)
 
         return events
+
+    def _check_format_signature(
+        self,
+        image_data: str | bytes,
+        image_bytes: bytes,
+        context: ScanContext,
+        index: int,
+    ) -> SecurityEvent | None:
+        """Corroborate a data URI's declared format against real magic bytes.
+
+        Only fires when ``image_data`` is a ``data:image/<fmt>`` URI (i.e. a
+        format was explicitly declared). Raw base64 without a declaration makes
+        no claim to contradict, so it is skipped to avoid false positives.
+
+        Returns a WARN event on mismatch / unrecognised signature, else None.
+        """
+        if not isinstance(image_data, str):
+            return None
+        match = DATA_URI_PATTERN.match(image_data)
+        if match is None:
+            return None
+
+        declared = match.group(1).lower()
+        if declared == "jpg":
+            declared = "jpeg"
+
+        actual = _sniff_image_format(image_bytes)
+        if actual == declared:
+            return None
+
+        if actual is None:
+            description = (
+                f"Image #{index} declares '{declared}' but carries no valid image "
+                f"signature (possible disguised payload)"
+            )
+        else:
+            description = (
+                f"Image #{index} format mismatch: declared '{declared}', "
+                f"actual '{actual}' (possible MIME confusion / polyglot)"
+            )
+
+        return SecurityEvent(
+            tenant_id=context.tenant_id,
+            agent_id=context.agent_id,
+            verdict=Verdict.WARN,
+            category=ThreatCategory.POLICY_VIOLATION,
+            description=description,
+            source="ml_vision_scanner",
+            severity="low",
+            metadata={
+                "image_index": index,
+                "declared_format": declared,
+                "actual_format": actual,
+            },
+        )
 
     def _decode_image(self, image_data: str | bytes) -> bytes:
         """Decode image from base64 or data URI."""
@@ -409,9 +513,10 @@ class VisionScanner(InputScanner):
         return results[:5]  # Limit to 5 images per message
 
     async def health(self) -> bool:
-        if not settings.ml_enabled:
-            return True
-        return self._available
+        # The deterministic guards (policy gate, DoS size limit, data-URI
+        # extraction, format-signature validation) always operate, so the scanner
+        # is healthy regardless of whether the optional OCR backend loaded.
+        return True
 
     async def shutdown(self) -> None:
         self._executor.shutdown(wait=False)

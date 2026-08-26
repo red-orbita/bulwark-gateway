@@ -201,6 +201,17 @@ class Settings(BaseSettings):
     hallucination_scanning_enabled: bool = False
     grounding_scanning_enabled: bool = False
 
+    # Multimodal (image) input scanning (opt-in, default off). When enabled the
+    # VisionScanner (INPUT_ASYNC, fire-and-forget) is registered. Its shipped,
+    # tested capability is a set of ZERO-dependency deterministic guards over
+    # inline `data:image/...;base64` URIs found in text content — the
+    # `allow_images` policy gate, the DoS size limit, base64 validation, and
+    # magic-byte format-signature validation (MIME-confusion detection). The
+    # OCR-based image-content layer stays INERT unless pillow + an OCR backend
+    # are installed (they do not ship in the distroless / no-torch image), so the
+    # scanner remains MaturityTier.EXPERIMENTAL. No LLM call, off the hot path.
+    vision_scanning_enabled: bool = False
+
     # mTLS (inter-service communication: proxy ↔ admin)
     # When enabled, internal endpoints require a valid client certificate
     # signed by the trusted CA. External endpoints continue using JWT/API key.

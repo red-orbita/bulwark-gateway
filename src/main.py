@@ -258,6 +258,17 @@ async def lifespan(app: FastAPI):
         pipeline.register(GroundingScanner())
         await logger.ainfo("grounding_scanner_registered")
 
+    # Register multimodal Vision Scanner (opt-in, default off). INPUT_ASYNC
+    # (fire-and-forget). Its shipped capability is a set of zero-dependency
+    # deterministic guards over inline data:image URIs in text (policy gate, DoS
+    # size limit, base64 + magic-byte format validation) — no OCR/pillow needed.
+    # The OCR content-analysis layer stays inert unless an OCR backend is
+    # installed, so enabling the flag alone carries no hot-path cost.
+    if settings.vision_scanning_enabled:
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+        pipeline.register(VisionScanner())
+        await logger.ainfo("vision_scanner_registered")
+
     # Discover and register third-party plugins
     if settings.scanners_dir.exists():
         discovered = discover_all_scanners(settings.scanners_dir)
