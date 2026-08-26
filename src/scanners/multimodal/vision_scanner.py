@@ -13,9 +13,18 @@ Pipeline:
 
 Dependencies (optional):
   pip install bulwark-gateway[vision]
-  # Installs: pillow, easyocr (or pytesseract)
+  # Installs pillow (the [vision] extra); an OCR backend (easyocr or
+  # pytesseract) must be installed separately.
 
 Default mode: async (fire-and-forget enrichment)
+
+SHIPPED STATE (honesty): the [vision] extra is not installed in the default
+distribution and no OCR backend ships, so ``startup()`` leaves the scanner
+unavailable and ``scan()`` returns ALLOW — INERT by default. It is also NOT
+registered in the default proxy pipeline (``src/main.py``), so it is doubly inert
+in a stock deployment. Declared ``MaturityTier.EXPERIMENTAL``. The
+OCR-to-injection decision logic is real, but its efficacy is unproven; enable it
+deliberately by installing pillow + an OCR backend and wiring the scanner in.
 """
 
 from __future__ import annotations

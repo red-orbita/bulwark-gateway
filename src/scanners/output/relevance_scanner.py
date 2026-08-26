@@ -9,6 +9,16 @@ question and the LLM response. Low relevance indicates potential:
 
 Model: Sentence embedding model (e.g., all-MiniLM-L6-v2, ONNX)
 Expected path: models/sentence-embeddings/model.onnx
+
+SHIPPED STATE (honesty): this ``sentence-embeddings`` ONNX model is NOT
+provisioned by default (no ``model_manifest.json`` entry, no download path in
+``scripts/download-models.py``), so the scanner is INERT — ``scan()`` returns
+ALLOW unconditionally until a model is loaded. Declared
+``MaturityTier.EXPERIMENTAL``; not registered in the default proxy pipeline
+(SDK-accessible only). The cosine-similarity decision logic is real and
+unit-tested against a mocked model, but its efficacy is unproven until a model is
+provisioned. Provision it like the injection / toxicity models (export -> ONNX ->
+manifest + download-models.py -> real forward-pass tests). No LLM call is involved.
 """
 
 from __future__ import annotations

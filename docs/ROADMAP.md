@@ -403,11 +403,21 @@ ml-gpu = [
 
 ---
 
-## Phase 3: Multilingual + Multimodal Support [COMPLETE]
+## Phase 3: Multilingual + Multimodal Support [PARTIALLY SHIPPED]
 
 **Goal**: Detect attacks in any language and modality.
 
 **Competitive gap**: Lakera supports 100+ languages and image-based attacks.
+
+> **Status (honesty — corrected).** The **language detector** (heuristic; degrades
+> without the optional `lingua` backend) and the **multilingual regex patterns**
+> ship and are wired. The **vision scanner** (§3.4) is **inert by default**: the
+> `[vision]` extra (pillow) is not installed in the default distribution, no OCR
+> backend ships, and the scanner is **not registered** in the default proxy
+> pipeline (`src/main.py`) — so it is doubly inert. Its OCR-to-injection logic is
+> real but unproven; it is declared `MaturityTier.EXPERIMENTAL`. Enable it
+> deliberately by installing pillow + an OCR backend and wiring it in.
+
 
 ### 3.1 Language Detection
 
@@ -532,11 +542,34 @@ vision = [
 
 ---
 
-## Phase 4: Hallucination Detection + Structured Output Validation [COMPLETE]
+## Phase 4: Hallucination Detection + Structured Output Validation [PARTIALLY SHIPPED]
 
 **Goal**: Detect when LLM outputs are factually incorrect or don't match expected schema.
 
 **Competitive gap**: NeMo (self-check facts/hallucination), Guardrails AI (Pydantic validation), LLM Guard (FactualConsistency).
+
+> **Status (honesty — corrected).** Only the **schema validator** ships as a
+> functional capability: it is model-free, `jsonschema` is a core runtime
+> dependency, its validation is deterministic and unit-tested, and it is declared
+> `MaturityTier.BETA`. It is **not** wired into the default proxy pipeline —
+> enable it deliberately per agent.
+>
+> The three model-backed scanners — **hallucination** (`nli-classifier`),
+> **grounding** (`nli-classifier`, shared), and **relevance**
+> (`sentence-embeddings`) — carry real decision logic (NLI entailment / cosine
+> similarity + claim extraction) but their ONNX models are **NOT provisioned**:
+> no `config/model_manifest.json` entry, no download path in
+> `scripts/download-models.py`, only mock-based unit tests. In the default
+> distribution they never load a model and `scan()` returns ALLOW — they are
+> **inert**, declared `MaturityTier.EXPERIMENTAL`, and not registered in the
+> default proxy pipeline (SDK-accessible only). This is the same honesty bar as
+> §2.5/2.6: **no capability ships without a real model + real-inference tests.**
+> To promote any of them, follow the `injection-classifier` / `toxicity` path:
+> source/export the model to ONNX → add it to `scripts/download-models.py` +
+> `config/model_manifest.json` → add real forward-pass tests (gated on
+> `ml_dependencies_available()` + `model_files_present`). None of these require an
+> LLM call in the hot path.
+
 
 ### 4.1 Hallucination Detector
 

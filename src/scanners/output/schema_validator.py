@@ -10,6 +10,15 @@ Policy configuration per agent:
   output_validation:
     schema: schemas/extraction_output.json
     on_schema_fail: repair   # block | warn | repair
+
+SHIPPED STATE (honesty): unlike the NLI / embedding output scanners, this one is
+model-free and FUNCTIONAL in every distribution — ``jsonschema`` is a core runtime
+dependency (see pyproject.toml). Its validation is deterministic and unit-tested,
+so it is declared ``MaturityTier.BETA`` (real logic + tests; efficacy not yet
+benchmark-validated, and it is not wired into the default proxy pipeline — enable
+it deliberately per agent). The optional ``repair`` mode uses the ``json_repair``
+package when it is installed (it is not a declared dependency) and otherwise falls
+back to a conservative regex repair (trailing commas / single quotes).
 """
 
 from __future__ import annotations
@@ -69,7 +78,7 @@ class SchemaValidator(OutputScanner):
             version="1.0.0",
             scanner_type=ScannerType.OUTPUT_BLOCKING,
             description="JSON Schema validation for structured LLM outputs",
-            maturity=MaturityTier.EXPERIMENTAL,
+            maturity=MaturityTier.BETA,
             author="bulwark",
             priority=10,
         )

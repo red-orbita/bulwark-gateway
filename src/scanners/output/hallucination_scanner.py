@@ -10,8 +10,21 @@ Strategies:
   2. Claim extraction + per-claim verification
   3. Configurable: threshold, per-agent enable
 
-Model: DeBERTa-v3 fine-tuned for NLI (same model as topic classifier)
+Model: DeBERTa-v3-style NLI classifier (3-class: contradiction / neutral / entailment).
 Expected path: models/nli-classifier/model.onnx
+
+SHIPPED STATE (honesty — read before relying on this scanner):
+  This model is NOT provisioned in the default distribution. It has no entry in
+  ``config/model_manifest.json`` and no download path in
+  ``scripts/download-models.py``, so ``startup()`` never loads a model and
+  ``scan()`` returns ALLOW unconditionally — the scanner is INERT by default. It
+  is declared ``MaturityTier.EXPERIMENTAL`` and is not registered in the default
+  proxy pipeline (SDK-accessible only). The decision logic below (claim
+  extraction + entailment thresholds) is real and unit-tested against a mocked
+  model, but its efficacy is unproven until a model is provisioned. To make it
+  live, follow the injection-classifier / toxicity path: source/export an NLI
+  model to ONNX -> add it to ``download-models.py`` + ``model_manifest.json`` ->
+  add real forward-pass tests. No LLM call is involved (pure ONNX; hot-path safe).
 """
 
 from __future__ import annotations

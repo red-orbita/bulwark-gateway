@@ -20,6 +20,11 @@ from src.scanners.builtin.regex_scanner import RegexInputScanner
 from src.scanners.builtin.tool_policy_scanner import ToolPolicyScanner
 from src.scanners.ml.injection_classifier import InjectionClassifier
 from src.scanners.ml.toxicity_scanner import ToxicityScanner
+from src.scanners.multimodal.vision_scanner import VisionScanner
+from src.scanners.output.grounding_scanner import GroundingScanner
+from src.scanners.output.hallucination_scanner import HallucinationScanner
+from src.scanners.output.relevance_scanner import RelevanceScanner
+from src.scanners.output.schema_validator import SchemaValidator
 from src.scanners.pipeline import ScannerPipeline
 from src.scanners.protocol import (
     InputScanner,
@@ -53,12 +58,31 @@ def test_default_maturity_is_experimental():
         # Beta — real model + tests, efficacy not yet benchmark-validated
         (InjectionClassifier, MaturityTier.BETA),
         (ToxicityScanner, MaturityTier.BETA),
+        # Beta — model-free, deterministic, tested; jsonschema is a core dep.
+        # Not wired into the default proxy pipeline (opt-in per agent).
+        (SchemaValidator, MaturityTier.BETA),
+        # Experimental — real decision logic but the required model/deps are NOT
+        # provisioned by default, so these scanners are INERT (return ALLOW) in
+        # the shipped distribution. They must never masquerade as GA/BETA until a
+        # model is provisioned + real-inference tests land (see ROADMAP §3.4/§4).
+        (HallucinationScanner, MaturityTier.EXPERIMENTAL),
+        (GroundingScanner, MaturityTier.EXPERIMENTAL),
+        (RelevanceScanner, MaturityTier.EXPERIMENTAL),
+        (VisionScanner, MaturityTier.EXPERIMENTAL),
     ],
 )
 def test_declared_maturity_tiers(scanner_cls, expected):
     """Each shipped scanner declares its approved maturity tier."""
     scanner = scanner_cls()
     assert scanner.info.maturity is expected
+
+
+def test_unprovisioned_model_scanners_are_never_ga():
+    """Scanners whose ONNX model / native deps are NOT provisioned in the default
+    distribution must stay EXPERIMENTAL — they are inert (return ALLOW) until a
+    model is provisioned, so a GA/BETA claim would overstate real coverage."""
+    for cls in (HallucinationScanner, GroundingScanner, RelevanceScanner, VisionScanner):
+        assert cls().info.maturity is MaturityTier.EXPERIMENTAL
 
 
 def test_ml_scanners_are_never_ga():

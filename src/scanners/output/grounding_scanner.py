@@ -8,7 +8,16 @@ each output claim is supported by the retrieved chunks.
 Designed for RAG pipelines where the LLM should only output information
 that can be traced back to the source documents.
 
-Model: Same NLI model as HallucinationScanner (shared)
+Model: shares the ``nli-classifier`` ONNX model with HallucinationScanner.
+Expected path: models/nli-classifier/model.onnx
+
+SHIPPED STATE (honesty): that model is NOT provisioned by default (no
+``model_manifest.json`` entry, no download path), so this scanner is INERT —
+``scan()`` returns ALLOW unconditionally until a model is loaded. Declared
+``MaturityTier.EXPERIMENTAL``; not registered in the default proxy pipeline
+(SDK-accessible only). Provision it exactly like the injection / toxicity models
+(export NLI -> ONNX -> manifest + download-models.py -> real forward-pass tests).
+No LLM call is involved.
 """
 
 from __future__ import annotations
