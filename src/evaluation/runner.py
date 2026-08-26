@@ -11,7 +11,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,6 +22,71 @@ from src.scanners.protocol import ScanContext
 from .attacks import Attack
 
 logger = logging.getLogger(__name__)
+
+
+# Decision policies. A guardrail's verdict is not binary: WARN forwards the
+# request (annotated) while BLOCK/REDACT stop or rewrite it. Collapsing the two
+# into one "detected" bucket (as the legacy detection_rate does) overstates
+# enforcement — a WARN does not protect the backend. We therefore score the
+# pipeline under two explicit policies so precision/recall are honest:
+#   * "block": only BLOCK/REDACT count as a positive (enforced) decision.
+#   * "flag":  BLOCK/REDACT *or* WARN count as a positive (surfaced) decision.
+def _is_block(verdict: Verdict) -> bool:
+    """True if the verdict actually stops/rewrites the request (enforced)."""
+    return verdict in (Verdict.BLOCK, Verdict.REDACT)
+
+
+def _is_flag(verdict: Verdict) -> bool:
+    """True if the verdict is anything other than a clean allow (surfaced)."""
+    return verdict in (Verdict.BLOCK, Verdict.REDACT, Verdict.WARN)
+
+
+@dataclass
+class ConfusionMatrix:
+    """Confusion matrix + derived metrics for one decision policy.
+
+    Malicious samples are the positive class, benign samples the negative class.
+    Derived metrics are stored as fields (not properties) so ``dataclasses.asdict``
+    serializes them for the admin API without a custom encoder.
+    """
+
+    policy: str          # "block" or "flag"
+    tp: int              # malicious correctly acted on
+    fp: int              # benign incorrectly acted on
+    tn: int              # benign correctly allowed
+    fn: int              # malicious that bypassed (missed)
+    precision: float
+    recall: float
+    f1: float
+    accuracy: float
+    specificity: float   # true-negative rate
+    fpr: float           # false-positive rate
+
+    @classmethod
+    def from_counts(cls, policy: str, tp: int, fp: int, tn: int, fn: int) -> ConfusionMatrix:
+        """Build a matrix, computing precision/recall/F1 with safe zero-guards.
+
+        When a denominator is zero the metric is reported as 0.0 (rather than
+        raising or reporting a misleading 1.0) — e.g. precision is 0.0 when the
+        pipeline made no positive predictions at all.
+        """
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        total = tp + fp + tn + fn
+        accuracy = (tp + tn) / total if total > 0 else 0.0
+        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+        return cls(
+            policy=policy,
+            tp=tp, fp=fp, tn=tn, fn=fn,
+            precision=round(precision, 4),
+            recall=round(recall, 4),
+            f1=round(f1, 4),
+            accuracy=round(accuracy, 4),
+            specificity=round(specificity, 4),
+            fpr=round(fpr, 4),
+        )
 
 
 @dataclass
@@ -72,6 +137,15 @@ class EvaluationReport:
     category_breakdown: dict[str, dict[str, Any]] = field(default_factory=dict)
     missed_attacks: list[MissedAttack] = field(default_factory=list)
     attack_log: list[AttackLogEntry] = field(default_factory=list)
+    # Confusion-matrix metrics under both decision policies (None until computed
+    # by _compute_metrics; optional so legacy constructors keep working).
+    confusion_block: ConfusionMatrix | None = None
+    confusion_flag: ConfusionMatrix | None = None
+    # Verdict distribution (allow/warn/block/redact counts) per sample class, so
+    # a reviewer can see *how* the pipeline decided, not just the rolled-up rate.
+    malicious_verdict_dist: dict[str, int] = field(default_factory=dict)
+    benign_verdict_dist: dict[str, int] = field(default_factory=dict)
+    benign_total: int = 0
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -89,6 +163,7 @@ class _SingleResult:
     guardrail_description: str | None = None
     severity: str | None = None
     source: str | None = None
+    is_malicious: bool = True
 
 
 class EvaluationRunner:
@@ -176,8 +251,7 @@ class EvaluationRunner:
             ))
 
         # Run benign samples to measure false positives
-        false_positives = 0
-        benign_latencies: list[float] = []
+        benign_results: list[_SingleResult] = []
 
         if benign_samples:
             for sample in benign_samples:
@@ -189,11 +263,15 @@ class EvaluationRunner:
                     difficulty="easy",
                 )
                 verdict, latency, _ = await self.run_single(benign_attack)
-                benign_latencies.append(latency)
-                if verdict in (Verdict.BLOCK, Verdict.WARN):
-                    false_positives += 1
+                benign_results.append(_SingleResult(
+                    attack=benign_attack,
+                    actual_verdict=verdict,
+                    latency_ms=latency,
+                    detected=_is_flag(verdict),
+                    is_malicious=False,
+                ))
 
-        return self._compute_metrics(results, false_positives, len(benign_samples or []))
+        return self._compute_metrics(results, benign_results)
 
     async def run_single(self, attack: Attack) -> tuple[Verdict, float, list]:
         """Run a single attack through the pipeline.
@@ -221,36 +299,69 @@ class EvaluationRunner:
     def _compute_metrics(
         self,
         results: list[_SingleResult],
-        false_positives: int,
-        benign_count: int,
+        benign_results: list[_SingleResult],
     ) -> EvaluationReport:
-        """Compute evaluation metrics from raw results.
+        """Compute evaluation metrics from raw attack + benign results.
 
         Args:
-            results: List of individual attack results.
-            false_positives: Number of benign samples incorrectly flagged.
-            benign_count: Total number of benign samples tested.
+            results: Individual malicious-attack results (positive class).
+            benign_results: Individual benign-sample results (negative class).
 
         Returns:
-            Complete EvaluationReport.
+            Complete EvaluationReport including confusion matrices under both the
+            "block" and "flag" decision policies.
         """
         total = len(results)
+        benign_count = len(benign_results)
+
+        # --- Confusion matrices (block vs flag policy) ---------------------
+        # Positive class = malicious. tp/fn come from attacks, fp/tn from benign.
+        tp_block = sum(1 for r in results if _is_block(r.actual_verdict))
+        fn_block = total - tp_block
+        fp_block = sum(1 for r in benign_results if _is_block(r.actual_verdict))
+        tn_block = benign_count - fp_block
+
+        tp_flag = sum(1 for r in results if _is_flag(r.actual_verdict))
+        fn_flag = total - tp_flag
+        fp_flag = sum(1 for r in benign_results if _is_flag(r.actual_verdict))
+        tn_flag = benign_count - fp_flag
+
+        confusion_block = ConfusionMatrix.from_counts("block", tp_block, fp_block, tn_block, fn_block)
+        confusion_flag = ConfusionMatrix.from_counts("flag", tp_flag, fp_flag, tn_flag, fn_flag)
+
+        # --- Verdict distributions ----------------------------------------
+        malicious_verdict_dist: dict[str, int] = {}
+        for r in results:
+            key = r.actual_verdict.value
+            malicious_verdict_dist[key] = malicious_verdict_dist.get(key, 0) + 1
+        benign_verdict_dist: dict[str, int] = {}
+        for r in benign_results:
+            key = r.actual_verdict.value
+            benign_verdict_dist[key] = benign_verdict_dist.get(key, 0) + 1
+
         if total == 0:
             return EvaluationReport(
                 total_attacks=0,
                 detected=0,
                 missed=0,
-                false_positives=false_positives,
+                false_positives=fp_flag,
                 detection_rate=0.0,
-                false_positive_rate=0.0,
+                false_positive_rate=confusion_flag.fpr,
                 bypass_rate=0.0,
                 latency_p50=0.0,
                 latency_p95=0.0,
                 latency_p99=0.0,
+                confusion_block=confusion_block,
+                confusion_flag=confusion_flag,
+                malicious_verdict_dist=malicious_verdict_dist,
+                benign_verdict_dist=benign_verdict_dist,
+                benign_total=benign_count,
             )
 
-        detected = sum(1 for r in results if r.detected)
-        missed = total - detected
+        # Legacy "detected" == flag policy (BLOCK/REDACT/WARN) for back-compat.
+        detected = tp_flag
+        missed = fn_flag
+        false_positives = fp_flag
 
         # Latency percentiles
         latencies = sorted(r.latency_ms for r in results)
@@ -271,6 +382,7 @@ class EvaluationRunner:
         for cat, cat_results in categories_seen.items():
             cat_total = len(cat_results)
             cat_detected = sum(1 for r in cat_results if r.detected)
+            cat_blocked = sum(1 for r in cat_results if _is_block(r.actual_verdict))
             cat_latencies = sorted(r.latency_ms for r in cat_results)
 
             # Per-difficulty breakdown
@@ -288,15 +400,16 @@ class EvaluationRunner:
             category_breakdown[cat] = {
                 "total": cat_total,
                 "detected": cat_detected,
+                "blocked": cat_blocked,
                 "missed": cat_total - cat_detected,
                 "detection_rate": cat_detected / cat_total if cat_total > 0 else 0.0,
+                "block_rate": cat_blocked / cat_total if cat_total > 0 else 0.0,
                 "latency_p50": self._percentile(cat_latencies, 50),
                 "latency_p95": self._percentile(cat_latencies, 95),
                 "by_difficulty": difficulty_breakdown,
             }
 
         detection_rate = detected / total if total > 0 else 0.0
-        fp_rate = false_positives / benign_count if benign_count > 0 else 0.0
         bypass_rate = missed / total if total > 0 else 0.0
 
         # Collect missed attacks (cap at 50 to avoid huge responses)
@@ -334,7 +447,7 @@ class EvaluationRunner:
             missed=missed,
             false_positives=false_positives,
             detection_rate=detection_rate,
-            false_positive_rate=fp_rate,
+            false_positive_rate=confusion_flag.fpr,
             bypass_rate=bypass_rate,
             latency_p50=p50,
             latency_p95=p95,
@@ -342,6 +455,11 @@ class EvaluationRunner:
             category_breakdown=category_breakdown,
             missed_attacks=missed_details,
             attack_log=attack_log,
+            confusion_block=confusion_block,
+            confusion_flag=confusion_flag,
+            malicious_verdict_dist=malicious_verdict_dist,
+            benign_verdict_dist=benign_verdict_dist,
+            benign_total=benign_count,
         )
 
     def generate_report(
@@ -381,6 +499,37 @@ class EvaluationRunner:
         lines.append(f"  False Positive Rate:{report.false_positive_rate:.1%}")
         lines.append(f"  Bypass Rate:        {report.bypass_rate:.1%}")
         lines.append("")
+
+        # Detection quality under both decision policies. The "flag" policy counts
+        # a WARN as a catch (surfaced); the "block" policy counts only BLOCK/REDACT
+        # (enforced). Reporting both prevents WARN-inflation of the headline rate.
+        if report.confusion_block is not None and report.confusion_flag is not None:
+            lines.append("  DETECTION QUALITY (benign samples: "
+                         f"{report.benign_total})")
+            lines.append("  " + "-" * 40)
+            header = f"  {'Policy':<10} {'Prec':<8} {'Recall':<8} {'F1':<8} {'FPR':<8}"
+            lines.append(header)
+            for cm in (report.confusion_block, report.confusion_flag):
+                lines.append(
+                    f"  {cm.policy:<10} {cm.precision:<8.3f} {cm.recall:<8.3f} "
+                    f"{cm.f1:<8.3f} {cm.fpr:<8.3f}"
+                )
+                lines.append(
+                    f"    └─ TP={cm.tp} FP={cm.fp} TN={cm.tn} FN={cm.fn}"
+                )
+            lines.append("")
+            if report.malicious_verdict_dist:
+                dist = ", ".join(
+                    f"{k}={v}" for k, v in sorted(report.malicious_verdict_dist.items())
+                )
+                lines.append(f"  Malicious verdicts: {dist}")
+            if report.benign_verdict_dist:
+                dist = ", ".join(
+                    f"{k}={v}" for k, v in sorted(report.benign_verdict_dist.items())
+                )
+                lines.append(f"  Benign verdicts:    {dist}")
+            lines.append("")
+
         lines.append("  LATENCY (ms)")
         lines.append("  " + "-" * 40)
         lines.append(f"  P50:  {report.latency_p50:.2f} ms")
@@ -433,6 +582,17 @@ class EvaluationRunner:
             "detection_rate": round(report.detection_rate, 4),
             "false_positive_rate": round(report.false_positive_rate, 4),
             "bypass_rate": round(report.bypass_rate, 4),
+            "benign_total": report.benign_total,
+            "confusion_block": (
+                asdict(report.confusion_block)
+                if report.confusion_block is not None else None
+            ),
+            "confusion_flag": (
+                asdict(report.confusion_flag)
+                if report.confusion_flag is not None else None
+            ),
+            "malicious_verdict_dist": report.malicious_verdict_dist,
+            "benign_verdict_dist": report.benign_verdict_dist,
             "latency": {
                 "p50_ms": round(report.latency_p50, 2),
                 "p95_ms": round(report.latency_p95, 2),

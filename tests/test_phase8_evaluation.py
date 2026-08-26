@@ -317,3 +317,165 @@ class TestDatasets:
                 assert indicator.lower() not in sample.lower(), (
                     f"Benign sample contains attack pattern: {sample[:50]}..."
                 )
+
+
+# =============================================================================
+# Confusion-matrix metrics (WARN separated from BLOCK)
+# =============================================================================
+
+
+class _ScriptedPipeline:
+    """Pipeline stub returning a scripted verdict per payload.
+
+    Lets confusion-matrix tests assert exact TP/FP/TN/FN without depending on
+    the behaviour of any real scanner.
+    """
+
+    def __init__(self, verdict_map: dict[str, Verdict]) -> None:
+        self._verdict_map = verdict_map
+
+    async def run_input_blocking(self, content: str, context):  # noqa: ANN001
+        from src.models import GuardrailResult
+
+        return GuardrailResult(verdict=self._verdict_map[content], events=[])
+
+
+def _mk_attack(payload: str):
+    from src.evaluation.attacks import Attack
+
+    return Attack(
+        payload=payload,
+        category=ThreatCategory.PROMPT_INJECTION,
+        technique="scripted",
+        expected_verdict=Verdict.BLOCK,
+        difficulty="easy",
+    )
+
+
+class TestConfusionMetrics:
+    """The evaluation must separate WARN (surfaced) from BLOCK (enforced)."""
+
+    def test_confusion_matrix_math(self):
+        from src.evaluation.runner import ConfusionMatrix
+
+        cm = ConfusionMatrix.from_counts("block", tp=8, fp=2, tn=18, fn=2)
+        assert cm.precision == 0.8       # 8 / (8 + 2)
+        assert cm.recall == 0.8          # 8 / (8 + 2)
+        assert cm.f1 == 0.8
+        assert cm.accuracy == round(26 / 30, 4)
+        assert cm.specificity == 0.9     # 18 / (18 + 2)
+        assert cm.fpr == 0.1             # 2 / (2 + 18)
+
+    def test_confusion_matrix_zero_guards(self):
+        from src.evaluation.runner import ConfusionMatrix
+
+        # No samples at all — must not divide by zero.
+        cm = ConfusionMatrix.from_counts("flag", tp=0, fp=0, tn=0, fn=0)
+        assert cm.precision == 0.0
+        assert cm.recall == 0.0
+        assert cm.f1 == 0.0
+        assert cm.accuracy == 0.0
+
+    def test_policy_helpers_separate_warn_from_block(self):
+        from src.evaluation.runner import _is_block, _is_flag
+
+        assert _is_block(Verdict.BLOCK) is True
+        assert _is_block(Verdict.REDACT) is True
+        assert _is_block(Verdict.WARN) is False   # WARN is NOT enforcement
+        assert _is_block(Verdict.ALLOW) is False
+
+        assert _is_flag(Verdict.WARN) is True      # WARN is surfaced
+        assert _is_flag(Verdict.BLOCK) is True
+        assert _is_flag(Verdict.ALLOW) is False
+
+    @pytest.mark.asyncio
+    async def test_warn_does_not_inflate_block_recall(self):
+        """A malicious prompt that only WARNs is a catch under 'flag' but a
+        bypass under 'block' — the core honesty property."""
+        from src.evaluation.runner import EvaluationRunner
+
+        attacks = [_mk_attack("warns_only")]
+        pipeline = _ScriptedPipeline({"warns_only": Verdict.WARN})
+        runner = EvaluationRunner(pipeline=pipeline)
+
+        report = await runner.run_evaluation(attacks)
+
+        assert report.confusion_flag.recall == 1.0   # WARN counts as surfaced
+        assert report.confusion_block.recall == 0.0   # WARN is NOT enforced
+        assert report.malicious_verdict_dist == {"warn": 1}
+
+    @pytest.mark.asyncio
+    async def test_confusion_counts_end_to_end(self):
+        from src.evaluation.runner import EvaluationRunner
+
+        attacks = [
+            _mk_attack("atk_block_1"),
+            _mk_attack("atk_block_2"),
+            _mk_attack("atk_warn"),
+            _mk_attack("atk_allow"),
+        ]
+        benign = ["ben_allow", "ben_warn", "ben_block"]
+        verdict_map = {
+            "atk_block_1": Verdict.BLOCK,
+            "atk_block_2": Verdict.BLOCK,
+            "atk_warn": Verdict.WARN,
+            "atk_allow": Verdict.ALLOW,
+            "ben_allow": Verdict.ALLOW,
+            "ben_warn": Verdict.WARN,
+            "ben_block": Verdict.BLOCK,
+        }
+        runner = EvaluationRunner(pipeline=_ScriptedPipeline(verdict_map))
+        report = await runner.run_evaluation(attacks, benign_samples=benign)
+
+        # Block policy: only BLOCK/REDACT are positive predictions.
+        cb = report.confusion_block
+        assert (cb.tp, cb.fp, cb.tn, cb.fn) == (2, 1, 2, 2)
+        assert cb.precision == round(2 / 3, 4)
+        assert cb.recall == 0.5
+
+        # Flag policy: BLOCK/REDACT or WARN are positive predictions.
+        cf = report.confusion_flag
+        assert (cf.tp, cf.fp, cf.tn, cf.fn) == (3, 2, 1, 1)
+        assert cf.precision == 0.6
+        assert cf.recall == 0.75
+
+        # Verdict distributions expose *how* each class was decided.
+        assert report.malicious_verdict_dist == {"block": 2, "warn": 1, "allow": 1}
+        assert report.benign_verdict_dist == {"allow": 1, "warn": 1, "block": 1}
+
+        # Legacy fields remain flag-policy for back-compat.
+        assert report.detected == 3
+        assert report.false_positives == 2
+        assert report.detection_rate == 0.75
+        assert report.benign_total == 3
+
+    @pytest.mark.asyncio
+    async def test_json_report_includes_confusion(self):
+        import json
+
+        from src.evaluation.runner import EvaluationRunner
+
+        attacks = [_mk_attack("x")]
+        runner = EvaluationRunner(pipeline=_ScriptedPipeline({"x": Verdict.BLOCK, "b": Verdict.ALLOW}))
+        report = await runner.run_evaluation(attacks, benign_samples=["b"])
+
+        parsed = json.loads(runner.generate_report(report, format="json"))
+        assert parsed["confusion_block"]["precision"] == 1.0
+        assert parsed["confusion_block"]["recall"] == 1.0
+        assert parsed["confusion_flag"]["tp"] == 1
+        assert parsed["benign_total"] == 1
+        assert parsed["malicious_verdict_dist"] == {"block": 1}
+        assert parsed["benign_verdict_dist"] == {"allow": 1}
+
+    @pytest.mark.asyncio
+    async def test_text_report_shows_both_policies(self):
+        from src.evaluation.runner import EvaluationRunner
+
+        attacks = [_mk_attack("x")]
+        runner = EvaluationRunner(pipeline=_ScriptedPipeline({"x": Verdict.WARN, "b": Verdict.ALLOW}))
+        report = await runner.run_evaluation(attacks, benign_samples=["b"])
+
+        text = runner.generate_report(report, format="text")
+        assert "DETECTION QUALITY" in text
+        assert "block" in text
+        assert "flag" in text
