@@ -218,7 +218,19 @@ class QueryTranslator:
 
         translated = re.sub(r"\?", replace_placeholder, translated)
 
-        # Convert LIKE with % → ILIKE for case-insensitive (optional, keep LIKE for now)
+        # Convert LIKE → ILIKE so SQLite's case-INSENSITIVE LIKE semantics are
+        # preserved on PostgreSQL. Queries in this codebase are authored in the
+        # SQLite dialect, where `col LIKE '%foo%'` matches case-insensitively
+        # (SQLite LIKE is case-insensitive for ASCII by default). PostgreSQL LIKE
+        # is case-SENSITIVE, so a verbatim translation would silently drop rows
+        # (e.g. a tenant/audit search for "Acme" missing "acme") — a real
+        # behavioural divergence between the two backends. ILIKE restores the
+        # case-insensitive contract the query authors expect.
+        #
+        # The \bLIKE\b boundary makes this idempotent: it never matches inside an
+        # existing "ILIKE" (no word boundary between the leading "I" and "LIKE"),
+        # and leaves identifiers such as `like_count` or `dislike` untouched.
+        translated = re.sub(r"\bLIKE\b", "ILIKE", translated, flags=re.IGNORECASE)
 
         # Convert datetime function differences
         # SQLite: datetime('now') → PostgreSQL: NOW()
