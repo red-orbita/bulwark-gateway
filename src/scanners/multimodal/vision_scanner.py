@@ -1,51 +1,31 @@
 """
-Vision Scanner — Detects prompt injection and harmful content in images.
+Vision Scanner — OCR-based image content analysis (EXPERIMENTAL).
 
-Attack vectors addressed:
-  1. Text-in-image injection (OCR extraction → text scanner)
-  2. Steganography (hidden data in pixel values)
-  3. QR codes containing malicious URLs or injection payloads
-  4. NSFW/harmful content classification
+This is the OCR half of multimodal input scanning. The deterministic,
+zero-dependency image-hygiene guards (data-URI extraction, base64 validation,
+DoS size limit, ``allow_images`` policy gate, magic-byte format-signature
+validation) have been split into the model-free, BETA
+:class:`~src.scanners.multimodal.image_hygiene_scanner.ImageHygieneScanner`.
 
-Pipeline:
-  Image → OCR → Text Extraction → InputGuardrail scan
-  Image → Content Classifier → Safety check
+What remains here is the eponymous, headline capability:
 
-Dependencies (optional):
-  pip install bulwark-gateway[vision]
-  # Installs pillow (the [vision] extra); an OCR backend (easyocr or
-  # pytesseract) must be installed separately.
+  Image → OCR (extract text from pixels) → injection detection on that text.
 
-Default mode: async (fire-and-forget enrichment)
+SHIPPED STATE (honesty): this capability is **INERT by default**. The ``[vision]``
+extra (pillow) is not installed in the default distribution and no OCR backend
+(easyocr / pytesseract) ships — and neither fits the distroless, no-torch runtime
+— so ``startup()`` leaves ``self._available`` False and ``scan()`` returns ALLOW
+immediately. Its OCR-to-injection efficacy is unproven, so the scanner is
+declared ``MaturityTier.EXPERIMENTAL`` and must never claim BETA/GA.
 
-SHIPPED STATE (honesty): the scanner is split into two capability tiers.
-
-  * Deterministic guards — data-URI extraction, base64 decode validation, the
-    DoS size limit, the ``allow_images`` policy gate, and magic-byte
-    format-signature validation — need NO extra dependencies and run in the
-    default distribution. They are real, active, and covered by measured
-    deterministic tests. Enable them opt-in via ``BULWARK_VISION_SCANNING_ENABLED``
-    (default off); once registered they operate on inline ``data:image/...;base64``
-    URIs embedded in text content, with zero OCR backend required.
-
-  * OCR-based image *content* analysis (extract text from pixels → injection
-    scan) is the scanner's headline capability and remains INERT: the [vision]
-    extra (pillow) is not installed in the default distribution and no OCR
-    backend (easyocr / pytesseract) ships — and neither fits the distroless,
-    no-torch runtime — so ``startup()`` leaves ``self._available`` False and the
-    OCR path never runs. Its efficacy is unproven.
-
-Because the eponymous vision capability (OCR) is unprovisioned and unproven, the
-scanner deliberately stays ``MaturityTier.EXPERIMENTAL`` — it must never claim
-BETA/GA on the strength of the deterministic hygiene guards alone. To enable OCR,
-install pillow + an OCR backend deliberately (understanding it will not load in a
-stock distroless image).
+To enable OCR, install pillow + an OCR backend deliberately (understanding it will
+not load in a stock distroless image). For deterministic image hygiene without
+OCR, enable the ``ImageHygieneScanner`` via ``BULWARK_IMAGE_HYGIENE_SCANNING_ENABLED``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import logging
 import re
@@ -53,44 +33,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 from src.config import settings
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
+from src.scanners.multimodal import _image_utils
 from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
 
 logger = logging.getLogger(__name__)
 
-# Max image size to process (prevent DoS via large images)
+# Max image size to process before OCR (prevent DoS via large images).
 MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
-MAX_IMAGE_DIMENSION = 4096  # pixels
-
-# Base64 data URI pattern (anchored for validation)
-DATA_URI_PATTERN = re.compile(
-    r"^data:image/(png|jpeg|jpg|gif|webp|bmp);base64,(.+)$", re.DOTALL
-)
-
-# Inline data URI pattern (for extraction from text)
-DATA_URI_INLINE_PATTERN = re.compile(
-    r"data:image/(png|jpeg|jpg|gif|webp|bmp);base64,([A-Za-z0-9+/=]+)"
-)
-
-
-def _sniff_image_format(image_bytes: bytes) -> str | None:
-    """Return the true image format from magic bytes, or None if unrecognised.
-
-    Zero-dependency signature sniffing — does NOT require pillow/OCR. Used to
-    corroborate the format a ``data:image/<fmt>`` URI *declares* against the
-    bytes it actually carries (MIME-confusion / polyglot / disguised-payload
-    detection). Formats mirror ``DATA_URI_PATTERN`` (jpg normalised to jpeg).
-    """
-    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "png"
-    if image_bytes.startswith(b"\xff\xd8\xff"):
-        return "jpeg"
-    if image_bytes[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif"
-    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
-        return "webp"
-    if image_bytes.startswith(b"BM"):
-        return "bmp"
-    return None
 
 
 def _vision_deps_available() -> bool:
@@ -118,22 +67,20 @@ def _ocr_available() -> bool:
 
 
 class VisionScanner(InputScanner):
-    """Scans images for embedded prompt injection and harmful content.
+    """Scans images for embedded prompt injection via OCR text extraction.
 
-    Handles the OpenAI vision API format where messages contain
-    image_url content blocks with base64-encoded or URL-referenced images.
+    Handles the OpenAI vision API format where messages contain image_url
+    content blocks with base64-encoded or URL-referenced images.
 
-    Scanning pipeline:
-    1. Extract images from message content blocks
-    2. Validate image (size, dimensions, format)
+    Scanning pipeline (only when an OCR backend loaded at startup):
+    1. Gather images (pre-extracted metadata or inline data URIs)
+    2. Pre-OCR safety: policy gate + size limit
     3. OCR text extraction (EasyOCR or Tesseract)
     4. Run extracted text through injection detection patterns
-    5. Optional: content safety classification
 
-    Configuration:
-      - BULWARK_ML_ENABLED=true
-      - Policy per agent: multimodal.allow_images, multimodal.ocr_scan
-      - Max size: multimodal.max_image_size_mb (default: 5)
+    The scanner is INERT (returns ALLOW) unless ``self._available`` was set at
+    startup. For deterministic image hygiene without OCR, use the
+    ``ImageHygieneScanner`` instead.
     """
 
     def __init__(
@@ -202,29 +149,26 @@ class VisionScanner(InputScanner):
             logger.info("vision_scanner_skipped", extra={"reason": "no OCR library"})
 
     async def scan(self, content: str, context: ScanContext) -> GuardrailResult:
-        """Scan for images in message content.
+        """OCR-scan images for embedded injection.
 
-        This scanner is called with the full message content. For multimodal
-        messages, the content may be a JSON-encoded list of content blocks,
-        or the images may already be extracted and available in context.metadata.
-
-        The deterministic guards below (image gathering, ``allow_images`` policy
-        gate, DoS size limit, format-signature validation) run WITHOUT any OCR
-        backend — they are the shipped, tested capability. OCR text extraction is
-        an additional layer that only engages when ``self._available`` is set (an
-        OCR backend loaded during ``startup()``), and is inert by default.
+        Fully INERT unless an OCR backend loaded at startup (``self._available``).
+        The deterministic image-hygiene guards (policy gate, DoS size limit,
+        base64 + magic-byte validation) now live in the ``ImageHygieneScanner``.
         """
-        # Gather images: pre-extracted by the proxy route, else inline data URIs
-        # embedded in the text content. No OCR/pillow required for either path.
-        image_contents = context.metadata.get("image_contents", [])
-        if not image_contents:
-            image_contents = self._extract_data_uris(content)
-
-        if not image_contents:
-            # No images anywhere — nothing for this scanner to do.
+        if not self._available:
+            # No OCR backend — this scanner has nothing to contribute. The
+            # deterministic hygiene guards are the ImageHygieneScanner's job.
             return GuardrailResult(verdict=Verdict.ALLOW)
 
-        # Policy gate (deterministic): images present but disallowed for this agent.
+        # Gather images: pre-extracted by the proxy route, else inline data URIs.
+        image_contents = context.metadata.get("image_contents", [])
+        if not image_contents:
+            image_contents = _image_utils.extract_data_uris(content)
+
+        if not image_contents:
+            return GuardrailResult(verdict=Verdict.ALLOW)
+
+        # Pre-OCR policy gate (defense in depth; ImageHygieneScanner also enforces).
         multimodal_config = context.metadata.get("multimodal", {})
         if not multimodal_config.get("allow_images", True):
             return GuardrailResult(
@@ -245,14 +189,12 @@ class VisionScanner(InputScanner):
                 ],
             )
 
-        # Process each image (deterministic checks always; OCR only if available)
         all_events: list[SecurityEvent] = []
         for i, image_data in enumerate(image_contents):
             events = await self._scan_image(image_data, context, index=i)
             all_events.extend(events)
 
         if all_events:
-            # Return highest verdict from all image scans
             has_block = any(e.verdict == Verdict.BLOCK for e in all_events)
             return GuardrailResult(
                 verdict=Verdict.BLOCK if has_block else Verdict.WARN,
@@ -267,21 +209,12 @@ class VisionScanner(InputScanner):
         context: ScanContext,
         index: int = 0,
     ) -> list[SecurityEvent]:
-        """Scan a single image.
-
-        Args:
-            image_data: base64-encoded image or raw bytes
-            context: scan context
-            index: image index in message
-
-        Returns:
-            List of security events (empty if clean)
-        """
+        """OCR-scan a single image (only reached when ``self._available``)."""
         events: list[SecurityEvent] = []
 
         # Decode image
         try:
-            image_bytes = self._decode_image(image_data)
+            image_bytes = _image_utils.decode_image(image_data)
         except ValueError as e:
             events.append(
                 SecurityEvent(
@@ -296,7 +229,7 @@ class VisionScanner(InputScanner):
             )
             return events
 
-        # Size check
+        # Pre-OCR size check (DoS guard on the OCR path itself)
         if len(image_bytes) > self._max_image_bytes:
             events.append(
                 SecurityEvent(
@@ -314,108 +247,24 @@ class VisionScanner(InputScanner):
             )
             return events
 
-        # Format-signature validation (deterministic, zero-dep): when the source
-        # is a data URI declaring a format, corroborate it against the real magic
-        # bytes. A mismatch — or bytes that carry no valid image signature at all
-        # — flags MIME confusion / a payload disguised as an image.
-        fmt_event = self._check_format_signature(image_data, image_bytes, context, index)
-        if fmt_event is not None:
-            events.append(fmt_event)
-
-        # OCR extraction (only engages when an OCR backend loaded at startup;
-        # inert by default in the shipped distroless / no-torch distribution).
-        if self._available and context.metadata.get("multimodal", {}).get("ocr_scan", True):
+        # OCR extraction + injection scan on the extracted text.
+        if context.metadata.get("multimodal", {}).get("ocr_scan", True):
             loop = asyncio.get_event_loop()
             extracted_text = await loop.run_in_executor(
                 self._executor, self._ocr_extract, image_bytes
             )
 
             if extracted_text:
-                # Store extracted text for downstream scanners
                 existing_ocr = context.metadata.get("ocr_extracted_text", [])
                 existing_ocr.append(extracted_text)
                 context.metadata["ocr_extracted_text"] = existing_ocr
 
-                # Run basic injection checks on extracted text
                 injection_events = self._check_injection_in_text(
                     extracted_text, context, index
                 )
                 events.extend(injection_events)
 
         return events
-
-    def _check_format_signature(
-        self,
-        image_data: str | bytes,
-        image_bytes: bytes,
-        context: ScanContext,
-        index: int,
-    ) -> SecurityEvent | None:
-        """Corroborate a data URI's declared format against real magic bytes.
-
-        Only fires when ``image_data`` is a ``data:image/<fmt>`` URI (i.e. a
-        format was explicitly declared). Raw base64 without a declaration makes
-        no claim to contradict, so it is skipped to avoid false positives.
-
-        Returns a WARN event on mismatch / unrecognised signature, else None.
-        """
-        if not isinstance(image_data, str):
-            return None
-        match = DATA_URI_PATTERN.match(image_data)
-        if match is None:
-            return None
-
-        declared = match.group(1).lower()
-        if declared == "jpg":
-            declared = "jpeg"
-
-        actual = _sniff_image_format(image_bytes)
-        if actual == declared:
-            return None
-
-        if actual is None:
-            description = (
-                f"Image #{index} declares '{declared}' but carries no valid image "
-                f"signature (possible disguised payload)"
-            )
-        else:
-            description = (
-                f"Image #{index} format mismatch: declared '{declared}', "
-                f"actual '{actual}' (possible MIME confusion / polyglot)"
-            )
-
-        return SecurityEvent(
-            tenant_id=context.tenant_id,
-            agent_id=context.agent_id,
-            verdict=Verdict.WARN,
-            category=ThreatCategory.POLICY_VIOLATION,
-            description=description,
-            source="ml_vision_scanner",
-            severity="low",
-            metadata={
-                "image_index": index,
-                "declared_format": declared,
-                "actual_format": actual,
-            },
-        )
-
-    def _decode_image(self, image_data: str | bytes) -> bytes:
-        """Decode image from base64 or data URI."""
-        if isinstance(image_data, bytes):
-            return image_data
-
-        # Try data URI format
-        match = DATA_URI_PATTERN.match(image_data)
-        if match:
-            b64_data = match.group(2)
-        else:
-            # Assume raw base64
-            b64_data = image_data
-
-        try:
-            return base64.b64decode(b64_data)
-        except Exception as e:
-            raise ValueError(f"Invalid base64 image data: {e}")
 
     def _ocr_extract(self, image_bytes: bytes) -> str | None:
         """Extract text from image using OCR (runs in thread pool).
@@ -428,9 +277,11 @@ class VisionScanner(InputScanner):
             image = Image.open(io.BytesIO(image_bytes))
 
             # Dimension check
-            if max(image.size) > MAX_IMAGE_DIMENSION:
+            if max(image.size) > _image_utils.MAX_IMAGE_DIMENSION:
                 # Resize to max dimension while preserving aspect ratio
-                image.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+                image.thumbnail(
+                    (_image_utils.MAX_IMAGE_DIMENSION, _image_utils.MAX_IMAGE_DIMENSION)
+                )
 
             if self._ocr_reader is not None:
                 # EasyOCR
@@ -506,16 +357,12 @@ class VisionScanner(InputScanner):
         return events
 
     def _extract_data_uris(self, content: str) -> list[str]:
-        """Extract base64 data URIs from text content."""
-        results = []
-        for match in re.finditer(DATA_URI_INLINE_PATTERN, content):
-            results.append(match.group(0))
-        return results[:5]  # Limit to 5 images per message
+        """Extract base64 data URIs from text content (delegates to _image_utils)."""
+        return _image_utils.extract_data_uris(content)
 
     async def health(self) -> bool:
-        # The deterministic guards (policy gate, DoS size limit, data-URI
-        # extraction, format-signature validation) always operate, so the scanner
-        # is healthy regardless of whether the optional OCR backend loaded.
+        # The scanner is registered and operational as an (inert) OCR layer; it
+        # never fails the pipeline. OCR only engages when self._available is set.
         return True
 
     async def shutdown(self) -> None:

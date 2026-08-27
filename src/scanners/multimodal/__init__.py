@@ -2,7 +2,9 @@
 Multimodal Scanners — Image and multimedia content scanning.
 
 Provides:
-  - VisionScanner: OCR extraction + injection detection in images
+  - ImageHygieneScanner: deterministic, zero-dependency image guards (BETA)
+    (allow_images policy gate, DoS size limit, base64 + magic-byte validation)
+  - VisionScanner: OCR extraction + injection detection in images (EXPERIMENTAL)
 
 Handles OpenAI vision API format:
   {"role": "user", "content": [
@@ -11,6 +13,7 @@ Handles OpenAI vision API format:
   ]}
 """
 
+from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 from src.scanners.multimodal.vision_scanner import VisionScanner
 
-__all__ = ["VisionScanner"]
+__all__ = ["ImageHygieneScanner", "VisionScanner"]

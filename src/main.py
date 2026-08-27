@@ -258,12 +258,22 @@ async def lifespan(app: FastAPI):
         pipeline.register(GroundingScanner())
         await logger.ainfo("grounding_scanner_registered")
 
+    # Register deterministic Image Hygiene Scanner (opt-in, default off).
+    # INPUT_ASYNC (fire-and-forget), zero-dependency model-free guards over inline
+    # data:image URIs in text (allow_images policy gate, DoS size limit, base64 +
+    # magic-byte format validation). No OCR/pillow needed — ships BETA. It returns
+    # ALLOW immediately when a message carries no image, so the only cost of
+    # enabling it is a cheap data-URI scan on requests that contain one.
+    if settings.image_hygiene_scanning_enabled:
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+        pipeline.register(ImageHygieneScanner())
+        await logger.ainfo("image_hygiene_scanner_registered")
+
     # Register multimodal Vision Scanner (opt-in, default off). INPUT_ASYNC
-    # (fire-and-forget). Its shipped capability is a set of zero-dependency
-    # deterministic guards over inline data:image URIs in text (policy gate, DoS
-    # size limit, base64 + magic-byte format validation) — no OCR/pillow needed.
-    # The OCR content-analysis layer stays inert unless an OCR backend is
-    # installed, so enabling the flag alone carries no hot-path cost.
+    # (fire-and-forget). Its eponymous OCR image-content-analysis layer stays inert
+    # unless pillow + an OCR backend are installed, so enabling the flag alone
+    # carries no hot-path cost. For deterministic image hygiene without OCR, enable
+    # the ImageHygieneScanner via BULWARK_IMAGE_HYGIENE_SCANNING_ENABLED.
     if settings.vision_scanning_enabled:
         from src.scanners.multimodal.vision_scanner import VisionScanner
         pipeline.register(VisionScanner())

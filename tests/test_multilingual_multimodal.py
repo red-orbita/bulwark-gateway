@@ -543,17 +543,58 @@ class TestVisionScanner:
         results = scanner._extract_data_uris(content)
         assert len(results) <= 5  # Max 5 per message
 
-    # --- Deterministic guards WITHOUT OCR -----------------------------------
-    # These prove the shipped (no pillow / no OCR backend) capability: the
-    # scanner runs its zero-dependency guards over inline data:image URIs even
-    # when self._available is False (the default in a stock distroless image).
+    # --- OCR path (self._available=True) delegates hygiene to ImageHygieneScanner,
+    # but keeps its own pre-OCR policy gate + size limit as defense in depth. ---
 
     @pytest.mark.asyncio
-    async def test_policy_gate_blocks_data_uri_in_text_without_ocr(self):
+    async def test_allows_when_unavailable_ocr(self):
+        """Without an OCR backend the VisionScanner is fully inert (ALLOW)."""
         from src.scanners.multimodal.vision_scanner import VisionScanner
 
         scanner = VisionScanner()
         assert scanner._available is False  # no OCR backend — shipped default
+        # Even with a data:image URI present, no OCR → nothing to contribute.
+        img = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20).decode()
+        result = await scanner.scan(
+            f"look data:image/png;base64,{img}", _make_context()
+        )
+        assert result.verdict == Verdict.ALLOW
+
+
+# ==============================================================================
+# Image Hygiene Scanner Tests (deterministic, zero-dependency, no OCR)
+# ==============================================================================
+class TestImageHygieneScanner:
+    """Test ImageHygieneScanner — the model-free half split from VisionScanner.
+
+    These prove the shipped (no pillow / no OCR backend) BETA capability: the
+    scanner runs its zero-dependency guards over inline data:image URIs with no
+    dependency on any OCR backend.
+    """
+
+    @pytest.mark.asyncio
+    async def test_info_properties(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+        from src.scanners.protocol import MaturityTier
+
+        scanner = ImageHygieneScanner()
+        assert scanner.info.name == "image_hygiene_scanner"
+        assert scanner.info.scanner_type == ScannerType.INPUT_ASYNC
+        assert scanner.info.priority == 14
+        assert scanner.info.maturity is MaturityTier.BETA
+
+    @pytest.mark.asyncio
+    async def test_info_blocking_mode(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+
+        scanner = ImageHygieneScanner(blocking=True)
+        assert scanner.info.scanner_type == ScannerType.INPUT_BLOCKING
+
+    @pytest.mark.asyncio
+    async def test_policy_gate_blocks_data_uri_in_text(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+
+        scanner = ImageHygieneScanner()
         img = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20).decode()
         content = f"please view data:image/png;base64,{img}"
 
@@ -565,11 +606,25 @@ class TestVisionScanner:
         assert "not allowed" in result.events[0].description
 
     @pytest.mark.asyncio
-    async def test_oversized_data_uri_in_text_blocks_without_ocr(self):
-        from src.scanners.multimodal.vision_scanner import VisionScanner
+    async def test_policy_gate_blocks_pre_extracted_images(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 
-        scanner = VisionScanner(max_image_size_mb=0.001)  # 1 KB limit
-        assert scanner._available is False
+        scanner = ImageHygieneScanner()
+        ctx = _make_context(
+            metadata={
+                "multimodal": {"allow_images": False},
+                "image_contents": ["base64data"],
+            }
+        )
+        result = await scanner.scan("Here's an image", ctx)
+        assert result.verdict == Verdict.BLOCK
+        assert "not allowed" in result.events[0].description
+
+    @pytest.mark.asyncio
+    async def test_oversized_data_uri_in_text_blocks(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+
+        scanner = ImageHygieneScanner(max_image_size_mb=0.001)  # 1 KB limit
         img = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 2000).decode()
         content = f"here: data:image/png;base64,{img}"
 
@@ -580,11 +635,22 @@ class TestVisionScanner:
         assert "too large" in result.events[0].description
 
     @pytest.mark.asyncio
-    async def test_format_signature_mismatch_warns_without_ocr(self):
-        from src.scanners.multimodal.vision_scanner import VisionScanner
+    async def test_oversized_pre_extracted_image_blocks(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 
-        scanner = VisionScanner()
-        assert scanner._available is False
+        scanner = ImageHygieneScanner(max_image_size_mb=0.001)  # 1 KB limit
+        large_data = base64.b64encode(b"x" * 2000).decode()
+
+        ctx = _make_context(metadata={"image_contents": [large_data]})
+        result = await scanner.scan("See image", ctx)
+        assert result.verdict == Verdict.BLOCK
+        assert "too large" in result.events[0].description
+
+    @pytest.mark.asyncio
+    async def test_format_signature_mismatch_warns(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+
+        scanner = ImageHygieneScanner()
         # Declares PNG but the bytes are a JPEG (MIME confusion / polyglot).
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 20
         img = base64.b64encode(jpeg_bytes).decode()
@@ -599,11 +665,10 @@ class TestVisionScanner:
         assert ev.metadata["actual_format"] == "jpeg"
 
     @pytest.mark.asyncio
-    async def test_disguised_payload_warns_without_ocr(self):
-        from src.scanners.multimodal.vision_scanner import VisionScanner
+    async def test_disguised_payload_warns(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 
-        scanner = VisionScanner()
-        assert scanner._available is False
+        scanner = ImageHygieneScanner()
         # Declares an image but carries a shell script (no image signature).
         payload = b"#!/bin/sh\nrm -rf / --no-preserve-root\n" + b"A" * 40
         img = base64.b64encode(payload).decode()
@@ -617,36 +682,63 @@ class TestVisionScanner:
         assert "no valid image signature" in ev.description
 
     @pytest.mark.asyncio
-    async def test_valid_png_data_uri_allows_without_ocr(self):
-        from src.scanners.multimodal.vision_scanner import VisionScanner
+    async def test_valid_png_data_uri_allows(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 
-        scanner = VisionScanner()
-        assert scanner._available is False
+        scanner = ImageHygieneScanner()
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 30  # real PNG signature
         img = base64.b64encode(png_bytes).decode()
         content = f"a photo data:image/png;base64,{img}"
 
         result = await scanner.scan(content, _make_context())
 
-        # Correct signature, within size, OCR inert → nothing to flag.
+        # Correct signature, within size → nothing to flag.
         assert result.verdict == Verdict.ALLOW
 
     @pytest.mark.asyncio
-    async def test_plain_text_allows_without_ocr(self):
-        from src.scanners.multimodal.vision_scanner import VisionScanner
+    async def test_plain_text_allows(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 
-        scanner = VisionScanner()
-        assert scanner._available is False
+        scanner = ImageHygieneScanner()
         result = await scanner.scan("no images here, just words", _make_context())
         assert result.verdict == Verdict.ALLOW
 
     @pytest.mark.asyncio
-    async def test_health_ok_without_ocr_backend(self):
-        from src.scanners.multimodal.vision_scanner import VisionScanner
+    async def test_invalid_base64_warns(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 
-        scanner = VisionScanner()
-        # Deterministic guards always operate → healthy even with no OCR backend.
+        scanner = ImageHygieneScanner()
+        # Pre-extracted content that is not valid base64.
+        ctx = _make_context(metadata={"image_contents": ["!!!not base64!!!"]})
+        result = await scanner.scan("see image", ctx)
+
+        assert result.verdict == Verdict.WARN
+        assert result.events[0].category.value == "policy_violation"
+        assert "Invalid image format" in result.events[0].description
+
+    @pytest.mark.asyncio
+    async def test_limits_images_per_message(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+
+        scanner = ImageHygieneScanner()
+        # A valid small PNG data URI, repeated 10x — extraction caps at 5.
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+        img = base64.b64encode(png_bytes).decode()
+        content = " ".join(
+            f"data:image/png;base64,{img}" for _ in range(10)
+        )
+        # All valid PNGs → ALLOW, but proves extraction does not choke on many.
+        result = await scanner.scan(content, _make_context())
+        assert result.verdict == Verdict.ALLOW
+
+    @pytest.mark.asyncio
+    async def test_health_ok(self):
+        from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
+
+        scanner = ImageHygieneScanner()
+        # Deterministic guards always operate → always healthy.
         assert await scanner.health() is True
+
 
 
 # ==============================================================================

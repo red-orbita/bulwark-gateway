@@ -22,6 +22,7 @@ from src.scanners.ml.injection_classifier import InjectionClassifier
 from src.scanners.ml.toxicity_scanner import ToxicityScanner
 from src.scanners.multilingual.language_detector import LanguageDetector
 from src.scanners.multilingual.patterns import MultilingualPatterns
+from src.scanners.multimodal.image_hygiene_scanner import ImageHygieneScanner
 from src.scanners.multimodal.vision_scanner import VisionScanner
 from src.scanners.output.grounding_scanner import GroundingScanner
 from src.scanners.output.hallucination_scanner import HallucinationScanner
@@ -86,14 +87,18 @@ def test_default_maturity_is_experimental():
         # scanner's docstring). Not GA precisely because default coverage is partial.
         (LanguageDetector, MaturityTier.BETA),
         (MultilingualPatterns, MaturityTier.BETA),
-        # Experimental — the VisionScanner ships real, tested, zero-dependency
-        # deterministic guards (allow_images policy gate, DoS size limit, base64
-        # + magic-byte format validation over inline data:image URIs), but its
-        # EPONYMOUS capability — OCR-based image content analysis — stays INERT:
-        # pillow + an OCR backend are unprovisioned and do not fit the distroless
-        # / no-torch runtime. It must never claim GA/BETA on the hygiene guards
-        # alone until OCR is provisioned + real-inference tests land (ROADMAP
-        # §3.4/§4).
+        # Beta — model-free, deterministic, zero-dependency image-hygiene guards
+        # (allow_images policy gate, DoS size limit, base64 + magic-byte format
+        # validation over inline data:image URIs). Real logic + measured tests, no
+        # OCR / pillow needed. Split out of the VisionScanner so the hygiene guards
+        # can carry an honest BETA tier independent of the inert OCR layer.
+        (ImageHygieneScanner, MaturityTier.BETA),
+        # Experimental — the VisionScanner's EPONYMOUS capability — OCR-based image
+        # content analysis — stays INERT: pillow + an OCR backend are unprovisioned
+        # and do not fit the distroless / no-torch runtime. It must never claim
+        # GA/BETA until OCR is provisioned + real-inference tests land (ROADMAP
+        # §3.4/§4). Deterministic image hygiene now lives in the BETA
+        # ImageHygieneScanner above.
         (VisionScanner, MaturityTier.EXPERIMENTAL),
     ],
 )
