@@ -636,3 +636,66 @@ class MyTestScanner(InputScanner):
 
         scanner = instantiate_scanner(AllowScanner)
         assert scanner.info.name == "allow_scanner"
+
+
+# ==============================================================================
+# C3: apply_ml_config runtime toggle + H-09 allowlist
+# ==============================================================================
+class TestApplyMlConfigAllowlist:
+    """Runtime enable/disable of tunable scanners via admin-pushed config, with
+    the curated H-09 allowlist protecting the GA floor and capability scanners.
+    """
+
+    def _pipeline_with(self, *names: str):
+        from src.scanners.pipeline import ScannerPipeline
+
+        pipeline = ScannerPipeline()
+        for n in names:
+            pipeline.register(AllowScanner(name=n), enabled=True)
+        return pipeline
+
+    def test_toggles_allowlisted_scanner(self):
+        # A runtime-tunable scanner can be disabled at runtime.
+        pipeline = self._pipeline_with("memory_guard")
+        pipeline.apply_ml_config({"memory_guard": {"enabled": False}})
+        assert pipeline._all_scanners["memory_guard"].enabled is False
+
+        # ...and re-enabled.
+        pipeline.apply_ml_config({"memory_guard": {"enabled": True}})
+        assert pipeline._all_scanners["memory_guard"].enabled is True
+
+    def test_toggles_aliased_toxicity_by_proxy_name(self):
+        # Admin publishes the proxy name "ml_toxicity" (not "ml_toxicity_scanner").
+        pipeline = self._pipeline_with("ml_toxicity")
+        pipeline.apply_ml_config({"ml_toxicity": {"enabled": False}})
+        assert pipeline._all_scanners["ml_toxicity"].enabled is False
+
+    def test_all_six_tunables_are_allowlisted(self):
+        from src.scanners.pipeline import RUNTIME_TUNABLE_SCANNERS
+
+        expected = {
+            "ml_injection_classifier", "ml_toxicity", "memory_guard",
+            "retrieval_scanner", "language_detector", "multilingual_patterns",
+        }
+        assert expected == set(RUNTIME_TUNABLE_SCANNERS)
+
+    def test_rejects_ga_floor_scanners(self):
+        # H-09: a compromised admin/Redis must not disable the GA regex/builtin floor.
+        for ga in ("regex_input", "output_redaction", "tool_policy"):
+            pipeline = self._pipeline_with(ga)
+            pipeline.apply_ml_config({ga: {"enabled": False}})
+            assert pipeline._all_scanners[ga].enabled is True, f"{ga} must stay enabled"
+
+    def test_rejects_capability_scanners(self):
+        # Boot-flag-governed capability scanners are not runtime-tunable.
+        for cap in ("relevance_checker", "hallucination_detector", "ml_vision_scanner"):
+            pipeline = self._pipeline_with(cap)
+            pipeline.apply_ml_config({cap: {"enabled": False}})
+            assert pipeline._all_scanners[cap].enabled is True, f"{cap} must stay enabled"
+
+    def test_unregistered_allowlisted_name_is_noop(self):
+        # An allowlisted name that was not registered at boot is a safe no-op.
+        pipeline = self._pipeline_with("memory_guard")
+        pipeline.apply_ml_config({"retrieval_scanner": {"enabled": True}})
+        assert "retrieval_scanner" not in pipeline._all_scanners
+        assert pipeline._all_scanners["memory_guard"].enabled is True

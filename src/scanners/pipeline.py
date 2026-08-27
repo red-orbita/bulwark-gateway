@@ -33,6 +33,21 @@ from src.scanners.protocol import (
 logger = logging.getLogger(__name__)
 
 
+# Curated allowlist of scanners whose ``enabled`` state may be toggled at runtime
+# by admin-pushed (Redis-synced) config. Keyed by PROXY scanner names (the admin
+# side normalises its config keys to these before publishing). Deliberately
+# excludes the GA regex/builtin floor and the boot-flag-governed capability
+# scanners — see ``ScannerPipeline.apply_ml_config`` (security control H-09).
+RUNTIME_TUNABLE_SCANNERS: frozenset[str] = frozenset({
+    "ml_injection_classifier",
+    "ml_toxicity",
+    "memory_guard",
+    "retrieval_scanner",
+    "language_detector",
+    "multilingual_patterns",
+})
+
+
 @dataclass
 class ScannerMetrics:
     """Runtime metrics for a registered scanner."""
@@ -443,16 +458,31 @@ class ScannerPipeline:
         return len(self._all_scanners)
 
     def apply_ml_config(self, config: dict[str, dict]) -> None:
-        """Apply ML scanner config from admin (Redis-synced).
+        """Apply admin-pushed (Redis-synced) runtime enable/disable config.
 
-        Enables/disables ML scanners based on admin-pushed configuration.
-        Only affects scanners whose names start with 'ml_'.
+        Admin can toggle the ``enabled`` state of the runtime-tunable BETA
+        scanners at runtime without a proxy restart. Registration itself is still
+        governed by the boot-time master flags (``ml_enabled``, ``rag_enabled``,
+        ``multilingual_enabled``): this only flips ``enabled`` on scanners that
+        were already registered at boot — a config entry for an unregistered
+        scanner is a no-op.
+
+        SECURITY (H-09): only scanners in the curated ``RUNTIME_TUNABLE_SCANNERS``
+        allowlist may be toggled. This prevents a compromised admin / Redis from
+        disabling the GA regex/builtin floor (``regex_input``, ``output_redaction``,
+        ``tool_policy``) or flipping the boot-flag-governed capability scanners
+        (schema/relevance/hallucination/grounding/image-hygiene/vision) — those are
+        deliberately NOT in the allowlist. The keys pushed by admin are already
+        normalised to proxy scanner names (see admin ``_sync_to_redis``).
         """
         for name, cfg in config.items():
-            # SECURITY FIX (H-09): Only allow ML config to affect ml_* scanners.
-            # Prevents compromised admin from disabling regex/builtin scanners via Redis.
-            if not name.startswith("ml_"):
-                logger.warning("ml_config_rejected", extra={"scanner": name, "reason": "not_ml_prefix"})
+            # SECURITY (H-09): curated allowlist — reject anything else, including
+            # GA builtins and boot-governed capability scanners.
+            if name not in RUNTIME_TUNABLE_SCANNERS:
+                logger.warning(
+                    "ml_config_rejected",
+                    extra={"scanner": name, "reason": "not_runtime_tunable"},
+                )
                 continue
             if name not in self._all_scanners:
                 continue

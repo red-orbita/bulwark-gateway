@@ -133,13 +133,22 @@ def _save_config() -> None:
 
 
 def _sync_to_redis() -> None:
-    """Push ML config to Redis so proxy can pick up changes without restart."""
+    """Push ML config to Redis so proxy can pick up changes without restart.
+
+    Config keys are normalised to PROXY scanner names (via _PROXY_NAME_ALIASES)
+    so they match the proxy's RUNTIME_TUNABLE_SCANNERS allowlist — e.g. the admin
+    key ``ml_toxicity_scanner`` is published as ``ml_toxicity``.
+    """
     try:
         from ..services.redis_sync import get_redis_client
         r = get_redis_client()
         if not r:
             return
-        r.set("bulwark:ml_scanners:config", json.dumps(_scanner_config))
+        proxy_keyed = {
+            _PROXY_NAME_ALIASES.get(name, name): cfg
+            for name, cfg in _scanner_config.items()
+        }
+        r.set("bulwark:ml_scanners:config", json.dumps(proxy_keyed))
         r.incr("bulwark:ml_scanners:version")
     except Exception:
         pass
