@@ -727,7 +727,8 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    | Relevance | `BULWARK_RELEVANCE_SCANNING_ENABLED=true` | `--embeddings` |
    | Hallucination | `BULWARK_HALLUCINATION_SCANNING_ENABLED=true` | `--nli` |
    | Grounding | `BULWARK_GROUNDING_SCANNING_ENABLED=true` | `--nli` |
-   | Image hygiene guards | `BULWARK_VISION_SCANNING_ENABLED=true` | none (zero-dep) |
+   | Image hygiene guards (BETA) | `BULWARK_IMAGE_HYGIENE_SCANNING_ENABLED=true` | none (zero-dep) |
+   | Vision OCR (EXPERIMENTAL) | `BULWARK_VISION_SCANNING_ENABLED=true` | pillow + OCR backend |
 
    The owning agent must also opt in via its `output_validation` policy — a flag
    with no matching policy is a no-op for that agent.
@@ -735,9 +736,12 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
 > **Verify provisioning.** `GET /internal/scanners/status` (and the admin
 > "Advanced Scanners" page) list every registered scanner with its lane and
 > `healthy` state — use it to confirm the scanner you enabled is actually
-> registered. If you enable a flag but leave the model unprovisioned, the scanner
-> loads no model and every `scan()` returns ALLOW (no protection, no hot-path
-> cost), so always confirm the model is present after enabling a flag.
+> functional. A model-backed scanner whose flag is **on** but whose model (or
+> OCR backend, for Vision) failed to load now reports **`healthy: false`**: the
+> admin renders it as a **Degraded** read-only card (amber) rather than Active,
+> so a mis-provisioned scanner is visible instead of silently returning ALLOW.
+> A scanner whose flag is **off** is not registered and reports healthy/inert.
+> Always confirm the scanner reads Active (not Degraded) after enabling a flag.
 
 ---
 

@@ -268,7 +268,11 @@ class HallucinationScanner(OutputScanner):
             return None
 
     async def health(self) -> bool:
-        if not settings.ml_enabled:
+        # Registered only when hallucination scanning is opted in. When it is,
+        # report unhealthy unless the NLI model loaded — surfaces a WARN in admin
+        # if the operator enabled the flag but the model/ML infra is absent, rather
+        # than implying a functional check that silently no-ops.
+        if not settings.hallucination_scanning_enabled:
             return True
         return self._model_loaded
 

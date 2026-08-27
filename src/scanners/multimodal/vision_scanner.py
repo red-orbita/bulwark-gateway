@@ -361,9 +361,15 @@ class VisionScanner(InputScanner):
         return _image_utils.extract_data_uris(content)
 
     async def health(self) -> bool:
-        # The scanner is registered and operational as an (inert) OCR layer; it
-        # never fails the pipeline. OCR only engages when self._available is set.
-        return True
+        # EXPERIMENTAL OCR layer. Registered only when vision scanning is opted in.
+        # When it is, report unhealthy unless an OCR backend actually loaded — this
+        # surfaces a WARN in admin so the operator knows the flag is on but no
+        # image-content analysis is happening (pillow + OCR backend not installed),
+        # rather than implying a functional vision scanner. For deterministic image
+        # hygiene without OCR, use the ImageHygieneScanner instead.
+        if not settings.vision_scanning_enabled:
+            return True
+        return self._available
 
     async def shutdown(self) -> None:
         self._executor.shutdown(wait=False)

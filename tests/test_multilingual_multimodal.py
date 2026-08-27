@@ -739,6 +739,30 @@ class TestImageHygieneScanner:
         # Deterministic guards always operate → always healthy.
         assert await scanner.health() is True
 
+    @pytest.mark.asyncio
+    async def test_vision_health_reflects_flag_and_ocr_backend(self, monkeypatch):
+        # A4: EXPERIMENTAL OCR scanner must report unhealthy when the operator
+        # enabled the flag but no OCR backend loaded (surfaces WARN in admin),
+        # rather than implying functional image-content analysis.
+        from src.config import settings
+        from src.scanners.multimodal.vision_scanner import VisionScanner
+
+        scanner = VisionScanner()
+
+        # Flag off => inert, healthy regardless of backend.
+        monkeypatch.setattr(settings, "vision_scanning_enabled", False)
+        scanner._available = False
+        assert await scanner.health() is True
+
+        # Flag on but no OCR backend => unhealthy.
+        monkeypatch.setattr(settings, "vision_scanning_enabled", True)
+        scanner._available = False
+        assert await scanner.health() is False
+
+        # Flag on and OCR backend loaded => healthy.
+        scanner._available = True
+        assert await scanner.health() is True
+
 
 
 # ==============================================================================

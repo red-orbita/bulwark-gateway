@@ -226,6 +226,30 @@ class TestReadOnlyUnionCards:
         assert all(s["read_only"] is False for s in out["scanners"])
         assert not any(s["name"] == "regex_input" for s in out["scanners"])
 
+    async def test_enabled_but_unhealthy_capability_is_degraded(self, monkeypatch, user):
+        # A4 surface: a capability scanner enabled at boot but reporting unhealthy
+        # (model/backend absent) must render as not-ready (Degraded) in the admin
+        # read-only card, not as Active.
+        import admin.routes.ml_scanners as ml
+
+        payload = {
+            "ml_enabled": False,
+            "lanes": {},
+            "scanners": [
+                {"name": "relevance_checker", "type": "output_async",
+                 "enabled": True, "healthy": False, "maturity": "beta",
+                 "description": "relevance", "priority": 30, "metrics": {}},
+            ],
+        }
+        monkeypatch.setattr(ml, "_query_proxy_scanner_status", lambda: _async_value(payload))
+
+        out = await ml.ml_scanner_status(_user=user)
+        card = next(s for s in out["scanners"] if s["name"] == "relevance_checker")
+        assert card["read_only"] is True
+        assert card["enabled"] is True
+        assert card["ready"] is False          # enabled + unhealthy => Degraded
+        assert card["model_installed"] is False
+
 
 def _async_none():
     async def _c():

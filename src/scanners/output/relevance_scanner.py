@@ -205,7 +205,12 @@ class RelevanceScanner(OutputScanner):
         return embedding[0]
 
     async def health(self) -> bool:
-        if not settings.ml_enabled:
+        # Registered only when relevance scanning is opted in. When it is, honesty
+        # requires reporting unhealthy unless the backing embedding model actually
+        # loaded — this surfaces a WARN in admin when the operator enabled the flag
+        # but the model is absent (or ML infra/deps are off), instead of implying
+        # a functional relevance check that silently no-ops.
+        if not settings.relevance_scanning_enabled:
             return True
         return self._model_loaded
 

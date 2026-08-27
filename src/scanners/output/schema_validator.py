@@ -30,6 +30,7 @@ import logging
 import re
 from pathlib import Path
 
+from src.config import settings
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.scanners.protocol import MaturityTier, OutputScanner, ScanContext, ScannerInfo, ScannerType
 
@@ -329,7 +330,13 @@ class SchemaValidator(OutputScanner):
         return None
 
     async def health(self) -> bool:
-        return True
+        # Registered only when schema validation is opted in. Model-free, but it
+        # relies on jsonschema (a core dep) for enforcement — report unhealthy if
+        # that is somehow unavailable so admin surfaces a WARN instead of implying
+        # functional validation.
+        if not settings.schema_validation_enabled:
+            return True
+        return _jsonschema_available()
 
     async def shutdown(self) -> None:
         pass

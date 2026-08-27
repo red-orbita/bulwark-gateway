@@ -814,3 +814,88 @@ class TestOutputPipelineIntegration:
         )
         result = await pipeline.run_output_blocking('{"wrong_field": 123}', ctx)
         assert result.verdict == Verdict.BLOCK
+
+
+# ==============================================================================
+# A4: health() honesty — flag ON but model/backend absent => unhealthy (WARN)
+# ==============================================================================
+class TestCapabilityHealthHonesty:
+    """Each opt-in capability scanner must report unhealthy when the operator
+    enabled its flag but the backing model/dependency is absent, so the admin
+    surfaces a WARN instead of implying a functional (but silently inert) check.
+    """
+
+    @pytest.mark.asyncio
+    async def test_relevance_health_reflects_flag_and_model(self, monkeypatch):
+        from src.config import settings
+        from src.scanners.output.relevance_scanner import RelevanceScanner
+
+        scanner = RelevanceScanner()
+
+        # Flag off => inert, reports healthy regardless of model state.
+        monkeypatch.setattr(settings, "relevance_scanning_enabled", False)
+        assert await scanner.health() is True
+
+        # Flag on but model not loaded => unhealthy (WARN in admin).
+        monkeypatch.setattr(settings, "relevance_scanning_enabled", True)
+        scanner._model_loaded = False
+        assert await scanner.health() is False
+
+        # Flag on and model loaded => healthy.
+        scanner._model_loaded = True
+        assert await scanner.health() is True
+
+    @pytest.mark.asyncio
+    async def test_hallucination_health_reflects_flag_and_model(self, monkeypatch):
+        from src.config import settings
+        from src.scanners.output.hallucination_scanner import HallucinationScanner
+
+        scanner = HallucinationScanner()
+
+        monkeypatch.setattr(settings, "hallucination_scanning_enabled", False)
+        assert await scanner.health() is True
+
+        monkeypatch.setattr(settings, "hallucination_scanning_enabled", True)
+        scanner._model_loaded = False
+        assert await scanner.health() is False
+
+        scanner._model_loaded = True
+        assert await scanner.health() is True
+
+    @pytest.mark.asyncio
+    async def test_grounding_health_reflects_flag_and_model(self, monkeypatch):
+        from src.config import settings
+        from src.scanners.output.grounding_scanner import GroundingScanner
+
+        scanner = GroundingScanner()
+
+        monkeypatch.setattr(settings, "grounding_scanning_enabled", False)
+        assert await scanner.health() is True
+
+        monkeypatch.setattr(settings, "grounding_scanning_enabled", True)
+        scanner._model_loaded = False
+        assert await scanner.health() is False
+
+        scanner._model_loaded = True
+        assert await scanner.health() is True
+
+    @pytest.mark.asyncio
+    async def test_schema_health_reflects_flag_and_dep(self, monkeypatch):
+        import src.scanners.output.schema_validator as sv
+        from src.config import settings
+        from src.scanners.output.schema_validator import SchemaValidator
+
+        scanner = SchemaValidator()
+
+        # Flag off => healthy regardless.
+        monkeypatch.setattr(settings, "schema_validation_enabled", False)
+        monkeypatch.setattr(sv, "_jsonschema_available", lambda: False)
+        assert await scanner.health() is True
+
+        # Flag on but jsonschema unavailable => unhealthy.
+        monkeypatch.setattr(settings, "schema_validation_enabled", True)
+        assert await scanner.health() is False
+
+        # Flag on and jsonschema present (core dep) => healthy.
+        monkeypatch.setattr(sv, "_jsonschema_available", lambda: True)
+        assert await scanner.health() is True
