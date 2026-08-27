@@ -41,6 +41,8 @@ from typing import Optional
 
 import structlog
 
+from src.redis_bootstrap import connect_redis
+
 logger = structlog.get_logger()
 
 # Redis HASH holding the runtime override (written by the admin service).
@@ -150,15 +152,9 @@ class CorrelationRuntimeConfig:
         """Connect to Redis once at startup. No-op-safe without a URL."""
         if redis_url:
             try:
-                import redis
-
-                kwargs: dict = {"decode_responses": True, "socket_timeout": 1}
-                if redis_url.startswith("rediss://") and redis_tls_insecure:
-                    import ssl
-
-                    kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
-                self._redis = redis.from_url(redis_url, **kwargs)
-                self._redis.ping()
+                self._redis = connect_redis(
+                    redis_url, redis_tls_insecure=redis_tls_insecure
+                )
             except Exception as e:  # noqa: BLE001 - degrade to static defaults
                 logger.warning("correlation_runtime_redis_unavailable", error=str(e))
                 self._redis = None

@@ -33,6 +33,8 @@ from typing import Any, Optional
 
 import structlog
 
+from src.redis_bootstrap import connect_redis
+
 logger = structlog.get_logger()
 
 # Redis key namespace for dialog session state.
@@ -109,15 +111,9 @@ class DialogSessionStore:
             self._ttl = max(1, int(ttl_seconds))
         if redis_url:
             try:
-                import redis
-
-                kwargs: dict = {"decode_responses": True, "socket_timeout": 1}
-                if redis_url.startswith("rediss://") and redis_tls_insecure:
-                    import ssl
-
-                    kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
-                self._redis = redis.from_url(redis_url, **kwargs)
-                self._redis.ping()
+                self._redis = connect_redis(
+                    redis_url, redis_tls_insecure=redis_tls_insecure
+                )
             except Exception as e:  # noqa: BLE001 - degrade to in-memory
                 logger.warning("dialog_session_redis_unavailable", error=str(e))
                 self._redis = None

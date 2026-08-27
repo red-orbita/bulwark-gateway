@@ -29,6 +29,7 @@ from typing import Optional
 import structlog
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
+from src.redis_bootstrap import connect_redis
 
 logger = structlog.get_logger()
 
@@ -189,13 +190,9 @@ class SessionDecompositionTracker:
         """Initialize Redis connection (call once at startup)."""
         if redis_url:
             try:
-                import redis
-                kwargs = {"decode_responses": True, "socket_timeout": 1}
-                if redis_url.startswith("rediss://") and redis_tls_insecure:
-                    import ssl
-                    kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
-                self._redis = redis.from_url(redis_url, **kwargs)
-                self._redis.ping()
+                self._redis = connect_redis(
+                    redis_url, redis_tls_insecure=redis_tls_insecure
+                )
             except Exception as e:
                 logger.warning("session_tracker_redis_unavailable", error=str(e))
                 self._redis = None
