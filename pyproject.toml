@@ -46,6 +46,14 @@ ml-gpu = [
     "tokenizers>=0.15",
     "numpy>=1.26",
 ]
+# Kept as an OPT-IN extra (NOT a core dependency) on purpose: the
+# lingua-language-detector wheel is ~170 MB (it bundles n-gram models for every
+# supported language), while the scanner it feeds (`language_detector`) is gated
+# behind BULWARK_MULTILINGUAL_ENABLED, which is OFF by default. Shipping it in
+# core would add 170 MB to every image for a default-off feature, breaking the
+# minimal-distroless / zero-cost-when-disabled posture. Without this extra the
+# detector still runs its script heuristic (CJK/Arabic/Cyrillic/… detected;
+# Latin-script resolved to "en" at reduced confidence).
 multilingual = [
     "lingua-language-detector>=2.0",
 ]

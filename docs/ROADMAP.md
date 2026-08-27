@@ -413,6 +413,15 @@ ml-gpu = [
 > without the optional `lingua` backend) and the **multilingual regex patterns**
 > ship and are wired.
 >
+> The `lingua` backend is **intentionally kept as an opt-in extra**
+> (`pip install bulwark-gateway[multilingual]`), not a core dependency: its wheel
+> is ~170 MB (it bundles n-gram models for every supported language) and the
+> detector is gated behind `BULWARK_MULTILINGUAL_ENABLED` (off by default).
+> Shipping it in core would add 170 MB to every image for a default-off feature,
+> so it stays out of the minimal distroless runtime. Default distribution runs
+> only the script heuristic: CJK/Arabic/Cyrillic/Devanagari are detected, and all
+> Latin-script input resolves to `"en"` at reduced confidence.
+>
 > The **vision scanner** (§3.4) is split into two honest capability tiers:
 > - Its **zero-dependency deterministic guards** — inline `data:image/...;base64`
 >   extraction, base64 decode validation, the DoS size limit, the `allow_images`
@@ -441,7 +450,8 @@ class LanguageDetector(InputScanner):
     version = "1.0.0"
     blocking = True  # Must run first to inform other scanners
 
-    # Uses fasttext-langdetect or lingua-py (lightweight, no GPU)
+    # Uses lingua-py (opt-in extra, ~170 MB, no GPU) or a fasttext model;
+    # falls back to a script heuristic when neither is installed.
     # Sets context.language for downstream scanners
     # Policy enforcement: agent allowed_languages in YAML
 ```
@@ -543,7 +553,7 @@ agents:
 ```toml
 [project.optional-dependencies]
 multilingual = [
-    "lingua-language-detector>=2.0",  # or fasttext
+    "lingua-language-detector>=2.0",  # ~170 MB wheel; opt-in only (see 3.1 status note)
 ]
 vision = [
     "pillow>=10.0",

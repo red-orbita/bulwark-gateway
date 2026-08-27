@@ -729,6 +729,17 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    | Grounding | `BULWARK_GROUNDING_SCANNING_ENABLED=true` | `--nli` |
    | Image hygiene guards (BETA) | `BULWARK_IMAGE_HYGIENE_SCANNING_ENABLED=true` | none (zero-dep) |
    | Vision OCR (EXPERIMENTAL) | `BULWARK_VISION_SCANNING_ENABLED=true` | pillow + OCR backend |
+   | Multilingual (BETA) | `BULWARK_MULTILINGUAL_ENABLED=true` | `[multilingual]` extra for accurate detection — see note |
+   | RAG scanner / memory guard | `BULWARK_RAG_ENABLED=true` | none (model-free) |
+
+   > **Multilingual footprint note.** The `[multilingual]` extra
+   > (`pip install bulwark-gateway[multilingual]`) pulls
+   > `lingua-language-detector`, a **~170 MB** wheel that bundles n-gram models
+   > for every language. It is deliberately **not** in core, so the default image
+   > stays minimal. Without it the language detector still runs — it falls back to
+   > a script heuristic that detects CJK/Arabic/Cyrillic/Devanagari but labels all
+   > Latin-script input `"en"` at reduced confidence. Install the extra only when
+   > you need to distinguish Latin-script languages (es/fr/de/pt/…).
 
    The owning agent must also opt in via its `output_validation` policy — a flag
    with no matching policy is a no-op for that agent.
