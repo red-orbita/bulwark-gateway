@@ -35,24 +35,32 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# SECURITY FIX (H-08): Verify ONNX model integrity before loading.
-# A model manifest file maps model names to expected SHA-256 hashes.
+# SECURITY FIX (H-08): Verify ML model integrity before loading.
+# A model manifest file maps each load-bearing file's path (model.onnx,
+# tokenizer.json, config.json) to its expected SHA-256 hash.
 _MODEL_MANIFEST_PATH = Path(__file__).parent.parent.parent.parent / "config" / "model_manifest.json"
 _MODEL_DIR = Path(os.environ.get("BULWARK_ML_MODEL_DIR",
                                   str(Path(__file__).parent.parent.parent.parent / "models")))
 
 
 def _verify_model_integrity(model_path: Path, model_dir: Path | None = None) -> bool:
-    """Verify model file matches expected hash from manifest.
+    """Verify a model file matches its expected hash from the manifest.
+
+    Works for ANY load-bearing model file (model.onnx, tokenizer.json,
+    config.json) — the key is the file's path relative to ``model_dir``.
 
     SECURITY FIX (H-12): Removed BULWARK_ML_SKIP_INTEGRITY bypass.
     Model integrity verification is ALWAYS enforced. To deploy a new model:
-    1. Compute SHA-256: sha256sum models/your_model.onnx
-    2. Add to config/model_manifest.json: {"your_model.onnx": "<sha256>"}
+    1. Compute SHA-256: sha256sum models/your_model/model.onnx
+    2. Add to config/model_manifest.json every load-bearing file:
+       {"your_model/model.onnx": "<sha256>",
+        "your_model/tokenizer.json": "<sha256>",
+        "your_model/config.json": "<sha256>"}
     3. Deploy. Integrity check passes.
 
     This prevents an attacker with container access from replacing ONNX models
-    with backdoored versions (e.g., always returning ALLOW).
+    (or their tokenizer/config) with backdoored versions (e.g., a tokenizer that
+    maps attacks to benign ids, or a config that inverts the label order).
 
     ``model_dir`` is the base directory the caller used to build ``model_path``
     (the ModelManager's own ``self._model_dir``). It MUST be passed by real
@@ -253,6 +261,8 @@ class ModelManager:
             logger.warning("model_tokenizer_missing", extra={"model": name, "path": str(tokenizer_path)})
             return None
 
+        config_path = model_path / "config.json"
+
         try:
             # SECURITY FIX (H-08): Verify model integrity before loading.
             # Pass this manager's own base dir so the manifest key is derived
@@ -261,6 +271,26 @@ class ModelManager:
             if not _verify_model_integrity(onnx_path, self._model_dir):
                 logger.error("model_load_blocked", extra={"model": name,
                             "reason": "integrity_check_failed"})
+                return None
+
+            # SECURITY: verify ALL load-bearing files, not just the ONNX weights.
+            # The model's verdict does not depend on model.onnx alone:
+            #   - tokenizer.json (mandatory) turns text into token ids. A poisoned
+            #     tokenizer can silently remap an attack payload to benign ids so
+            #     the classifier scores it SAFE — a full bypass that never touches
+            #     the pinned weights.
+            #   - config.json (when present) drives the label ordering (id2label)
+            #     for NLI-style models; a silent reorder inverts entailment vs
+            #     contradiction (and SAFE vs INJECTION), flipping every verdict.
+            # Both are pinned in the manifest and fail-closed here so the
+            # "model-driven, tamper-evident" label guarantee below is real.
+            if not _verify_model_integrity(tokenizer_path, self._model_dir):
+                logger.error("model_load_blocked", extra={"model": name,
+                            "reason": "tokenizer_integrity_failed"})
+                return None
+            if config_path.exists() and not _verify_model_integrity(config_path, self._model_dir):
+                logger.error("model_load_blocked", extra={"model": name,
+                            "reason": "config_integrity_failed"})
                 return None
 
             # Load ONNX session
@@ -280,9 +310,10 @@ class ModelManager:
             tokenizer.enable_truncation(max_length=max_length)
             tokenizer.enable_padding(length=max_length)
 
-            # Read version + labels from config if available
+            # Read version + labels from config if available. The file's
+            # integrity was already verified above (fail-closed), so the label
+            # ordering derived here is genuinely tamper-evident.
             version = "1.0.0"
-            config_path = model_path / "config.json"
             if config_path.exists():
                 import json
                 with open(config_path) as f:
@@ -292,8 +323,9 @@ class ModelManager:
                         # Prefer an explicit `labels` list; otherwise derive the
                         # label order from the model's own `id2label` map (ordered
                         # by integer id). This keeps class ordering MODEL-DRIVEN and
-                        # tamper-evident — critical for NLI/classifier models whose
-                        # label order varies (a silent swap inverts every verdict).
+                        # tamper-evident (config.json is hash-pinned) — critical for
+                        # NLI/classifier models whose label order varies (a silent
+                        # swap inverts every verdict).
                         labels = config.get("labels", [])
                         if not labels and isinstance(config.get("id2label"), dict):
                             try:

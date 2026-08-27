@@ -9,13 +9,12 @@ These tests verify:
   - Scanner protocol compliance
 """
 
-import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from src.models import GuardrailResult, Verdict
+from src.models import Verdict
 from src.scanners.protocol import ScanContext, ScannerType
 
 
@@ -112,6 +111,76 @@ class TestModelManager:
 
         with patch.object(mm, "_MODEL_MANIFEST_PATH", manifest):
             assert mm._verify_model_integrity(model_file, tmp_path) is False
+
+    def test_integrity_verifies_tokenizer_and_config(self, tmp_path):
+        """The verifier is generic: tokenizer.json / config.json are pinned too.
+
+        The model's verdict does not depend on model.onnx alone — a poisoned
+        tokenizer or a reordered config.json (id2label) silently subverts every
+        decision. So every load-bearing file must be individually verifiable
+        against its own manifest key.
+        """
+        import hashlib
+        import json
+
+        from src.scanners.ml import model_manager as mm
+
+        subdir = "clf"
+        d = tmp_path / subdir
+        d.mkdir(parents=True)
+        files = {"model.onnx": b"weights", "tokenizer.json": b"tok", "config.json": b"cfg"}
+        manifest_data = {}
+        for name, data in files.items():
+            (d / name).write_bytes(data)
+            manifest_data[f"{subdir}/{name}"] = hashlib.sha256(data).hexdigest()
+
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(json.dumps(manifest_data))
+
+        with patch.object(mm, "_MODEL_MANIFEST_PATH", manifest):
+            # All three match their pinned hash.
+            for name in files:
+                assert mm._verify_model_integrity(d / name, tmp_path) is True
+            # Tamper the tokenizer → fail closed, weights untouched.
+            (d / "tokenizer.json").write_bytes(b"poisoned")
+            assert mm._verify_model_integrity(d / "tokenizer.json", tmp_path) is False
+            # Tamper the config → fail closed.
+            (d / "config.json").write_bytes(b"reordered")
+            assert mm._verify_model_integrity(d / "config.json", tmp_path) is False
+
+    def test_load_model_fails_closed_on_tampered_tokenizer(self, tmp_path):
+        """load_model must refuse a model whose tokenizer.json is unpinned/tampered.
+
+        Even with valid, pinned model.onnx bytes, an unverifiable tokenizer is a
+        full-bypass vector (remaps attacks to benign ids), so loading fails
+        closed. This is a pure-unit test (no ML deps needed): the integrity gate
+        runs before any ONNX/tokenizer machinery, so a fake model dir suffices.
+        """
+        import hashlib
+        import json
+
+        from src.scanners.ml import model_manager as mm
+        from src.scanners.ml.model_manager import ModelManager
+
+        subdir = "clf"
+        d = tmp_path / subdir
+        d.mkdir(parents=True)
+        onnx = b"weights"
+        (d / "model.onnx").write_bytes(onnx)
+        (d / "tokenizer.json").write_bytes(b"tok")
+        # Manifest pins ONLY the weights, not the tokenizer → tokenizer unverifiable.
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps({f"{subdir}/model.onnx": hashlib.sha256(onnx).hexdigest()})
+        )
+
+        manager = ModelManager(tmp_path)
+        # Force the "deps available" path so we reach the integrity gate even on a
+        # runner without onnxruntime/tokenizers installed.
+        manager._available = True
+        with patch.object(mm, "_MODEL_MANIFEST_PATH", manifest):
+            assert manager.load_model("clf", model_subdir=subdir) is None
+
 
 
 def ml_dependencies_available():
@@ -406,6 +475,54 @@ class TestRealInference:
         assert abs(sum(clean.values()) - 1.0) < 1e-4
         # A plainly polite sentence should not be flagged as toxic.
         assert clean.get("toxic", clean.get("TOXIC", 0.0)) < 0.5
+
+    def test_real_model_loads_but_tampered_aux_fails_closed(self, tmp_path):
+        """Against the REAL provisioned model: a clean copy loads, but tampering
+        the tokenizer or config (leaving the pinned weights intact) fails closed.
+
+        This exercises the true attack shape — swap an auxiliary file inside a
+        provisioned model volume without touching model.onnx — end to end through
+        the real manifest, ONNX session, and tokenizer machinery.
+        """
+        import shutil
+
+        if not self._models_available("injection-classifier"):
+            pytest.skip("injection-classifier model or ML deps not present")
+
+        from src.scanners.ml.model_manager import ModelManager
+
+        src = Path("models") / "injection-classifier"
+        dst = tmp_path / "injection-classifier"
+        dst.mkdir(parents=True)
+        for f in ("model.onnx", "tokenizer.json", "config.json"):
+            shutil.copy2(src / f, dst / f)
+
+        # Clean copy loads (hashes match the committed manifest).
+        assert (
+            ModelManager(tmp_path).load_model(
+                "injection-classifier", labels=["SAFE", "INJECTION"]
+            )
+            is not None
+        )
+
+        # Tamper tokenizer.json only → fail closed (weights untouched).
+        (dst / "tokenizer.json").write_bytes((dst / "tokenizer.json").read_bytes() + b" ")
+        assert (
+            ModelManager(tmp_path).load_model(
+                "injection-classifier", labels=["SAFE", "INJECTION"]
+            )
+            is None
+        )
+
+        # Restore tokenizer, tamper config.json only → fail closed.
+        shutil.copy2(src / "tokenizer.json", dst / "tokenizer.json")
+        (dst / "config.json").write_bytes((dst / "config.json").read_bytes() + b" ")
+        assert (
+            ModelManager(tmp_path).load_model(
+                "injection-classifier", labels=["SAFE", "INJECTION"]
+            )
+            is None
+        )
 
 
 class TestPipelineIntegration:

@@ -218,3 +218,95 @@ def test_verify_models_fails_on_empty_manifest(dl, tmp_path, monkeypatch):
     monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
     assert dl.verify_models(tmp_path / "models") is False
 
+
+# ---------------------------------------------------------------------------
+# _pin_model_files — pins every load-bearing file, not just the ONNX weights
+# ---------------------------------------------------------------------------
+
+
+def test_pin_model_files_pins_all_load_bearing_files(dl, tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    dest = tmp_path / "models" / "injection-classifier"
+    dest.mkdir(parents=True)
+    (dest / "model.onnx").write_bytes(b"weights")
+    (dest / "tokenizer.json").write_bytes(b"tok")
+    (dest / "config.json").write_bytes(b"cfg")
+
+    assert dl._pin_model_files(dest, "injection-classifier") is True
+
+    recorded = json.loads(manifest.read_text())
+    # Not just the weights — the tokenizer and config are pinned too, so a
+    # poisoned tokenizer / reordered config is tamper-evident at load time.
+    assert "injection-classifier/model.onnx" in recorded
+    assert "injection-classifier/tokenizer.json" in recorded
+    assert "injection-classifier/config.json" in recorded
+
+
+def test_pin_model_files_skips_absent_config(dl, tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    dest = tmp_path / "models" / "some-model"
+    dest.mkdir(parents=True)
+    (dest / "model.onnx").write_bytes(b"weights")
+    (dest / "tokenizer.json").write_bytes(b"tok")
+    # No config.json on disk.
+
+    assert dl._pin_model_files(dest, "some-model") is True
+
+    recorded = json.loads(manifest.read_text())
+    assert "some-model/model.onnx" in recorded
+    assert "some-model/tokenizer.json" in recorded
+    assert "some-model/config.json" not in recorded
+
+
+def test_verify_models_skips_metadata_keys(dl, tmp_path, monkeypatch):
+    """A ``_comment`` (or any ``_``-prefixed) meta key documents the manifest and
+    must NOT be treated as a model file to hash — otherwise --verify always fails
+    on the real repo manifest."""
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    model_dir = tmp_path / "models"
+
+    _pin(dl, manifest, model_dir, "toxicity/model.onnx", b"present")
+    # Inject a metadata key alongside the real file entry.
+    m = json.loads(manifest.read_text())
+    m["_comment"] = "this is documentation, not a file"
+    manifest.write_text(json.dumps(m, indent=2, sort_keys=True) + "\n")
+
+    # Verification passes: the meta key is ignored, the real file matches.
+    assert dl.verify_models(model_dir) is True
+
+
+# ---------------------------------------------------------------------------
+# Committed manifest completeness — every model pins ALL load-bearing files
+# ---------------------------------------------------------------------------
+
+
+def test_committed_manifest_pins_aux_files_for_every_model():
+    """The repo's config/model_manifest.json must pin tokenizer.json and
+    config.json for every ONNX model directory it references, not just the
+    weights. A model whose tokenizer/config is unpinned is unverifiable and would
+    fail closed at load — or, worse, silently trusted if the gate were weaker."""
+    manifest_path = (
+        Path(__file__).resolve().parent.parent / "config" / "model_manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text())
+
+    # Model subdirs are keys shaped "<subdir>/model.onnx" (fasttext is a bare file).
+    subdirs = {
+        key.split("/", 1)[0]
+        for key in manifest
+        if not key.startswith("_") and key.endswith("/model.onnx")
+    }
+    assert subdirs, "expected at least one ONNX model in the manifest"
+
+    for subdir in subdirs:
+        assert f"{subdir}/tokenizer.json" in manifest, (
+            f"{subdir}: tokenizer.json not pinned (poisoned-tokenizer bypass risk)"
+        )
+        assert f"{subdir}/config.json" in manifest, (
+            f"{subdir}: config.json not pinned (label-inversion risk)"
+        )
+
+

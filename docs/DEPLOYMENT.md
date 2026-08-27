@@ -701,7 +701,8 @@ scanners: relevance, hallucination, grounding) are **model-backed** and ship
 either and the scanner stays silently inert (returns ALLOW, no protection):
 
 1. **Provision the model bytes.** Model weights are NOT committed to the repo
-   (only the download path + expected hash + `config.json`). Download them:
+   (only the download path + the expected SHA-256 of every load-bearing file).
+   Download them:
 
    ```bash
    # The ONNX downloader needs the HuggingFace Hub client (provisioning-only,
@@ -723,9 +724,15 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    Models land in `models/` (`BULWARK_ML_MODEL_DIR`). On Kubernetes, mount this
    as a persistent volume or bake it into an ML image variant so every replica
    sees the same bytes. The download is hash-verified against
-   `config/model_manifest.json`; `--verify` re-checks every pinned file on disk
-   against that manifest (fail-closed) so you can validate a mounted volume or
-   baked image before enabling any flag.
+   `config/model_manifest.json`, which pins **every load-bearing file** of each
+   model — `model.onnx` (weights), `tokenizer.json`, and `config.json` — not just
+   the weights. This matters: a poisoned tokenizer can silently remap an attack
+   payload to benign token ids, and a reordered `config.json` (`id2label`) inverts
+   an NLI model's verdict, both without touching the pinned weights. The loader
+   fails closed at load time if any of these files is missing from the manifest or
+   its hash does not match; `--verify` re-checks every pinned file on disk against
+   that manifest (fail-closed) so you can validate a mounted volume or baked image
+   before enabling any flag.
 
 2. **Enable the capability flag** (boot-time env, default off):
 

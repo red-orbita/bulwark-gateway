@@ -1,8 +1,16 @@
 {
-  "_comment": "SHA-256 integrity manifest for ML models (security control H-08/H-12). Maps each model's path (relative to BULWARK_ML_MODEL_DIR) to its trusted SHA-256. The ONNX loader (src/scanners/ml/model_manager.py) fails closed if a model is missing from this manifest or its hash does not match. Regenerate/verify with: python scripts/download-models.py --all",
+  "_comment": "SHA-256 integrity manifest for ML models (security control H-08/H-12). Maps each model's path (relative to BULWARK_ML_MODEL_DIR) to its trusted SHA-256. The ONNX loader (src/scanners/ml/model_manager.py) fails closed if a load-bearing file is missing from this manifest or its hash does not match. Every model pins ALL load-bearing files, not just the weights: model.onnx (weights), tokenizer.json (a poisoned tokenizer can silently remap an attack payload to benign token ids) and config.json (drives id2label label ordering — a silent reorder inverts every verdict for NLI-style models). Regenerate/verify with: python scripts/download-models.py --all  /  --verify",
   "injection-classifier/model.onnx": "f0ea7f239f765aedbde7c9e163a7cb38a79c5b8853d3f76db5152172047b228c",
+  "injection-classifier/tokenizer.json": "752fe5f0d5678ad563e1bd2ecc1ddf7a3ba7e2024d0ac1dba1a72975e26dff2f",
+  "injection-classifier/config.json": "3093743035223c46b1497a72e939e56fa0a50afbd7bafbf7eb8aad060b8d23f8",
   "lid.176.ftz": "8f3472cfe8738a7b6099e8e999c3cbfae0dcd15696aac7d7738a8039db603e83",
   "nli-classifier/model.onnx": "59fd8dd78926e15907ab419303179e4196bdedd710e888773e2f0143fe430897",
+  "nli-classifier/tokenizer.json": "5124ef2ead1a10a717703bc436de7f353da76d6340e4587719b42b1693707964",
+  "nli-classifier/config.json": "885d0dceae8fa5c136da9209121ec9eb11160488e840de3bc1f29353674e5712",
   "sentence-embeddings/model.onnx": "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452",
-  "toxicity/model.onnx": "bf78dc86addc6be09ace75ce95b846da7424f990f74fa450445c9ddb258e546d"
+  "sentence-embeddings/tokenizer.json": "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037",
+  "sentence-embeddings/config.json": "953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41",
+  "toxicity/model.onnx": "bf78dc86addc6be09ace75ce95b846da7424f990f74fa450445c9ddb258e546d",
+  "toxicity/tokenizer.json": "1649e42e2e4cc707159be564b62216cd3c21a0225fad65b04bed94477dd79083",
+  "toxicity/config.json": "ea70efbb72271b950f1cb14a46aa3fc0180317a77019c7c8ceb0192a84cabb42"
 }

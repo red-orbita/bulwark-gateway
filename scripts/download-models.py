@@ -161,6 +161,24 @@ def download_url(url: str, dest: Path) -> bool:
         tmp.unlink(missing_ok=True)
 
 
+def _pin_model_files(dest: Path, subdir: str) -> bool:
+    """Pin every load-bearing file of a downloaded model in the manifest.
+
+    Security: the model's verdict depends on more than the ONNX weights. A
+    poisoned ``tokenizer.json`` can remap an attack payload to benign token ids,
+    and a reordered ``config.json`` (id2label) inverts every verdict. So all
+    three are hashed and pinned, mirroring what ``model_manager`` fail-closes on
+    at load time. ``config.json`` is optional (some models ship none); when
+    present it is pinned too.
+    """
+    ok = update_manifest(dest / "model.onnx", f"{subdir}/model.onnx")
+    if ok:
+        ok = update_manifest(dest / "tokenizer.json", f"{subdir}/tokenizer.json")
+    if ok and (dest / "config.json").exists():
+        ok = update_manifest(dest / "config.json", f"{subdir}/config.json")
+    return ok
+
+
 def download_injection(model_dir: Path) -> bool:
     """Download prompt injection classifier (DeBERTa-v3, ~700MB)."""
     dest = model_dir / "injection-classifier"
@@ -174,7 +192,7 @@ def download_injection(model_dir: Path) -> bool:
         dest=dest,
     )
     if ok:
-        ok = update_manifest(dest / "model.onnx", "injection-classifier/model.onnx")
+        ok = _pin_model_files(dest, "injection-classifier")
     return ok
 
 
@@ -191,7 +209,7 @@ def download_toxicity(model_dir: Path) -> bool:
         dest=dest,
     )
     if ok:
-        ok = update_manifest(dest / "model.onnx", "toxicity/model.onnx")
+        ok = _pin_model_files(dest, "toxicity")
     return ok
 
 
@@ -214,7 +232,7 @@ def download_embeddings(model_dir: Path) -> bool:
         dest=dest,
     )
     if ok:
-        ok = update_manifest(dest / "model.onnx", "sentence-embeddings/model.onnx")
+        ok = _pin_model_files(dest, "sentence-embeddings")
     return ok
 
 
@@ -241,7 +259,7 @@ def download_nli(model_dir: Path) -> bool:
         dest=dest,
     )
     if ok:
-        ok = update_manifest(dest / "model.onnx", "nli-classifier/model.onnx")
+        ok = _pin_model_files(dest, "nli-classifier")
     return ok
 
 
@@ -294,9 +312,12 @@ def verify_models(model_dir: Path) -> bool:
         print(f"ERROR: integrity manifest {_MANIFEST_PATH} is empty — nothing to verify")
         return False
 
-    print(f"Verifying {len(manifest)} pinned model file(s) under {model_dir.resolve()}")
+    # Metadata keys (e.g. "_comment") document the manifest; they are not model
+    # files on disk, so exclude them from the file set being verified.
+    file_keys = sorted(k for k in manifest if not k.startswith("_"))
+    print(f"Verifying {len(file_keys)} pinned model file(s) under {model_dir.resolve()}")
     all_ok = True
-    for key in sorted(manifest):
+    for key in file_keys:
         expected = manifest[key]
         path = model_dir / key
         if not path.exists():
