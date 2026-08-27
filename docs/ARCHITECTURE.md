@@ -96,6 +96,11 @@ Tiers are pinned by `tests/test_scanner_maturity.py` and propagate through
 | **BETA** | Real capability + real-inference/deterministic tests; opt-in | `ml_injection_classifier`, `ml_toxicity_scanner`, `schema_validator`, `relevance_scanner`, `hallucination_scanner`, `grounding_scanner`, `retrieval_scanner`, `memory_guard`, `language_detector`, `multilingual_patterns` |
 | **EXPERIMENTAL** | Headline capability unprovisioned/unproven | `ml_vision_scanner` (OCR layer inert without pillow + OCR backend) |
 
+> The accepted limitations behind the BETA/EXPERIMENTAL tiers (vision OCR in
+> distroless, multilingual heuristic-only default, unshipped topic classifiers,
+> WAF scope) are consolidated in [Accepted Limitations & Known
+> Gaps](LIMITATIONS.md).
+
 ### Master flags vs runtime toggles
 
 Capability scanners are gated by boot-time env flags (`BULWARK_*_SCANNING_ENABLED`,

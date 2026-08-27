@@ -1157,4 +1157,5 @@ Full troubleshooting: `docs/TROUBLESHOOTING.md`
 | API details | `docs/API-REFERENCE.md` |
 | Validate pipeline e2e (K8s) | `docs/E2E-VALIDATION.md` |
 | Security posture | `docs/SECURITY-HARDENING.md` |
+| Accepted limitations / known gaps | `docs/LIMITATIONS.md` |
 | All docs (index) | `docs/INDEX.md` |

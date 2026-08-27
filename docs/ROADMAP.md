@@ -437,6 +437,10 @@ ml-gpu = [
 > `MaturityTier.EXPERIMENTAL` — it never claims BETA/GA on the strength of the
 > hygiene guards alone. To run OCR, install pillow + an OCR backend deliberately
 > (understanding it will not load in a stock distroless image).
+>
+> These accepted gaps (vision OCR, multilingual heuristic-only default, fasttext
+> provisioning) are consolidated in [Accepted Limitations & Known
+> Gaps](LIMITATIONS.md).
 
 
 ### 3.1 Language Detection
