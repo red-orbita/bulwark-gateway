@@ -7,7 +7,8 @@ intent matching.
 
 Features:
   - YAML-defined dialog flows (trigger → allowed/denied intents → response)
-  - Session state tracking (in-memory, keyed by session_id)
+  - Session state tracking (Redis-backed with in-memory fallback, keyed by a
+    tenant/agent-namespaced session id — see ``dialog.session_store``)
   - Keyword-based intent matching (deterministic; no ML model — the earlier
     "ML intent scanner" was removed, so matching is keyword-only by design)
   - Three possible actions: allow, redirect (canned response), block
@@ -54,6 +55,11 @@ from typing import Any
 
 import yaml
 
+from src.dialog.session_store import (
+    DialogSessionState,
+    DialogSessionStore,
+    get_dialog_session_store,
+)
 from src.scanners.protocol import ScanContext
 
 logger = logging.getLogger(__name__)
@@ -95,15 +101,6 @@ class DialogDecision:
     matched_intent: str | None = None
 
 
-@dataclass
-class _SessionState:
-    """Internal session tracking state."""
-
-    current_node: str | None = None
-    turn_count: int = 0
-    history: list[str] = field(default_factory=list)
-
-
 class DialogEngine:
     """YAML-based dialog flow engine with session state.
 
@@ -111,8 +108,13 @@ class DialogEngine:
     Uses keyword matching to detect intents and enforce allowed/denied
     transitions per node.
 
-    Session state is stored in-memory (session_id -> current_node).
-    For production distributed deployments, extend with Redis backing.
+    Session state (the state-machine position per conversation) is persisted via
+    a :class:`~src.dialog.session_store.DialogSessionStore` — Redis-backed with a
+    bounded in-memory fallback — so a conversation routes correctly even when
+    consecutive turns land on different proxy replicas. State is keyed by the
+    authenticated tenant/agent plus the caller's ``session_id`` and carries an
+    idle TTL, so sessions cannot leak unbounded (the earlier bare in-memory dict
+    had neither cross-replica sharing nor eviction).
 
     Usage:
         flows = load_dialog_config(Path("config/dialog.yaml"))
@@ -120,15 +122,21 @@ class DialogEngine:
         decision = await engine.process(message, session_id, context)
     """
 
-    def __init__(self, flows: dict[str, DialogFlow]) -> None:
+    def __init__(
+        self,
+        flows: dict[str, DialogFlow],
+        session_store: DialogSessionStore | None = None,
+    ) -> None:
         """Initialize dialog engine with flow definitions.
 
         Args:
             flows: Mapping of node_name -> DialogFlow. Must contain at least
                    one node to be functional.
+            session_store: Optional store for per-session state. Defaults to the
+                   process-wide singleton (Redis-backed with in-memory fallback).
         """
         self._flows = flows
-        self._sessions: dict[str, _SessionState] = {}
+        self._store = session_store or get_dialog_session_store()
         logger.info(
             "dialog_engine_initialized",
             extra={"flow_count": len(flows), "nodes": list(flows.keys())},
@@ -153,11 +161,31 @@ class DialogEngine:
         if not self._flows:
             return DialogDecision(action="allow")
 
-        # Get or create session state
-        session = self._get_or_create_session(session_id)
+        session_key = self._store.make_session_key(
+            context.tenant_id, context.agent_id, session_id
+        )
+        session = self._store.load(session_key)
         session.turn_count += 1
-        session.history.append(message[:200])  # Keep truncated history
+        try:
+            return self._advance(message, session_id, context, session)
+        finally:
+            # Persist the (possibly transitioned) state so the next turn — even
+            # on a different replica — resumes from the correct node.
+            self._store.save(session_key, session)
 
+    def _advance(
+        self,
+        message: str,
+        session_id: str,
+        context: ScanContext,
+        session: DialogSessionState,
+    ) -> DialogDecision:
+        """Core state-machine step for one turn.
+
+        Mutates ``session`` in place (``current_node`` transitions); the caller
+        (:meth:`process`) persists it. Factored out so ``process`` can guarantee
+        a save on every return path via ``finally``.
+        """
         # Detect intent from message (keyword-based)
         detected_intent = self._detect_intent(message)
 
@@ -253,12 +281,6 @@ class DialogEngine:
 
         return DialogDecision(action="allow", matched_node=session.current_node)
 
-    def _get_or_create_session(self, session_id: str) -> _SessionState:
-        """Get existing session or create a new one."""
-        if session_id not in self._sessions:
-            self._sessions[session_id] = _SessionState()
-        return self._sessions[session_id]
-
     def _detect_intent(self, message: str) -> str | None:
         """Detect intent from message using keyword matching.
 
@@ -298,27 +320,39 @@ class DialogEngine:
                         return next_name
         return None
 
-    def reset_session(self, session_id: str) -> None:
+    def reset_session(
+        self, session_id: str, tenant_id: str = "", agent_id: str = ""
+    ) -> None:
         """Reset a session to initial state.
 
         Args:
             session_id: The session to reset.
+            tenant_id: Authenticated tenant that owns the session. Required to
+                target the same namespaced key ``process`` writes under; defaults
+                to empty for legacy/debug single-arg callers.
+            agent_id: Authenticated agent that owns the session.
         """
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            logger.debug("dialog_session_reset", extra={"session_id": session_id})
+        session_key = self._store.make_session_key(tenant_id, agent_id, session_id)
+        self._store.delete(session_key)
+        logger.debug("dialog_session_reset", extra={"session_id": session_id})
 
-    def get_session_node(self, session_id: str) -> str | None:
+    def get_session_node(
+        self, session_id: str, tenant_id: str = "", agent_id: str = ""
+    ) -> str | None:
         """Get the current node for a session (for debugging/testing).
 
         Args:
             session_id: The session to query.
+            tenant_id: Authenticated tenant that owns the session (must match the
+                value ``process`` was called with to resolve the same key).
+            agent_id: Authenticated agent that owns the session.
 
         Returns:
             Current node name or None if session doesn't exist.
         """
-        session = self._sessions.get(session_id)
-        return session.current_node if session else None
+        session_key = self._store.make_session_key(tenant_id, agent_id, session_id)
+        state = self._store.load(session_key)
+        return state.current_node
 
     @property
     def flow_names(self) -> list[str]:

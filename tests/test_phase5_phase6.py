@@ -2,7 +2,7 @@
 Tests for Phase 5 (RAG Guardrails + Dialog Control) and Phase 6 (SDK Mode).
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -160,7 +160,7 @@ class TestDialogEngine:
 
     @pytest.mark.asyncio
     async def test_allows_valid_intent(self):
-        from src.dialog.engine import DialogDecision, DialogEngine, DialogFlow
+        from src.dialog.engine import DialogEngine, DialogFlow
 
         flows = {
             "start": DialogFlow(
@@ -177,7 +177,7 @@ class TestDialogEngine:
 
     @pytest.mark.asyncio
     async def test_redirects_denied_intent(self):
-        from src.dialog.engine import DialogDecision, DialogEngine, DialogFlow
+        from src.dialog.engine import DialogEngine, DialogFlow
 
         # First enter a node, then test denied intent
         flows = {
@@ -203,6 +203,198 @@ class TestDialogEngine:
         decision = await engine.process("What about the election results?", "sess-2", ctx)
         assert decision.action == "redirect"
         assert "billing" in decision.response
+
+
+class TestDialogSessionStore:
+    """Redis-backed dialog session store (in-memory fallback path)."""
+
+    def _store(self):
+        # Explicit no-URL init → pure in-memory, deterministic, no Redis attempt.
+        from src.dialog.session_store import DialogSessionStore
+
+        store = DialogSessionStore()
+        store.initialize()  # redis_url=None → in-memory mode
+        return store
+
+    def test_load_absent_returns_fresh(self):
+        from src.dialog.session_store import DialogSessionState
+
+        store = self._store()
+        state = store.load(store.make_session_key("t", "a", "s"))
+        assert isinstance(state, DialogSessionState)
+        assert state.current_node is None
+        assert state.turn_count == 0
+
+    def test_save_load_roundtrip(self):
+        from src.dialog.session_store import DialogSessionState
+
+        store = self._store()
+        key = store.make_session_key("t", "a", "s1")
+        store.save(key, DialogSessionState(current_node="ask", turn_count=3))
+        got = store.load(key)
+        assert got.current_node == "ask"
+        assert got.turn_count == 3
+
+    def test_load_returns_copy_not_live_reference(self):
+        """Mutating a loaded state must not retroactively change stored data."""
+        from src.dialog.session_store import DialogSessionState
+
+        store = self._store()
+        key = store.make_session_key("t", "a", "s1")
+        store.save(key, DialogSessionState(current_node="ask", turn_count=1))
+        got = store.load(key)
+        got.current_node = "tampered"
+        got.turn_count = 99
+        # Reload — the store's copy is untouched until an explicit save.
+        again = store.load(key)
+        assert again.current_node == "ask"
+        assert again.turn_count == 1
+
+    def test_delete_forgets_session(self):
+        from src.dialog.session_store import DialogSessionState
+
+        store = self._store()
+        key = store.make_session_key("t", "a", "s1")
+        store.save(key, DialogSessionState(current_node="ask"))
+        store.delete(key)
+        assert store.load(key).current_node is None
+
+    def test_namespacing_isolates_tenants(self):
+        """Same session_id under different tenants must not collide (isolation)."""
+        from src.dialog.session_store import DialogSessionState
+
+        store = self._store()
+        k1 = store.make_session_key("tenant-1", "agent", "shared-id")
+        k2 = store.make_session_key("tenant-2", "agent", "shared-id")
+        assert k1 != k2
+        store.save(k1, DialogSessionState(current_node="node-a"))
+        # tenant-2's view of the same session_id is empty.
+        assert store.load(k2).current_node is None
+        assert store.load(k1).current_node == "node-a"
+
+    def test_local_ttl_expiry(self):
+        """A session idle past its TTL is forgotten in the fallback map too."""
+        import time
+
+        from src.dialog.session_store import DialogSessionState, DialogSessionStore
+
+        store = DialogSessionStore(ttl_seconds=1)
+        store.initialize()
+        key = store.make_session_key("t", "a", "s1")
+        store.save(key, DialogSessionState(current_node="ask"))
+        assert store.load(key).current_node == "ask"
+        # Force the record past its TTL without sleeping the whole second.
+        store._local[key].updated_at = time.time() - 5
+        assert store.load(key).current_node is None
+
+    def test_never_raises_on_redis_error_degrades_to_local(self):
+        """A broken Redis client must not break the turn — degrade to in-memory."""
+        from src.dialog.session_store import DialogSessionState, DialogSessionStore
+
+        store = DialogSessionStore()
+        store._initialized = True  # skip lazy init
+        broken = MagicMock()
+        broken.hgetall.side_effect = RuntimeError("redis down")
+        broken.hset.side_effect = RuntimeError("redis down")
+        broken.expire.side_effect = RuntimeError("redis down")
+        broken.delete.side_effect = RuntimeError("redis down")
+        store._redis = broken
+        key = store.make_session_key("t", "a", "s1")
+        # None of these raise; save/load fall back to the in-memory map.
+        store.save(key, DialogSessionState(current_node="ask"))
+        got = store.load(key)
+        assert got.current_node == "ask"  # served from local fallback
+        store.delete(key)  # also must not raise
+
+    def test_circuit_breaker_opens_after_repeated_failures(self):
+        from src.dialog.session_store import DialogSessionStore
+
+        store = DialogSessionStore()
+        store._initialized = True
+        broken = MagicMock()
+        broken.hgetall.side_effect = RuntimeError("redis down")
+        store._redis = broken
+        key = store.make_session_key("t", "a", "s1")
+        for _ in range(6):
+            store.load(key)  # each is a consecutive failure
+        assert store.circuit_open is True
+
+    def test_bounded_local_eviction(self):
+        from src.dialog import session_store as ss
+        from src.dialog.session_store import DialogSessionState, DialogSessionStore
+
+        store = DialogSessionStore()
+        store.initialize()
+        with patch.object(ss, "_MAX_LOCAL_ENTRIES", 3):
+            for i in range(5):
+                store.save(
+                    store.make_session_key("t", "a", f"s{i}"),
+                    DialogSessionState(current_node=f"n{i}"),
+                )
+            # Map never grows past the cap — the original in-memory dict had none.
+            assert len(store._local) <= 3
+
+    @pytest.mark.asyncio
+    async def test_cross_replica_continuity(self):
+        """Two engines sharing one store continue a conversation correctly.
+
+        Simulates consecutive turns landing on different proxy replicas: turn 1
+        enters a flow on engine A; turn 2 on engine B (fresh instance, shared
+        store) must resume from that node and enforce its denied intent — the
+        exact correctness the old per-process dict could not provide.
+        """
+        from src.dialog.engine import DialogEngine, DialogFlow
+        from src.dialog.session_store import DialogSessionStore
+
+        flows = {
+            "start": DialogFlow(
+                trigger=["help", "hello", "hi"],
+                allowed_intents=[],
+                denied_intents=["politics", "election"],
+                on_denied="I can only help with billing and support.",
+                next_nodes=[],
+            ),
+            "politics": DialogFlow(
+                trigger=["election", "politics", "vote"],
+                allowed_intents=[],
+                denied_intents=[],
+                on_denied="",
+            ),
+        }
+        shared = DialogSessionStore()
+        shared.initialize()
+        engine_a = DialogEngine(flows=flows, session_store=shared)
+        engine_b = DialogEngine(flows=flows, session_store=shared)
+        ctx = _make_context()
+
+        # Replica A: enter the "start" node.
+        await engine_a.process("hello there", "sess-xr", ctx)
+        # Replica B (different instance, shared store): denied intent enforced.
+        decision = await engine_b.process("election results?", "sess-xr", ctx)
+        assert decision.action == "redirect"
+        assert "billing" in decision.response
+
+    @pytest.mark.asyncio
+    async def test_reset_session_clears_state(self):
+        from src.dialog.engine import DialogEngine, DialogFlow
+        from src.dialog.session_store import DialogSessionStore
+
+        flows = {
+            "start": DialogFlow(
+                trigger=["hello", "hi"],
+                allowed_intents=[],
+                denied_intents=["politics"],
+                on_denied="no",
+            ),
+        }
+        store = DialogSessionStore()
+        store.initialize()
+        engine = DialogEngine(flows=flows, session_store=store)
+        ctx = _make_context()
+        await engine.process("hello", "sess-r", ctx)
+        assert engine.get_session_node("sess-r", "test-tenant", "test-agent") == "start"
+        engine.reset_session("sess-r", "test-tenant", "test-agent")
+        assert engine.get_session_node("sess-r", "test-tenant", "test-agent") is None
 
 
 # ==============================================================================
