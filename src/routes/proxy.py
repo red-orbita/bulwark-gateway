@@ -405,6 +405,62 @@ async def _async_is_ssrf_target(url: str, *, allow_private: bool = False) -> boo
     return _check_ips_blocked(addr_infos, allow_private=allow_private)
 
 
+# Max structured images pulled from one request (DoS guard on extraction itself,
+# mirrors _image_utils.MAX_INLINE_IMAGES for the inline-data-URI path).
+_MAX_STRUCTURED_IMAGES = 5
+
+
+def _content_to_text(content: object) -> str:
+    """Flatten an OpenAI message ``content`` field to plain scannable text.
+
+    ``content`` is either a plain string or, for the multimodal (vision) API, a
+    list of typed blocks like ``{"type": "text", "text": "..."}`` and
+    ``{"type": "image_url", "image_url": {"url": "..."}}``. Only the text blocks
+    carry scannable prose; image payloads are handled separately by
+    ``_extract_image_contents``. Returns ``""`` for anything unrecognised.
+
+    Without this, ``" ".join(msg.get("content", "") ...)`` raises ``TypeError``
+    on list content, so a single multimodal message would crash the hot path.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return " ".join(parts)
+    return ""
+
+
+def _extract_image_contents(messages: list[dict]) -> list[str]:
+    """Extract image payloads from structured ``image_url`` blocks in messages.
+
+    Returns the raw ``url`` values (base64 ``data:image/...`` URIs *and* remote
+    ``http(s)://`` URLs) from OpenAI-vision ``{"type": "image_url", ...}`` blocks,
+    so the multimodal scanners can read them from
+    ``context.metadata["image_contents"]`` instead of only recovering inline
+    data URIs from flattened text (which misses remote URLs and structured
+    payloads entirely). Bounded to ``_MAX_STRUCTURED_IMAGES`` to cap work on a
+    single hostile request.
+    """
+    images: list[str] = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "image_url":
+                continue
+            image_url = block.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else image_url
+            if isinstance(url, str) and url:
+                images.append(url)
+                if len(images) >= _MAX_STRUCTURED_IMAGES:
+                    return images
+    return images
+
+
 @router.post("/chat/completions")
 async def chat_completions(request: Request):
     """OpenAI-compatible chat completions with security guardrails."""
@@ -507,15 +563,23 @@ async def chat_completions(request: Request):
             messages=messages,
             source_ip=source_ip,
         )
+        # Pre-extract structured vision-API image payloads (data URIs + remote
+        # URLs) so the multimodal scanners read them from metadata instead of
+        # only recovering inline data URIs from flattened text. Mark the request
+        # multimodal so downstream scanners can branch on modality.
+        _image_contents = _extract_image_contents(messages)
+        if _image_contents:
+            _scan_ctx.metadata["image_contents"] = _image_contents
+            _scan_ctx.content_type = "multimodal"
         # SECURITY FIX (M-08): Scan ALL role messages, not just 'user'.
         # System/tool messages can contain attacker-controlled content that bypasses scanning.
         # Join all message content for cross-message pattern detection.
         all_content = " ".join(
-            msg.get("content", "") for msg in messages if msg.get("content")
+            _content_to_text(msg.get("content")) for msg in messages if msg.get("content")
         )
         # Also scan user messages individually for single-message attacks
         user_messages = [
-            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+            _content_to_text(msg.get("content")) for msg in messages if msg.get("role") == "user" and msg.get("content")
         ]
         user_content = " ".join(user_messages)
         # Use the broader scan (all content) for guardrail evaluation
@@ -534,7 +598,9 @@ async def chat_completions(request: Request):
         enrichment_mgr = get_enrichment_manager()
         if enrichment_mgr.enabled:
             user_content = " ".join(
-                msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+                _content_to_text(msg.get("content"))
+                for msg in messages
+                if msg.get("role") == "user" and msg.get("content")
             )
             if user_content:
                 asyncio.create_task(
@@ -566,9 +632,9 @@ async def chat_completions(request: Request):
         # (exception-allowed ones carry allowed_by_exception + exception_scope in
         # metadata, which the UI renders as an "ALLOWED" badge with the scope).
         _warn_snippet_src = " ".join(
-            m.get("content", "")
+            _content_to_text(m.get("content"))
             for m in messages
-            if isinstance(m.get("content"), str) and m.get("content")
+            if m.get("content")
         )
         _push_recent_block(
             input_result.events, tenant_id, agent_id, snippet_source=_warn_snippet_src
@@ -596,9 +662,9 @@ async def chat_completions(request: Request):
             record_correlation_metric("origin_risk_total")
             await _log_events([_risk_event], source_ip)
             _risk_snippet = " ".join(
-                m.get("content", "")
+                _content_to_text(m.get("content"))
                 for m in messages
-                if isinstance(m.get("content"), str) and m.get("content")
+                if m.get("content")
             )
             _push_recent_block(
                 [_risk_event], tenant_id, agent_id, snippet_source=_risk_snippet
@@ -630,7 +696,7 @@ async def chat_completions(request: Request):
     if input_result.verdict != Verdict.BLOCK:
         _session_tracker = get_session_tracker()
         user_content_for_session = " ".join(
-            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+            _content_to_text(msg.get("content")) for msg in messages if msg.get("role") == "user" and msg.get("content")
         )
         if user_content_for_session:
             session_result = _session_tracker.check_and_update(
@@ -660,7 +726,7 @@ async def chat_completions(request: Request):
     # These run in the background regardless of client disconnection.
     if settings.scanners_pipeline_enabled and _pipeline.input_async_count > 0:
         user_content_for_async = " ".join(
-            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+            _content_to_text(msg.get("content")) for msg in messages if msg.get("role") == "user" and msg.get("content")
         )
         if user_content_for_async:
             asyncio.create_task(_run_async_scanners_and_log(user_content_for_async, _scan_ctx, tenant_id, agent_id))
@@ -668,7 +734,7 @@ async def chat_completions(request: Request):
     # === PHASE 2: IOC Check ===
     ioc_manager = request.app.state.ioc_manager
     for msg in messages:
-        content = msg.get("content", "") or ""
+        content = _content_to_text(msg.get("content"))
         ioc_matches = ioc_manager.check_content(content)
         if ioc_matches:
             event = SecurityEvent(
@@ -723,9 +789,9 @@ async def chat_completions(request: Request):
             _push_recent_allowed(
                 tenant_id, agent_id,
                 snippet_source=" ".join(
-                    m.get("content", "")
+                    _content_to_text(m.get("content"))
                     for m in messages
-                    if isinstance(m.get("content"), str) and m.get("content")
+                    if m.get("content")
                 ),
                 request_id=request_id,
             )
@@ -1090,9 +1156,9 @@ async def chat_completions(request: Request):
         import hashlib as _hashlib
 
         _corr_input = " ".join(
-            m.get("content", "")
+            _content_to_text(m.get("content"))
             for m in messages
-            if isinstance(m.get("content"), str) and m.get("content")
+            if m.get("content")
         )
         _corr_hash = (
             _hashlib.sha256(_corr_input.encode("utf-8", "ignore")).hexdigest()[:16]
@@ -1174,7 +1240,7 @@ async def chat_completions(request: Request):
     if enrichment_mgr.enabled:
         # Collect all user message content for enrichment
         user_content = " ".join(
-            msg.get("content", "") for msg in messages if msg.get("role") == "user" and msg.get("content")
+            _content_to_text(msg.get("content")) for msg in messages if msg.get("role") == "user" and msg.get("content")
         )
         if user_content:
             asyncio.create_task(
@@ -1200,9 +1266,9 @@ async def chat_completions(request: Request):
     # to avoid double-recording.
     if input_result.verdict == Verdict.ALLOW:
         _allow_snippet = " ".join(
-            m.get("content", "")
+            _content_to_text(m.get("content"))
             for m in messages
-            if isinstance(m.get("content"), str) and m.get("content")
+            if m.get("content")
         )
         _push_recent_allowed(
             tenant_id, agent_id, snippet_source=_allow_snippet,
