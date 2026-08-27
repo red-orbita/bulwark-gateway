@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.models import GuardrailResult, Verdict
+from src.models import Verdict
 from src.scanners.protocol import ScanContext, ScannerType
 
 
@@ -204,8 +204,98 @@ class TestLanguageDetector:
 
         ctx = _make_context()
         # Normal Japanese: kanji + hiragana + katakana
-        result = await scanner.scan("東京タワーはとても高いです。カフェに行きましょう。", ctx)
+        await scanner.scan("東京タワーはとても高いです。カフェに行きましょう。", ctx)
         assert ctx.metadata.get("code_switching") is None
+
+
+class TestLanguageDetectorFasttextIntegrity:
+    """fasttext lid.176.ftz must be integrity-verified before it is ever loaded.
+
+    lid.176.ftz is hash-pinned in config/model_manifest.json. A tampered model
+    lets an attacker forge language verdicts (spoof an allowed language to slip
+    past an allowed_languages policy, or hide a script so a localized pattern set
+    stays dormant). On integrity failure the detector MUST refuse the untrusted
+    file and degrade to the script heuristic — never hand bad bytes to
+    fasttext.load_model.
+    """
+
+    def _fake_fasttext_module(self):
+        """A stand-in fasttext module (real wheel not installed in CI)."""
+        mod = MagicMock(name="fasttext")
+        mod.load_model.return_value = MagicMock(name="fasttext_model")
+        # startup() sets fasttext.FastText.eprint = lambda x: None
+        mod.FastText = MagicMock(name="FastText")
+        return mod
+
+    @pytest.mark.asyncio
+    async def test_integrity_failure_refuses_model_and_falls_back(self, tmp_path):
+        """Hash mismatch → model is NOT loaded, backend degrades to heuristic."""
+        from src.scanners.multilingual import language_detector as ld
+
+        model_dir = tmp_path
+        (model_dir / "lid.176.ftz").write_bytes(b"tampered-model-bytes")
+        fake_ft = self._fake_fasttext_module()
+
+        scanner = ld.LanguageDetector()
+        with patch.object(ld, "_fasttext_available", return_value=True), \
+             patch.object(ld, "_lingua_available", return_value=False), \
+             patch.dict("sys.modules", {"fasttext": fake_ft}), \
+             patch("src.scanners.ml.model_manager._verify_model_integrity",
+                   return_value=False) as mock_verify, \
+             patch.object(ld.settings, "ml_model_dir", model_dir):
+            await scanner.startup()
+
+        # Integrity was checked, load_model was NEVER called, backend degraded.
+        mock_verify.assert_called_once()
+        fake_ft.load_model.assert_not_called()
+        assert scanner._backend == "heuristic"
+        assert scanner._fasttext_model is None
+
+    @pytest.mark.asyncio
+    async def test_integrity_pass_loads_fasttext(self, tmp_path):
+        """Hash match → model loaded from the verified path, backend = fasttext."""
+        from src.scanners.multilingual import language_detector as ld
+
+        model_dir = tmp_path
+        model_path = model_dir / "lid.176.ftz"
+        model_path.write_bytes(b"trusted-model-bytes")
+        fake_ft = self._fake_fasttext_module()
+
+        scanner = ld.LanguageDetector()
+        with patch.object(ld, "_fasttext_available", return_value=True), \
+             patch.object(ld, "_lingua_available", return_value=False), \
+             patch.dict("sys.modules", {"fasttext": fake_ft}), \
+             patch("src.scanners.ml.model_manager._verify_model_integrity",
+                   return_value=True) as mock_verify, \
+             patch.object(ld.settings, "ml_model_dir", model_dir):
+            await scanner.startup()
+
+        mock_verify.assert_called_once_with(model_path, model_dir)
+        fake_ft.load_model.assert_called_once_with(str(model_path))
+        assert scanner._backend == "fasttext"
+        assert scanner._fasttext_model is not None
+
+    @pytest.mark.asyncio
+    async def test_missing_model_skips_verification_and_falls_back(self, tmp_path):
+        """Absent model → no integrity call, no load, heuristic fallback preserved."""
+        from src.scanners.multilingual import language_detector as ld
+
+        model_dir = tmp_path  # empty: lid.176.ftz does not exist
+        fake_ft = self._fake_fasttext_module()
+
+        scanner = ld.LanguageDetector()
+        with patch.object(ld, "_fasttext_available", return_value=True), \
+             patch.object(ld, "_lingua_available", return_value=False), \
+             patch.dict("sys.modules", {"fasttext": fake_ft}), \
+             patch("src.scanners.ml.model_manager._verify_model_integrity",
+                   return_value=True) as mock_verify, \
+             patch.object(ld.settings, "ml_model_dir", model_dir):
+            await scanner.startup()
+
+        mock_verify.assert_not_called()
+        fake_ft.load_model.assert_not_called()
+        assert scanner._backend == "heuristic"
+        assert scanner._fasttext_model is None
 
 
 # ==============================================================================

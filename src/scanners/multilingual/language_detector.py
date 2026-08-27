@@ -18,8 +18,12 @@ default) — shipping it in core would add 170 MB to every image for a default-o
 feature. Backend 2 (fasttext) is a lighter opt-in: the ``fasttext`` extra
 (~2 MB wheel) plus the 917 KB ``lid.176.ftz`` model, now provisioned and
 hash-pinned via ``python scripts/download-models.py --fasttext`` (loaded from
-``BULWARK_ML_MODEL_DIR / lid.176.ftz``; it still degrades gracefully — logs
-``fasttext_model_missing`` and falls through — if the file is absent). In the
+``BULWARK_ML_MODEL_DIR / lid.176.ftz``). Its integrity is verified against
+``config/model_manifest.json`` (H-08) BEFORE ``fasttext.load_model`` is ever
+called — a tampered or unpinned model would let an attacker forge language
+verdicts, so it is refused. It still degrades gracefully — logs
+``fasttext_model_missing`` (absent) or ``fasttext_model_integrity_failed``
+(tampered) and falls through to the heuristic, never trusting bad bytes. In the
 default distribution only the script heuristic runs, and it resolves every
 Latin-script input to ``"en"`` at reduced confidence (``_detect_heuristic``).
 This means Latin-script languages (es/fr/de/pt/…) are NOT distinguished by
@@ -156,19 +160,37 @@ class LanguageDetector(InputScanner):
             try:
                 import fasttext
 
+                from src.scanners.ml.model_manager import _verify_model_integrity
+
                 model_path = settings.ml_model_dir / "lid.176.ftz"
-                if model_path.exists():
+                if not model_path.exists():
+                    logger.info(
+                        "fasttext_model_missing",
+                        extra={"path": str(model_path)},
+                    )
+                # SECURITY (H-08): never hand unverified bytes to fasttext.load_model.
+                # lid.176.ftz is hash-pinned in config/model_manifest.json; a tampered
+                # model lets an attacker forge language verdicts (spoof an allowed
+                # language to bypass allowed_languages policy, or hide a script to keep
+                # a localized pattern set dormant). On integrity failure we refuse the
+                # untrusted file and fall through to the script heuristic — the same
+                # graceful degradation as a missing model, never trusting bad bytes.
+                elif not _verify_model_integrity(model_path, settings.ml_model_dir):
+                    logger.critical(
+                        "fasttext_model_integrity_failed",
+                        extra={
+                            "path": str(model_path),
+                            "note": "lid.176.ftz hash mismatch or unpinned; "
+                            "refusing tampered model, falling back to heuristic",
+                        },
+                    )
+                else:
                     # Suppress fasttext warnings
                     fasttext.FastText.eprint = lambda x: None
                     self._fasttext_model = fasttext.load_model(str(model_path))
                     self._backend = "fasttext"
                     logger.info("language_detector_ready", extra={"backend": "fasttext"})
                     return
-                else:
-                    logger.info(
-                        "fasttext_model_missing",
-                        extra={"path": str(model_path)},
-                    )
             except Exception as e:
                 logger.warning(
                     "fasttext_init_failed",

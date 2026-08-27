@@ -755,7 +755,9 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    >   wheel that bundles n-gram models for every language. Most accurate.
    > - **fasttext** — `pip install bulwark-gateway[fasttext]` (~2 MB wheel) then
    >   `python scripts/download-models.py --fasttext` for the 917 KB
-   >   `lid.176.ftz` model (hash-pinned in the manifest). Much smaller, and a far
+   >   `lid.176.ftz` model (hash-pinned in the manifest and verified against it
+   >   before load — a tampered/unpinned model is refused and the detector
+   >   degrades to the heuristic). Much smaller, and a far
    >   better default than the heuristic.
    >
    > Without either, the detector falls back to a script heuristic that detects
