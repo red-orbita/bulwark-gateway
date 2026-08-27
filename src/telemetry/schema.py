@@ -15,6 +15,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.telemetry.compliance import OWASP_LLM_VERSION, compliance_for
+
 # Placeholder used in CEF/LEEF `src` fields when the originating IP is unknown.
 # These formats require a syntactically valid IP; "0.0.0.0" is the conventional
 # "unspecified address" sentinel. This is a log-record value, NOT a socket bind.
@@ -72,6 +74,21 @@ class ECSObserver(BaseModel):
     hostname: Optional[str] = None
 
 
+class ComplianceFields(BaseModel):
+    """Regulatory / standards references for a detection (``bulwark.compliance.*``).
+
+    Every axis is optional; empty axes are dropped from the ECS export. Mirrors
+    src/telemetry/compliance.ComplianceMapping so a SIEM can pivot a detection to
+    OWASP LLM / MITRE ATT&CK / NIST AI RMF / EU AI Act without a lookup table.
+    """
+
+    owasp_llm: Optional[list[str]] = None
+    owasp_llm_version: Optional[str] = None
+    mitre_attack: Optional[list[str]] = None
+    nist_ai_rmf: Optional[list[str]] = None
+    eu_ai_act: Optional[list[str]] = None
+
+
 class BulwarkFields(BaseModel):
     """Custom fields specific to Bulwark Gateway (nested under 'bulwark.')."""
 
@@ -93,6 +110,10 @@ class BulwarkFields(BaseModel):
     # generic warn. `exception_scope` is the tenant:agent the exception applied to.
     allowed_by_exception: bool = False
     exception_scope: Optional[str] = None
+    # Declarative regulatory/standards references for the threat category
+    # (nested under `bulwark.compliance.*`). Populated from the central mapping in
+    # src/telemetry/compliance.py; omitted when the category has no mapping.
+    compliance: Optional[ComplianceFields] = None
 
 
 class TenantFields(BaseModel):
@@ -148,6 +169,14 @@ class SecurityTelemetryEvent(BaseModel):
         severity = self.event.severity.value
         # CEF severity is 0-10
         name = self.bulwark.rule_description or self.bulwark.threat_category or "SecurityEvent"
+        comp = self.bulwark.compliance
+        # Compact, legacy-SIEM-friendly compliance summary (CEF has no arrays):
+        # OWASP + EU AI Act are the two axes analysts most often pivot on.
+        compliance_summary = "none"
+        if comp is not None:
+            parts = list(comp.owasp_llm or []) + list(comp.eu_ai_act or [])
+            if parts:
+                compliance_summary = ",".join(parts)
         extension = (
             f"src={self.source.ip or _UNKNOWN_SRC_IP} "
             f"act={self.bulwark.verdict} "
@@ -158,6 +187,7 @@ class SecurityTelemetryEvent(BaseModel):
             f"cn1={int(self.bulwark.latency_ms)} cn1Label=LatencyMs "
             f"cs4={str(self.bulwark.allowed_by_exception).lower()} cs4Label=AllowedByException "
             f"cs5={self.bulwark.exception_scope or 'none'} cs5Label=ExceptionScope "
+            f"cs6={compliance_summary} cs6Label=Compliance "
             f"msg={self.message}"
         )
         return (
@@ -167,6 +197,10 @@ class SecurityTelemetryEvent(BaseModel):
 
     def to_leef(self) -> str:
         """Convert to LEEF 2.0 (Log Event Extended Format) for IBM QRadar."""
+        comp = self.bulwark.compliance
+        owasp = ",".join(comp.owasp_llm) if comp and comp.owasp_llm else "none"
+        mitre = ",".join(comp.mitre_attack) if comp and comp.mitre_attack else "none"
+        eu_ai_act = ",".join(comp.eu_ai_act) if comp and comp.eu_ai_act else "none"
         return (
             f"LEEF:2.0|BulwarkGateway|Guardrail|{self.observer.version}|SecurityEvent|"
             f"cat={self.event.category.value}\t"
@@ -179,6 +213,9 @@ class SecurityTelemetryEvent(BaseModel):
             f"latencyMs={int(self.bulwark.latency_ms)}\t"
             f"allowedByException={str(self.bulwark.allowed_by_exception).lower()}\t"
             f"exceptionScope={self.bulwark.exception_scope or 'none'}\t"
+            f"owaspLlm={owasp}\t"
+            f"mitreAttack={mitre}\t"
+            f"euAiAct={eu_ai_act}\t"
             f"msg={self.message}"
         )
 
@@ -228,6 +265,19 @@ def from_security_event(
     if allowed_by_exception:
         tags.append("allowed-by-exception")
 
+    # Attach declarative compliance references for the threat category (OWASP LLM /
+    # MITRE ATT&CK / NIST AI RMF / EU AI Act). None for unmapped/ad-hoc categories.
+    compliance_fields: Optional[ComplianceFields] = None
+    mapping = compliance_for(threat_category)
+    if mapping is not None and not mapping.is_empty():
+        compliance_fields = ComplianceFields(
+            owasp_llm=list(mapping.owasp_llm) or None,
+            owasp_llm_version=OWASP_LLM_VERSION if mapping.owasp_llm else None,
+            mitre_attack=list(mapping.mitre_attack) or None,
+            nist_ai_rmf=list(mapping.nist_ai_rmf) or None,
+            eu_ai_act=list(mapping.eu_ai_act) or None,
+        )
+
     return SecurityTelemetryEvent(
         **{"@timestamp": datetime.now(timezone.utc).isoformat()},  # type: ignore[arg-type]
         message=message,
@@ -254,6 +304,7 @@ def from_security_event(
             request_id=request_id,
             allowed_by_exception=allowed_by_exception,
             exception_scope=exception_scope,
+            compliance=compliance_fields,
         ),
         tenant=TenantFields(id=tenant_id, agent_id=agent_id),
     )

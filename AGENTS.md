@@ -98,7 +98,8 @@ bulwark-gateway/
 │   │   ├── webhooks.py           # Webhook alert dispatcher
 │   │   ├── counters.py           # Redis-backed distributed counters
 │   │   ├── queue.py              # In-memory event queue
-│   │   ├── schema.py             # ECS schema mapping
+│   │   ├── schema.py             # ECS schema mapping (+ bulwark.compliance.*)
+│   │   ├── compliance.py         # Declarative ThreatCategory→OWASP/MITRE/NIST AI RMF/EU AI Act
 │   │   └── transports/
 │   │       ├── file_shipper.py   # NDJSON file output (→ Filebeat/Fluentd)
 │   │       ├── http_rest.py      # HTTP REST (→ Splunk HEC, Elastic, Datadog)
@@ -1025,6 +1026,31 @@ Events exported in ECS (Elastic Common Schema) format:
 - TCP+TLS → Custom collectors
 
 Exporter features: batch flush (100 events or 1s), circuit breaker, exponential backoff retry.
+
+### Compliance Mapping (`bulwark.compliance.*`)
+
+Every exported event carries declarative regulatory/standards references derived
+from its `ThreatCategory`, so a SIEM can pivot a detection to a framework without
+its own lookup table. The single source of truth is `src/telemetry/compliance.py`
+(a pure, side-effect-free table; a unit test enforces that **every** ThreatCategory
+has a non-empty mapping). Emitted under `bulwark.compliance` in ECS, and summarised
+in the CEF (`cs6Label=Compliance`) and LEEF (`owaspLlm` / `mitreAttack` / `euAiAct`)
+converters:
+
+| Field | Framework | Example |
+|-------|-----------|---------|
+| `owasp_llm` (+ `owasp_llm_version`) | OWASP Top 10 for LLM Apps (2023) | `["LLM01"]` |
+| `mitre_attack` | MITRE ATT&CK techniques | `["T1041"]` |
+| `nist_ai_rmf` | NIST AI RMF (AI 100-1) subcategories | `["MEASURE-2.7","MANAGE-4.1"]` |
+| `eu_ai_act` | EU AI Act (Reg. 2024/1689) articles | `["Article 15"]` |
+
+Mappings are intentionally conservative (each ref is auditor-defensible, not an
+exhaustive spray). Empty axes are dropped from the export; unmapped/ad-hoc category
+strings emit no compliance block at all (no fabricated tags). Anchors: Art. 15
+(cybersecurity/robustness) for adversarial threats, Art. 10 (data governance) for
+poisoning/PII, Art. 14 (human oversight) for agency/tool abuse, Art. 9 (risk mgmt)
+for policy; MEASURE-2.7 (security & resilience) + MANAGE-4.1 (post-deployment
+monitoring) recur because Bulwark is itself a runtime monitor.
 
 ### Wazuh Rules (MITRE ATT&CK Mapped)
 
