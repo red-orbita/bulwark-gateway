@@ -164,6 +164,15 @@ async def internal_scanner_status(request: Request):
         "ml_timeout_ms": settings.ml_timeout_ms,
         "rag_enabled": settings.rag_enabled,
         "multilingual_enabled": settings.multilingual_enabled,
+        # Opt-in capability master flags (default off). Surfaced so the admin UI
+        # can honestly show which graduated scanners are registered vs dormant —
+        # each governs whether the corresponding scanner is wired at boot.
+        "schema_validation_enabled": settings.schema_validation_enabled,
+        "relevance_scanning_enabled": settings.relevance_scanning_enabled,
+        "hallucination_scanning_enabled": settings.hallucination_scanning_enabled,
+        "grounding_scanning_enabled": settings.grounding_scanning_enabled,
+        "image_hygiene_scanning_enabled": settings.image_hygiene_scanning_enabled,
+        "vision_scanning_enabled": settings.vision_scanning_enabled,
         "lanes": {
             "input_blocking": pipeline.input_blocking_count,
             "input_async": pipeline.input_async_count,

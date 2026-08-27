@@ -228,12 +228,29 @@ async def ml_scanner_status(
     rag_enabled_env = os.environ.get("BULWARK_RAG_ENABLED", "false").lower() in ("true", "1")
     multilingual_enabled_env = os.environ.get("BULWARK_MULTILINGUAL_ENABLED", "false").lower() in ("true", "1")
 
+    # Opt-in capability master flags (default off). These govern whether each
+    # graduated scanner is registered at proxy boot. Read from env as a display
+    # fallback; overridden by the proxy's authoritative state when reachable.
+    capability_flags = {
+        flag: os.environ.get(f"BULWARK_{flag.upper()}", "false").lower() in ("true", "1")
+        for flag in (
+            "schema_validation_enabled",
+            "relevance_scanning_enabled",
+            "hallucination_scanning_enabled",
+            "grounding_scanning_enabled",
+            "image_hygiene_scanning_enabled",
+            "vision_scanning_enabled",
+        )
+    }
+
     # Override with proxy's actual state if available
     if proxy_data:
         ml_enabled_env = proxy_data.get("ml_enabled", ml_enabled_env)
         ml_blocking_env = proxy_data.get("ml_blocking", ml_blocking_env)
         rag_enabled_env = proxy_data.get("rag_enabled", rag_enabled_env)
         multilingual_enabled_env = proxy_data.get("multilingual_enabled", multilingual_enabled_env)
+        for flag in capability_flags:
+            capability_flags[flag] = proxy_data.get(flag, capability_flags[flag])
 
     scanners = []
     for name, cfg in _scanner_config.items():
@@ -285,6 +302,7 @@ async def ml_scanner_status(
             "model_dir": model_dir,
             "rag_enabled_env": rag_enabled_env,
             "multilingual_enabled_env": multilingual_enabled_env,
+            "capability_flags": capability_flags,
             "dependencies_available": deps_available,
             "missing_dependencies": missing_deps,
             "proxy_reachable": proxy_reachable,
