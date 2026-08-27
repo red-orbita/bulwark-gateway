@@ -701,6 +701,20 @@ def _summarize_scanners(raw: dict) -> dict:
     scanners = raw.get("scanners") or []
     healthy = sum(1 for s in scanners if s.get("healthy"))
     lanes = raw.get("lanes") or {}
+    # Opt-in capability master flags — read straight from the proxy payload,
+    # defaulting to False. Never fabricated: a flag the proxy does not report
+    # simply reads False (dormant), matching the "no fabrication" contract.
+    capability_flags = {
+        flag: bool(raw.get(flag, False))
+        for flag in (
+            "schema_validation_enabled",
+            "relevance_scanning_enabled",
+            "hallucination_scanning_enabled",
+            "grounding_scanning_enabled",
+            "image_hygiene_scanning_enabled",
+            "vision_scanning_enabled",
+        )
+    }
     return {
         "available": True,
         "ml_enabled": bool(raw.get("ml_enabled", False)),
@@ -708,6 +722,7 @@ def _summarize_scanners(raw: dict) -> dict:
         "ml_timeout_ms": raw.get("ml_timeout_ms"),
         "rag_enabled": bool(raw.get("rag_enabled", False)),
         "multilingual_enabled": bool(raw.get("multilingual_enabled", False)),
+        "capability_flags": capability_flags,
         "lanes": {
             "input_blocking": lanes.get("input_blocking", 0),
             "input_async": lanes.get("input_async", 0),

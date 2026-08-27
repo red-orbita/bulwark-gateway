@@ -128,6 +128,35 @@ class TestSummarizeScanners:
         assert out["lanes"]["total"] == 0
         assert out["ml_enabled"] is False
 
+    def test_capability_flags_reflect_payload(self):
+        from admin.routes.health import _summarize_scanners
+
+        raw = dict(_RAW_SCANNER_STATUS)
+        raw["image_hygiene_scanning_enabled"] = True
+        raw["schema_validation_enabled"] = True
+        out = _summarize_scanners(raw)
+        flags = out["capability_flags"]
+        # Reported flags reflect the payload...
+        assert flags["image_hygiene_scanning_enabled"] is True
+        assert flags["schema_validation_enabled"] is True
+        # ...and unreported ones degrade to False (never fabricated).
+        assert flags["vision_scanning_enabled"] is False
+        assert flags["relevance_scanning_enabled"] is False
+
+    def test_capability_flags_default_false_on_empty(self):
+        from admin.routes.health import _summarize_scanners
+
+        out = _summarize_scanners({})
+        assert set(out["capability_flags"]) == {
+            "schema_validation_enabled",
+            "relevance_scanning_enabled",
+            "hallucination_scanning_enabled",
+            "grounding_scanning_enabled",
+            "image_hygiene_scanning_enabled",
+            "vision_scanning_enabled",
+        }
+        assert all(v is False for v in out["capability_flags"].values())
+
     def test_none_payload_does_not_raise(self):
         from admin.routes.health import _summarize_scanners
 

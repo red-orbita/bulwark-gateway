@@ -110,6 +110,14 @@
                         <span class="sg-badge sg-badge-neutral text-[10px]" x-text="'out-block ' + infra.scanners.lanes.output_blocking"></span>
                         <span class="sg-badge sg-badge-neutral text-[10px]" x-text="'out-async ' + infra.scanners.lanes.output_async"></span>
                     </div>
+                    <div class="flex flex-wrap gap-1.5 pt-1" x-show="infra.scanners.capability_flags">
+                        <span class="text-[10px] text-gray-500">Opt-in:</span>
+                        <template x-for="(on, flag) in (infra.scanners.capability_flags || {})" :key="flag">
+                            <span class="sg-badge text-[10px]"
+                                  :class="on ? 'sg-badge-success' : 'sg-badge-neutral'"
+                                  x-text="flag.replace(/_scanning_enabled$|_validation_enabled$|_enabled$/, '').replace(/_/g, ' ')"></span>
+                        </template>
+                    </div>
                     <div class="mt-2 max-h-48 overflow-y-auto divide-y divide-gray-700/40 border-t border-gray-700/40">
                         <template x-for="s in infra.scanners.scanners" :key="s.name">
                             <div class="flex items-center justify-between py-1.5 text-xs">
