@@ -154,6 +154,40 @@ def _check_model_exists(model_path: str) -> bool:
     return any(p.glob("*.onnx"))
 
 
+# Admin config key -> proxy ScannerInfo.name. The proxy registers the toxicity
+# scanner as "ml_toxicity" (no "_scanner" suffix); keep the admin-facing key
+# stable while resolving the real proxy status/metrics.
+_PROXY_NAME_ALIASES = {
+    "ml_toxicity_scanner": "ml_toxicity",
+}
+
+
+def _prettify_scanner_name(name: str) -> str:
+    """Derive a human-readable display name from a proxy scanner name.
+
+    e.g. "ml_vision_scanner" -> "Vision Scanner", "regex_input" -> "Regex Input".
+    """
+    cleaned = name
+    if cleaned.startswith("ml_"):
+        cleaned = cleaned[3:]
+    return cleaned.replace("_", " ").strip().title() or name
+
+
+def _derive_display_category(scanner_type: str, name: str) -> str:
+    """Map a proxy scanner (type + name) to a coarse display category.
+
+    The four tunable categories (ml/rag/multilingual) are owned by
+    ``_DEFAULT_SCANNERS``. Derived read-only cards fall into descriptive
+    buckets shown only under the "All" tab.
+    """
+    lowered = name.lower()
+    if "vision" in lowered or "image" in lowered:
+        return "multimodal"
+    if str(scanner_type).startswith("output"):
+        return "output"
+    return "builtin"
+
+
 async def _query_proxy_scanner_status() -> dict | None:
     """Query the proxy service for actual scanner pipeline status.
 
@@ -257,7 +291,7 @@ async def ml_scanner_status(
         model_path = cfg.get("model_path", "")
 
         # Check if scanner is registered + healthy on proxy
-        proxy_scanner = proxy_scanners.get(name)
+        proxy_scanner = proxy_scanners.get(_PROXY_NAME_ALIASES.get(name, name))
         if proxy_scanner:
             # Scanner is actually loaded on proxy — get real status
             model_installed = proxy_scanner.get("healthy", True)
@@ -293,6 +327,34 @@ async def ml_scanner_status(
             "ready": ready,
             "maturity": maturity,
             "metrics": metrics,
+            "read_only": False,
+        })
+
+    # Union: surface proxy-registered scanners that are NOT admin-tunable
+    # (GA builtins, output validators, multimodal). These are governed by
+    # BULWARK_* boot flags / policy — rendered read-only (no toggle/thresholds)
+    # so operators see the full live pipeline, not just the tunable subset.
+    covered = {_PROXY_NAME_ALIASES.get(n, n) for n in _scanner_config}
+    for pname, ps in sorted(proxy_scanners.items()):
+        if pname in covered:
+            continue
+        scanner_type = str(ps.get("type", ""))
+        healthy = bool(ps.get("healthy", True))
+        enabled = bool(ps.get("enabled", False))
+        scanners.append({
+            "name": pname,
+            "display_name": _prettify_scanner_name(pname),
+            "description": ps.get("description") or "",
+            "category": _derive_display_category(scanner_type, pname),
+            "maturity": ps.get("maturity") or "experimental",
+            "enabled": enabled,
+            "blocking": scanner_type.endswith("blocking"),
+            "model_path": "",
+            "model_installed": healthy,
+            "ready": enabled and healthy,
+            "priority": ps.get("priority", 0),
+            "metrics": ps.get("metrics", {}),
+            "read_only": True,
         })
 
     return {

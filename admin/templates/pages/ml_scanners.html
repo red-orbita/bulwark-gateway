@@ -144,14 +144,23 @@
                             <p class="text-xs text-gray-500" x-text="scanner.description"></p>
                         </div>
                     </div>
-                    <!-- Toggle -->
-                    <button type="button" @click="toggleScanner(scanner.name, !scanner.enabled)"
+                    <!-- Toggle (tunable scanners only) -->
+                    <button type="button" x-show="!scanner.read_only"
+                            @click="toggleScanner(scanner.name, !scanner.enabled)"
                             class="relative w-10 h-5 rounded-full transition-colors"
                             :class="scanner.enabled ? 'bg-cyan-600' : 'bg-gray-600'"
                             :disabled="saving">
                         <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform"
                               :class="scanner.enabled ? 'translate-x-5' : ''"></span>
                     </button>
+                    <!-- Read-only indicator (boot-flag / policy governed scanners) -->
+                    <span x-show="scanner.read_only"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded font-medium"
+                          :class="scanner.enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-gray-700/40 text-gray-500'"
+                          title="Managed at boot via BULWARK_* env / policy — not tunable here">
+                        <i data-lucide="lock" class="w-3 h-3"></i>
+                        <span x-text="scanner.enabled ? 'Active' : 'Dormant'"></span>
+                    </span>
                 </div>
 
                 <!-- Status badges -->
@@ -182,8 +191,14 @@
                     </span>
                 </div>
 
-                <!-- Threshold controls -->
-                <div class="space-y-3" x-show="scanner.enabled || scanner.model_installed || !scanner.model_path">
+                <!-- Read-only note (boot-flag / policy governed scanners) -->
+                <div x-show="scanner.read_only" class="flex items-start gap-2 text-[11px] text-gray-500 bg-gray-800/40 rounded-md px-3 py-2">
+                    <i data-lucide="info" class="w-3.5 h-3.5 flex-shrink-0 mt-0.5"></i>
+                    <span>Managed at boot via <code class="text-gray-400">BULWARK_*</code> env / policy — enable, thresholds, and blocking are not tunable from this page.</span>
+                </div>
+
+                <!-- Threshold controls (tunable scanners only) -->
+                <div class="space-y-3" x-show="!scanner.read_only && (scanner.enabled || scanner.model_installed || !scanner.model_path)">
                     <!-- Block threshold (only for ML models with confidence scores) -->
                     <template x-if="scanner.block_threshold > 0">
                         <div>
