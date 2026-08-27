@@ -5,7 +5,9 @@ Handles:
   - Lazy model loading (only when first needed)
   - ONNX Runtime session management
   - Tokenizer loading and caching
-  - Model hot-swap without downtime
+  - Model hot-swap without downtime (atomic under-lock slot replacement;
+    a failed swap keeps the old model serving — see ``hot_swap``)
+  - Artifact drift detection (in-memory model vs. on-disk bytes — ``detect_drift``)
   - Health status per model
   - Graceful fallback when models unavailable
 
@@ -103,6 +105,44 @@ def _verify_model_integrity(model_path: Path, model_dir: Path | None = None) -> 
         return False
     return True
 
+
+# The load-bearing files whose bytes together determine a model's behaviour.
+# A change to ANY of them changes the model's verdict (weights, tokenizer, or
+# label ordering), so all three participate in the drift identity below.
+_LOAD_BEARING_FILES = ("model.onnx", "tokenizer.json", "config.json")
+
+
+def _compute_content_hash(model_path: Path) -> str:
+    """Order-stable combined SHA-256 over a model's load-bearing files.
+
+    This is the *artifact identity* used for drift detection: it digests
+    ``(filename, sha256(file))`` for every load-bearing file that exists under
+    ``model_path``. If any load-bearing byte on disk changes (a swapped
+    tokenizer, reordered config, or replaced weights), the digest changes and
+    ``detect_drift`` reports the in-memory model as stale.
+
+    Files that are absent are skipped (config.json is optional), but their
+    presence/absence still affects the digest because the filename is folded in
+    only when the file exists — adding a previously-absent config.json therefore
+    also registers as drift.
+
+    Note: this is a *change detector*, not an integrity check. It says "the
+    bytes on disk differ from what was loaded", not "the bytes on disk are
+    trusted". Trust is enforced fail-closed by ``_verify_model_integrity`` at
+    (re)load time — i.e. inside ``hot_swap``.
+    """
+    h = hashlib.sha256()
+    for fname in _LOAD_BEARING_FILES:
+        fpath = model_path / fname
+        if not fpath.exists():
+            continue
+        h.update(fname.encode())
+        h.update(b"\0")
+        h.update(hashlib.sha256(fpath.read_bytes()).hexdigest().encode())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 # Optional imports — graceful if not installed
 try:
     import numpy as np
@@ -174,6 +214,10 @@ class LoadedModel:
     max_length: int = 512
     labels: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Artifact identity at load time — combined hash of the load-bearing files
+    # (weights + tokenizer + config) as they were on disk when this model was
+    # built. ``detect_drift`` compares this against the current on-disk bytes.
+    content_hash: str = ""
 
     @property
     def input_names(self) -> list[str]:
@@ -229,6 +273,12 @@ class ModelManager:
         if not self._available:
             logger.warning("ml_deps_missing", extra={"model": name})
             return None
+
+        # Preserve the caller's *explicit* label request separately from the
+        # labels finally used (which may be derived from config.json below).
+        # hot_swap replays load_model with these original args so a reload
+        # reproduces the exact same load semantics.
+        requested_labels = list(labels) if labels else None
 
         subdir = model_subdir or name
         model_path = self._model_dir / subdir
@@ -343,6 +393,14 @@ class ModelManager:
                 tokenizer=tokenizer,
                 max_length=max_length,
                 labels=labels or [],
+                # Remember how this model was loaded so hot_swap can rebuild it
+                # from the identical arguments, and record the artifact identity
+                # so detect_drift can compare against the current on-disk bytes.
+                metadata={
+                    "model_subdir": subdir,
+                    "requested_labels": requested_labels,
+                },
+                content_hash=_compute_content_hash(model_path),
             )
 
             with self._lock:
@@ -382,6 +440,107 @@ class ModelManager:
                 logger.info("model_unloaded", extra={"model": name})
                 return True
             return False
+
+    def detect_drift(self, name: str) -> dict[str, Any] | None:
+        """Detect artifact drift for a loaded model: in-memory vs on-disk bytes.
+
+        Compares the content hash captured when the model was loaded against a
+        freshly-computed hash of the load-bearing files currently on disk. This
+        catches the case where the model directory was updated (new weights /
+        tokenizer / config pushed by a provisioning job) after the process
+        loaded the old bytes, so the serving model is stale.
+
+        This is a pure *change* signal — it does NOT verify the new bytes are
+        trusted; that gate runs fail-closed inside ``hot_swap`` at reload time.
+
+        Returns:
+            ``None`` if the model is not loaded, otherwise a dict::
+
+                {"name", "drifted": bool, "loaded_hash", "disk_hash"}
+        """
+        with self._lock:
+            model = self._models.get(name)
+            if model is None:
+                return None
+            loaded_hash = model.content_hash
+            subdir = model.metadata.get("model_subdir", name)
+
+        # Filesystem read done outside the lock — the in-memory model keeps
+        # serving while we hash the on-disk artifacts.
+        disk_hash = _compute_content_hash(self._model_dir / subdir)
+        return {
+            "name": name,
+            "drifted": disk_hash != loaded_hash,
+            "loaded_hash": loaded_hash,
+            "disk_hash": disk_hash,
+        }
+
+    def hot_swap(self, name: str) -> bool:
+        """Atomically reload a model from disk, replacing the in-memory slot.
+
+        Rebuilds the model completely from the SAME arguments used originally,
+        re-running the fail-closed integrity gate (``_verify_model_integrity``)
+        on every load-bearing file. The new model is built OUTSIDE the lock
+        (integrity hashing + ONNX session construction are slow), so the
+        currently-loaded model keeps serving with zero downtime during the
+        rebuild. ``load_model`` then performs the slot replacement atomically
+        under the lock.
+
+        Fail-closed: on ANY failure (missing files, integrity mismatch, corrupt
+        ONNX/tokenizer) the rebuild returns ``None`` without touching the slot,
+        so the previously-loaded model is left serving untouched. A bad on-disk
+        update can never take a healthy model offline.
+
+        Returns:
+            ``True`` if the model was reloaded and swapped, ``False`` if the
+            model was not loaded or the reload failed (old model retained).
+        """
+        with self._lock:
+            old = self._models.get(name)
+            if old is None:
+                return False
+            subdir = old.metadata.get("model_subdir", name)
+            max_length = old.max_length
+            requested_labels = old.metadata.get("requested_labels")
+
+        # Rebuild + atomic store happen in load_model; on failure it returns
+        # None and leaves self._models[name] (the old model) in place.
+        new = self.load_model(
+            name,
+            model_subdir=subdir,
+            max_length=max_length,
+            labels=list(requested_labels) if requested_labels else None,
+        )
+        if new is None:
+            logger.warning("model_hot_swap_failed_kept_old", extra={"model": name})
+            return False
+        logger.info("model_hot_swapped",
+                    extra={"model": name, "version": new.version,
+                           "content_hash": new.content_hash[:16]})
+        return True
+
+    def hot_swap_all(self) -> dict[str, bool]:
+        """Hot-swap every currently-loaded model that has drifted on disk.
+
+        Only models whose on-disk artifacts actually changed are reloaded —
+        unchanged models are left serving as-is (no needless rebuild). Each
+        swap is independently fail-closed: a failed reload keeps that model's
+        old bytes serving and does not affect the others.
+
+        Returns:
+            Dict mapping model name -> swap outcome, for every model that was
+            found to have drifted (``True`` swapped, ``False`` reload failed).
+            Unchanged models are omitted.
+        """
+        with self._lock:
+            names = list(self._models.keys())
+
+        results: dict[str, bool] = {}
+        for name in names:
+            drift = self.detect_drift(name)
+            if drift is not None and drift["drifted"]:
+                results[name] = self.hot_swap(name)
+        return results
 
     def list_models(self) -> list[dict[str, Any]]:
         """List all loaded models."""

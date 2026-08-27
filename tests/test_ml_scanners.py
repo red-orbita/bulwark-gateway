@@ -181,6 +181,169 @@ class TestModelManager:
         with patch.object(mm, "_MODEL_MANIFEST_PATH", manifest):
             assert manager.load_model("clf", model_subdir=subdir) is None
 
+    # --- Artifact drift detection + hot-swap (A-hard) ------------------------
+
+    def test_content_hash_stable_and_byte_sensitive(self, tmp_path):
+        """_compute_content_hash is deterministic and changes on ANY load-bearing byte."""
+        from src.scanners.ml.model_manager import _compute_content_hash
+
+        d = tmp_path / "m"
+        d.mkdir()
+        (d / "model.onnx").write_bytes(b"weights")
+        (d / "tokenizer.json").write_bytes(b"tok")
+        h1 = _compute_content_hash(d)
+        # Deterministic: same bytes → same digest.
+        assert h1 == _compute_content_hash(d)
+        # A poisoned tokenizer (weights untouched) still changes the identity.
+        (d / "tokenizer.json").write_bytes(b"poisoned")
+        h2 = _compute_content_hash(d)
+        assert h2 != h1
+        # Adding a previously-absent config.json also registers.
+        (d / "config.json").write_bytes(b"cfg")
+        assert _compute_content_hash(d) != h2
+
+    def test_detect_drift_not_loaded(self, tmp_path):
+        from src.scanners.ml.model_manager import ModelManager
+
+        manager = ModelManager(tmp_path)
+        assert manager.detect_drift("absent") is None
+
+    def test_detect_drift_unchanged_then_changed(self, tmp_path):
+        """detect_drift reports False when disk matches, True once disk mutates."""
+        from src.scanners.ml.model_manager import (
+            LoadedModel,
+            ModelManager,
+            _compute_content_hash,
+        )
+
+        subdir = "clf"
+        d = tmp_path / subdir
+        d.mkdir()
+        (d / "model.onnx").write_bytes(b"weights")
+        (d / "tokenizer.json").write_bytes(b"tok")
+
+        manager = ModelManager(tmp_path)
+        manager._models["clf"] = LoadedModel(
+            name="clf", version="1.0.0", session=None, tokenizer=None,
+            metadata={"model_subdir": subdir, "requested_labels": None},
+            content_hash=_compute_content_hash(d),
+        )
+
+        drift = manager.detect_drift("clf")
+        assert drift is not None
+        assert drift["drifted"] is False
+        assert drift["loaded_hash"] == drift["disk_hash"]
+
+        # Provisioning job pushes new tokenizer bytes after load → drift.
+        (d / "tokenizer.json").write_bytes(b"poisoned")
+        drift2 = manager.detect_drift("clf")
+        assert drift2["drifted"] is True
+        assert drift2["loaded_hash"] != drift2["disk_hash"]
+
+    def test_hot_swap_not_loaded(self, tmp_path):
+        from src.scanners.ml.model_manager import ModelManager
+
+        manager = ModelManager(tmp_path)
+        assert manager.hot_swap("absent") is False
+
+    def test_hot_swap_reloads_and_replays_load_args(self, tmp_path):
+        """hot_swap rebuilds via load_model, replacing the slot atomically."""
+        from src.scanners.ml.model_manager import LoadedModel, ModelManager
+
+        subdir = "clf"
+        manager = ModelManager(tmp_path)
+        old = LoadedModel(
+            name="clf", version="1.0.0", session=None, tokenizer=None,
+            max_length=256,
+            metadata={"model_subdir": subdir, "requested_labels": ["SAFE", "ATTACK"]},
+            content_hash="oldhash",
+        )
+        manager._models["clf"] = old
+        new = LoadedModel(
+            name="clf", version="2.0.0", session=None, tokenizer=None,
+            metadata={"model_subdir": subdir, "requested_labels": ["SAFE", "ATTACK"]},
+            content_hash="newhash",
+        )
+
+        captured: dict = {}
+
+        def fake_load(name, model_subdir=None, max_length=512, labels=None):
+            captured.update(name=name, model_subdir=model_subdir,
+                            max_length=max_length, labels=labels)
+            manager._models[name] = new  # mimic load_model's atomic under-lock store
+            return new
+
+        manager.load_model = fake_load  # type: ignore[assignment]
+        assert manager.hot_swap("clf") is True
+        assert manager.get_model("clf") is new
+        # Rebuild replays the ORIGINAL load semantics (subdir + explicit labels + length).
+        assert captured["model_subdir"] == subdir
+        assert captured["labels"] == ["SAFE", "ATTACK"]
+        assert captured["max_length"] == 256
+
+    def test_hot_swap_failed_keeps_old_model_serving(self, tmp_path):
+        """A failed reload leaves the previously-loaded model serving (fail-closed)."""
+        from src.scanners.ml.model_manager import LoadedModel, ModelManager
+
+        manager = ModelManager(tmp_path)
+        old = LoadedModel(
+            name="clf", version="1.0.0", session=None, tokenizer=None,
+            metadata={"model_subdir": "clf", "requested_labels": None},
+            content_hash="oldhash",
+        )
+        manager._models["clf"] = old
+        # Simulate integrity failure / corrupt bytes on reload.
+        manager.load_model = lambda *a, **k: None  # type: ignore[assignment]
+
+        assert manager.hot_swap("clf") is False
+        # No downtime: old model still served.
+        assert manager.get_model("clf") is old
+
+    def test_hot_swap_all_only_swaps_drifted(self, tmp_path):
+        """hot_swap_all reloads only models whose on-disk bytes changed."""
+        from src.scanners.ml.model_manager import (
+            LoadedModel,
+            ModelManager,
+            _compute_content_hash,
+        )
+
+        for sub in ("a", "b"):
+            dd = tmp_path / sub
+            dd.mkdir()
+            (dd / "model.onnx").write_bytes(b"w-" + sub.encode())
+            (dd / "tokenizer.json").write_bytes(b"t")
+
+        manager = ModelManager(tmp_path)
+        # 'a' matches disk (no drift); 'b' has a stale hash (drift).
+        manager._models["a"] = LoadedModel(
+            name="a", version="1", session=None, tokenizer=None,
+            metadata={"model_subdir": "a", "requested_labels": None},
+            content_hash=_compute_content_hash(tmp_path / "a"),
+        )
+        manager._models["b"] = LoadedModel(
+            name="b", version="1", session=None, tokenizer=None,
+            metadata={"model_subdir": "b", "requested_labels": None},
+            content_hash="stale",
+        )
+
+        swapped: dict = {}
+
+        def fake_load(name, model_subdir=None, max_length=512, labels=None):
+            m = LoadedModel(
+                name=name, version="2", session=None, tokenizer=None,
+                metadata={"model_subdir": model_subdir, "requested_labels": labels},
+                content_hash=_compute_content_hash(tmp_path / model_subdir),
+            )
+            manager._models[name] = m
+            swapped[name] = True
+            return m
+
+        manager.load_model = fake_load  # type: ignore[assignment]
+        results = manager.hot_swap_all()
+        # Only the drifted model 'b' is reloaded; 'a' is left untouched.
+        assert results == {"b": True}
+        assert "a" not in swapped
+
 
 
 def ml_dependencies_available():
