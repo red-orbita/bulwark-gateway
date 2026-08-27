@@ -15,14 +15,18 @@ default. Backend 1 (lingua) ships via the ``multilingual`` extra
 core because its wheel is ~170 MB (it bundles n-gram models for every language)
 while this scanner is gated behind ``BULWARK_MULTILINGUAL_ENABLED`` (off by
 default) — shipping it in core would add 170 MB to every image for a default-off
-feature. Backend 2 (fasttext) is not packaged at all (it also needs a model with
-no download path). In the default distribution only the script heuristic runs,
-and it resolves every Latin-script input to ``"en"`` at reduced confidence
-(``_detect_heuristic``). This means Latin-script languages (es/fr/de/pt/…) are
-NOT distinguished by default: downstream Latin-script pattern sets stay dormant,
-and an ``allowed_languages`` policy that excludes English may under-block
-Latin-script text labelled "en". Script-distinguishable languages (CJK, Arabic,
-Cyrillic, Devanagari) are detected reliably. The active backend is recorded in
+feature. Backend 2 (fasttext) is a lighter opt-in: the ``fasttext`` extra
+(~2 MB wheel) plus the 917 KB ``lid.176.ftz`` model, now provisioned and
+hash-pinned via ``python scripts/download-models.py --fasttext`` (loaded from
+``BULWARK_ML_MODEL_DIR / lid.176.ftz``; it still degrades gracefully — logs
+``fasttext_model_missing`` and falls through — if the file is absent). In the
+default distribution only the script heuristic runs, and it resolves every
+Latin-script input to ``"en"`` at reduced confidence (``_detect_heuristic``).
+This means Latin-script languages (es/fr/de/pt/…) are NOT distinguished by
+default: downstream Latin-script pattern sets stay dormant, and an
+``allowed_languages`` policy that excludes English may under-block Latin-script
+text labelled "en". Script-distinguishable languages (CJK, Arabic, Cyrillic,
+Devanagari) are detected reliably. The active backend is recorded in
 ``context.metadata["language_backend"]`` and logged at startup.
 
 Policy enforcement:

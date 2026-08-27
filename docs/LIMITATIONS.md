@@ -49,47 +49,34 @@ alone).
 
 **Status: By design.** Scanner: `language_detector` (`MaturityTier.BETA`).
 
-Accurate language identification requires either the `lingua` backend — shipped
-as the **opt-in `[multilingual]` extra**, a **~170 MB** wheel that bundles n-gram
-models for every language — or a `fasttext` model (see L3). Because the scanner
-is gated behind `BULWARK_MULTILINGUAL_ENABLED` (off by default), lingua is kept
-out of core so the default image stays minimal (zero cost when disabled).
+Accurate language identification requires a real backend. Two are available,
+both **opt-in** because the scanner is gated behind `BULWARK_MULTILINGUAL_ENABLED`
+(off by default), so neither is shipped in core (zero cost when disabled):
 
-Without an accurate backend the detector runs a **script heuristic**: it detects
+- **`lingua`** — the `[multilingual]` extra, a **~170 MB** wheel that bundles
+  n-gram models for every language. Most accurate.
+- **`fasttext`** — the `[fasttext]` extra (~2 MB wheel) plus the 917 KB
+  `lid.176.ftz` model, now provisioned + hash-pinned via
+  `python scripts/download-models.py --fasttext`. Much smaller than lingua and a
+  far better default than the heuristic.
+
+Without either backend the detector runs a **script heuristic**: it detects
 script-distinguishable languages (CJK, Arabic, Cyrillic, Devanagari) reliably,
 but resolves **all Latin-script input to `"en"`** at reduced confidence.
 
 - **Impact:** Latin-script languages (es/fr/de/pt/…) are not distinguished by
-  default. Latin-script multilingual pattern sets stay dormant, and an
-  `allowed_languages` policy that excludes English may under-block Latin-script
-  text labelled `"en"`.
-- **Opt in:** `pip install bulwark-gateway[multilingual]`.
+  the built-in heuristic. Latin-script multilingual pattern sets stay dormant,
+  and an `allowed_languages` policy that excludes English may under-block
+  Latin-script text labelled `"en"`.
+- **Opt in:** `pip install bulwark-gateway[multilingual]` (lingua) **or**
+  `pip install bulwark-gateway[fasttext] && python scripts/download-models.py --fasttext`.
 - **Refs:** `src/scanners/multilingual/language_detector.py` (SHIPPED STATE
   docstring), [DEPLOYMENT multilingual footprint note](DEPLOYMENT.md),
   [ROADMAP §3.1](ROADMAP.md).
 
 ---
 
-## L3 — fasttext language backend has no automated download path
-
-**Status: By design.** Backend of `language_detector` (secondary to lingua).
-
-The detector will use a `fasttext` model (`lid.176.ftz`) if `fasttext` is
-installed **and** the model file is present in `BULWARK_ML_MODEL_DIR`. This path
-is real and gracefully degrades (it logs `fasttext_model_missing` and falls
-through to the heuristic), but unlike the ONNX classifiers it is **not** wired
-into `scripts/download-models.py` / `config/model_manifest.json`, so there is no
-hash-verified provisioning step for it.
-
-- **Impact:** the fasttext backend is effectively operator-provisioned only; the
-  supported "accurate detection" path is lingua (L2).
-- **Opt in:** install `fasttext` and place `lid.176.ftz` in the model dir
-  manually.
-- **Refs:** `src/scanners/multilingual/language_detector.py` (`startup()`).
-
----
-
-## L4 — Topic / intent ML classifiers are not shipped
+## L3 — Topic / intent ML classifiers are not shipped
 
 **Status: Future work.**
 
@@ -108,7 +95,7 @@ non-functional stubs.
 
 ---
 
-## L5 — The input guardrail is not a SQLi / XSS WAF
+## L4 — The input guardrail is not a SQLi / XSS WAF
 
 **Status: By design.**
 
@@ -126,7 +113,7 @@ caught incidentally by exfiltration / tool-abuse patterns.
 
 ---
 
-## L6 — Model-backed BETA scanners are inert until the model is provisioned
+## L5 — Model-backed BETA scanners are inert until the model is provisioned
 
 **Status: By design.**
 

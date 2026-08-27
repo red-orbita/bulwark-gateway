@@ -61,6 +61,9 @@ reports/*
 models/*.onnx
 models/*/model.onnx
 models/*/tokenizer.json
+# fastText language-ID model (lid.176.ftz, ~917 KB — download-models.py --fasttext)
+models/*.ftz
+models/**/*.ftz
 # HuggingFace / sentence-transformers cache (blobs, snapshots, refs)
 models/sentence-transformers/
 models/**/*.safetensors

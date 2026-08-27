@@ -2,16 +2,19 @@
 """Download ML models for Bulwark Gateway async scanner pipeline.
 
 Usage:
-    python scripts/download-models.py [--all | --injection | --toxicity | --embeddings | --nli]
+    python scripts/download-models.py [--all | --injection | --toxicity
+                                       | --embeddings | --nli | --fasttext]
 
 Models:
     injection-classifier: DeBERTa-v3 prompt injection detector (~700MB)
     toxicity: RoBERTa toxicity classifier (~250MB)
     sentence-embeddings: all-MiniLM-L6-v2 embeddings for RelevanceScanner (~90MB)
     nli-classifier: DeBERTa-v3 NLI for Hallucination/Grounding scanners (~540MB)
+    fasttext: lid.176.ftz language-ID model for LanguageDetector (~917KB)
 
 Requirements:
-    pip install huggingface-hub
+    pip install huggingface-hub   # only for the ONNX models (HF Hub)
+    # --fasttext needs no extra dependency (stdlib urllib over HTTPS)
 
 Destination: models/ (configurable via BULWARK_ML_MODEL_DIR)
 """
@@ -24,6 +27,12 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+# Canonical fastText language-identification model (176 languages, compressed,
+# ~917 KB). Served from Facebook AI's public file host — the same origin the
+# fastText project documents. Pinned by SHA-256 in the manifest on first
+# download (TOFU), identical trust model to the ONNX artifacts.
+_FASTTEXT_LID_URL = "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz"
 
 # Integrity manifest consumed by src/scanners/ml/model_manager.py (fail-closed).
 # Keyed by the model's path relative to the model directory, e.g.
@@ -113,6 +122,44 @@ def download_model(repo_id: str, files: list[tuple[str, str]], dest: Path) -> bo
     return True
 
 
+def download_url(url: str, dest: Path) -> bool:
+    """Download a single file over HTTPS to ``dest`` (stdlib only, no HF dep).
+
+    Security: refuses any non-HTTPS URL, streams the body to a temp file in
+    bounded chunks (never buffering the whole payload), and only publishes the
+    final file on success. Used for artifacts that are not on HuggingFace Hub.
+    """
+    import urllib.request
+
+    if not url.lower().startswith("https://"):
+        print(f"  REFUSED: non-HTTPS model URL: {url}")
+        return False
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {url} → {dest}")
+
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix="bulwark-url-dl-", suffix=".part")
+    os.close(tmp_fd)
+    tmp = Path(tmp_name)
+    try:
+        with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310 (HTTPS enforced above)
+            status = getattr(resp, "status", 200)
+            if status not in (200, None):
+                print(f"  FAILED: HTTP {status}")
+                return False
+            with open(tmp, "wb") as out:
+                shutil.copyfileobj(resp, out, length=1024 * 1024)
+        shutil.copy2(tmp, dest)
+        size_kb = dest.stat().st_size / 1024
+        print(f"  {dest.name} ({size_kb:.0f} KB)")
+        return True
+    except Exception as e:
+        print(f"  FAILED: {url} — {e}")
+        return False
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def download_injection(model_dir: Path) -> bool:
     """Download prompt injection classifier (DeBERTa-v3, ~700MB)."""
     dest = model_dir / "injection-classifier"
@@ -197,6 +244,24 @@ def download_nli(model_dir: Path) -> bool:
     return ok
 
 
+def download_fasttext(model_dir: Path) -> bool:
+    """Download the fastText language-ID model (lid.176.ftz, ~917 KB).
+
+    Powers the LanguageDetector's ``fasttext`` backend — a far more accurate
+    default than the Unicode-script heuristic, without lingua's 170 MB wheel.
+    This only provisions the model file; using it also needs the runtime
+    package (``pip install '.[fasttext]'``). The file is loaded directly by
+    ``src/scanners/multilingual/language_detector.py`` from
+    ``BULWARK_ML_MODEL_DIR / lid.176.ftz`` and its hash is recorded in the
+    integrity manifest for tamper-evidence.
+    """
+    dest = model_dir / "lid.176.ftz"
+    ok = download_url(_FASTTEXT_LID_URL, dest)
+    if ok:
+        ok = update_manifest(dest, "lid.176.ftz")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download ML models for Bulwark Gateway")
     parser.add_argument("--all", action="store_true", help="Download all models")
@@ -204,6 +269,7 @@ def main():
     parser.add_argument("--toxicity", action="store_true", help="Download toxicity classifier")
     parser.add_argument("--embeddings", action="store_true", help="Download sentence-embedding model")
     parser.add_argument("--nli", action="store_true", help="Download NLI classifier (hallucination/grounding)")
+    parser.add_argument("--fasttext", action="store_true", help="Download fastText language-ID model (lid.176.ftz)")
     parser.add_argument(
         "--model-dir",
         type=Path,
@@ -212,7 +278,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if not any([args.all, args.injection, args.toxicity, args.embeddings, args.nli]):
+    if not any([args.all, args.injection, args.toxicity, args.embeddings, args.nli, args.fasttext]):
         args.all = True
 
     model_dir = args.model_dir
@@ -232,6 +298,10 @@ def main():
 
     if args.all or args.nli:
         if not download_nli(model_dir):
+            success = False
+
+    if args.all or args.fasttext:
+        if not download_fasttext(model_dir):
             success = False
 
     if success:

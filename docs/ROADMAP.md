@@ -438,9 +438,11 @@ ml-gpu = [
 > hygiene guards alone. To run OCR, install pillow + an OCR backend deliberately
 > (understanding it will not load in a stock distroless image).
 >
-> These accepted gaps (vision OCR, multilingual heuristic-only default, fasttext
-> provisioning) are consolidated in [Accepted Limitations & Known
-> Gaps](LIMITATIONS.md).
+> These accepted gaps (vision OCR, multilingual heuristic-only default) are
+> consolidated in [Accepted Limitations & Known Gaps](LIMITATIONS.md). The
+> fasttext backend is now provisioned + hash-pinned via
+> `download-models.py --fasttext` (the `[fasttext]` extra), so it is no longer a
+> gap — just a lighter opt-in alternative to lingua.
 
 
 ### 3.1 Language Detection
@@ -454,8 +456,10 @@ class LanguageDetector(InputScanner):
     version = "1.0.0"
     blocking = True  # Must run first to inform other scanners
 
-    # Uses lingua-py (opt-in extra, ~170 MB, no GPU) or a fasttext model;
-    # falls back to a script heuristic when neither is installed.
+    # Uses lingua-py (opt-in [multilingual] extra, ~170 MB, no GPU) or a
+    # fasttext lid.176.ftz model (opt-in [fasttext] extra + download-models.py
+    # --fasttext, ~3 MB total); falls back to a script heuristic when neither
+    # is installed.
     # Sets context.language for downstream scanners
     # Policy enforcement: agent allowed_languages in YAML
 ```
