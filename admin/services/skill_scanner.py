@@ -60,7 +60,7 @@ from admin.services.mcp_privilege import (
     analyze_directory as mcp_privilege_analyze_dir,
     PATTERN_COUNT as MCP_PRIVILEGE_PATTERNS,
 )
-from admin.services import model_artifact_scanner
+from src.scanners.artifacts import model_artifact_scanner
 
 logger = logging.getLogger(__name__)
 

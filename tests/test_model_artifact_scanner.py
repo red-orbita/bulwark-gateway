@@ -21,7 +21,7 @@ import zipfile
 import numpy as np
 import pytest
 
-from admin.services import model_artifact_scanner as mas
+from src.scanners.artifacts import model_artifact_scanner as mas
 
 # ═══════════════════════════════════════════════════════════════════
 # Malicious fixture builders (constructed statically — never executed)

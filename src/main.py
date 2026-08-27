@@ -279,6 +279,18 @@ async def lifespan(app: FastAPI):
         pipeline.register(VisionScanner())
         await logger.ainfo("vision_scanner_registered")
 
+    # Register binary Artifact Output Scanner (opt-in, default off). OUTPUT_ASYNC
+    # (fire-and-forget, off the response hot path) DETECTIVE control: it decodes
+    # inline base64 blobs / data: URIs in the LLM response and runs the shared
+    # stdlib pickle-opcode engine (never deserializes) over the bytes, emitting a
+    # WARN event when a serialized artifact carries a load-time RCE gadget. It
+    # never blocks or rewrites the response — base64 in responses is often benign,
+    # so the threat is alerted, not blocked. Zero external deps, so no provisioning.
+    if settings.artifact_output_scanning_enabled:
+        from src.scanners.output.artifact_scanner import ArtifactOutputScanner
+        pipeline.register(ArtifactOutputScanner())
+        await logger.ainfo("artifact_output_scanner_registered")
+
     # Discover and register third-party plugins
     if settings.scanners_dir.exists():
         discovered = discover_all_scanners(settings.scanners_dir)

@@ -219,6 +219,20 @@ class Settings(BaseSettings):
     # `image_hygiene_scanning_enabled` above. No LLM call, off the hot path.
     vision_scanning_enabled: bool = False
 
+    # Binary artifact scanning of LLM OUTPUT (opt-in, default off). When enabled the
+    # ArtifactOutputScanner (OUTPUT_ASYNC, fire-and-forget) is registered. It is a
+    # DETECTIVE control: it decodes inline base64 blobs / `data:` URIs found in the
+    # response text and runs the stdlib-only pickle-opcode analyser
+    # (src/scanners/artifacts/model_artifact_scanner.py — never deserializes) over
+    # the bytes, emitting a WARN SecurityEvent (ThreatCategory.INSECURE_OUTPUT,
+    # OWASP LLM02) when a serialized artifact carries load-time RCE gadgets. It runs
+    # off the hot path, NEVER modifies or blocks the response, and never executes
+    # payload bytes — the threat (a downstream consumer deserializing an artifact
+    # the LLM emitted) is real but niche, so a base64 blob in a response is alerted,
+    # not blocked (blocking every response with base64 would false-positive). No LLM
+    # call. Shares the same engine as the admin SkillSpector pipeline.
+    artifact_output_scanning_enabled: bool = False
+
     # mTLS (inter-service communication: proxy ↔ admin)
     # When enabled, internal endpoints require a valid client certificate
     # signed by the trusted CA. External endpoints continue using JWT/API key.

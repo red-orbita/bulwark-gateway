@@ -113,9 +113,10 @@ bulwark-gateway/
 │   │   ├── discovery.py          # Plugin discovery (entry_points + drop-in)
 │   │   ├── builtin/              # Builtin scanners (regex, output, tool_policy)
 │   │   ├── ml/                   # ML detection (injection, toxicity, topic, intent)
+│   │   ├── artifacts/            # Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*) — shared by admin SkillSpector + proxy output lane
 │   │   ├── multilingual/         # Language detection + 10-language patterns
 │   │   ├── multimodal/           # OCR + vision scanner
-│   │   ├── output/               # Hallucination, schema, grounding, relevance
+│   │   ├── output/               # Hallucination, schema, grounding, relevance, artifact (insecure-output)
 │   │   └── rag/                  # RAG chunk scanner + memory guard
 │   ├── dialog/                    # Dialog flow engine (YAML-based state machine)
 │   │   └── engine.py
@@ -163,7 +164,6 @@ bulwark-gateway/
 │   │   ├── auth_service.py       # Password hashing, JWT, sessions
 │   │   ├── guardrails_store.py   # Pattern CRUD operations
 │   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (5-stage pipeline; default ~77 text patterns + 63-entry artifact catalog, stage 1 optional)
-│   │   ├── model_artifact_scanner.py # Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*)
 │   │   ├── mcp_poisoning.py      # MCP Tool Poisoning detection (TP1-TP4, 20 patterns)
 │   │   ├── mcp_privilege.py      # MCP Least Privilege analysis (LP1-LP4, 29 patterns)
 │   │   ├── tenant_manager.py     # Tenant CRUD + agent assignment
@@ -459,14 +459,17 @@ model-artifact stage (`model_artifact_patterns`, reported separately by
 set on top (mode `skillspector+bulwark`). `skill_scanner.status()` reports live
 counts + mode.
 
-**Model Artifact Scanner** (`admin/services/model_artifact_scanner.py`):
+**Model Artifact Scanner** (`src/scanners/artifacts/model_artifact_scanner.py`):
 Stdlib-only (`pickletools.genops`) opcode analysis that **never deserializes** a
 model file. Detects load-time RCE gadgets (`REDUCE`/`BUILD`/`INST` wired to
 dangerous `GLOBAL`/`STACK_GLOBAL` imports) across raw pickle, PyTorch zip, numpy
 `.npy/.npz`, gzip/bz2/xz/zlib-compressed joblib, and HDF5/Keras Lambda
 heuristics; validates `.safetensors` as code-free. Bounded against zip/decompress
 bombs. A binary artifact file skips the UTF-8 text stages. Rules `BWK-ART-*`;
-`BWK-ART-PICKLE-RCE` is a hard-veto BLOCK.
+`BWK-ART-PICKLE-RCE` is a hard-veto BLOCK. Lives in `src/` (pure stdlib, zero
+`admin`/`src` coupling) so it is shared by BOTH the admin SkillSpector pipeline
+and the proxy's opt-in output-path `ArtifactOutputScanner`
+(`src/scanners/output/artifact_scanner.py`) without `src` ever importing `admin`.
 
 
 **MCP Tool Poisoning** (`admin/services/mcp_poisoning.py`):
@@ -653,6 +656,7 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_HALLUCINATION_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `HallucinationScanner` (BETA, OUTPUT_ASYNC). Requires `nli-classifier` model (`download-models.py --nli`) |
 | `BULWARK_GROUNDING_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `GroundingScanner` (BETA, OUTPUT_ASYNC). Shares the `nli-classifier` model |
 | `BULWARK_VISION_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `VisionScanner` (INPUT_ASYNC). Zero-dep deterministic image-hygiene guards ship active; OCR layer stays inert/EXPERIMENTAL without pillow + an OCR backend |
+| `BULWARK_ARTIFACT_OUTPUT_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `ArtifactOutputScanner` (OUTPUT_ASYNC, BETA, **detective**). Decodes inline base64/`data:` URIs in LLM output and runs the shared stdlib pickle-opcode engine (never deserializes) to WARN on serialized-artifact RCE gadgets (OWASP LLM02). Never blocks/rewrites the response; zero deps |
 | `BULWARK_CORRELATION_ENABLED` | bool | `false` | Master switch for the inline correlation engine (starts event tap at boot) |
 | `BULWARK_CORRELATION_BLOCKING` | bool | `false` | When on, correlated exfiltration / origin-risk decisions BLOCK; otherwise WARN. Runtime-tunable |
 | `BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD` | float | `7.0` | Origin risk score (0–10) at/above which requests are hardened to BLOCK. Runtime-tunable |
@@ -959,7 +963,7 @@ Security-critical files — review carefully before modifying:
 | `src/guardrails/output_filter.py` | Secret redaction patterns |
 | `src/routes/proxy.py` | Main request pipeline, SSRF protection |
 | `admin/services/skill_scanner.py` | SkillSpector hybrid engine (5-stage pipeline; default ~77 text patterns / 4 active stages + binary-artifact stage, stage 1 optional) |
-| `admin/services/model_artifact_scanner.py` | Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*) |
+| `src/scanners/artifacts/model_artifact_scanner.py` | Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*) |
 | `admin/services/mcp_poisoning.py` | MCP tool poisoning detection (20 patterns) |
 | `admin/services/mcp_privilege.py` | MCP least privilege analysis (29 patterns) |
 | `helm/bulwark-gateway/templates/secrets.yaml` | Secret generation |

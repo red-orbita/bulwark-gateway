@@ -745,6 +745,7 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    | Grounding | `BULWARK_GROUNDING_SCANNING_ENABLED=true` | `--nli` |
    | Image hygiene guards (BETA) | `BULWARK_IMAGE_HYGIENE_SCANNING_ENABLED=true` | none (zero-dep) |
    | Vision OCR (EXPERIMENTAL) | `BULWARK_VISION_SCANNING_ENABLED=true` | pillow + OCR backend |
+   | Artifact output (BETA, detective) | `BULWARK_ARTIFACT_OUTPUT_SCANNING_ENABLED=true` | none (stdlib) |
    | Multilingual (BETA) | `BULWARK_MULTILINGUAL_ENABLED=true` | `[multilingual]` (lingua) **or** `[fasttext]` + `download-models.py --fasttext` — see note |
    | RAG scanner / memory guard | `BULWARK_RAG_ENABLED=true` | none (model-free) |
 
@@ -764,6 +765,19 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    > CJK/Arabic/Cyrillic/Devanagari but labels all Latin-script input `"en"` at
    > reduced confidence. Install one only when you need to distinguish
    > Latin-script languages (es/fr/de/pt/…).
+
+   > **Artifact output scanning note.** `BULWARK_ARTIFACT_OUTPUT_SCANNING_ENABLED`
+   > registers a **detective** OUTPUT_ASYNC scanner: it decodes inline base64
+   > blobs / `data:` URIs in the LLM response and runs the stdlib pickle-opcode
+   > engine (never deserializes) to flag serialized-artifact RCE gadgets (OWASP
+   > LLM02), emitting a **WARN** SecurityEvent to the SIEM/alert channels. It runs
+   > off the response hot path and **never blocks or rewrites the response** —
+   > base64 blobs in responses are frequently benign (images, embeddings), so the
+   > threat is alerted, not blocked. Needs no model or extra dependency, and —
+   > unlike the model-backed output scanners below — needs **no** per-agent
+   > `output_validation` policy: once the flag is on it inspects every agent's
+   > output. Enable it when a downstream consumer might deserialize artifacts an
+   > LLM/tool returns.
 
    The owning agent must also opt in via its `output_validation` policy — a flag
    with no matching policy is a no-op for that agent.
