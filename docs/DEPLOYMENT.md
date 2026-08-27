@@ -704,6 +704,10 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    (only the download path + expected hash + `config.json`). Download them:
 
    ```bash
+   # The ONNX downloader needs the HuggingFace Hub client (provisioning-only,
+   # NOT a runtime dependency). --fasttext / --verify need nothing extra.
+   pip install '.[ml-provision]'
+
    # All provisioned models
    python scripts/download-models.py --all
 
@@ -711,12 +715,17 @@ either and the scanner stays silently inert (returns ALLOW, no protection):
    python scripts/download-models.py --injection --toxicity   # input ML
    python scripts/download-models.py --embeddings             # relevance
    python scripts/download-models.py --nli                    # hallucination + grounding
+
+   # Audit an already-provisioned volume (no download, stdlib only):
+   python scripts/download-models.py --verify
    ```
 
    Models land in `models/` (`BULWARK_ML_MODEL_DIR`). On Kubernetes, mount this
    as a persistent volume or bake it into an ML image variant so every replica
    sees the same bytes. The download is hash-verified against
-   `config/model_manifest.json`.
+   `config/model_manifest.json`; `--verify` re-checks every pinned file on disk
+   against that manifest (fail-closed) so you can validate a mounted volume or
+   baked image before enabling any flag.
 
 2. **Enable the capability flag** (boot-time env, default off):
 

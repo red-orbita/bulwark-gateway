@@ -4,6 +4,7 @@
 Usage:
     python scripts/download-models.py [--all | --injection | --toxicity
                                        | --embeddings | --nli | --fasttext]
+    python scripts/download-models.py --verify   # integrity-check on-disk models
 
 Models:
     injection-classifier: DeBERTa-v3 prompt injection detector (~700MB)
@@ -13,8 +14,8 @@ Models:
     fasttext: lid.176.ftz language-ID model for LanguageDetector (~917KB)
 
 Requirements:
-    pip install huggingface-hub   # only for the ONNX models (HF Hub)
-    # --fasttext needs no extra dependency (stdlib urllib over HTTPS)
+    pip install '.[ml-provision]'   # only for the ONNX models (HF Hub client)
+    # --fasttext and --verify need no extra dependency (stdlib only)
 
 Destination: models/ (configurable via BULWARK_ML_MODEL_DIR)
 """
@@ -94,7 +95,7 @@ def download_model(repo_id: str, files: list[tuple[str, str]], dest: Path) -> bo
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
-        print("ERROR: huggingface-hub not installed. Run: pip install huggingface-hub")
+        print("ERROR: huggingface-hub not installed. Run: pip install '.[ml-provision]'")
         return False
 
     dest.mkdir(parents=True, exist_ok=True)
@@ -262,6 +263,58 @@ def download_fasttext(model_dir: Path) -> bool:
     return ok
 
 
+def verify_models(model_dir: Path) -> bool:
+    """Integrity-check every pinned model on disk against the manifest.
+
+    Downloads nothing and needs no third-party dependency (stdlib only). For each
+    entry in ``config/model_manifest.json`` it re-hashes the corresponding file
+    under ``model_dir`` and compares it to the pinned SHA-256. This is the same
+    fail-closed check ``model_manager._verify_model_integrity`` runs at load time,
+    exposed as an offline audit so operators can validate a provisioned volume
+    (e.g. after copying models into an image) without starting the proxy.
+
+    Manifest keys are the model's path relative to the model directory, e.g.
+    ``injection-classifier/model.onnx`` or ``lid.176.ftz``.
+
+    Returns True only if the manifest is non-empty and EVERY pinned file exists
+    and matches. A missing file, a hash mismatch, or an unreadable/empty manifest
+    all fail closed (returns False).
+    """
+    if not _MANIFEST_PATH.exists():
+        print(f"ERROR: no integrity manifest at {_MANIFEST_PATH}")
+        return False
+
+    try:
+        manifest: dict = json.loads(_MANIFEST_PATH.read_text())
+    except (ValueError, OSError) as e:
+        print(f"ERROR: cannot read manifest {_MANIFEST_PATH}: {e}")
+        return False
+
+    if not manifest:
+        print(f"ERROR: integrity manifest {_MANIFEST_PATH} is empty — nothing to verify")
+        return False
+
+    print(f"Verifying {len(manifest)} pinned model file(s) under {model_dir.resolve()}")
+    all_ok = True
+    for key in sorted(manifest):
+        expected = manifest[key]
+        path = model_dir / key
+        if not path.exists():
+            print(f"  MISSING: {key} (not provisioned under {model_dir})")
+            all_ok = False
+            continue
+        actual = _sha256(path)
+        if actual == expected:
+            print(f"  OK      {key}")
+        else:
+            print(f"  MISMATCH {key}")
+            print(f"    manifest : {expected}")
+            print(f"    on disk  : {actual}")
+            all_ok = False
+
+    return all_ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download ML models for Bulwark Gateway")
     parser.add_argument("--all", action="store_true", help="Download all models")
@@ -271,12 +324,26 @@ def main():
     parser.add_argument("--nli", action="store_true", help="Download NLI classifier (hallucination/grounding)")
     parser.add_argument("--fasttext", action="store_true", help="Download fastText language-ID model (lid.176.ftz)")
     parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify on-disk models against the integrity manifest (no download)",
+    )
+    parser.add_argument(
         "--model-dir",
         type=Path,
         default=Path(os.environ.get("BULWARK_ML_MODEL_DIR", "models")),
         help="Model directory (default: models/)",
     )
     args = parser.parse_args()
+
+    # --verify is a standalone, offline audit mode: never mix it with downloads.
+    if args.verify:
+        if verify_models(args.model_dir):
+            print("\nAll pinned models verified OK.")
+        else:
+            print("\nModel integrity verification FAILED.", file=sys.stderr)
+            sys.exit(1)
+        return
 
     if not any([args.all, args.injection, args.toxicity, args.embeddings, args.nli, args.fasttext]):
         args.all = True

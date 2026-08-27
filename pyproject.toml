@@ -41,6 +41,15 @@ ml = [
     "tokenizers>=0.15",
     "numpy>=1.26",
 ]
+# Provisioning-only extra for `scripts/download-models.py`: the ONNX artifacts
+# (injection / toxicity / embeddings / NLI) are pulled from HuggingFace Hub, which
+# needs the `huggingface-hub` client. This is NOT a runtime dependency — the proxy
+# never imports it; it is only used offline/at-build-time to fetch + hash-pin
+# models. Kept separate from `ml` so the runtime image stays free of the Hub
+# client. `--fasttext` and `--verify` need nothing from this extra (stdlib only).
+ml-provision = [
+    "huggingface-hub>=0.23",
+]
 ml-gpu = [
     "onnxruntime-gpu>=1.17",
     "tokenizers>=0.15",

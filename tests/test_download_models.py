@@ -153,3 +153,68 @@ def test_update_manifest_detects_tampering(dl, tmp_path, monkeypatch):
     assert dl.update_manifest(f, "lid.176.ftz") is False
     # Manifest must NOT have been overwritten with the bad hash.
     assert json.loads(manifest.read_text())["lid.176.ftz"] == pinned
+
+
+# ---------------------------------------------------------------------------
+# verify_models — offline integrity audit (--verify), stdlib only, fail-closed
+# ---------------------------------------------------------------------------
+
+
+def _pin(dl, manifest: Path, model_dir: Path, key: str, data: bytes) -> None:
+    """Write a model file under model_dir and pin its hash in the manifest."""
+    target = model_dir / key
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    existing: dict = json.loads(manifest.read_text()) if manifest.exists() else {}
+    existing[key] = dl._sha256(target)
+    manifest.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n")
+
+
+def test_verify_models_passes_when_all_hashes_match(dl, tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    model_dir = tmp_path / "models"
+
+    _pin(dl, manifest, model_dir, "injection-classifier/model.onnx", b"onnx-bytes")
+    _pin(dl, manifest, model_dir, "lid.176.ftz", b"fasttext-bytes")
+
+    assert dl.verify_models(model_dir) is True
+
+
+def test_verify_models_fails_on_hash_mismatch(dl, tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    model_dir = tmp_path / "models"
+
+    _pin(dl, manifest, model_dir, "lid.176.ftz", b"trusted")
+    # Swap the on-disk bytes without updating the manifest → tamper.
+    (model_dir / "lid.176.ftz").write_bytes(b"swapped-bytes")
+
+    assert dl.verify_models(model_dir) is False
+
+
+def test_verify_models_fails_on_missing_file(dl, tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    model_dir = tmp_path / "models"
+
+    _pin(dl, manifest, model_dir, "toxicity/model.onnx", b"present")
+    # Pin a second entry but never write the file.
+    m = json.loads(manifest.read_text())
+    m["nli-classifier/model.onnx"] = "deadbeef" * 8
+    manifest.write_text(json.dumps(m, indent=2, sort_keys=True) + "\n")
+
+    assert dl.verify_models(model_dir) is False
+
+
+def test_verify_models_fails_when_manifest_absent(dl, tmp_path, monkeypatch):
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", tmp_path / "nope.json")
+    assert dl.verify_models(tmp_path / "models") is False
+
+
+def test_verify_models_fails_on_empty_manifest(dl, tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}\n")
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    assert dl.verify_models(tmp_path / "models") is False
+

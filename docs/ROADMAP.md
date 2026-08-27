@@ -282,49 +282,32 @@ class SemanticSimilarityScanner(InputScanner):
     # 4. Adaptive threshold based on tenant-specific false positive rate
 ```
 
-### 2.5 Topic Classification Scanner
+### 2.5 Topic Classification Scanner — DEPRECATED (withdrawn from roadmap)
 
-> **Status: not shipped (future work).** Earlier dead stubs were removed — they
-> had no provisioned model, no download path, no manifest entry, and only
-> mock-based tests, so they violated the "no capability ships without a real
-> model + real-inference tests" bar. The correct way to add this later is
-> **identical to `injection-classifier` / `toxicity`**: source/train a model →
-> export to ONNX → add it to `scripts/download-models.py` + `config/model_manifest.json`
-> → add real forward-pass tests (gated on `ml_dependencies_available()` +
-> `model_files_present`). This is a normal ONNX classifier — it does **NOT**
-> require an LLM call in the hot path.
+> **Status: DEPRECATED — will not be shipped as a planned roadmap item.**
+> Earlier dead stubs were already removed (no provisioned model, no download
+> path, no manifest entry, mock-only tests). This entry is now formally withdrawn
+> to keep the roadmap honest: the only ML scanners Bulwark actually ships are
+> `injection-classifier` and `toxicity` (real ONNX models, real forward-pass
+> tests in `tests/test_ml_inference.py`, `download-models.py` + manifest pins).
+>
+> Topic-boundary enforcement is **not on the committed roadmap**. If a future
+> need is proven, the *only* acceptable path is the same bar the shipped
+> scanners meet — source/train a model → export to ONNX → add to
+> `scripts/download-models.py` + `config/model_manifest.json` → add real
+> forward-pass tests gated on `ml_dependencies_available()` + `model_files_present`.
+> It would be a normal ONNX classifier (no LLM call in the hot path). Until that
+> work is actually done, there is no `TopicScanner` and none is planned.
 
-Create `src/scanners/ml/topic_scanner.py`:
+### 2.6 Sentiment/Intent Detector — DEPRECATED (withdrawn from roadmap)
 
-```python
-class TopicScanner(InputScanner):
-    """Enforces topic boundaries using zero-shot classification."""
-    name = "ml_topic_classifier"
-    version = "1.0.0"
-    blocking = False
+> **Status: DEPRECATED — will not be shipped as a planned roadmap item.**
+> Same disposition and rationale as §2.5. There is no `IntentScanner`, no model,
+> and none is planned. Adversarial-intent signal is instead covered today by the
+> regex hot path plus the shipped `injection-classifier`. Any future revival must
+> clear the identical "real ONNX model + real-inference tests, no LLM in the hot
+> path" bar before it re-enters the roadmap.
 
-    # Uses zero-shot NLI model (ONNX-exported bart-large-mnli or similar)
-    # Config per-agent: allowed_topics, denied_topics in policy YAML
-    # Example: agent "support-bot" can only discuss [billing, technical_support, account]
-```
-
-### 2.6 Sentiment/Intent Detector
-
-> **Status: not shipped (future work).** Same rationale and same correct path as
-> §2.5 — a real ONNX model + real-inference tests, no LLM in the hot path.
-
-Create `src/scanners/ml/intent_scanner.py`:
-
-```python
-class IntentScanner(InputScanner):
-    """Detects adversarial intent via multi-label classification."""
-    name = "ml_intent_detector"
-    version = "1.0.0"
-    blocking = False
-
-    # Labels: benign, social_engineering, manipulation, escalation_attempt
-    # Useful for detecting subtle attacks regex cannot catch
-```
 
 ### 2.7 ML Model Management
 
