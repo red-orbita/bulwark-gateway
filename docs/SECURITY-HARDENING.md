@@ -240,7 +240,7 @@ scope (provider responsibility).
 | LLM06 | Excessive Agency | ✅ | Tool Policy engine (per-agent RBAC, allow/deny, `max_tool_calls`) + tool_call buffering before execution |
 | LLM07 | System Prompt Leakage | ✅ | Output Filter + Input Guardrail detection of system-prompt override/leak attempts |
 | LLM08 | Vector and Embedding Weaknesses | ◑ | Embedding scanner + RAG memory guard (semantic similarity, poisoning detection) |
-| LLM09 | Misinformation | ◑ | WARN verdict + output-validation scanners (hallucination, grounding, relevance) |
+| LLM09 | Misinformation | ◑ | WARN verdict + output-validation scanners (hallucination, grounding, relevance) — BETA, model-backed (`nli-classifier` / `sentence-embeddings`), opt-in per agent |
 | LLM10 | Unbounded Consumption | ✅ | Per-tenant rate limiter, request/response size limits, `max_tokens` enforcement |
 
 > This mapping was updated from the 2023 list. The most material changes: former

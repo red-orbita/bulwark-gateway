@@ -627,6 +627,15 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_REDACT_EMAIL` | bool | `false` | Opt-in: redact emails in LLM output (`[REDACTED:EMAIL]`) |
 | `BULWARK_REDACT_PHONE` | bool | `false` | Opt-in: redact phone numbers in LLM output (`[REDACTED:PHONE]`) |
 | `BULWARK_WEBHOOK_ALERT_URLS` | str | `""` | Webhook URLs for alerts |
+| `BULWARK_ML_ENABLED` | bool | `false` | Master switch for ML scanners (injection/toxicity). Requires provisioned ONNX models + `ml` extra |
+| `BULWARK_ML_BLOCKING` | bool | `false` | When on, ML scanner verdicts BLOCK; otherwise WARN/async-only |
+| `BULWARK_MULTILINGUAL_ENABLED` | bool | `false` | Master switch for language detector + 10-language attack patterns |
+| `BULWARK_RAG_ENABLED` | bool | `false` | Master switch for RAG retrieval scanner + memory guard |
+| `BULWARK_SCHEMA_VALIDATION_ENABLED` | bool | `false` | Opt-in: wire the model-free `SchemaValidator` (BETA) into the output pipeline |
+| `BULWARK_RELEVANCE_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `RelevanceScanner` (BETA, OUTPUT_ASYNC). Requires `sentence-embeddings` model (`download-models.py --embeddings`) |
+| `BULWARK_HALLUCINATION_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `HallucinationScanner` (BETA, OUTPUT_ASYNC). Requires `nli-classifier` model (`download-models.py --nli`) |
+| `BULWARK_GROUNDING_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `GroundingScanner` (BETA, OUTPUT_ASYNC). Shares the `nli-classifier` model |
+| `BULWARK_VISION_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `VisionScanner` (INPUT_ASYNC). Zero-dep deterministic image-hygiene guards ship active; OCR layer stays inert/EXPERIMENTAL without pillow + an OCR backend |
 | `BULWARK_CORRELATION_ENABLED` | bool | `false` | Master switch for the inline correlation engine (starts event tap at boot) |
 | `BULWARK_CORRELATION_BLOCKING` | bool | `false` | When on, correlated exfiltration / origin-risk decisions BLOCK; otherwise WARN. Runtime-tunable |
 | `BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD` | float | `7.0` | Origin risk score (0–10) at/above which requests are hardened to BLOCK. Runtime-tunable |

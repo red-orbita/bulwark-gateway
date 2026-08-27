@@ -73,6 +73,40 @@ User/Agent ───────▶│  [Auth] → [Input Guardrail] → [Tool P
 
 ---
 
+## Scanner Pipeline & Maturity
+
+Beyond the always-on hot-path guardrails (input guardrail, output filter, tool
+policy), Bulwark runs a pluggable **four-lane scanner pipeline**
+(`src/scanners/pipeline.py`): `INPUT_BLOCKING`, `INPUT_ASYNC`, `OUTPUT_BLOCKING`,
+`OUTPUT_ASYNC`. Blocking lanes gate the request; async lanes are fire-and-forget
+(no LLM call, off the hot path). Registration is introspectable via
+`GET /internal/scanners/status` and surfaced in the admin "Advanced Scanners" page.
+
+### Maturity tiers (honesty signal)
+
+Every scanner declares a `MaturityTier` in its `ScannerInfo`. This is an
+**honesty signal for triage/IR — not a functional gate**: it tells operators how
+much to trust a scanner's verdicts today so the product never overstates coverage.
+Tiers are pinned by `tests/test_scanner_maturity.py` and propagate through
+`list_scanners()` → `/internal/scanners/status` → admin UI.
+
+| Tier | Meaning | Scanners |
+|------|---------|----------|
+| **GA** | Deterministic, tested, production-proven | `regex_input`, `output_redaction`, `tool_policy` |
+| **BETA** | Real capability + real-inference/deterministic tests; opt-in | `ml_injection_classifier`, `ml_toxicity_scanner`, `schema_validator`, `relevance_scanner`, `hallucination_scanner`, `grounding_scanner`, `retrieval_scanner`, `memory_guard`, `language_detector`, `multilingual_patterns` |
+| **EXPERIMENTAL** | Headline capability unprovisioned/unproven | `ml_vision_scanner` (OCR layer inert without pillow + OCR backend) |
+
+### Master flags vs runtime toggles
+
+Capability scanners are gated by boot-time env flags (`BULWARK_*_SCANNING_ENABLED`,
+`BULWARK_ML_ENABLED`, `BULWARK_RAG_ENABLED`, `BULWARK_MULTILINGUAL_ENABLED`), all
+default off. A scanner also stays **inert (ALLOW)** unless its backing model is
+provisioned (`scripts/download-models.py`) *and* the owning agent opts in via
+policy — so enabling a flag alone carries no hot-path cost, but also delivers no
+protection until the model is downloaded (see `docs/DEPLOYMENT.md`).
+
+---
+
 ## Request Lifecycle
 
 ### Non-Streaming Request

@@ -7,6 +7,7 @@ Complete guide for deploying Bulwark Gateway in production and development envir
 - [Quick Start (Kubernetes)](#quick-start-kubernetes)
 - [Helm Chart (Recommended)](#helm-chart-recommended)
 - [Redis Configuration](#redis-configuration)
+- [ML Model Provisioning (Optional Scanners)](#ml-model-provisioning-optional-scanners)
 - [Docker Compose (Development)](#docker-compose-development)
 - [Network Architecture](#network-architecture)
 - [Ingress & TLS](#ingress--tls)
@@ -688,6 +689,55 @@ curl -s https://admin.bulwark-gateway.local/admin/health/detailed \
   -H "Cookie: session=<TOKEN>" | jq '.redis'
 # Expected: {"status": "connected", "latency_ms": 1.2, "version": "7.2.4", ...}
 ```
+
+---
+
+## ML Model Provisioning (Optional Scanners)
+
+The regex hot path needs **no** models and works out of the box. The optional
+BETA scanners (ML injection/toxicity classifiers and the output-validation
+scanners: relevance, hallucination, grounding) are **model-backed** and ship
+**disabled by default**. Enabling one requires **two independent steps** — miss
+either and the scanner stays silently inert (returns ALLOW, no protection):
+
+1. **Provision the model bytes.** Model weights are NOT committed to the repo
+   (only the download path + expected hash + `config.json`). Download them:
+
+   ```bash
+   # All provisioned models
+   python scripts/download-models.py --all
+
+   # Or selectively
+   python scripts/download-models.py --injection --toxicity   # input ML
+   python scripts/download-models.py --embeddings             # relevance
+   python scripts/download-models.py --nli                    # hallucination + grounding
+   ```
+
+   Models land in `models/` (`BULWARK_ML_MODEL_DIR`). On Kubernetes, mount this
+   as a persistent volume or bake it into an ML image variant so every replica
+   sees the same bytes. The download is hash-verified against
+   `config/model_manifest.json`.
+
+2. **Enable the capability flag** (boot-time env, default off):
+
+   | Scanner | Flag | Requires model |
+   |---------|------|----------------|
+   | ML injection / toxicity | `BULWARK_ML_ENABLED=true` | `--injection` / `--toxicity` |
+   | Schema validator | `BULWARK_SCHEMA_VALIDATION_ENABLED=true` | none (model-free) |
+   | Relevance | `BULWARK_RELEVANCE_SCANNING_ENABLED=true` | `--embeddings` |
+   | Hallucination | `BULWARK_HALLUCINATION_SCANNING_ENABLED=true` | `--nli` |
+   | Grounding | `BULWARK_GROUNDING_SCANNING_ENABLED=true` | `--nli` |
+   | Image hygiene guards | `BULWARK_VISION_SCANNING_ENABLED=true` | none (zero-dep) |
+
+   The owning agent must also opt in via its `output_validation` policy — a flag
+   with no matching policy is a no-op for that agent.
+
+> **Verify provisioning.** `GET /internal/scanners/status` (and the admin
+> "Advanced Scanners" page) list every registered scanner with its lane and
+> `healthy` state — use it to confirm the scanner you enabled is actually
+> registered. If you enable a flag but leave the model unprovisioned, the scanner
+> loads no model and every `scan()` returns ALLOW (no protection, no hot-path
+> cost), so always confirm the model is present after enabling a flag.
 
 ---
 

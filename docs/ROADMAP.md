@@ -411,12 +411,23 @@ ml-gpu = [
 
 > **Status (honesty — corrected).** The **language detector** (heuristic; degrades
 > without the optional `lingua` backend) and the **multilingual regex patterns**
-> ship and are wired. The **vision scanner** (§3.4) is **inert by default**: the
-> `[vision]` extra (pillow) is not installed in the default distribution, no OCR
-> backend ships, and the scanner is **not registered** in the default proxy
-> pipeline (`src/main.py`) — so it is doubly inert. Its OCR-to-injection logic is
-> real but unproven; it is declared `MaturityTier.EXPERIMENTAL`. Enable it
-> deliberately by installing pillow + an OCR backend and wiring it in.
+> ship and are wired.
+>
+> The **vision scanner** (§3.4) is split into two honest capability tiers:
+> - Its **zero-dependency deterministic guards** — inline `data:image/...;base64`
+>   extraction, base64 decode validation, the DoS size limit, the `allow_images`
+>   policy gate, and magic-byte format-signature validation (MIME-confusion
+>   detection) — are **real, tested, and registered opt-in** via
+>   `BULWARK_VISION_SCANNING_ENABLED` (default off). No OCR backend required.
+> - Its eponymous **OCR-to-injection** capability remains **inert**: the `[vision]`
+>   extra (pillow) is not installed in the default distribution and no OCR backend
+>   ships (nor fits the distroless / no-torch runtime), so `startup()` leaves it
+>   disabled. That logic is real but unproven.
+>
+> Because the headline OCR capability is unprovisioned, the whole scanner stays
+> `MaturityTier.EXPERIMENTAL` — it never claims BETA/GA on the strength of the
+> hygiene guards alone. To run OCR, install pillow + an OCR backend deliberately
+> (understanding it will not load in a stock distroless image).
 
 
 ### 3.1 Language Detection
@@ -542,33 +553,36 @@ vision = [
 
 ---
 
-## Phase 4: Hallucination Detection + Structured Output Validation [PARTIALLY SHIPPED]
+## Phase 4: Hallucination Detection + Structured Output Validation [SHIPPED — BETA, opt-in]
 
 **Goal**: Detect when LLM outputs are factually incorrect or don't match expected schema.
 
 **Competitive gap**: NeMo (self-check facts/hallucination), Guardrails AI (Pydantic validation), LLM Guard (FactualConsistency).
 
-> **Status (honesty — corrected).** Only the **schema validator** ships as a
-> functional capability: it is model-free, `jsonschema` is a core runtime
-> dependency, its validation is deterministic and unit-tested, and it is declared
-> `MaturityTier.BETA`. It is **not** wired into the default proxy pipeline —
-> enable it deliberately per agent.
+> **Status (honesty — shipped BETA, opt-in).** All four output-validation
+> scanners are now functional, wired into the proxy pipeline behind per-capability
+> master flags (default off), and declared `MaturityTier.BETA`. None runs on the
+> hot path or issues an LLM call — they are OUTPUT_ASYNC (fire-and-forget) except
+> the schema validator, and each stays inert (ALLOW) until the owning agent opts
+> in via its `output_validation` policy.
 >
-> The three model-backed scanners — **hallucination** (`nli-classifier`),
-> **grounding** (`nli-classifier`, shared), and **relevance**
-> (`sentence-embeddings`) — carry real decision logic (NLI entailment / cosine
-> similarity + claim extraction) but their ONNX models are **NOT provisioned**:
-> no `config/model_manifest.json` entry, no download path in
-> `scripts/download-models.py`, only mock-based unit tests. In the default
-> distribution they never load a model and `scan()` returns ALLOW — they are
-> **inert**, declared `MaturityTier.EXPERIMENTAL`, and not registered in the
-> default proxy pipeline (SDK-accessible only). This is the same honesty bar as
-> §2.5/2.6: **no capability ships without a real model + real-inference tests.**
-> To promote any of them, follow the `injection-classifier` / `toxicity` path:
-> source/export the model to ONNX → add it to `scripts/download-models.py` +
-> `config/model_manifest.json` → add real forward-pass tests (gated on
-> `ml_dependencies_available()` + `model_files_present`). None of these require an
-> LLM call in the hot path.
+> - **Schema validator** — model-free, `jsonschema` is a core runtime dependency,
+>   deterministic + unit-tested. Enable with `BULWARK_SCHEMA_VALIDATION_ENABLED`.
+> - **Relevance** (`sentence-embeddings`, cosine similarity) — enable with
+>   `BULWARK_RELEVANCE_SCANNING_ENABLED`.
+> - **Hallucination** and **grounding** (share the `nli-classifier` model, NLI
+>   entailment / claim extraction) — enable with
+>   `BULWARK_HALLUCINATION_SCANNING_ENABLED` / `BULWARK_GROUNDING_SCANNING_ENABLED`.
+>
+> The three model-backed scanners are **provisioned**: each has a
+> `config/model_manifest.json` entry, a download path in
+> `scripts/download-models.py` (`--embeddings` / `--nli`), and **real
+> forward-pass tests** gated on `ml_dependencies_available()` +
+> `model_files_present`. If the model is not downloaded they no-op (ALLOW) rather
+> than fail, so enabling a flag without provisioning the model carries no hot-path
+> cost — but also delivers no protection (see `docs/DEPLOYMENT.md` → model
+> provisioning). This meets the honesty bar of §2.5/2.6: **no capability ships
+> without a real model + real-inference tests.**
 
 
 ### 4.1 Hallucination Detector
