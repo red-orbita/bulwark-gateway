@@ -143,6 +143,44 @@ def _compute_content_hash(model_path: Path) -> str:
     return h.hexdigest()
 
 
+def _scan_artifact_rce(path: Path) -> dict[str, Any] | None:
+    """Static opcode scan of a model file for a load-time RCE gadget.
+
+    Defense-in-depth complement to the hash-pin integrity gate (C-hard). Even a
+    hash-matched, integrity-verified artifact is refused at load if a static
+    scan finds a live pickle code-execution gadget. This closes the residual
+    gap in a TOFU trust model: if ``config/model_manifest.json`` was bootstrapped
+    from a poisoned upstream pull, the hash matches (it pins the malicious bytes)
+    yet the file still carries an RCE payload. Deserializing an ONNX model does
+    not execute pickle, but an artifact *disguised* as ``model.onnx`` that is
+    really a pickle would — so we scan the exact bytes about to be loaded.
+
+    Reuses the stdlib-only artifact scanner shared with SkillSpector, which
+    NEVER deserializes the file (``pickletools.genops`` opcode walk only). Only
+    CRITICAL findings gate a load (the sole critical rule is a live
+    REDUCE/BUILD-wired execution gadget); legitimate opaque formats (real ONNX)
+    score low and never block.
+
+    Returns the first CRITICAL finding dict if the artifact must be refused,
+    else ``None``. NEVER raises: a scanner import/parse error degrades to
+    ``None`` so a scan glitch can never brick a legitimate, integrity-verified
+    model — the fail-closed hash pin remains the primary trust gate.
+    """
+    try:
+        from src.scanners.artifacts.model_artifact_scanner import analyze_file
+
+        findings = analyze_file(path, str(path))
+    except Exception as e:  # scanner unavailable / unexpected parse error
+        logger.warning("artifact_scan_unavailable",
+                       extra={"path": str(path), "error": str(e)[:200]})
+        return None
+
+    for finding in findings:
+        if finding.get("severity") == "critical":
+            return finding
+    return None
+
+
 # Optional imports — graceful if not installed
 try:
     import numpy as np
@@ -342,6 +380,25 @@ class ModelManager:
                 logger.error("model_load_blocked", extra={"model": name,
                             "reason": "config_integrity_failed"})
                 return None
+
+            # SECURITY (C-hard): defense-in-depth artifact scan AFTER integrity.
+            # A hash-pinned file is only as trustworthy as the pull that seeded
+            # the manifest (TOFU). Statically scan the exact bytes about to be
+            # loaded for a load-time code-execution gadget — catches an artifact
+            # disguised as model.onnx that is really a malicious pickle, even
+            # when its hash matches the (poisoned) manifest. The scan never
+            # deserializes; only a CRITICAL finding (live RCE gadget) blocks.
+            for artifact_path in (onnx_path, tokenizer_path, config_path):
+                if not artifact_path.exists():
+                    continue
+                gadget = _scan_artifact_rce(artifact_path)
+                if gadget is not None:
+                    logger.critical("model_load_blocked_rce_gadget",
+                                    extra={"model": name,
+                                           "file": artifact_path.name,
+                                           "rule": gadget.get("rule_id"),
+                                           "detail": gadget.get("detail", "")[:200]})
+                    return None
 
             # Load ONNX session
             sess_options = ort.SessionOptions()
@@ -600,7 +657,7 @@ class ModelManager:
             if model.labels:
                 return {
                     label: float(prob)
-                    for label, prob in zip(model.labels, probabilities)
+                    for label, prob in zip(model.labels, probabilities, strict=False)
                 }
             else:
                 return {f"class_{i}": float(p) for i, p in enumerate(probabilities)}

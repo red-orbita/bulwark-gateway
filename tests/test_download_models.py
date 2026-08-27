@@ -279,6 +279,87 @@ def test_verify_models_skips_metadata_keys(dl, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _scan_artifact_safety — supply-chain gate that runs BEFORE a hash is pinned
+# ---------------------------------------------------------------------------
+
+
+def _malicious_pickle() -> bytes:
+    """Pickle bytes with an os.system __reduce__ gadget (serialize-only).
+
+    ``pickle.dumps`` never executes the gadget — only unpickling would. The
+    resulting bytes carry a REDUCE opcode wired to an os.system global import,
+    i.e. the BWK-ART-PICKLE-RCE signature the artifact scanner detects
+    statically (without deserializing).
+    """
+    import os
+    import pickle
+
+    class _Evil:
+        def __reduce__(self):
+            return (os.system, ("echo pwned",))
+
+    return pickle.dumps(_Evil())
+
+
+def test_scan_artifact_safety_blocks_malicious_pickle(dl, tmp_path):
+    """A downloaded artifact carrying an RCE gadget is refused before pinning."""
+    evil = tmp_path / "model.onnx"  # disguised as ONNX weights
+    evil.write_bytes(_malicious_pickle())
+    assert dl._scan_artifact_safety(evil) is False
+
+
+def test_scan_artifact_safety_passes_benign_json(dl, tmp_path):
+    """A legitimate JSON aux file (tokenizer/config) has no code surface → allowed."""
+    tok = tmp_path / "tokenizer.json"
+    tok.write_bytes(b'{"model": {"type": "BPE"}, "vocab": {}}')
+    assert dl._scan_artifact_safety(tok) is True
+
+
+def test_scan_artifact_safety_degrades_open_on_scan_error(dl, tmp_path, monkeypatch):
+    """A scanner error must NOT block provisioning (hash pin stays primary gate)."""
+    import src.scanners.artifacts.model_artifact_scanner as scanner
+
+    def _boom(path, source=""):
+        raise RuntimeError("scanner exploded")
+
+    monkeypatch.setattr(scanner, "analyze_file", _boom)
+    f = tmp_path / "model.onnx"
+    f.write_bytes(b"whatever")
+    assert dl._scan_artifact_safety(f) is True
+
+
+def test_pin_model_files_refuses_malicious_artifact(dl, tmp_path, monkeypatch):
+    """_pin_model_files rejects (and never pins) a model with a poisoned weight file."""
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+    dest = tmp_path / "models" / "injection-classifier"
+    dest.mkdir(parents=True)
+    dest.joinpath("model.onnx").write_bytes(_malicious_pickle())  # RCE gadget
+    dest.joinpath("tokenizer.json").write_bytes(b"tok")
+
+    assert dl._pin_model_files(dest, "injection-classifier") is False
+    # Nothing was pinned — the scan blocks before update_manifest ever writes it,
+    # so a malicious artifact never enters the trust anchor.
+    assert not manifest.exists()
+
+
+def test_download_fasttext_refuses_malicious_payload(dl, tmp_path, monkeypatch):
+    """download_fasttext rejects a poisoned .ftz before pinning its hash."""
+    def _fake_download_url(url, dest):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(_malicious_pickle())  # upstream served an RCE gadget
+        return True
+
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setattr(dl, "download_url", _fake_download_url)
+    monkeypatch.setattr(dl, "_MANIFEST_PATH", manifest)
+
+    assert dl.download_fasttext(tmp_path / "models") is False
+    # The poisoned artifact was never recorded as trusted (scan blocks pre-pin).
+    assert not manifest.exists()
+
+
+# ---------------------------------------------------------------------------
 # Committed manifest completeness — every model pins ALL load-bearing files
 # ---------------------------------------------------------------------------
 

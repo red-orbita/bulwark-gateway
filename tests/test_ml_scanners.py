@@ -344,6 +344,88 @@ class TestModelManager:
         assert results == {"b": True}
         assert "a" not in swapped
 
+    # --- Load-time artifact RCE scan (C-hard: defense-in-depth) --------------
+
+    @staticmethod
+    def _malicious_pickle() -> bytes:
+        """Pickle bytes with an os.system __reduce__ gadget.
+
+        pickle.dumps only SERIALIZES — it never runs the gadget (only
+        unpickling would). The bytes carry a REDUCE opcode wired to a global
+        import of os.system, i.e. exactly the BWK-ART-PICKLE-RCE signature.
+        """
+        import os
+        import pickle
+
+        class _Evil:
+            def __reduce__(self):
+                return (os.system, ("echo pwned",))
+
+        return pickle.dumps(_Evil())
+
+    def test_scan_artifact_rce_flags_malicious_pickle(self, tmp_path):
+        """_scan_artifact_rce returns the critical finding for a live RCE gadget."""
+        from src.scanners.ml.model_manager import _scan_artifact_rce
+
+        # Disguised as model.onnx but really a malicious pickle (magic \x80).
+        onnx = tmp_path / "model.onnx"
+        onnx.write_bytes(self._malicious_pickle())
+
+        finding = _scan_artifact_rce(onnx)
+        assert finding is not None
+        assert finding["severity"] == "critical"
+        assert finding["rule_id"] == "BWK-ART-PICKLE-RCE"
+
+    def test_scan_artifact_rce_passes_benign(self, tmp_path):
+        """A legitimate (non-pickle) artifact yields no critical finding → None."""
+        from src.scanners.ml.model_manager import _scan_artifact_rce
+
+        # A real tokenizer.json is plain JSON — no artifact/code surface.
+        tok = tmp_path / "tokenizer.json"
+        tok.write_bytes(b'{"model": {"type": "BPE"}, "vocab": {}}')
+        assert _scan_artifact_rce(tok) is None
+
+    def test_scan_artifact_rce_never_raises(self, tmp_path):
+        """A scan/import glitch degrades to None (hash pin stays primary gate)."""
+        from src.scanners.ml.model_manager import _scan_artifact_rce
+
+        # Nonexistent path: the scanner surfaces a low read-error, not critical.
+        assert _scan_artifact_rce(tmp_path / "absent.onnx") is None
+
+    def test_load_model_blocks_rce_disguised_as_onnx(self, tmp_path):
+        """Integration: a hash-MATCHED artifact carrying an RCE gadget is refused.
+
+        This is the C-hard guarantee: even when the manifest pins the malicious
+        bytes (a TOFU manifest bootstrapped from a poisoned pull), the load-time
+        opcode scan catches the disguised pickle and fails closed AFTER integrity
+        passes. Pure-unit: the scan runs before any ONNX/tokenizer machinery.
+        """
+        import hashlib
+        import json
+
+        from src.scanners.ml import model_manager as mm
+        from src.scanners.ml.model_manager import ModelManager
+
+        subdir = "clf"
+        d = tmp_path / subdir
+        d.mkdir(parents=True)
+        evil = self._malicious_pickle()
+        (d / "model.onnx").write_bytes(evil)  # disguised malicious pickle
+        (d / "tokenizer.json").write_bytes(b"tok")
+
+        # Manifest pins BOTH files' real hashes → integrity gate passes cleanly,
+        # so only the artifact scan can stop the load.
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(json.dumps({
+            f"{subdir}/model.onnx": hashlib.sha256(evil).hexdigest(),
+            f"{subdir}/tokenizer.json": hashlib.sha256(b"tok").hexdigest(),
+        }))
+
+        manager = ModelManager(tmp_path)
+        manager._available = True  # reach the gate without onnxruntime installed
+        with patch.object(mm, "_MODEL_MANIFEST_PATH", manifest):
+            assert manager.load_model("clf", model_subdir=subdir) is None
+
 
 
 def ml_dependencies_available():

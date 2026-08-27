@@ -29,6 +29,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Make the stdlib-only model-artifact scanner in src/ importable so freshly
+# pulled artifacts can be supply-chain scanned BEFORE their hash is pinned into
+# the trust manifest. This adds no runtime dependency to the gateway image (the
+# scanner is pure stdlib); it only matters at provisioning time.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 # Canonical fastText language-identification model (176 languages, compressed,
 # ~917 KB). Served from Facebook AI's public file host — the same origin the
 # fastText project documents. Pinned by SHA-256 in the manifest on first
@@ -161,6 +169,49 @@ def download_url(url: str, dest: Path) -> bool:
         tmp.unlink(missing_ok=True)
 
 
+def _scan_artifact_safety(path: Path) -> bool:
+    """Supply-chain scan a freshly downloaded artifact BEFORE pinning its hash.
+
+    Deserializing an untrusted model file is remote code execution
+    (``pickle``/``torch``/``joblib`` run attacker code before the first
+    inference). This reuses the stdlib-only model-artifact opcode scanner —
+    which NEVER deserializes the file — to reject an upstream artifact carrying
+    a load-time RCE gadget (rule ``BWK-ART-PICKLE-RCE``, severity ``critical``)
+    at ingest time, before its hash becomes a trusted pin in the manifest. It is
+    the provisioning-side complement to the fail-closed load-time scan in
+    ``model_manager``: stop a poisoned pull from ever being recorded as trusted.
+
+    Only CRITICAL findings block. The sole critical rule is a live pickle
+    code-execution gadget; low/medium opacity findings on legitimate opaque
+    formats (real ONNX weights, fastText ``.ftz``) are informational and never
+    abort provisioning. Returns True if the artifact is safe to pin.
+
+    Degrades open on scanner import/scan error (prints a warning): the manifest
+    hash pin remains the primary integrity gate, so a scanner glitch must not
+    silently block provisioning of a legitimate model.
+    """
+    try:
+        from src.scanners.artifacts.model_artifact_scanner import analyze_file
+    except Exception as e:  # pragma: no cover - only if src/ layout changes
+        print(f"  WARN: artifact scanner unavailable ({e}); relying on hash pin")
+        return True
+
+    try:
+        findings = analyze_file(path, str(path))
+    except Exception as e:
+        print(f"  WARN: artifact scan errored for {path.name} ({e}); relying on hash pin")
+        return True
+
+    critical = [f for f in findings if f.get("severity") == "critical"]
+    if critical:
+        print(f"  SUPPLY-CHAIN BLOCK: {path.name} carries a load-time code-execution gadget")
+        for f in critical:
+            print(f"    {f.get('rule_id')}: {f.get('message')}")
+        print("    Refusing to pin a malicious artifact. Do NOT deploy this file.")
+        return False
+    return True
+
+
 def _pin_model_files(dest: Path, subdir: str) -> bool:
     """Pin every load-bearing file of a downloaded model in the manifest.
 
@@ -170,7 +221,15 @@ def _pin_model_files(dest: Path, subdir: str) -> bool:
     three are hashed and pinned, mirroring what ``model_manager`` fail-closes on
     at load time. ``config.json`` is optional (some models ship none); when
     present it is pinned too.
+
+    Every load-bearing file is supply-chain scanned (``_scan_artifact_safety``)
+    BEFORE it is pinned, so a poisoned upstream artifact carrying a load-time RCE
+    gadget is rejected at ingest and never becomes a trusted manifest entry.
     """
+    for fname in ("model.onnx", "tokenizer.json", "config.json"):
+        fpath = dest / fname
+        if fpath.exists() and not _scan_artifact_safety(fpath):
+            return False
     ok = update_manifest(dest / "model.onnx", f"{subdir}/model.onnx")
     if ok:
         ok = update_manifest(dest / "tokenizer.json", f"{subdir}/tokenizer.json")
@@ -276,6 +335,8 @@ def download_fasttext(model_dir: Path) -> bool:
     """
     dest = model_dir / "lid.176.ftz"
     ok = download_url(_FASTTEXT_LID_URL, dest)
+    if ok and not _scan_artifact_safety(dest):
+        return False
     if ok:
         ok = update_manifest(dest, "lid.176.ftz")
     return ok
