@@ -4,10 +4,15 @@ Bulwark Skill Scanner — SkillSpector integration + Bulwark-specific patterns.
 SHIPPED STATE (default deployment):
   The NVIDIA `skillspector` package is an OPTIONAL dependency and is NOT bundled.
   When it is absent (the default), stage 1 is skipped and the scanner runs in
-  "bulwark-builtin" mode with 4 active stages and ~77 patterns:
+  "bulwark-builtin" mode with ~77 text patterns:
     - MCP Tool Poisoning: 20 patterns
     - MCP Least Privilege: 29 patterns
     - Bulwark overlay: 28 rules (`_BULWARK_RULES`)
+  Binary model artifacts (pickle/torch/joblib/HDF5) that reach the scanner via a
+  file or directory path are additionally routed through the
+  `model_artifact_scanner` stage — a stdlib-only (`pickletools`) opcode analysis
+  that never deserializes. This stage contributes a dangerous-symbol catalog
+  (reported separately by `status()` as `model_artifact_patterns`).
   Install the `skillspector` package to unlock stage 1 (adds its pattern set,
   AST/taint/YARA/OSV.dev analysis) and "skillspector+bulwark" mode. The live
   counts and mode are always reported honestly by `status()` — do not rely on
@@ -55,6 +60,7 @@ from admin.services.mcp_privilege import (
     analyze_directory as mcp_privilege_analyze_dir,
     PATTERN_COUNT as MCP_PRIVILEGE_PATTERNS,
 )
+from admin.services import model_artifact_scanner
 
 logger = logging.getLogger(__name__)
 
@@ -566,6 +572,7 @@ class SkillScanner:
 
     def status(self) -> dict:
         mcp_patterns = MCP_POISONING_PATTERNS + MCP_PRIVILEGE_PATTERNS
+        artifact_patterns = model_artifact_scanner.PATTERN_COUNT
         skillspector_patterns = (
             _SKILLSPECTOR_PATTERN_COUNT if _SKILLSPECTOR_AVAILABLE else 0
         )
@@ -582,10 +589,12 @@ class SkillScanner:
             "skillspector_patterns": skillspector_patterns,
             "bulwark_rules_count": len(_BULWARK_RULES),
             "mcp_security_patterns": mcp_patterns,
+            "model_artifact_patterns": artifact_patterns,
             "total_patterns": (
                 skillspector_patterns
                 + len(_BULWARK_RULES)
                 + mcp_patterns
+                + artifact_patterns
             ),
         }
 
@@ -606,37 +615,49 @@ class SkillScanner:
         try:
             findings: list[SkillFinding] = []
             skillspector_score: Optional[float] = None
-
-            # Stage 1: SkillSpector engine (if available)
-            if _SKILLSPECTOR_AVAILABLE:
-                sp_result = self._run_skillspector(input_path)
-                if sp_result:
-                    skillspector_score = sp_result.get("risk_score", 0.0)
-                    findings.extend(self._map_skillspector_findings(sp_result))
-
-            # Stage 2: MCP Security Analysis (always runs)
             path = Path(input_path)
-            if path.is_dir():
-                content = self._read_directory(path)
+
+            # Stage 0: binary model-artifact supply-chain scan.
+            # A pickle/torch/joblib/HDF5 file executes attacker code on load
+            # (torch.load/pickle.load/joblib.load), entirely outside the request
+            # path. A binary artifact is NOT a valid UTF-8 skill definition, so
+            # for a single artifact file the text stages are skipped and only the
+            # opcode-level scan runs.
+            if path.is_file() and model_artifact_scanner.is_model_artifact(path):
+                findings.extend(self._run_model_artifact(path))
             else:
-                content = path.read_text(encoding="utf-8", errors="replace")
+                # Stage 1: SkillSpector engine (if available)
+                if _SKILLSPECTOR_AVAILABLE:
+                    sp_result = self._run_skillspector(input_path)
+                    if sp_result:
+                        skillspector_score = sp_result.get("risk_score", 0.0)
+                        findings.extend(self._map_skillspector_findings(sp_result))
 
-            # Stage 2a: MCP Tool Poisoning detection
-            poisoning_findings = self._run_mcp_poisoning(content, str(path))
-            findings.extend(poisoning_findings)
+                # Stage 2: MCP Security Analysis (always runs)
+                if path.is_dir():
+                    content = self._read_directory(path)
+                    # A directory may also contain binary artifacts scattered
+                    # alongside the text definitions — scan those too.
+                    findings.extend(self._run_model_artifact_dir(path))
+                else:
+                    content = path.read_text(encoding="utf-8", errors="replace")
 
-            # Stage 2b: MCP Least Privilege analysis
-            privilege_findings = self._run_mcp_privilege(content, path)
-            findings.extend(privilege_findings)
+                # Stage 2a: MCP Tool Poisoning detection
+                poisoning_findings = self._run_mcp_poisoning(content, str(path))
+                findings.extend(poisoning_findings)
 
-            # Stage 3: Bulwark overlay patterns (always runs)
-            bulwark_findings = self._analyze_bulwark(content, str(path))
-            findings.extend(bulwark_findings)
+                # Stage 2b: MCP Least Privilege analysis
+                privilege_findings = self._run_mcp_privilege(content, path)
+                findings.extend(privilege_findings)
 
-            # Stage 4: Structural checks
-            structured = self._parse_structured(content)
-            if structured:
-                findings.extend(self._structural_checks(structured, str(path)))
+                # Stage 3: Bulwark overlay patterns (always runs)
+                bulwark_findings = self._analyze_bulwark(content, str(path))
+                findings.extend(bulwark_findings)
+
+                # Stage 4: Structural checks
+                structured = self._parse_structured(content)
+                if structured:
+                    findings.extend(self._structural_checks(structured, str(path)))
 
         except Exception as e:
             logger.error("skill_scan_error path=%s error=%s", input_path, e)
@@ -659,14 +680,20 @@ class SkillScanner:
             for f in findings if f.source == "mcp_security"
         ))
 
+        # Binary model-artifact findings (pickle RCE gadgets etc.)
+        artifact_score = min(10.0, sum(
+            f.confidence * self._artifact_score(f.severity)
+            for f in findings if f.source == "model_artifact"
+        ))
+
         if skillspector_score is not None:
             # Normalized SkillSpector score (0-100 → 0-10) combined with Bulwark score
             sp_normalized = _skillspector_score_to_bulwark(skillspector_score)
             # Use weighted max: whichever engine found more risk, biased to highest
-            combined_bulwark = max(bulwark_score, mcp_score, (bulwark_score + mcp_score) / 2)
+            combined_bulwark = max(bulwark_score, mcp_score, artifact_score, (bulwark_score + mcp_score) / 2)
             risk_score = max(sp_normalized, combined_bulwark, (sp_normalized + combined_bulwark) / 2)
         else:
-            risk_score = max(bulwark_score, mcp_score, (bulwark_score + mcp_score) / 2)
+            risk_score = max(bulwark_score, mcp_score, artifact_score, (bulwark_score + mcp_score) / 2)
 
         risk_score = round(min(10.0, risk_score), 1)
 
@@ -932,6 +959,49 @@ class SkillScanner:
         elif s == "medium":
             return RiskSeverity.MEDIUM
         return RiskSeverity.LOW
+
+    # ─── Model artifact (binary supply-chain) analysis ───────────
+
+    def _run_model_artifact(self, path: Path) -> list[SkillFinding]:
+        """Statically scan a single binary model artifact for load-time RCE.
+
+        Never deserializes — walks the pickle opcode stream (pickletools) and
+        inspects archive/compressed containers for dangerous imports wired to a
+        REDUCE/BUILD call gadget.
+        """
+        try:
+            raw_findings = model_artifact_scanner.analyze_file(path, str(path))
+        except Exception as e:
+            logger.warning("model_artifact_failed path=%s error=%s", path, e)
+            return []
+        return self._map_artifact_findings(raw_findings, str(path))
+
+    def _run_model_artifact_dir(self, path: Path) -> list[SkillFinding]:
+        """Scan every binary model artifact under a directory tree."""
+        try:
+            raw_findings = model_artifact_scanner.analyze_directory(path)
+        except Exception as e:
+            logger.warning("model_artifact_dir_failed path=%s error=%s", path, e)
+            return []
+        return self._map_artifact_findings(raw_findings, str(path))
+
+    def _map_artifact_findings(self, raw_findings: list[dict[str, Any]],
+                               default_loc: str) -> list[SkillFinding]:
+        """Convert model_artifact_scanner dicts to SkillFinding objects."""
+        findings: list[SkillFinding] = []
+        for f in raw_findings:
+            severity = self._map_severity_str(f.get("severity", "medium"))
+            findings.append(SkillFinding(
+                rule_id=f.get("rule_id", "BWK-ART-?"),
+                message=f.get("message", "Model artifact supply-chain risk"),
+                severity=severity,
+                confidence=f.get("confidence", 50) / 100,
+                location=f.get("file", default_loc),
+                tags=["model-artifact", "supply-chain", "MITRE-T1195"],
+                category=f.get("category", "model_supply_chain"),
+                source="model_artifact",
+            ))
+        return findings
 
     # ─── Bulwark overlay analysis ───────────────────────────────
 
@@ -1327,11 +1397,12 @@ class SkillScanner:
         1. CRITICAL finding in exfiltration/credential_access category with confidence >= 0.9
         2. Multiple (2+) HIGH findings in exfiltration category
         3. Any BWK-DF-002 or BWK-DF-003 finding (read+write or read+network with secrets)
+        4. Any BWK-ART-PICKLE-RCE finding (deserialization code-execution gadget)
 
         Returns True if veto should be applied (force BLOCK).
         """
         # Veto rule IDs — these ALWAYS force BLOCK
-        VETO_RULES = {"BWK-DF-002", "BWK-DF-003"}
+        VETO_RULES = {"BWK-DF-002", "BWK-DF-003", "BWK-ART-PICKLE-RCE"}
 
         # Categories that trigger veto at CRITICAL severity
         VETO_CATEGORIES = {"exfiltration", "credential_access"}
@@ -1369,6 +1440,22 @@ class SkillScanner:
             RiskSeverity.HIGH: 2.5,
             RiskSeverity.MEDIUM: 1.5,
             RiskSeverity.LOW: 0.5,
+        }.get(severity, 1.0)
+
+    @staticmethod
+    def _artifact_score(severity: RiskSeverity) -> float:
+        """Score contribution for binary model-artifact findings (0-10 scale).
+
+        Weighted higher than the text engines: a confirmed pickle
+        code-execution gadget (BWK-ART-PICKLE-RCE, confidence ~0.95, CRITICAL)
+        should cross the block threshold on its own — deserializing it is
+        unconditional RCE.
+        """
+        return {
+            RiskSeverity.CRITICAL: 8.0,
+            RiskSeverity.HIGH: 5.0,
+            RiskSeverity.MEDIUM: 2.0,
+            RiskSeverity.LOW: 0.4,
         }.get(severity, 1.0)
 
     def _disabled_result(self, scan_id: Optional[str] = None) -> ScanResult:

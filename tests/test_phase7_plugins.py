@@ -534,10 +534,14 @@ instructions: |
         # When SkillSpector is not installed the contributed count is zero.
         if not status["skillspector_installed"]:
             assert status["skillspector_patterns"] == 0
-        # total_patterns is the sum of the three engine contributions — no drift.
+        # total_patterns is the honest sum of every engine contribution — no drift.
+        assert "model_artifact_patterns" in status, (
+            "status() must expose the binary model-artifact catalog size"
+        )
         assert status["total_patterns"] == (
             status["skillspector_patterns"]
             + status["bulwark_rules_count"]
             + status["mcp_security_patterns"]
+            + status["model_artifact_patterns"]
         )
 

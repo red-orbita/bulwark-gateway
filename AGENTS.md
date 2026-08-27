@@ -161,7 +161,8 @@ bulwark-gateway/
 │   │   ├── redis_sync.py         # get_redis_client(), pattern sync, version tracking
 │   │   ├── auth_service.py       # Password hashing, JWT, sessions
 │   │   ├── guardrails_store.py   # Pattern CRUD operations
-│   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (5-stage pipeline; default ~77 patterns / 4 active stages, stage 1 optional)
+│   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (5-stage pipeline; default ~77 text patterns + 63-entry artifact catalog, stage 1 optional)
+│   │   ├── model_artifact_scanner.py # Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*)
 │   │   ├── mcp_poisoning.py      # MCP Tool Poisoning detection (TP1-TP4, 20 patterns)
 │   │   ├── mcp_privilege.py      # MCP Least Privilege analysis (LP1-LP4, 29 patterns)
 │   │   ├── tenant_manager.py     # Tenant CRUD + agent assignment
@@ -439,8 +440,10 @@ Pre-deployment security scanner for AI agent skills and MCP servers. Accessible
 via admin UI (`/skills`) and API (`/admin/skills/scan/*`). Version 2.1.0-bulwark.
 
 **Pipeline** (Stage 1 runs ONLY when the optional NVIDIA `skillspector` package
-is installed; the default deployment does NOT bundle it → 4 active stages):
+is installed; the default deployment does NOT bundle it → 4 active text stages
+plus a binary-artifact stage that fires only on model files):
 ```
+Stage 0: Model Artifact Scanner  (binary pickle/torch/joblib/HDF5 — fires on model files)
 Stage 1: NVIDIA SkillSpector     (OPTIONAL — skipped when package absent)
 Stage 2a: MCP Tool Poisoning     (20 patterns — always runs)
 Stage 2b: MCP Least Privilege    (29 patterns — always runs)
@@ -448,9 +451,22 @@ Stage 3: Bulwark Overlay        (28 rules — always runs)
 Stage 4: Structural Checks       (RBAC/agency validation)
 ```
 
-**Total patterns (default, `skillspector` absent)**: ~77 (0 + 20 + 29 + 28).
-Installing `skillspector` adds its own pattern set on top (mode
-`skillspector+bulwark`). `skill_scanner.status()` reports live counts + mode.
+**Total patterns (default, `skillspector` absent)**: ~77 text patterns
+(0 + 20 + 29 + 28) plus a 63-entry dangerous-symbol catalog for the binary
+model-artifact stage (`model_artifact_patterns`, reported separately by
+`status()`; total_patterns = 140). Installing `skillspector` adds its own pattern
+set on top (mode `skillspector+bulwark`). `skill_scanner.status()` reports live
+counts + mode.
+
+**Model Artifact Scanner** (`admin/services/model_artifact_scanner.py`):
+Stdlib-only (`pickletools.genops`) opcode analysis that **never deserializes** a
+model file. Detects load-time RCE gadgets (`REDUCE`/`BUILD`/`INST` wired to
+dangerous `GLOBAL`/`STACK_GLOBAL` imports) across raw pickle, PyTorch zip, numpy
+`.npy/.npz`, gzip/bz2/xz/zlib-compressed joblib, and HDF5/Keras Lambda
+heuristics; validates `.safetensors` as code-free. Bounded against zip/decompress
+bombs. A binary artifact file skips the UTF-8 text stages. Rules `BWK-ART-*`;
+`BWK-ART-PICKLE-RCE` is a hard-veto BLOCK.
+
 
 **MCP Tool Poisoning** (`admin/services/mcp_poisoning.py`):
 | Rule | Severity | Description |
@@ -941,7 +957,8 @@ Security-critical files — review carefully before modifying:
 | `src/guardrails/input_guardrail.py` | Detection patterns (4600+ lines, regex) |
 | `src/guardrails/output_filter.py` | Secret redaction patterns |
 | `src/routes/proxy.py` | Main request pipeline, SSRF protection |
-| `admin/services/skill_scanner.py` | SkillSpector hybrid engine (5-stage pipeline; default ~77 patterns / 4 active stages, stage 1 optional) |
+| `admin/services/skill_scanner.py` | SkillSpector hybrid engine (5-stage pipeline; default ~77 text patterns / 4 active stages + binary-artifact stage, stage 1 optional) |
+| `admin/services/model_artifact_scanner.py` | Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*) |
 | `admin/services/mcp_poisoning.py` | MCP tool poisoning detection (20 patterns) |
 | `admin/services/mcp_privilege.py` | MCP least privilege analysis (29 patterns) |
 | `helm/bulwark-gateway/templates/secrets.yaml` | Secret generation |
