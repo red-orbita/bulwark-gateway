@@ -323,7 +323,7 @@ Web-based management interface at `/` (port 8090).
 | Access Control | RBAC roles and permissions |
 | Enrichment | Attack replay browser, evasion telemetry, regex-candidate review |
 | Skills | Pre-deployment skill/MCP security scanner (SkillSpector) |
-| Plugins | Plugin hub — install, enable, security audit |
+| Plugins | Install (local path / Git URL), enable, security audit |
 | Evaluation | Red-team adversarial evaluation runner |
 | Discovery | Agent / shadow-AI / MCP discovery and risk assessment |
 | Status | System health (Redis, proxy, scanner, telemetry) |

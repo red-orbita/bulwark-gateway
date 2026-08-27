@@ -557,17 +557,31 @@ List all installed plugins.
 
 Get specific plugin specification.
 
-#### POST /admin/plugins/install
+#### POST /admin/plugins/install/upload
 
-Install a plugin from hub or local source.
+Install a plugin from an uploaded archive (`multipart/form-data`, field `file`:
+a `.zip`/`.tar.gz` containing `bulwark-plugin.yaml`). The archive is extracted
+to a temp dir, AST-analysed, and installed only if the security check passes.
+Decompression-bomb protected.
+
+#### POST /admin/plugins/install/url
+
+Install a plugin from an HTTPS Git repository. The repo is shallow-cloned
+(`--depth 1`, 30s timeout, non-interactive), the URL is SSRF-validated
+(HTTPS-only, DNS-resolved against private/loopback/reserved IPs), the branch
+name is injection-validated, and the tree is AST-analysed before install.
 
 **Body**:
 ```json
 {
-  "name": "my-scanner",
-  "source": "hub"
+  "url": "https://github.com/example/my-scanner.git",
+  "branch": "main"
 }
 ```
+
+> There is **no** public plugin hub/registry. Remote installs are Git-based
+> (endpoint above) or local (`bulwark plugin install <path> --source local`).
+> The CLI also supports `--source git <url> [--branch <name>]`.
 
 #### POST /admin/plugins/uninstall
 

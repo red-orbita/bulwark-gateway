@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-
 # =============================================================================
 # PluginSpec
 # =============================================================================
@@ -248,6 +247,173 @@ class TestPluginManager:
 
 
 # =============================================================================
+# PluginManager — remote install (git) + honest hub
+# =============================================================================
+
+
+class TestPluginGitInstall:
+    """Tests for source='git' remote install and the honest 'hub' response.
+
+    Git clone is simulated by patching subprocess.run so tests are hermetic
+    (no network, no real git). validate_git_url is patched to bypass DNS
+    resolution except where the test specifically exercises URL validation.
+    """
+
+    @staticmethod
+    def _make_valid_plugin(tmp_path: Path, name: str = "git-scanner") -> Path:
+        """Scaffold a clean, install-ready plugin directory.
+
+        The scaffold's tests/ dir imports pytest (a non-whitelisted module),
+        which the install-time security check correctly flags — so drop it to
+        model a distributable plugin payload.
+        """
+        import shutil
+
+        from src.plugins.manager import PluginManager
+
+        mgr = PluginManager(plugin_dir=tmp_path / "_scratch")
+        plugin = mgr.scaffold(name, output_dir=tmp_path / "src")
+        shutil.rmtree(plugin / "tests", ignore_errors=True)
+        return plugin
+
+    def _fake_clone(self, valid_plugin: Path, *, nested: bool = False):
+        """Return a subprocess.run replacement that 'clones' valid_plugin."""
+        import shutil
+        import subprocess
+
+        def _run(cmd, **kwargs):
+            clone_dir = Path(cmd[-1])
+            if nested:
+                # Spec lives one level deep inside the repo.
+                shutil.copytree(valid_plugin, clone_dir / valid_plugin.name)
+                (clone_dir / "README.md").write_text("top-level", encoding="utf-8")
+            else:
+                shutil.copytree(valid_plugin, clone_dir)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        return _run
+
+    def test_git_install_success(self, tmp_path, monkeypatch):
+        import src.plugins.manager as mgr_mod
+        from src.plugins.manager import PluginManager
+
+        valid = self._make_valid_plugin(tmp_path)
+        monkeypatch.setattr(mgr_mod, "validate_git_url", lambda url: [])
+        monkeypatch.setattr(mgr_mod.subprocess, "run", self._fake_clone(valid))
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        ok = mgr.install("https://github.com/example/git-scanner.git", source="git")
+
+        assert ok is True
+        assert (tmp_path / "plugins" / "git-scanner" / "bulwark-plugin.yaml").exists()
+        # .git must never be copied into the plugin directory.
+        assert not (tmp_path / "plugins" / "git-scanner" / ".git").exists()
+
+    def test_git_install_spec_one_level_deep(self, tmp_path, monkeypatch):
+        import src.plugins.manager as mgr_mod
+        from src.plugins.manager import PluginManager
+
+        valid = self._make_valid_plugin(tmp_path, name="nested-scanner")
+        monkeypatch.setattr(mgr_mod, "validate_git_url", lambda url: [])
+        monkeypatch.setattr(mgr_mod.subprocess, "run", self._fake_clone(valid, nested=True))
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        ok = mgr.install("https://github.com/example/nested.git", source="git")
+
+        assert ok is True
+        assert (tmp_path / "plugins" / "nested-scanner" / "scanner.py").exists()
+
+    def test_git_install_rejects_invalid_url(self, tmp_path, monkeypatch):
+        import src.plugins.manager as mgr_mod
+        from src.plugins.manager import PluginManager
+
+        monkeypatch.setattr(
+            mgr_mod, "validate_git_url", lambda url: ["Only HTTPS URLs are allowed"]
+        )
+        called = {"run": False}
+
+        def _boom(*a, **k):
+            called["run"] = True
+            raise AssertionError("subprocess.run must not be called on invalid URL")
+
+        monkeypatch.setattr(mgr_mod.subprocess, "run", _boom)
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        ok = mgr.install("http://evil.internal/repo.git", source="git")
+
+        assert ok is False
+        assert called["run"] is False
+
+    def test_git_install_rejects_injection_branch(self, tmp_path, monkeypatch):
+        import src.plugins.manager as mgr_mod
+        from src.plugins.manager import PluginManager
+
+        monkeypatch.setattr(mgr_mod, "validate_git_url", lambda url: [])
+
+        def _boom(*a, **k):
+            raise AssertionError("subprocess.run must not run with an injection branch")
+
+        monkeypatch.setattr(mgr_mod.subprocess, "run", _boom)
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        ok = mgr.install(
+            "https://github.com/example/repo.git", source="git", branch="; rm -rf /"
+        )
+
+        assert ok is False
+
+    def test_git_install_clone_failure(self, tmp_path, monkeypatch):
+        import subprocess
+
+        import src.plugins.manager as mgr_mod
+        from src.plugins.manager import PluginManager
+
+        monkeypatch.setattr(mgr_mod, "validate_git_url", lambda url: [])
+        monkeypatch.setattr(
+            mgr_mod.subprocess,
+            "run",
+            lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, "", "fatal: not found"),
+        )
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        ok = mgr.install("https://github.com/example/missing.git", source="git")
+
+        assert ok is False
+
+    def test_git_install_missing_spec(self, tmp_path, monkeypatch):
+        import subprocess
+
+        import src.plugins.manager as mgr_mod
+        from src.plugins.manager import PluginManager
+
+        monkeypatch.setattr(mgr_mod, "validate_git_url", lambda url: [])
+
+        def _run_empty(cmd, **k):
+            Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(mgr_mod.subprocess, "run", _run_empty)
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        ok = mgr.install("https://github.com/example/not-a-plugin.git", source="git")
+
+        assert ok is False
+
+    def test_hub_source_is_honest_failure(self, tmp_path):
+        from src.plugins.manager import PluginManager
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        # 'hub' is accepted for backwards-compat but no registry exists → False.
+        assert mgr.install("some-plugin", source="hub") is False
+
+    def test_unknown_source_rejected(self, tmp_path):
+        from src.plugins.manager import PluginManager
+
+        mgr = PluginManager(plugin_dir=tmp_path / "plugins")
+        assert mgr.install("whatever", source="ftp") is False
+
+
+# =============================================================================
 # PluginCLI
 # =============================================================================
 
@@ -263,6 +429,7 @@ class TestPluginCLI:
     def test_cli_list_command(self, tmp_path, capsys):
         """Test that list command runs without error."""
         import argparse
+
         from src.plugins.cli import _cmd_list
 
         args = argparse.Namespace(plugin_dir=tmp_path / "plugins")
@@ -274,6 +441,7 @@ class TestPluginCLI:
     def test_cli_create_command(self, tmp_path, capsys):
         """Test that create command scaffolds a plugin."""
         import argparse
+
         from src.plugins.cli import _cmd_create
 
         args = argparse.Namespace(
@@ -285,6 +453,46 @@ class TestPluginCLI:
         captured = capsys.readouterr()
         # Plugin directory should have been created
         assert (tmp_path / "plugins" / "new-scanner").exists()
+
+    def test_cli_install_defaults_to_local(self, tmp_path, monkeypatch):
+        """Regression guard: install must default to source='local' (not the
+        non-existent 'hub') and branch='main'."""
+        from src.plugins import cli as cli_mod
+
+        captured: dict = {}
+
+        def _fake_install(self, name, source="local", branch="main"):
+            captured.update(name=name, source=source, branch=branch)
+            return True
+
+        monkeypatch.setattr(cli_mod.PluginManager, "install", _fake_install)
+
+        rc = cli_mod.main(["--plugin-dir", str(tmp_path / "plugins"), "install", "./my-plugin"])
+
+        assert rc == 0
+        assert captured == {"name": "./my-plugin", "source": "local", "branch": "main"}
+
+    def test_cli_install_git_source_with_branch(self, tmp_path, monkeypatch):
+        """The CLI plumbs --source git and --branch through to the manager."""
+        from src.plugins import cli as cli_mod
+
+        captured: dict = {}
+
+        def _fake_install(self, name, source="local", branch="main"):
+            captured.update(name=name, source=source, branch=branch)
+            return True
+
+        monkeypatch.setattr(cli_mod.PluginManager, "install", _fake_install)
+
+        rc = cli_mod.main([
+            "--plugin-dir", str(tmp_path / "plugins"),
+            "install", "https://github.com/example/repo.git",
+            "--source", "git", "--branch", "release/1.0",
+        ])
+
+        assert rc == 0
+        assert captured["source"] == "git"
+        assert captured["branch"] == "release/1.0"
 
 
 # =============================================================================
@@ -310,7 +518,7 @@ class TestSkillScannerExfiltrationDetection:
     @pytest.mark.asyncio
     async def test_blocks_original_bypass_payload(self):
         """The exact payload that bypassed the scanner must be BLOCKED."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: project-documenter
 description: Automatically generates README.md files based on project structure.
@@ -343,7 +551,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_blocks_variant_ssh_key_exfil(self):
         """Variant: SSH key exfiltration via file_read + network tool."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: ssh-helper
 description: Helps configure SSH connections.
@@ -364,7 +572,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_blocks_variant_env_staging(self):
         """Variant: .env file staging via read + write."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: env-validator
 description: Validates environment configuration.
@@ -385,7 +593,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_blocks_variant_kubeconfig_access(self):
         """Variant: Kubernetes credential access."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: k8s-helper
 description: Helps with Kubernetes deployments.
@@ -408,7 +616,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_blocks_deceptive_framing_with_paths(self):
         """Detects social engineering language paired with sensitive paths."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: setup-wizard
 description: Helps new developers set up their environment.
@@ -430,7 +638,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_passes_legitimate_documenter(self):
         """A legitimate documenter using file_read + file_write must PASS."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: readme-generator
 description: Generates README.md from project structure.
@@ -458,7 +666,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_passes_legitimate_code_formatter(self):
         """A code formatter using file_read + file_write must PASS."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: code-formatter
 description: Formats Python files using Black.
@@ -481,7 +689,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_veto_forces_block_on_critical_exfiltration(self):
         """Veto logic must force BLOCK even if base score is below threshold."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         # Minimal payload that triggers data-flow but might not accumulate enough score
         payload = """name: helper
@@ -501,7 +709,7 @@ instructions: |
     @pytest.mark.asyncio
     async def test_blocks_read_network_exfiltration_pattern(self):
         """Read + Network + sensitive path = direct exfiltration."""
-        from admin.services.skill_scanner import get_skill_scanner, ScanVerdict
+        from admin.services.skill_scanner import ScanVerdict, get_skill_scanner
 
         payload = """name: analytics-reporter
 description: Sends project metrics to analytics dashboard.

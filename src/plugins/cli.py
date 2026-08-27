@@ -2,7 +2,8 @@
 Plugin CLI — Command-line interface for Bulwark plugin management.
 
 Usage:
-    bulwark plugin install <name> [--source hub|local]
+    bulwark plugin install <path> [--source local]
+    bulwark plugin install <git-url> --source git [--branch main]
     bulwark plugin uninstall <name>
     bulwark plugin list
     bulwark plugin create <name> [--output-dir <path>]
@@ -41,16 +42,23 @@ def _get_manager(plugin_dir: Path | None = None) -> PluginManager:
 def _cmd_install(args: argparse.Namespace) -> int:
     """Handle 'install' command."""
     manager = _get_manager(args.plugin_dir)
-    source = args.source or "hub"
+    source = args.source or "local"
+    branch = getattr(args, "branch", "main")
 
     print(f"Installing plugin '{args.name}' from {source}...")
-    success = manager.install(args.name, source=source)
+    success = manager.install(args.name, source=source, branch=branch)
 
     if success:
         print(f"  [OK] Plugin '{args.name}' installed successfully.")
         return 0
     else:
         print(f"  [FAIL] Failed to install plugin '{args.name}'.", file=sys.stderr)
+        if source == "hub":
+            print(
+                "         No plugin hub/registry exists. Install from a local "
+                "path (--source local) or a Git URL (--source git).",
+                file=sys.stderr,
+            )
         return 1
 
 
@@ -236,12 +244,17 @@ def main(argv: list[str] | None = None) -> int:
 
     # install
     install_parser = subparsers.add_parser("install", help="Install a plugin")
-    install_parser.add_argument("name", help="Plugin name or path")
+    install_parser.add_argument("name", help="Local plugin path, or Git URL when --source git")
     install_parser.add_argument(
         "--source",
-        choices=["hub", "local"],
-        default="hub",
-        help="Installation source (default: hub)",
+        choices=["local", "git", "hub"],
+        default="local",
+        help="Installation source: local path or git URL (default: local)",
+    )
+    install_parser.add_argument(
+        "--branch",
+        default="main",
+        help="Git branch to clone when --source git (default: main)",
     )
 
     # uninstall

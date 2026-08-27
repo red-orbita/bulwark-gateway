@@ -18,18 +18,23 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Union
 
 from src.plugins.sandbox import (
     PluginSandbox,
     SandboxConfig,
+    StaticAnalysisResult,
     analyze_plugin_directory,
     analyze_plugin_source,
-    StaticAnalysisResult,
+    validate_git_branch,
+    validate_git_url,
 )
 from src.plugins.spec import PluginSpec, PluginType, load_plugin_spec, validate_plugin_spec
 from src.scanners.protocol import InputScanner, OutputScanner, ScannerInfo
@@ -231,69 +236,167 @@ class PluginManager:
                     )
         return plugins
 
-    def install(self, name: str, source: str = "hub") -> bool:
-        """Install a plugin from the hub or a local path.
+    def install(self, name: str, source: str = "local", branch: str = "main") -> bool:
+        """Install a plugin from a local path or a Git repository.
 
         Args:
-            name: Plugin name or path to local plugin directory.
-            source: 'hub' for marketplace or 'local' for filesystem path.
+            name: For ``source='local'``, a path to a plugin directory. For
+                ``source='git'``, an HTTPS Git repository URL.
+            source: ``'local'`` (filesystem path) or ``'git'`` (clone from an
+                HTTPS Git URL). ``'hub'`` is accepted but not available — there
+                is no public plugin registry; remote installs are Git-based.
+            branch: Git branch to clone when ``source='git'`` (default ``main``).
 
         Returns:
             True if installation succeeded, False otherwise.
         """
         if source == "local":
-            source_path = Path(name)
-            if not source_path.is_dir():
-                logger.error("plugin_install_not_dir", extra={"path": name})
-                return False
+            return self._install_from_local_path(Path(name))
 
-            spec_file = source_path / "bulwark-plugin.yaml"
-            if not spec_file.exists():
-                logger.error("plugin_install_no_spec", extra={"path": name})
-                return False
-
-            spec = load_plugin_spec(spec_file)
-            errors = validate_plugin_spec(spec)
-            if errors:
-                for err in errors:
-                    logger.error("plugin_spec_invalid", extra={"error": err})
-                return False
-
-            # Security check
-            warnings = self._security_check(source_path)
-            if warnings:
-                for w in warnings:
-                    logger.warning("plugin_security_warning", extra={"warning": w})
-                return False
-
-            # Copy to plugin directory
-            dest = self.plugin_dir / spec.name
-            if dest.exists():
-                logger.error("plugin_already_installed", extra={"plugin_name": spec.name})
-                return False
-
-            shutil.copytree(source_path, dest)
-            self._state[spec.name] = {"enabled": True, "version": spec.version}
-            self._save_state()
-            logger.info("plugin_installed", extra={"plugin_name": spec.name, "version": spec.version})
-            return True
+        elif source == "git":
+            return self._install_from_git(name, branch=branch)
 
         elif source == "hub":
-            # Hub integration placeholder — would fetch from remote registry
-            logger.info(
-                "plugin_hub_install",
-                extra={"plugin_name": name, "status": "not_implemented"},
-            )
-            # TODO: Implement hub download, signature verification, install
+            # There is no public plugin hub/marketplace registry. Remote installs
+            # are performed from a Git URL (source='git') or a local path
+            # (source='local'). Fail closed with an honest, actionable message
+            # rather than pretending a marketplace exists.
             logger.warning(
                 "plugin_hub_not_available",
-                extra={"message": "Plugin hub is not yet available. Use source='local'."},
+                extra={
+                    "plugin_name": name,
+                    "detail": (
+                        "No plugin hub/registry exists. Install from a Git URL "
+                        "(source='git') or a local path (source='local')."
+                    ),
+                },
             )
             return False
 
         else:
             logger.error("plugin_install_unknown_source", extra={"source": source})
             return False
+
+    def _install_from_local_path(self, source_path: Path) -> bool:
+        """Validate, security-check, and install a plugin from a directory.
+
+        This is the shared install core used by both ``source='local'`` and
+        ``source='git'`` (after the repository has been cloned to a temp dir).
+
+        Args:
+            source_path: Directory containing ``bulwark-plugin.yaml``.
+
+        Returns:
+            True on success, False on any validation/security failure.
+        """
+        if not source_path.is_dir():
+            logger.error("plugin_install_not_dir", extra={"path": str(source_path)})
+            return False
+
+        spec_file = source_path / "bulwark-plugin.yaml"
+        if not spec_file.exists():
+            logger.error("plugin_install_no_spec", extra={"path": str(source_path)})
+            return False
+
+        spec = load_plugin_spec(spec_file)
+        errors = validate_plugin_spec(spec)
+        if errors:
+            for err in errors:
+                logger.error("plugin_spec_invalid", extra={"error": err})
+            return False
+
+        # Security check (regex pre-filter + AST analysis on every .py file)
+        warnings = self._security_check(source_path)
+        if warnings:
+            for w in warnings:
+                logger.warning("plugin_security_warning", extra={"warning": w})
+            return False
+
+        # Copy to plugin directory
+        dest = self.plugin_dir / spec.name
+        if dest.exists():
+            logger.error("plugin_already_installed", extra={"plugin_name": spec.name})
+            return False
+
+        shutil.copytree(source_path, dest)
+        self._state[spec.name] = {"enabled": True, "version": spec.version}
+        self._save_state()
+        logger.info("plugin_installed", extra={"plugin_name": spec.name, "version": spec.version})
+        return True
+
+    def _install_from_git(self, url: str, branch: str = "main") -> bool:
+        """Clone a plugin from an HTTPS Git URL and install it.
+
+        SECURITY: fail-closed at every step.
+        1. URL is validated (HTTPS-only, no shell/option injection, DNS-resolved
+           against private/loopback/link-local/reserved IPs to block SSRF and
+           DNS-rebinding) via ``validate_git_url``.
+        2. Branch name is validated against injection via ``validate_git_branch``.
+        3. Clone is shallow (``--depth 1``), non-interactive
+           (``GIT_TERMINAL_PROMPT=0``), and time-boxed (30s).
+        4. The cloned tree runs through the same AST + regex security check as a
+           local install before anything is copied into the plugin directory.
+
+        Args:
+            url: HTTPS Git repository URL.
+            branch: Branch to clone (default ``main``).
+
+        Returns:
+            True on success, False on any validation/clone/security failure.
+        """
+        url_issues = validate_git_url(url)
+        if url_issues:
+            logger.error("plugin_git_url_invalid", extra={"url": url, "issues": url_issues})
+            return False
+
+        if not validate_git_branch(branch):
+            logger.error("plugin_git_branch_invalid", extra={"branch": branch})
+            return False
+
+        tmp_dir: Path | None = None
+        try:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="bulwark-plugin-git-"))
+            clone_dir = tmp_dir / "repo"
+
+            result = subprocess.run(  # noqa: S603 — url+branch validated above (validate_git_url/branch)
+                ["git", "clone", "--depth", "1", "--branch", branch, url, str(clone_dir)],  # noqa: S607 — git resolved via PATH by design
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+            if result.returncode != 0:
+                # Do not surface raw git stderr (may leak internal DNS/paths).
+                logger.error("plugin_git_clone_failed", extra={"url": url, "branch": branch})
+                return False
+
+            # Locate bulwark-plugin.yaml at the repo root or one level deep.
+            install_root = clone_dir
+            if not (clone_dir / "bulwark-plugin.yaml").exists():
+                for child in sorted(clone_dir.iterdir()):
+                    if child.is_dir() and (child / "bulwark-plugin.yaml").exists():
+                        install_root = child
+                        break
+                else:
+                    logger.error("plugin_git_no_spec", extra={"url": url})
+                    return False
+
+            # Drop the .git directory before install (not needed, saves space).
+            git_dir = clone_dir / ".git"
+            if git_dir.exists():
+                shutil.rmtree(git_dir, ignore_errors=True)
+
+            return self._install_from_local_path(install_root)
+
+        except subprocess.TimeoutExpired:
+            logger.error("plugin_git_clone_timeout", extra={"url": url})
+            return False
+        except Exception as e:
+            logger.error("plugin_git_install_error", extra={"url": url, "error": str(e)})
+            return False
+        finally:
+            if tmp_dir is not None and tmp_dir.exists():
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def uninstall(self, name: str) -> bool:
         """Uninstall a plugin by name.
