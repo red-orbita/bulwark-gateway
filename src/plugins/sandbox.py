@@ -52,8 +52,8 @@ _seccomp_module: Any = None
 
 if platform.system() == "Linux":
     try:
-        import ctypes
-        import ctypes.util
+        import ctypes  # nosemgrep: bulwark-no-ctypes — reviewed: seccomp/prctl kernel sandbox fallback
+        import ctypes.util  # nosemgrep: bulwark-no-ctypes — reviewed: resolves libc for the prctl() seccomp fallback
 
         # PR_SET_SECCOMP = 22, SECCOMP_MODE_FILTER = 2
         _PR_SET_SECCOMP = 22

@@ -184,11 +184,15 @@ rules:
 
   - id: bulwark-redis-no-keys-pattern
     patterns:
-      - pattern: $REDIS.keys(...)
+      # Require at least one argument (the glob pattern). Redis KEYS is called
+      # as `.keys(pattern)`; Python dict `.keys()` takes NO arguments, so this
+      # arg requirement excludes the pervasive dict.keys() false positives while
+      # still catching the blocking Redis command.
+      - pattern: $REDIS.keys($PATTERN)
     message: >
       Redis KEYS command blocks the server while scanning all keys. Use SCAN
-      with a cursor for production-safe iteration. In a high-traffic proxy
-      this can cause a denial-of-service.
+      (redis-py scan_iter(match=...)) for production-safe iteration. In a
+      high-traffic proxy this can cause a denial-of-service.
     languages: [python]
     severity: WARNING
     metadata:
@@ -301,9 +305,9 @@ rules:
   # ─── Dangerous Imports ───────────────────────────────────────────────────────
 
   - id: bulwark-no-marshal
-    patterns:
+    pattern-either:
       - pattern: import marshal
-      - pattern: from marshal import ...
+      - pattern: from marshal import $X
     message: >
       marshal module can execute arbitrary code during deserialization,
       similar to pickle. Do not use for untrusted data.
@@ -316,9 +320,9 @@ rules:
       impact: CRITICAL
 
   - id: bulwark-no-ctypes
-    patterns:
+    pattern-either:
       - pattern: import ctypes
-      - pattern: from ctypes import ...
+      - pattern: from ctypes import $X
     message: >
       ctypes provides raw memory access and can bypass Python's safety
       guarantees. Not appropriate in a security proxy unless absolutely
@@ -339,7 +343,10 @@ rules:
           if $SECRET == $INPUT: ...
       - metavariable-regex:
           metavariable: $SECRET
-          regex: ".*(key|token|secret|password|hash).*"
+          # Match the secret word only as a whole `_`/`.`-delimited segment, so
+          # `api_key`/`jwt_secret`/`current_password` still match but incidental
+          # substrings like `total_tokens` ("token") or `keyword` ("key") don't.
+          regex: '(^|[._])(key|token|secret|password|hash)([._]|$)'
     message: >
       String comparison of secrets is vulnerable to timing attacks. Use
       hmac.compare_digest() for constant-time comparison of secret values.

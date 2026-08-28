@@ -92,7 +92,7 @@ class HttpTransportConfig:
     # Auth credentials
     token: Optional[str] = None
     api_key: Optional[str] = None
-    api_key_header: str = "Authorization"
+    api_key_header: str = "Authorization"  # nosemgrep: bulwark-no-hardcoded-jwt-secret — header name, not a secret
     username: Optional[str] = None
     password: Optional[str] = None
     # HMAC (Azure Bulwark)

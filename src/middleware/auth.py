@@ -282,7 +282,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     # to API key check — this creates a timing oracle that reveals
                     # whether a string is a malformed JWT vs an invalid API key.
                     # If it looks like a JWT (has 2 dots), reject immediately.
-                    if token.count(".") == 2:
+                    if token.count(".") == 2:  # nosemgrep: bulwark-no-string-comparison-secrets — not a secret
                         return JSONResponse(
                             status_code=401,
                             content={"error": "Invalid token or API key"},

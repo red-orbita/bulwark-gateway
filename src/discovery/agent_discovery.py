@@ -78,7 +78,7 @@ class AgentDiscovery:
 
         discovered: list[DiscoveredAgent] = []
         k8s_host = "https://kubernetes.default.svc"
-        token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"  # noqa: S105 — filesystem path, not a secret
+        token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"  # noqa: S105 — filesystem path, not a secret  # nosemgrep: bulwark-no-hardcoded-jwt-secret
         ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
         try:

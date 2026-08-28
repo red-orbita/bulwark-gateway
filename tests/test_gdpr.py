@@ -671,14 +671,14 @@ class TestGDPRSecurity:
     @pytest.mark.asyncio
     async def test_redis_erasure_patterns(self, gdpr_service, audit_logger_with_data, mock_redis):
         """Redis erasure should scan correct key patterns (H-09 fix)."""
-        mock_redis.keys.return_value = []
+        mock_redis.scan_iter.return_value = iter([])
         mock_redis.lrange.return_value = []
 
         with patch("admin.services.gdpr.get_redis_client", return_value=mock_redis):
             await gdpr_service._erase_redis_subject_data("tenant-acme")
 
-        # Verify correct patterns were scanned
-        calls = [str(c) for c in mock_redis.keys.call_args_list]
+        # Verify correct patterns were scanned (SCAN, not KEYS — DoS-safe)
+        calls = [str(c) for c in mock_redis.scan_iter.call_args_list]
         assert any("bulwark:ratelimit:*tenant-acme*" in c for c in calls)
         assert any("bulwark:quota:*tenant-acme*" in c for c in calls)
         assert any("bulwark:tenant:tenant-acme:*" in c for c in calls)

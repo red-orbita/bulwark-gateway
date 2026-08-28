@@ -165,7 +165,7 @@ def _mask_transport(t: dict) -> dict:
     """H-07: Mask sensitive fields in transport responses."""
     masked = dict(t)
     if masked.get("wazuh_password"):
-        masked["wazuh_password"] = "***"  # noqa: S105 - masking placeholder, redacts the real secret
+        masked["wazuh_password"] = "***"  # noqa: S105 - masking placeholder, redacts the real secret  # nosemgrep: bulwark-no-hardcoded-jwt-secret
     return masked
 
 

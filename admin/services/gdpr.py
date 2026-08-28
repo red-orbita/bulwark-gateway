@@ -969,7 +969,7 @@ class GDPRService:
                 f"bulwark:quota:*{subject_id}*",
                 f"bulwark:tenant:{subject_id}:*",
             ]:
-                keys = client.keys(pattern)
+                keys = list(client.scan_iter(match=pattern, count=200))
                 if keys:
                     client.delete(*keys)
                     erased += len(keys)
