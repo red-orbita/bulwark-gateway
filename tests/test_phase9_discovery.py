@@ -189,6 +189,120 @@ class TestShadowAIMonitor:
 
 
 # =============================================================================
+# Shadow AI alert dispatch
+# =============================================================================
+
+
+def _make_warn_engine():
+    """Build a NotificationEngine with a single 'warn'-accepting channel whose
+    dispatch is captured (no real HTTP). Returns (engine, sent_list)."""
+    from src.telemetry.notifications import NotificationChannel, NotificationEngine
+
+    engine = NotificationEngine()
+    # Replace any file/env/yaml-loaded channels with a deterministic one that
+    # accepts advisory 'warn' verdicts at any severity.
+    engine._channels = [
+        NotificationChannel(
+            id="test-shadow-ai",
+            name="test",
+            type="generic",
+            enabled=True,
+            min_severity="low",
+            verdicts=["warn"],
+            url="https://example.invalid/hook",
+        )
+    ]
+    sent: list = []
+
+    async def _capture(channel, alert):
+        sent.append((channel, alert))
+
+    engine._dispatch = _capture  # type: ignore[assignment]
+    return engine, sent
+
+
+class TestShadowAIDispatch:
+    """Tests for ShadowAIMonitor.dispatch_alerts → NotificationEngine bridge."""
+
+    async def test_dispatch_empty_returns_zero(self):
+        from src.discovery.shadow_ai import ShadowAIMonitor
+
+        monitor = ShadowAIMonitor()
+        assert await monitor.dispatch_alerts([]) == 0
+
+    async def test_dispatch_no_channels_returns_zero(self, monkeypatch):
+        import src.telemetry.notifications as notif
+        from src.discovery.shadow_ai import ShadowAIAlert, ShadowAIMonitor
+
+        engine = notif.NotificationEngine()
+        engine._channels = []  # inert engine
+        monkeypatch.setattr(notif, "get_notification_engine", lambda: engine)
+
+        monitor = ShadowAIMonitor()
+        alert = ShadowAIAlert(
+            hostname="api.openai.com", service="OpenAI",
+            timestamp="2024-01-01T00:00:00Z", risk_level="high",
+        )
+        # No channels configured → engine.configured is False → 0 dispatched.
+        assert await monitor.dispatch_alerts([alert]) == 0
+
+    async def test_dispatch_delivers_warn_alerts(self, monkeypatch):
+        import src.telemetry.notifications as notif
+        from src.discovery.shadow_ai import ShadowAIAlert, ShadowAIMonitor
+
+        engine, sent = _make_warn_engine()
+        monkeypatch.setattr(notif, "get_notification_engine", lambda: engine)
+
+        monitor = ShadowAIMonitor()
+        alerts = [
+            ShadowAIAlert(
+                hostname="api.openai.com", service="OpenAI",
+                timestamp="2024-01-01T00:00:00Z", source_ip="10.0.1.5",
+                risk_level="high",
+            ),
+            ShadowAIAlert(
+                hostname="api.anthropic.com", service="Anthropic",
+                timestamp="2024-01-01T00:01:00Z", source_ip="10.0.1.6",
+                risk_level="high",
+            ),
+        ]
+        count = await monitor.dispatch_alerts(alerts, tenant_id="acme")
+        assert count == 2
+        assert len(sent) == 2
+
+        _, first = sent[0]
+        assert first.verdict == "warn"
+        assert first.severity == "high"
+        assert first.category == "shadow_ai"
+        assert first.source == "shadow_ai_monitor"
+        assert first.tenant_id == "acme"
+        assert first.source_ip == "10.0.1.5"
+        assert first.matched_patterns == ["api.openai.com"]
+        assert "OpenAI" in first.description
+        assert "api.openai.com" in first.description
+
+    async def test_dispatch_respects_channel_verdict_filter(self, monkeypatch):
+        """A default 'block'-only channel must not receive advisory warn alerts."""
+        import src.telemetry.notifications as notif
+        from src.discovery.shadow_ai import ShadowAIAlert, ShadowAIMonitor
+
+        engine, sent = _make_warn_engine()
+        engine._channels[0].verdicts = ["block"]  # only blocks, not warns
+        monkeypatch.setattr(notif, "get_notification_engine", lambda: engine)
+
+        monitor = ShadowAIMonitor()
+        alert = ShadowAIAlert(
+            hostname="api.openai.com", service="OpenAI",
+            timestamp="2024-01-01T00:00:00Z", risk_level="high",
+        )
+        # dispatch_alerts still counts it as handed to the engine, but the
+        # engine's per-channel filter drops it (no channel dispatched).
+        count = await monitor.dispatch_alerts([alert])
+        assert count == 1
+        assert sent == []
+
+
+# =============================================================================
 # MCP Inventory
 # =============================================================================
 

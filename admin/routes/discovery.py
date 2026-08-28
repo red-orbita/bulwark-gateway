@@ -75,6 +75,18 @@ class TrafficLogEntry(BaseModel):
 class AnalyzeTrafficRequest(BaseModel):
     """Request to analyze traffic logs for shadow AI usage."""
     log_entries: list[TrafficLogEntry] = Field(..., min_length=1, description="Traffic log entries")
+    notify: bool = Field(
+        False,
+        description=(
+            "When true, dispatch detected shadow-AI alerts to the configured "
+            "notification channels (advisory 'warn' verdict). Off by default so "
+            "analysis is side-effect-free unless the operator opts in."
+        ),
+    )
+    tenant_id: str = Field(
+        "unknown",
+        description="Tenant the traffic belongs to (drives per-channel tenant filtering on dispatch).",
+    )
 
 
 class ShadowAIAlertResponse(BaseModel):
@@ -84,6 +96,13 @@ class ShadowAIAlertResponse(BaseModel):
     timestamp: str
     source_ip: str | None = None
     risk_level: str
+
+
+class AnalyzeTrafficResponse(BaseModel):
+    """Response from shadow AI traffic analysis."""
+    alerts: list[ShadowAIAlertResponse]
+    total_found: int
+    notified: int = Field(0, description="Number of alerts dispatched to notification channels.")
 
 
 class ClassifyHostnameRequest(BaseModel):
@@ -207,16 +226,31 @@ def shadow_ai_endpoints(
     return monitor.get_blocklist()
 
 
-@router.post("/shadow-ai/analyze", response_model=list[ShadowAIAlertResponse])
-def shadow_ai_analyze(
+@router.post("/shadow-ai/analyze", response_model=AnalyzeTrafficResponse)
+async def shadow_ai_analyze(
     req: AnalyzeTrafficRequest,
     user: TokenPayload = Depends(require_permission("admin:read")),
-) -> list[ShadowAIAlertResponse]:
-    """Analyze traffic log for shadow AI usage."""
+) -> AnalyzeTrafficResponse:
+    """Analyze traffic log for shadow AI usage.
+
+    Detection is always performed. When ``notify`` is set, the detected alerts
+    are additionally dispatched to the configured notification channels; the
+    ``notified`` count reflects how many were handed to the engine (0 when no
+    channels are configured).
+    """
     monitor = ShadowAIMonitor()
     log_entries = [entry.model_dump() for entry in req.log_entries]
     alerts = monitor.analyze_traffic_log(log_entries)
-    return [ShadowAIAlertResponse(**asdict(a)) for a in alerts]
+
+    notified = 0
+    if req.notify and alerts:
+        notified = await monitor.dispatch_alerts(alerts, tenant_id=req.tenant_id)
+
+    return AnalyzeTrafficResponse(
+        alerts=[ShadowAIAlertResponse(**asdict(a)) for a in alerts],
+        total_found=len(alerts),
+        notified=notified,
+    )
 
 
 @router.post("/shadow-ai/classify", response_model=ClassifyHostnameResponse)

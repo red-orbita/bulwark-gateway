@@ -1222,7 +1222,7 @@ class MCPInventory:
 - [x] Shadow AI detection (DNS-based) (`src/discovery/shadow_ai.py`)
 - [x] Admin UI: agent map, discovered services, risk scores (`admin/routes/discovery.py` + template)
 - [ ] Automated onboarding: discovered agent → suggested policy — not implemented; discovery results are display-only
-- [ ] Alerting: new unregistered AI agents detected — not wired; `ShadowAIAlert` is returned in API responses but never dispatched to a notification channel
+- [x] Alerting: new unregistered AI agents detected — `ShadowAIMonitor.dispatch_alerts()` fans out detected alerts to the shared `NotificationEngine` (advisory `warn` verdict, `shadow_ai` category); opt-in via the `notify` flag on `POST /admin/discovery/shadow-ai/analyze`
 
 ---
 

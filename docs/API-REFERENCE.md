@@ -726,18 +726,37 @@ Return the full AI endpoint blocklist (30+ known AI API hostnames).
 
 #### POST /admin/discovery/shadow-ai/analyze
 
-Analyze traffic logs for unauthorized AI usage.
+Analyze traffic logs for unauthorized AI usage. Optionally dispatch detected
+alerts to the configured notification channels (advisory `warn` verdict).
 
 **Body**:
 ```json
 {
-  "entries": [
+  "log_entries": [
     {"hostname": "api.openai.com", "source_ip": "10.0.1.5", "timestamp": "2024-01-01T12:00:00Z"}
-  ]
+  ],
+  "notify": false,
+  "tenant_id": "unknown"
 }
 ```
 
-**Response**: Array of ShadowAIAlerts (hostname, service, risk_level).
+- `notify` (default `false`): when `true`, each detected alert is dispatched to
+  the notification engine. Off by default so analysis stays side-effect-free.
+- `tenant_id` (default `"unknown"`): drives per-channel tenant filtering on dispatch.
+
+**Response**:
+```json
+{
+  "alerts": [
+    {"hostname": "api.openai.com", "service": "OpenAI", "timestamp": "...", "source_ip": "10.0.1.5", "risk_level": "high"}
+  ],
+  "total_found": 1,
+  "notified": 0
+}
+```
+
+`notified` is the number of alerts handed to the notification engine (`0` when
+`notify` is false or no channels are configured).
 
 #### POST /admin/discovery/shadow-ai/classify
 

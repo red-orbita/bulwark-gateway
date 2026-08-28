@@ -176,6 +176,81 @@ class ShadowAIMonitor:
 
         return alerts
 
+    async def dispatch_alerts(
+        self,
+        alerts: list[ShadowAIAlert],
+        *,
+        tenant_id: str = "unknown",
+    ) -> int:
+        """Fan out shadow-AI alerts to the configured notification channels.
+
+        Detection (``analyze_traffic_log``) is intentionally decoupled from
+        dispatch so callers stay in control of *when* an operator is paged.
+        This method is a thin, side-effecting bridge onto the shared
+        :class:`~src.telemetry.notifications.NotificationEngine`; it inherits
+        that engine's per-channel severity/verdict/tenant filtering and dedup.
+
+        The mapping is deliberately honest — a shadow-AI finding is advisory,
+        not an enforced block, so every alert is emitted with ``verdict="warn"``
+        and the risk level the analyzer already assigned:
+
+        =====================  ===================================
+        AlertPayload field     Source
+        =====================  ===================================
+        ``verdict``            ``"warn"`` (advisory, never blocked)
+        ``severity``           ``alert.risk_level``
+        ``category``           ``"shadow_ai"``
+        ``description``        service + hostname
+        ``source``             ``"shadow_ai_monitor"``
+        ``source_ip``          ``alert.source_ip``
+        ``matched_patterns``   ``[alert.hostname]``
+        =====================  ===================================
+
+        Args:
+            alerts: Alerts produced by :meth:`analyze_traffic_log`.
+            tenant_id: Tenant the traffic belongs to (drives per-channel
+                tenant filtering); defaults to ``"unknown"``.
+
+        Returns:
+            Number of alerts handed to the engine for dispatch. Returns ``0``
+            when there are no alerts or no channels are configured (the engine
+            is inert), so callers can surface a truthful "notified" count.
+        """
+        if not alerts:
+            return 0
+
+        # Lazy import: keeps this module import-light and avoids any startup
+        # coupling to the telemetry subsystem for the pure-detection path.
+        from src.telemetry.notifications import AlertPayload, get_notification_engine
+
+        engine = get_notification_engine()
+        if not engine.configured:
+            return 0
+
+        dispatched = 0
+        for alert in alerts:
+            payload = AlertPayload(
+                verdict="warn",
+                severity=alert.risk_level,
+                category="shadow_ai",
+                description=(
+                    f"Shadow AI usage detected: {alert.service} via {alert.hostname}"
+                ),
+                tenant_id=tenant_id,
+                source_ip=alert.source_ip or "",
+                matched_patterns=[alert.hostname],
+                source="shadow_ai_monitor",
+            )
+            try:
+                await engine.send_alert(payload)
+                dispatched += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error(
+                    "shadow_ai_dispatch_error: %s: %s", type(exc).__name__, exc
+                )
+
+        return dispatched
+
     def get_blocklist(self) -> list[str]:
         """Return domains that should be blocked to prevent shadow AI usage.
 

@@ -831,7 +831,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/discovery/scan/network` | Session | Scan network for LLM agents |
 | POST | `/admin/discovery/scan/kubernetes` | Session | Scan K8s namespace |
 | GET | `/admin/discovery/shadow-ai/endpoints` | Session | AI endpoint blocklist |
-| POST | `/admin/discovery/shadow-ai/analyze` | Session | Analyze traffic for shadow AI |
+| POST | `/admin/discovery/shadow-ai/analyze` | Session | Analyze traffic for shadow AI (opt-in `notify` flag dispatches advisory `warn` alerts to notification channels) |
 | POST | `/admin/discovery/shadow-ai/classify` | Session | Classify hostname |
 | GET | `/admin/discovery/mcp/status` | Session | MCP inventory status |
 | POST | `/admin/discovery/mcp/assess-risk` | Session | Assess MCP tool risk |
