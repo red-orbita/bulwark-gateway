@@ -175,6 +175,19 @@ async def _run_evaluation(args: argparse.Namespace) -> int:
     if not args.no_benign:
         benign_samples = BenignDataset.load()
 
+    # Populate the scanner pipeline. Standalone entrypoints (this CLI, CI) do
+    # NOT run the app lifespan, so the global pipeline singleton would otherwise
+    # be empty and report 0% detection. Register the always-on GA built-ins via
+    # the shared SSOT helper (no tenant policy engine in eval context — the
+    # tool-policy scanner degrades to ALLOW), then start them.
+    from src.scanners.builtin import register_builtin_scanners
+    from src.scanners.pipeline import get_scanner_pipeline
+
+    pipeline = get_scanner_pipeline()
+    if not pipeline.list_scanners():
+        register_builtin_scanners(pipeline)
+        await pipeline.startup()
+
     # Run evaluation
     runner = EvaluationRunner()
     report = await runner.run_evaluation(attacks, benign_samples=benign_samples)

@@ -562,3 +562,84 @@ class TestConfusionMetrics:
         assert "DETECTION QUALITY" in text
         assert "block" in text
         assert "flag" in text
+
+
+# =============================================================================
+# Built-in scanner registration (SSOT) + standalone CLI wiring
+# =============================================================================
+
+
+class TestBuiltinScannerRegistration:
+    """The GA built-in scanners must be registered via a single shared helper so
+    the app lifespan and standalone entrypoints (eval CLI / CI) never drift."""
+
+    def test_helper_populates_all_ga_scanners(self):
+        from src.scanners.builtin import register_builtin_scanners
+        from src.scanners.pipeline import ScannerPipeline
+
+        pipeline = ScannerPipeline()
+        assert pipeline.list_scanners() == []
+
+        register_builtin_scanners(pipeline)
+
+        names = {s["name"] for s in pipeline.list_scanners()}
+        assert names == {"regex_input", "output_redaction", "tool_policy"}
+
+    def test_helper_registers_input_blocking_lane(self):
+        from src.scanners.builtin import register_builtin_scanners
+        from src.scanners.pipeline import ScannerPipeline
+
+        pipeline = ScannerPipeline()
+        register_builtin_scanners(pipeline)
+
+        # The regex input scanner must land in the input-blocking lane so the
+        # evaluation harness (which drives run_input_blocking) exercises it.
+        types = {s["name"]: s["type"] for s in pipeline.list_scanners()}
+        assert types["regex_input"] == "input_blocking"
+
+    @pytest.mark.asyncio
+    async def test_tool_policy_scanner_degrades_without_engine(self):
+        """Registering without a policy engine must not crash — the tool-policy
+        scanner degrades to ALLOW so input-only eval harnesses stay safe."""
+        from src.models import Verdict
+        from src.scanners.builtin import ToolPolicyScanner
+        from src.scanners.protocol import ScanContext
+
+        scanner = ToolPolicyScanner()  # no engine
+        ctx = ScanContext(tenant_id="t", agent_id="a", request_id="r")
+        result = await scanner.scan("some output", ctx)
+        assert result.verdict == Verdict.ALLOW
+
+    @pytest.mark.asyncio
+    async def test_cli_run_evaluation_detects_attacks_standalone(self):
+        """Regression: the eval CLI must populate the (otherwise empty) global
+        pipeline singleton. Before the SSOT fix this reported 0% detection."""
+        import argparse
+
+        from src.evaluation.cli import _run_evaluation
+        from src.scanners.pipeline import get_scanner_pipeline, reset_scanner_pipeline
+
+        # Simulate a fresh standalone process: empty global pipeline.
+        reset_scanner_pipeline()
+        assert get_scanner_pipeline().list_scanners() == []
+
+        args = argparse.Namespace(
+            attacks="standard",
+            categories=None,
+            count=12,
+            benign=False,
+            no_benign=True,
+            min_detection_rate=0.5,
+            max_fp_rate=1.0,
+            report="json",
+            output=None,
+            seed=42,
+        )
+        try:
+            exit_code = await _run_evaluation(args)
+            # Pipeline is now populated and detection cleared the 50% floor.
+            assert get_scanner_pipeline().list_scanners() != []
+            assert exit_code == 0
+        finally:
+            reset_scanner_pipeline()
+

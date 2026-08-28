@@ -150,19 +150,15 @@ async def lifespan(app: FastAPI):
                              note="Replay DB recording active without ML enrichment")
 
     # Initialize Scanner Pipeline (pluggable scanner framework)
-    from src.scanners.builtin import OutputRedactionScanner, RegexInputScanner, ToolPolicyScanner
+    from src.scanners.builtin import register_builtin_scanners
     from src.scanners.discovery import discover_all_scanners, instantiate_scanner
     from src.scanners.pipeline import get_scanner_pipeline
 
     pipeline = get_scanner_pipeline()
 
-    # Register built-in scanners
-    pipeline.register(RegexInputScanner())
-    pipeline.register(OutputRedactionScanner())
-
-    tool_policy_scanner = ToolPolicyScanner()
-    tool_policy_scanner.set_policy_engine(app.state.policy_loader.engine)
-    pipeline.register(tool_policy_scanner)
+    # Register the always-on GA built-in scanners (SSOT: shared with the
+    # evaluation CLI / SDK so scanner coverage never drifts between entrypoints).
+    register_builtin_scanners(pipeline, policy_engine=app.state.policy_loader.engine)
 
     # Register ML scanners (async by default, no latency impact unless ml_blocking=true)
     #
