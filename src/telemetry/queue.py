@@ -125,7 +125,7 @@ class DiskFallback:
             # the actual id values are bound as parameters (never string-formatted).
             placeholders = ",".join("?" * len(ids))
             self._conn.execute(
-                f"DELETE FROM events WHERE id IN ({placeholders})", ids  # noqa: S608 — only "?" placeholders interpolated; ids bound as params
+                f"DELETE FROM events WHERE id IN ({placeholders})", ids  # noqa: S608 — only "?" placeholders interpolated; ids bound as params  # nosec B608
             )
         return events
 

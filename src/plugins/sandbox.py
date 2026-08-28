@@ -830,7 +830,7 @@ class FilesystemBlocker:
         # access to), not locations where a temp file is created.
         _BLOCKED_PATHS = {
             "/proc", "/sys", "/dev", "/run", "/etc",
-            "/var", "/tmp", "/root", "/home",  # noqa: S108 — deny-list entry, not a temp-file location
+            "/var", "/tmp", "/root", "/home",  # noqa: S108 — deny-list entry, not a temp-file location  # nosec B108
         }
         for blocked in _BLOCKED_PATHS:
             if str(target).startswith(blocked):
