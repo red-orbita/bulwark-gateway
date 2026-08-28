@@ -21,7 +21,6 @@ Redis keys:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -414,7 +413,7 @@ class VirtualKeyManager:
                 "FATAL: 'cryptography' package is required for virtual key encryption. "
                 "Install it with: pip install cryptography>=42.0. "
                 "Refusing to start with insecure XOR fallback."
-            )
+            ) from None
 
     def _decrypt(self, ciphertext: str) -> str:
         """Decrypt a stored key.

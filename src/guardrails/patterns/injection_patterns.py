@@ -13,7 +13,6 @@ import re
 from src.guardrails.patterns import Pattern
 from src.models import ThreatCategory
 
-
 # === PROMPT INJECTION PATTERNS ===
 # User trying to override system prompt or inject instructions
 

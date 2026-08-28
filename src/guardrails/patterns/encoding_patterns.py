@@ -14,7 +14,6 @@ import re
 from src.guardrails.patterns import Pattern
 from src.models import ThreatCategory
 
-
 # === INDIRECT INJECTION PATTERNS (V6) ===
 # Injection hidden in documents, emails, issues, API responses — no explicit file reference
 

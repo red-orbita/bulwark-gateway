@@ -15,8 +15,8 @@ Security model:
 """
 
 import logging
-import time
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 # Optional dependency: cryptography (required for RS256/ES256)
 _CRYPTOGRAPHY_AVAILABLE = False
 try:
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
     from cryptography.hazmat.primitives.serialization import (
-        load_pem_public_key,
         load_pem_private_key,
+        load_pem_public_key,
     )
-    from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
     _CRYPTOGRAPHY_AVAILABLE = True
 except ImportError:
@@ -129,7 +129,7 @@ class JWKSCache:
             if not self._keys:
                 raise JWTKeyError(
                     f"JWKS fetch failed and no cached keys available: {e}"
-                )
+                ) from e
 
     def get_key(self, kid: Optional[str] = None) -> dict:
         """Get a JWK by kid. Refreshes cache if expired.
@@ -206,7 +206,7 @@ class JWKSCache:
         except Exception as e:
             if isinstance(e, JWTKeyError):
                 raise
-            raise JWTKeyError(f"Failed to convert JWK to public key: {e}")
+            raise JWTKeyError(f"Failed to convert JWK to public key: {e}") from e
 
 
 def _require_cryptography() -> None:
@@ -241,12 +241,12 @@ def load_public_key(path: str):
     try:
         key_data = key_path.read_bytes()
     except (OSError, IOError) as e:
-        raise JWTKeyError(f"Cannot read public key file '{path}': {e}")
+        raise JWTKeyError(f"Cannot read public key file '{path}': {e}") from e
 
     try:
         public_key = load_pem_public_key(key_data)
     except Exception as e:
-        raise JWTKeyError(f"Invalid PEM public key in '{path}': {e}")
+        raise JWTKeyError(f"Invalid PEM public key in '{path}': {e}") from e
 
     # Validate key type
     if not isinstance(public_key, (rsa.RSAPublicKey, ec.EllipticCurvePublicKey)):
@@ -286,12 +286,12 @@ def load_private_key(path: str, password: Optional[bytes] = None):
     try:
         key_data = key_path.read_bytes()
     except (OSError, IOError) as e:
-        raise JWTKeyError(f"Cannot read private key file '{path}': {e}")
+        raise JWTKeyError(f"Cannot read private key file '{path}': {e}") from e
 
     try:
         private_key = load_pem_private_key(key_data, password=password)
     except Exception as e:
-        raise JWTKeyError(f"Invalid PEM private key in '{path}': {e}")
+        raise JWTKeyError(f"Invalid PEM private key in '{path}': {e}") from e
 
     if not isinstance(private_key, (rsa.RSAPrivateKey, ec.EllipticCurvePrivateKey)):
         raise JWTKeyError(

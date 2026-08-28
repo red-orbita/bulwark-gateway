@@ -222,7 +222,13 @@ class ResponseCache:
                 pass
         return None
 
-    def put(self, request_body: dict[str, Any], response_data: dict[str, Any], tenant_id: str = "", agent_id: str = "") -> None:
+    def put(
+        self,
+        request_body: dict[str, Any],
+        response_data: dict[str, Any],
+        tenant_id: str = "",
+        agent_id: str = "",
+    ) -> None:
         """Store a response in the cache.
 
         Args:

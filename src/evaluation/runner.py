@@ -233,7 +233,8 @@ class EvaluationRunner:
             source = None
             if events:
                 # Use the highest-severity event as the primary match
-                primary = max(events, key=lambda e: {"low": 0, "medium": 1, "high": 2, "critical": 3}.get(e.severity, 0))
+                _sev_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+                primary = max(events, key=lambda e: _sev_rank.get(e.severity, 0))
                 matched_pattern = primary.matched_pattern
                 guardrail_desc = primary.description
                 severity = primary.severity
@@ -287,7 +288,14 @@ class EvaluationRunner:
             agent_id="eval-agent",
             request_id=f"eval-{uuid.uuid4().hex[:12]}",
             messages=[{"role": "user", "content": attack.payload}],
-            metadata={"evaluation": True, "category": attack.category.value if hasattr(attack.category, 'value') else str(attack.category)},
+            metadata={
+                "evaluation": True,
+                "category": (
+                    attack.category.value
+                    if hasattr(attack.category, "value")
+                    else str(attack.category)
+                ),
+            },
         )
 
         start = time.perf_counter()

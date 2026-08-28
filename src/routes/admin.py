@@ -3,9 +3,9 @@
 All endpoints require admin-level authentication (valid JWT with role=admin).
 """
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-import jwt
 from jwt import InvalidTokenError as JWTError
 
 from src.config import settings
@@ -34,7 +34,7 @@ async def require_admin(request: Request):
             options={"require": ["exp", "iss", "aud", "jti"]},
         )
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
     # Check token revocation (fail-closed: if Redis unavailable, reject)
     jti = payload.get("jti")
@@ -51,7 +51,7 @@ async def require_admin(request: Request):
         raise
     except Exception:
         # Fail-closed: cannot verify revocation → reject
-        raise HTTPException(status_code=401, detail="Cannot verify token revocation status")
+        raise HTTPException(status_code=401, detail="Cannot verify token revocation status") from None
 
     role = payload.get("role", "")
     if role != "admin":
@@ -195,9 +195,9 @@ async def register_agent(request: Request, _=Depends(require_admin)):
         )
 
     # SSRF protection: validate backend_url (C-01/H-01)
-    from urllib.parse import urlparse
     import ipaddress
     import socket
+    from urllib.parse import urlparse
 
     parsed = urlparse(backend_url)
     if parsed.scheme not in ("http", "https"):

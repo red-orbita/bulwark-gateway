@@ -20,7 +20,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.sdk.guard import Guard, SecurityError
 
@@ -90,7 +90,7 @@ class LangChainGuard:
                 raise ImportError(
                     "LangChain integration requires 'langchain-core' or 'langchain'. "
                     "Install with: pip install langchain-core"
-                )
+                ) from None
 
         guard = self._guard
 
@@ -135,8 +135,9 @@ class LangChainGuard:
                 if output_text:
                     out_result = guard.scan_output_sync(output_text)
                     if out_result.verdict.value == "block":
+                        _reason = out_result.events[0].description if out_result.events else "policy violation"
                         raise SecurityError(
-                            f"Output blocked: {out_result.events[0].description if out_result.events else 'policy violation'}",
+                            f"Output blocked: {_reason}",
                             result=out_result,
                         )
                     if out_result.verdict.value == "redact" and out_result.modified_content:
@@ -170,8 +171,9 @@ class LangChainGuard:
                 if output_text:
                     out_result = await guard.scan_output(output_text)
                     if out_result.verdict.value == "block":
+                        _reason = out_result.events[0].description if out_result.events else "policy violation"
                         raise SecurityError(
-                            f"Output blocked: {out_result.events[0].description if out_result.events else 'policy violation'}",
+                            f"Output blocked: {_reason}",
                             result=out_result,
                         )
                     if out_result.verdict.value == "redact" and out_result.modified_content:
@@ -202,7 +204,7 @@ class LangChainGuard:
                 raise ImportError(
                     "LangChain integration requires 'langchain-core' or 'langchain'. "
                     "Install with: pip install langchain-core"
-                )
+                ) from None
 
         guard = self._guard
 
@@ -289,7 +291,7 @@ def _extract_lc_input(input_data: Any) -> str | None:
 
     # HumanMessage or similar
     if hasattr(input_data, "content"):
-        content = getattr(input_data, "content")
+        content = input_data.content
         if isinstance(content, str):
             return content
 
@@ -308,7 +310,7 @@ def _extract_lc_output(output: Any) -> str | None:
 
     # AIMessage or similar
     if hasattr(output, "content"):
-        content = getattr(output, "content")
+        content = output.content
         if isinstance(content, str):
             return content
 

@@ -338,10 +338,11 @@ def _print_comparison_text(baseline: dict, current: dict) -> None:
     c_lat = current.get("latency", {}).get("p95_ms", 0)
     lat_delta = c_lat - b_lat
     lat_status = "improved" if lat_delta < -1.0 else ("regressed" if lat_delta > 1.0 else "same")
+    lat_symbol = "=" if lat_status == "same" else ("+" if lat_status == "improved" else "!")
 
     print(
         f"  {'Latency P95 (ms)':<22} {b_lat:<12.2f} {c_lat:<12.2f} "
-        f"{lat_delta:+<12.2f} [{'=' if lat_status == 'same' else ('+' if lat_status == 'improved' else '!')}] {lat_status}"
+        f"{lat_delta:+<12.2f} [{lat_symbol}] {lat_status}"
     )
 
     print()

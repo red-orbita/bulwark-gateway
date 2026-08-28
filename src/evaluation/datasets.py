@@ -13,7 +13,6 @@ from src.models import ThreatCategory
 
 from .attacks import Attack, AttackGenerator
 
-
 # === Standard Benign Prompts ===
 # These represent legitimate user queries that should pass through without blocking.
 # A false positive on any of these indicates a guardrail defect.

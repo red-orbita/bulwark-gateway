@@ -895,7 +895,10 @@ class ToolPolicyEngine:
         re.compile(r"https?://\d{8,10}(/|$|\?)", re.I),  # Decimal IP (e.g., 2130706433 = 127.0.0.1)
         re.compile(r"https?://0x[0-9a-f]{8}", re.I),  # Hex IP
         re.compile(r"https?://0[0-7]{1,3}\.0*[0-7]{1,3}\.0*[0-7]{1,3}\.0*[0-7]{1,3}", re.I),  # Octal IP (0177.0.0.1)
-        re.compile(r"https?://[\w.-]*\.(nip\.io|xip\.io|sslip\.io|localtest\.me|lvh\.me|vcap\.me)", re.I),  # DNS rebinding services
+        re.compile(
+            r"https?://[\w.-]*\.(nip\.io|xip\.io|sslip\.io|localtest\.me|lvh\.me|vcap\.me)",
+            re.I,
+        ),  # DNS rebinding services
         re.compile(r"https?://[\w.-]*127[\w.-]*\.(com|io|net|org)", re.I),  # DNS with 127 in hostname
     ]
 

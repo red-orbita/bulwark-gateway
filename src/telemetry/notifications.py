@@ -354,7 +354,10 @@ class NotificationEngine:
         for attempt in range(3):
             try:
                 await sender(channel, alert)
-                logger.warning(f"notification_sent channel='{channel.name}' type={channel.type} category={alert.category} severity={alert.severity}")
+                logger.warning(
+                    f"notification_sent channel='{channel.name}' type={channel.type} "
+                    f"category={alert.category} severity={alert.severity}"
+                )
                 return
             except (httpx.ConnectTimeout, httpx.ConnectError) as e:
                 last_err = e
@@ -365,10 +368,16 @@ class NotificationEngine:
                 if attempt < 2:
                     await asyncio.sleep(1.0 * (attempt + 1))
             except Exception as e:
-                logger.warning(f"Notification channel '{channel.name}' ({channel.type}) failed: {type(e).__name__}: {e!r}")
+                logger.warning(
+                    f"Notification channel '{channel.name}' ({channel.type}) failed: "
+                    f"{type(e).__name__}: {e!r}"
+                )
                 return
 
-        logger.warning(f"Notification channel '{channel.name}' ({channel.type}) failed after 3 retries: {type(last_err).__name__}: {last_err!r}")
+        logger.warning(
+            f"Notification channel '{channel.name}' ({channel.type}) failed after 3 retries: "
+            f"{type(last_err).__name__}: {last_err!r}"
+        )
 
     # --- Channel Formatters ---
 
@@ -380,7 +389,13 @@ class NotificationEngine:
 
         body = {
             "blocks": [
-                {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} Bulwark Gateway — {alert.verdict.upper()}"}},
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"{emoji} Bulwark Gateway — {alert.verdict.upper()}",
+                    },
+                },
                 {"type": "section", "fields": [
                     {"type": "mrkdwn", "text": f"*Severity:* `{alert.severity}`"},
                     {"type": "mrkdwn", "text": f"*Category:* `{alert.category}`"},
@@ -452,7 +467,12 @@ class NotificationEngine:
 
     async def _send_discord(self, channel: NotificationChannel, alert: AlertPayload):
         """Discord Webhook with embed."""
-        color = {"critical": 0xFF0000, "high": 0xFF8C00, "medium": 0xFFD700, "low": 0x4169E1}.get(alert.severity, 0x808080)
+        color = {
+            "critical": 0xFF0000,
+            "high": 0xFF8C00,
+            "medium": 0xFFD700,
+            "low": 0x4169E1,
+        }.get(alert.severity, 0x808080)
         patterns = ", ".join(alert.matched_patterns[:3]) or "N/A"
 
         body = {
@@ -533,7 +553,12 @@ class NotificationEngine:
 
     async def _send_telegram(self, channel: NotificationChannel, alert: AlertPayload):
         """Telegram Bot API — uses HTML parse mode to avoid Markdown escaping issues."""
-        emoji = {"critical": "\U0001f6a8", "high": "\u26a0\ufe0f", "medium": "\U0001f7e1", "low": "\u2139\ufe0f"}.get(alert.severity, "\U0001f514")
+        emoji = {
+            "critical": "\U0001f6a8",
+            "high": "\u26a0\ufe0f",
+            "medium": "\U0001f7e1",
+            "low": "\u2139\ufe0f",
+        }.get(alert.severity, "\U0001f514")
         patterns = ", ".join(alert.matched_patterns[:3]) or "N/A"
         # Escape HTML special chars in user-provided fields
         def esc(s: str) -> str:
@@ -602,7 +627,10 @@ class NotificationEngine:
   <h2 style="margin: 0 0 12px 0; color: #333;">🛡️ Bulwark Gateway — {alert.verdict.upper()}</h2>
   <table style="border-collapse: collapse; width: 100%;">
     <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Severity</td>
-        <td style="padding: 4px 0;"><span style="background: {severity_color}; color: white; padding: 2px 8px; border-radius: 4px;">{alert.severity.upper()}</span></td></tr>
+        <td style="padding: 4px 0;">
+          <span style="background: {severity_color}; color: white;
+                       padding: 2px 8px; border-radius: 4px;">{alert.severity.upper()}</span>
+        </td></tr>
     <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Category</td>
         <td style="padding: 4px 0;">{alert.category}</td></tr>
     <tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Tenant</td>
@@ -698,7 +726,10 @@ class NotificationEngine:
             verdict="block",
             severity="high",
             category="connectivity_test",
-            description="Bulwark Gateway notification channel verification. This confirms the integration is operational and alerts will be delivered to this endpoint.",
+            description=(
+                "Bulwark Gateway notification channel verification. This confirms the "
+                "integration is operational and alerts will be delivered to this endpoint."
+            ),
             tenant_id="system",
             agent_id="bulwark-gateway",
             source_ip="10.0.0.1",

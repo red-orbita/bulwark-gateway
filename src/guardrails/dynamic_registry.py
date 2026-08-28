@@ -27,7 +27,6 @@ from typing import Optional
 
 import redis
 
-
 # --- ReDoS protection ---
 # Reject patterns with dangerous quantifier nesting (e.g., (a+)+ or (a*)*b)
 _REDOS_DANGEROUS = re.compile(
@@ -40,7 +39,7 @@ _MAX_PATTERN_LENGTH = 500
 
 def _safe_compile(pattern: str) -> re.Pattern:
     """Compile regex with ReDoS protection.
-    
+
     Raises ValueError if pattern is potentially dangerous.
     Raises re.error if pattern is invalid.
     """
@@ -154,7 +153,10 @@ class DynamicPatternRegistry:
                 return
 
             # Version changed — refresh
-            self._disabled = {s.decode() if isinstance(s, bytes) else s for s in (self._redis.smembers(KEY_DISABLED) or set())}
+            self._disabled = {
+                s.decode() if isinstance(s, bytes) else s
+                for s in (self._redis.smembers(KEY_DISABLED) or set())
+            }
             raw_custom = self._redis.hgetall(KEY_CUSTOM) or {}
 
             custom_patterns = []

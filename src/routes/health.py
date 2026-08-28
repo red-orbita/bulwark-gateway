@@ -142,8 +142,8 @@ async def internal_scanner_status(request: Request):
 
     Returns: registered scanners, health, lane counts, ML model status.
     """
-    from src.scanners.pipeline import get_scanner_pipeline
     from src.config import settings
+    from src.scanners.pipeline import get_scanner_pipeline
 
     pipeline = get_scanner_pipeline()
 

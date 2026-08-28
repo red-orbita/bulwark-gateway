@@ -318,8 +318,9 @@ class Guard:
                 metadata=metadata,
             )
             if input_result.verdict == Verdict.BLOCK:
+                _reason = input_result.events[0].description if input_result.events else "policy violation"
                 raise SecurityError(
-                    f"Input blocked: {input_result.events[0].description if input_result.events else 'policy violation'}",
+                    f"Input blocked: {_reason}",
                     result=input_result,
                 )
 
@@ -342,8 +343,9 @@ class Guard:
                 metadata=metadata,
             )
             if output_result.verdict == Verdict.BLOCK:
+                _reason = output_result.events[0].description if output_result.events else "policy violation"
                 raise SecurityError(
-                    f"Output blocked: {output_result.events[0].description if output_result.events else 'policy violation'}",
+                    f"Output blocked: {_reason}",
                     result=output_result,
                 )
             if output_result.verdict == Verdict.REDACT and output_result.modified_content:
@@ -553,7 +555,7 @@ def _extract_output_content(response: Any) -> str | None:
 
     # Object with .content attribute
     if hasattr(response, "content"):
-        content = getattr(response, "content")
+        content = response.content
         if isinstance(content, str):
             return content
 

@@ -76,11 +76,17 @@ _DECOMPOSITION_SIGNALS: list[tuple[re.Pattern, str, float]] = [
     (re.compile(r"\b(exfiltrat|data\s+theft|steal\s+data|dump\s+database)\b", re.I), "exfiltration", 2.5),
 
     # Weapons/drugs/dangerous synthesis (individually might be chemistry class)
-    (re.compile(r"\b(synthe\w+|manufacture|produce|formul)\s+.{0,20}(explosive|detonat|bomb|weapon)\b", re.I), "weapon_synth", 4.0),
-    (re.compile(r"\b(methamphetamine|fentanyl|heroin|cocaine|LSD)\s+.{0,20}(synthe|cook|make|produce|formul)\b", re.I), "drug_synth", 4.0),
+    (re.compile(
+        r"\b(synthe\w+|manufacture|produce|formul)\s+.{0,20}(explosive|detonat|bomb|weapon)\b", re.I
+    ), "weapon_synth", 4.0),
+    (re.compile(
+        r"\b(methamphetamine|fentanyl|heroin|cocaine|LSD)\s+.{0,20}(synthe|cook|make|produce|formul)\b", re.I
+    ), "drug_synth", 4.0),
     (re.compile(r"\b(nerve\s+agent|sarin|VX|ricin|anthrax|botulinum)\b", re.I), "bioweapon", 4.0),
     (re.compile(r"\b(detonator|primer|initiator|blasting\s+cap)\b", re.I), "detonator", 3.0),
-    (re.compile(r"\b(ammonium\s+nitrate|ANFO|TATP|RDX|C-4|Semtex|TNT)\s+.{0,20}(make|synthe|mix|produce)\b", re.I), "explosive_compound", 4.0),
+    (re.compile(
+        r"\b(ammonium\s+nitrate|ANFO|TATP|RDX|C-4|Semtex|TNT)\s+.{0,20}(make|synthe|mix|produce)\b", re.I
+    ), "explosive_compound", 4.0),
 
     # Social engineering / hacking methodology (each step is fine, combination is an attack)
     (re.compile(r"\b(reconnaissance|recon|footprint|OSINT\s+target)\b", re.I), "recon", 1.5),
@@ -93,7 +99,11 @@ _DECOMPOSITION_SIGNALS: list[tuple[re.Pattern, str, float]] = [
 # Combination patterns — specific multi-signal combos that are always malicious
 _DANGEROUS_COMBINATIONS: list[tuple[set[str], float, str]] = [
     # Full attack chain (kill chain stages)
-    ({"recon", "initial_access", "privesc", "lateral_movement", "exfiltration"}, 3.0, "Complete attack kill chain detected"),
+    (
+        {"recon", "initial_access", "privesc", "lateral_movement", "exfiltration"},
+        3.0,
+        "Complete attack kill chain detected",
+    ),
     ({"recon", "initial_access", "persistence", "defense_evasion"}, 2.5, "Attack chain with persistence and evasion"),
     # Exploit development chain
     ({"memory_corruption", "shellcode", "rop", "mitigation_bypass"}, 3.0, "Exploit development pipeline detected"),

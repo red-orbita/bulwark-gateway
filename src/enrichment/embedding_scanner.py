@@ -151,7 +151,7 @@ class EmbeddingScanner(BaseEnrichmentScanner):
         embeddings_data = []
         for category, samples in attack_corpus.items():
             vectors = self._model.encode(samples, normalize_embeddings=True)
-            for text, vector in zip(samples, vectors):
+            for text, vector in zip(samples, vectors, strict=True):
                 text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
                 embeddings_data.append({
                     "category": category,

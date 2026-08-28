@@ -14,8 +14,8 @@ import math
 import re
 import unicodedata
 
-from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.guardrails.patterns import ALL_PATTERNS, Pattern  # noqa: F401
+from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 
 
 class InputGuardrail:

@@ -362,7 +362,7 @@ def validate_settings():
             )
 
         # Initialize asymmetric key management (fail-closed on error)
-        from src.middleware.jwt_keys import initialize, JWTKeyError
+        from src.middleware.jwt_keys import JWTKeyError, initialize
 
         try:
             initialize(
@@ -373,7 +373,7 @@ def validate_settings():
                 jwks_ttl=settings.jwt_jwks_ttl,
             )
         except JWTKeyError as e:
-            raise SystemExit(f"FATAL: JWT key initialization failed: {e}")
+            raise SystemExit(f"FATAL: JWT key initialization failed: {e}") from e
 
         import logging
         logging.getLogger(__name__).info(
@@ -409,8 +409,8 @@ def validate_settings():
             # SECURITY FIX: In debug mode, auto-generate a random secret instead of
             # allowing the insecure default. This prevents the attack vector where
             # debug=true + known secret = forge arbitrary tokens.
-            import secrets as _secrets
             import logging
+            import secrets as _secrets
             generated = _secrets.token_hex(32)
             settings.jwt_secret = generated  # type: ignore[misc]
             logging.getLogger(__name__).warning(

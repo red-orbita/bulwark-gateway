@@ -19,9 +19,9 @@ Constraints:
     - CEF/LEEF converters for legacy SIEMs
 """
 
-from .schema import SecurityTelemetryEvent, TelemetryEventCategory, TelemetrySeverity
-from .queue import TelemetryQueue, get_telemetry_queue
 from .exporter import TelemetryExporter, get_exporter
+from .queue import TelemetryQueue, get_telemetry_queue
+from .schema import SecurityTelemetryEvent, TelemetryEventCategory, TelemetrySeverity
 
 __all__ = [
     "SecurityTelemetryEvent",

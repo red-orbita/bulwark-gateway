@@ -9,7 +9,6 @@ Supports per-tenant rate limit overrides from admin (Redis-synced).
 import json
 import threading
 import time
-
 from typing import Optional
 
 import redis
@@ -44,12 +43,18 @@ class RedisRateLimiter:
             self._try_connect()
 
     def _build_client(self) -> "redis.Redis":
+        # Invariant: only ever called after a truthy redis_url check
+        # (_try_connect / _ensure_connection both guard on it). Narrow the
+        # Optional here so the type is provably str and mypy is satisfied.
+        if not self._redis_url:
+            raise RuntimeError("rate limiter Redis URL is not configured")
+        url = self._redis_url
         kwargs = {"decode_responses": True, "socket_timeout": 0.5}
         # Support TLS connections (rediss:// scheme) with optional cert skip
-        if self._redis_url and self._redis_url.startswith("rediss://") and settings.redis_tls_insecure:
+        if url.startswith("rediss://") and settings.redis_tls_insecure:
             import ssl
             kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
-        return redis.from_url(self._redis_url, **kwargs)
+        return redis.from_url(url, **kwargs)
 
     def _try_connect(self) -> None:
         """Attempt a single throttled (re)connection. Never raises."""

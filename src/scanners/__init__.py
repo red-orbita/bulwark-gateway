@@ -16,6 +16,7 @@ Usage:
   pipeline.register(MyCustomScanner(), priority=50)
 """
 
+from src.scanners.pipeline import ScannerPipeline
 from src.scanners.protocol import (
     InputScanner,
     OutputScanner,
@@ -23,7 +24,6 @@ from src.scanners.protocol import (
     ScannerInfo,
     ScannerType,
 )
-from src.scanners.pipeline import ScannerPipeline
 
 __all__ = [
     "InputScanner",

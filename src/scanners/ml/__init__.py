@@ -12,8 +12,8 @@ Scanners:
   - ToxicityScanner: Toxic/harmful content detection
 """
 
-from src.scanners.ml.model_manager import ModelManager, get_model_manager
 from src.scanners.ml.injection_classifier import InjectionClassifier
+from src.scanners.ml.model_manager import ModelManager, get_model_manager
 from src.scanners.ml.toxicity_scanner import ToxicityScanner
 
 __all__ = [

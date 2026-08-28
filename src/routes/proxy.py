@@ -51,9 +51,9 @@ from src.models import (
 from src.scanners.pipeline import get_scanner_pipeline
 from src.scanners.protocol import ScanContext
 from src.telemetry.counters import get_counters
+from src.telemetry.notifications import AlertPayload, get_notification_engine
 from src.telemetry.queue import get_telemetry_queue
 from src.telemetry.schema import from_security_event
-from src.telemetry.notifications import get_notification_engine, AlertPayload
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -204,6 +204,7 @@ _BLOCKED_IPS = {
 # PERFORMANCE (M-03 fix): Cache DNS resolutions for SSRF checks (5s TTL).
 # Prevents blocking the event loop on repeated getaddrinfo() calls.
 from cachetools import TTLCache
+
 _DNS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=5.0)
 
 # H-04 fix: Maximum size for accumulated tool call arguments in streaming responses.
@@ -215,6 +216,7 @@ _MAX_TOOL_ARGS_BYTES = int(os.environ.get("BULWARK_MAX_TOOL_ARGS_BYTES", str(102
 # Previously a single global semaphore meant one tenant could block ALL streaming.
 _MAX_CONCURRENT_STREAMS = int(os.environ.get("BULWARK_MAX_CONCURRENT_STREAMS", "50"))
 _MAX_STREAMS_PER_TENANT = int(os.environ.get("BULWARK_MAX_STREAMS_PER_TENANT", "10"))
+_TENANT_STREAM_LIMIT_MSG = f"Too many concurrent streams for tenant (max {_MAX_STREAMS_PER_TENANT})"
 _stream_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_STREAMS)
 _tenant_stream_counts: dict[str, int] = {}  # tenant_id -> active stream count (in-memory fallback)
 _tenant_stream_lock = asyncio.Lock()
@@ -506,14 +508,26 @@ async def chat_completions(request: Request):
     if content_length and int(content_length) > MAX_BODY_SIZE:
         return JSONResponse(
             status_code=413,
-            content={"error": {"message": "Request body too large (max 10MB)", "type": "validation_error", "code": "body_too_large"}},
+                content={
+                    "error": {
+                        "message": "Request body too large (max 10MB)",
+                        "type": "validation_error",
+                        "code": "body_too_large",
+                    }
+                },
         )
     try:
         raw_body = await request.body()
         if len(raw_body) > MAX_BODY_SIZE:
             return JSONResponse(
                 status_code=413,
-                content={"error": {"message": "Request body too large (max 10MB)", "type": "validation_error", "code": "body_too_large"}},
+            content={
+                "error": {
+                    "message": "Request body too large (max 10MB)",
+                    "type": "validation_error",
+                    "code": "body_too_large",
+                }
+            },
             )
         # SECURITY FIX (H-06): Use object_pairs_hook to detect and reject
         # duplicate JSON keys. Duplicate keys create parser differentials
@@ -799,7 +813,13 @@ async def chat_completions(request: Request):
     if backend is None:
         return JSONResponse(
             status_code=403,
-            content={"error": {"message": "Request blocked by security policy", "type": "security_violation", "code": "security_block"}},
+                    content={
+                        "error": {
+                            "message": "Request blocked by security policy",
+                            "type": "security_violation",
+                            "code": "security_block",
+                        }
+                    },
         )
 
     is_streaming = body.get("stream", False)
@@ -853,7 +873,13 @@ async def chat_completions(request: Request):
                 )
                 return JSONResponse(
                     status_code=502,
-                    content={"error": {"message": "Backend credential unavailable", "type": "configuration_error", "code": "backend_credential_unavailable"}},
+                    content={
+                        "error": {
+                            "message": "Backend credential unavailable",
+                            "type": "configuration_error",
+                            "code": "backend_credential_unavailable",
+                        }
+                    },
                 )
             backend_headers.update(auth_headers)
 
@@ -870,7 +896,13 @@ async def chat_completions(request: Request):
                 logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
                 return JSONResponse(
                     status_code=403,
-                    content={"error": {"message": "Request blocked by security policy", "type": "security_violation", "code": "security_block"}},
+            content={
+                "error": {
+                    "message": "Request blocked by security policy",
+                    "type": "security_violation",
+                    "code": "security_block",
+                }
+            },
                 )
 
             if is_streaming:
@@ -879,7 +911,13 @@ async def chat_completions(request: Request):
                 if _stream_semaphore.locked():
                     return JSONResponse(
                         status_code=503,
-                        content={"error": {"message": "Too many concurrent streaming connections", "type": "capacity_error", "code": "stream_limit"}},
+                        content={
+                            "error": {
+                                "message": "Too many concurrent streaming connections",
+                                "type": "capacity_error",
+                                "code": "stream_limit",
+                            }
+                        },
                     )
 
                 # P8-01 fix: Use Redis for distributed stream counting across workers.
@@ -897,7 +935,13 @@ async def chat_completions(request: Request):
                             r.decr(tenant_stream_key)
                             return JSONResponse(
                                 status_code=429,
-                                content={"error": {"message": f"Too many concurrent streams for tenant (max {_MAX_STREAMS_PER_TENANT})", "type": "rate_limit", "code": "tenant_stream_limit"}},
+                                content={
+                                    "error": {
+                                        "message": _TENANT_STREAM_LIMIT_MSG,
+                                        "type": "rate_limit",
+                                        "code": "tenant_stream_limit",
+                                    }
+                                },
                             )
                         # Global distributed check
                         current_global = r.incr(_STREAM_KEY_GLOBAL)
@@ -907,7 +951,13 @@ async def chat_completions(request: Request):
                             r.decr(tenant_stream_key)
                             return JSONResponse(
                                 status_code=503,
-                                content={"error": {"message": "Too many concurrent streaming connections", "type": "capacity_error", "code": "stream_limit"}},
+                        content={
+                            "error": {
+                                "message": "Too many concurrent streaming connections",
+                                "type": "capacity_error",
+                                "code": "stream_limit",
+                            }
+                        },
                             )
                     except Exception:
                         # Redis failed mid-operation — fall back to in-memory
@@ -921,7 +971,13 @@ async def chat_completions(request: Request):
                         if current_count >= _MAX_STREAMS_PER_TENANT:
                             return JSONResponse(
                                 status_code=429,
-                                content={"error": {"message": f"Too many concurrent streams for tenant (max {_MAX_STREAMS_PER_TENANT})", "type": "rate_limit", "code": "tenant_stream_limit"}},
+                                content={
+                                    "error": {
+                                        "message": _TENANT_STREAM_LIMIT_MSG,
+                                        "type": "rate_limit",
+                                        "code": "tenant_stream_limit",
+                                    }
+                                },
                             )
                         _tenant_stream_counts[tenant_id] = current_count + 1
 
@@ -1835,6 +1891,8 @@ def _make_block_snippet(snippet_source: str | None) -> tuple[str | None, str | N
 
         from src.guardrails.output_filter import (
             REDACTION_PATTERNS as _RP,
+        )
+        from src.guardrails.output_filter import (
             _strip_invisible as _strip,
         )
         text = _strip(_ud.normalize("NFKC", snippet_source))
@@ -2005,12 +2063,13 @@ async def _enrich_and_record(
             for enrichment_result in results:
                 # Enrichment results with similarity > threshold produce events
                 if hasattr(enrichment_result, "verdict") and enrichment_result.verdict != Verdict.ALLOW:
+                    _enrich_desc = getattr(enrichment_result, "description", "semantic match")
                     event = SecurityEvent(
                         tenant_id=tenant_id,
                         agent_id="enrichment",
                         verdict=enrichment_result.verdict,
                         category=ThreatCategory.PROMPT_INJECTION,
-                        description=f"Enrichment detection: {getattr(enrichment_result, 'description', 'semantic match')}",
+                        description=f"Enrichment detection: {_enrich_desc}",
                         source="enrichment_pipeline",
                         severity="medium",
                         metadata={"request_id": request_id},

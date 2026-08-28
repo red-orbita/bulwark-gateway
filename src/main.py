@@ -377,9 +377,9 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     app.state._ml_sync_task.cancel()
-    _corr_tap = getattr(app.state, "correlation_tap", None)
-    if _corr_tap is not None:
-        await _corr_tap.stop()
+    corr_tap_shutdown = getattr(app.state, "correlation_tap", None)
+    if corr_tap_shutdown is not None:
+        await corr_tap_shutdown.stop()
     await app.state.scanner_pipeline.shutdown()
     await app.state.telemetry_exporter.stop()
     await app.state.policy_loader.stop_hot_reload()

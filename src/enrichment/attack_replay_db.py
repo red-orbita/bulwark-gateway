@@ -433,9 +433,15 @@ class AttackReplayDB:
         """Get replay DB statistics."""
         with self._lock:
             total = self._conn.execute("SELECT COUNT(*) as cnt FROM replay_entries").fetchone()["cnt"]  # type: ignore[union-attr]
-            evasions = self._conn.execute("SELECT COUNT(*) as cnt FROM replay_entries WHERE is_evasion = 1").fetchone()["cnt"]  # type: ignore[union-attr]
-            pending_regex = self._conn.execute("SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'pending'").fetchone()["cnt"]  # type: ignore[union-attr]
-            approved_regex = self._conn.execute("SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'approved'").fetchone()["cnt"]  # type: ignore[union-attr]
+            evasions = self._conn.execute(  # type: ignore[union-attr]
+                "SELECT COUNT(*) as cnt FROM replay_entries WHERE is_evasion = 1"
+            ).fetchone()["cnt"]
+            pending_regex = self._conn.execute(  # type: ignore[union-attr]
+                "SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'pending'"
+            ).fetchone()["cnt"]
+            approved_regex = self._conn.execute(  # type: ignore[union-attr]
+                "SELECT COUNT(*) as cnt FROM regex_candidates WHERE status = 'approved'"
+            ).fetchone()["cnt"]
 
             # Category breakdown for evasions
             category_rows = self._conn.execute(  # type: ignore[union-attr]
@@ -451,7 +457,12 @@ class AttackReplayDB:
             "evasion_categories": categories,
         }
 
-    def get_replay_payloads(self, category: Optional[str] = None, verdict: Optional[str] = None, limit: int = 100) -> list[dict]:
+    def get_replay_payloads(
+        self,
+        category: Optional[str] = None,
+        verdict: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict]:
         """Get payloads for replay testing."""
         query = "SELECT * FROM replay_entries WHERE 1=1"
         params: list[str | int] = []

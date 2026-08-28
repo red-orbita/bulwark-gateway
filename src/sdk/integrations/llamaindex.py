@@ -19,7 +19,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.sdk.guard import Guard, SecurityError
 
@@ -122,8 +122,9 @@ class _BulwarkQueryEngine:
         if response_text:
             out_result = self._guard.scan_output_sync(response_text)
             if out_result.verdict.value == "block":
+                _reason = out_result.events[0].description if out_result.events else "policy violation"
                 raise SecurityError(
-                    f"Response blocked: {out_result.events[0].description if out_result.events else 'policy violation'}",
+                    f"Response blocked: {_reason}",
                     result=out_result,
                 )
             if out_result.verdict.value == "redact" and out_result.modified_content:
@@ -166,8 +167,9 @@ class _BulwarkQueryEngine:
         if response_text:
             out_result = await self._guard.scan_output(response_text)
             if out_result.verdict.value == "block":
+                _reason = out_result.events[0].description if out_result.events else "policy violation"
                 raise SecurityError(
-                    f"Response blocked: {out_result.events[0].description if out_result.events else 'policy violation'}",
+                    f"Response blocked: {_reason}",
                     result=out_result,
                 )
             if out_result.verdict.value == "redact" and out_result.modified_content:
@@ -190,13 +192,13 @@ def _extract_query_text(query: Any) -> str | None:
 
     # QueryBundle
     if hasattr(query, "query_str"):
-        query_str = getattr(query, "query_str")
+        query_str = query.query_str
         if isinstance(query_str, str):
             return query_str
 
     # Custom query object with text field
     if hasattr(query, "text"):
-        text = getattr(query, "text")
+        text = query.text
         if isinstance(text, str):
             return text
 
@@ -210,7 +212,7 @@ def _extract_response_text(response: Any) -> str | None:
 
     # Response object with .response attribute
     if hasattr(response, "response"):
-        resp = getattr(response, "response")
+        resp = response.response
         if isinstance(resp, str):
             return resp
 

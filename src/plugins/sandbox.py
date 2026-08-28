@@ -823,7 +823,7 @@ class FilesystemBlocker:
         except (OSError, ValueError):
             raise PermissionError(
                 f"Plugin '{self.plugin_name}': Invalid file path."
-            )
+            ) from None
 
         # Block sensitive paths
         # nosec B108: these are DENY-list entries (paths the sandbox forbids
@@ -1045,8 +1045,8 @@ def check_archive_safety(file_path: Path) -> list[str]:
 
     Returns list of issues found (empty = safe).
     """
-    import zipfile
     import tarfile
+    import zipfile
 
     issues: list[str] = []
     compressed_size = file_path.stat().st_size
@@ -1152,8 +1152,8 @@ def validate_git_url(url: str) -> list[str]:
 
     Returns list of issues (empty = safe).
     """
-    import socket
     import ipaddress
+    import socket
     from urllib.parse import urlparse
 
     issues: list[str] = []

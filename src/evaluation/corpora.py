@@ -203,6 +203,7 @@ class CorpusLoader:
         self._bundled_dir = Path(bundled_dir) if bundled_dir is not None else DEFAULT_DATA_DIR
         # Sentinel default (...) means "read the env var"; an explicit None
         # disables the external dir entirely (useful for hermetic tests).
+        self._external_dir: Path | None
         if external_dir is ...:
             env_val = os.environ.get(_EXTERNAL_DIR_ENV)
             self._external_dir = Path(env_val) if env_val else None

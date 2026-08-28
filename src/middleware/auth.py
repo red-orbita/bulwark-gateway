@@ -15,16 +15,16 @@ import hmac
 import logging
 import os
 import re
-from typing import Set
+from typing import Any, Set
 
-from fastapi import Request
 import jwt
+from fastapi import Request
 from jwt import InvalidTokenError as JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from src.config import settings
-from src.middleware.jwt_keys import is_asymmetric, get_verification_key, JWTKeyError
+from src.middleware.jwt_keys import JWTKeyError, get_verification_key, is_asymmetric
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     # SECURITY FIX (VULN 1.3+1.4): Require both exp AND jti claims.
                     # Tokens without jti cannot be revoked. Tokens without exp never expire.
                     decode_options = {"require": ["exp", "jti"]}  # type: ignore[var-annotated]
-                    decode_kwargs = {
+                    decode_kwargs: dict[str, Any] = {
                         "algorithms": [settings.jwt_algorithm],
                     }
                     # SECURITY FIX (VULN 1.10): Always enforce audience/issuer
@@ -252,7 +252,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         token,
                         verification_key,
                         options=decode_options,  # type: ignore[arg-type]
-                        **decode_kwargs,  # type: ignore[arg-type]
+                        **decode_kwargs,
                     )
                     # SECURITY FIX (VULN 1.3): jti is now mandatory (required above),
                     # so this check always runs. No more skip-if-absent bypass.
@@ -325,7 +325,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 token = auth_header[7:]
                 try:
                     verification_key = _get_jwt_verification_key(token)
-                    decode_kwargs: dict = {
+                    decode_kwargs = {
                         "algorithms": [settings.jwt_algorithm],
                     }
                     # Enforce audience/issuer even in non-auth mode

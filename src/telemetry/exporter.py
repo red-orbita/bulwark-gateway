@@ -417,13 +417,13 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
         transport_type = cfg.get("transport_type", "file")
         try:
             if transport_type == "file":
-                from .transports.file_shipper import FileShipperTransport, FileShipperConfig
+                from .transports.file_shipper import FileShipperConfig, FileShipperTransport
                 file_t = FileShipperTransport(FileShipperConfig(
                     path=cfg.get("endpoint", "/var/log/bulwark-gateway/events.ndjson"),
                 ))
                 exporter.add_transport(file_t)
             elif transport_type == "syslog":
-                from .transports.syslog import SyslogTransport, SyslogConfig
+                from .transports.syslog import SyslogConfig, SyslogTransport
                 syslog_t = SyslogTransport(SyslogConfig(
                     host=cfg.get("endpoint", "localhost"),
                     port=int(cfg.get("port", 514)),
@@ -437,7 +437,7 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
                 ))
                 exporter.add_transport(http_t)
             elif transport_type == "tcp_tls":
-                from .transports.tcp_tls import TcpTlsTransport, TcpTlsConfig
+                from .transports.tcp_tls import TcpTlsConfig, TcpTlsTransport
                 tcp_t = TcpTlsTransport(TcpTlsConfig(
                     host=cfg.get("endpoint", "localhost"),
                     port=int(cfg.get("port", 6514)),

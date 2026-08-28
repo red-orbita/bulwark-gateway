@@ -16,7 +16,6 @@ import re
 from src.guardrails.patterns import Pattern
 from src.models import ThreatCategory
 
-
 # === V8 FIXES: Patterns to close identified bypasses ===
 # (Originally part of INDIRECT_INJECTION_PATTERNS, extracted for maintainability)
 

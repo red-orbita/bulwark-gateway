@@ -161,8 +161,8 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
             if raw:
                 # SECURITY (H-03 fix): Verify HMAC before trusting Redis value.
                 # Prevents routing manipulation by attackers with Redis write access.
-                import hmac as _hmac
                 import hashlib as _hashlib
+                import hmac as _hmac
                 data = json.loads(raw)
                 if isinstance(data, dict) and "tenants" in data and "hmac" in data:
                     # Signed format: {"tenants": [...], "hmac": "<hex>"}
@@ -260,8 +260,8 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         }
         headers["X-Forwarded-By"] = "bulwark-shared-pool"
         # SECURITY (M-16 fix): Sign the header so receiving pod can validate authenticity
-        import hmac as _hmac_fwd
         import hashlib as _hashlib_fwd
+        import hmac as _hmac_fwd
         headers["X-Forwarded-Sig"] = _hmac_fwd.new(
             settings.jwt_secret.encode(),
             b"bulwark-shared-pool",
@@ -384,8 +384,8 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
         forwarded_by = request.headers.get("X-Forwarded-By")
         forwarded_sig = request.headers.get("X-Forwarded-Sig")
         if forwarded_by == "bulwark-shared-pool":
-            import hmac as _hmac
             import hashlib as _hashlib
+            import hmac as _hmac
             expected_sig = _hmac.new(
                 settings.jwt_secret.encode(),
                 b"bulwark-shared-pool",
