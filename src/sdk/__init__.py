@@ -24,7 +24,7 @@ Usage:
 from __future__ import annotations
 
 from src.models import Verdict
-from src.sdk.guard import Guard, ScanResult
+from src.sdk.guard import Guard, ScanResult, SecurityError
 from src.sdk.integrations import LangChainGuard, LlamaIndexGuard
 
 __all__ = [
@@ -32,5 +32,6 @@ __all__ = [
     "LangChainGuard",
     "LlamaIndexGuard",
     "ScanResult",
+    "SecurityError",
     "Verdict",
 ]

@@ -107,6 +107,7 @@ select = ["E", "F", "W", "I", "S", "B"]
 "src/guardrails/input_guardrail.py" = ["E501"]
 "src/guardrails/output_filter.py" = ["E501"]
 "tests/*" = ["E501", "S101"]
+"examples/*" = ["S101"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
