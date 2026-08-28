@@ -847,7 +847,7 @@ function eventsManager() {
                 if (key === 'severity') {
                     av = rank[a.severity] || 0; bv = rank[b.severity] || 0;
                 } else if (key === 'ts') {
-                    av = new Date(a.ts || 0).getTime(); bv = new Date(b.ts || 0).getTime();
+                    av = this.tsToMillis(a.ts); bv = this.tsToMillis(b.ts);
                 } else {
                     av = (a[key] || '').toString().toLowerCase();
                     bv = (b[key] || '').toString().toLowerCase();
@@ -906,9 +906,19 @@ function eventsManager() {
         formatTime(ts) {
             if (!ts) return '—';
             try {
-                const d = new Date(ts);
+                const d = new Date(this.tsToMillis(ts));
                 return d.toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', second:'2-digit' });
             } catch { return ts; }
+        },
+
+        // Store timestamps are epoch SECONDS (float); JS Date expects milliseconds,
+        // so a bare `new Date(ts)` renders every event in 1970 and breaks time sort.
+        // Values below 1e12 are seconds (year-2001 in seconds is ~1e9, in ms ~1e12),
+        // so scale those to ms; anything already in ms passes through untouched.
+        tsToMillis(ts) {
+            const n = Number(ts);
+            if (!n || Number.isNaN(n)) return 0;
+            return n < 1e12 ? n * 1000 : n;
         },
 
         sortedCategories() {
