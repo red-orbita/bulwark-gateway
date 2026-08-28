@@ -2,7 +2,16 @@
 
 Competitive feature parity plan. Organized by phases with dependencies, effort estimates, and architectural decisions.
 
-**Status: ALL 9 PHASES COMPLETE** (~1,300 tests passing)
+**Status: Core capabilities shipped across all 9 phases (2,000+ tests passing).** The
+scanner/guardrail *engines* for every phase are implemented and tested. However a
+subset of the deliverables listed below are aspirational, opt-in-and-inert without a
+provisioned model, shipped in a different shape than originally sketched, or
+deliberately retired. The per-deliverable checkboxes reflect the honest state — this
+roadmap is a plan-vs-reality ledger, not a "done" banner.
+
+**Deliverable legend**: `[x]` shipped & tested · `[~]` partial — shipped in a
+different shape, opt-in/inert, or not fully wired · `[ ]` not shipped (aspirational
+or retired). Rationale is noted inline next to every non-`[x]` item.
 
 **Principle**: Never sacrifice the zero-latency hot path. ML features are additive layers, not replacements for regex.
 
@@ -19,15 +28,15 @@ Hot Path (regex, <5ms) → Decision → Response to client
 
 | Phase | Name | Duration | Priority | Status |
 |-------|------|----------|----------|--------|
-| 1 | Scanner Framework + Plugin Architecture | 3-4 weeks | Critical | COMPLETE |
-| 2 | ML-Based Detection Engine | 4-6 weeks | Critical | COMPLETE |
-| 3 | Multilingual + Multimodal Support | 3-4 weeks | High | COMPLETE |
-| 4 | Hallucination + Output Validation | 3-4 weeks | High | COMPLETE |
-| 5 | RAG Guardrails + Dialog Control | 4-5 weeks | Medium | COMPLETE |
-| 6 | SDK / Library Mode | 4-5 weeks | Medium | COMPLETE |
-| 7 | Plugin Hub / Marketplace | 3-4 weeks | Medium | COMPLETE |
-| 8 | Red Teaming + Evaluation Framework | 3-4 weeks | Medium | COMPLETE |
-| 9 | Agent Discovery + Workforce AI | 4-5 weeks | Low | COMPLETE |
+| 1 | Scanner Framework + Plugin Architecture | 3-4 weeks | Critical | Shipped (docs gap) |
+| 2 | ML-Based Detection Engine | 4-6 weeks | Critical | Shipped (opt-in; 2 ML scanners) |
+| 3 | Multilingual + Multimodal Support | 3-4 weeks | High | Partial |
+| 4 | Hallucination + Output Validation | 3-4 weeks | High | Beta (opt-in) |
+| 5 | RAG Guardrails + Dialog Control | 4-5 weeks | Medium | Shipped |
+| 6 | SDK / Library Mode | 4-5 weeks | Medium | Shipped (core; no docs/examples) |
+| 7 | Plugin Hub / Marketplace | 3-4 weeks | Medium | Partial (engine only; no hub) |
+| 8 | Red Teaming + Evaluation Framework | 3-4 weeks | Medium | Shipped (core; no CI/leaderboard) |
+| 9 | Agent Discovery + Workforce AI | 4-5 weeks | Low | Shipped (detection only) |
 
 **Total estimated**: 31-41 weeks (parallelizable — see dependency graph below)
 
@@ -49,7 +58,7 @@ Phase 1 (Foundation)
 
 ---
 
-## Phase 1: Scanner Framework + Plugin Architecture [COMPLETE]
+## Phase 1: Scanner Framework + Plugin Architecture [SHIPPED — docs gap]
 
 **Goal**: Create a formal, pluggable scanner infrastructure that all future phases build upon.
 
@@ -187,11 +196,11 @@ Wrap existing code into the new protocol:
 
 ### 1.6 Deliverables
 
-- [ ] `src/scanners/` package with protocol, pipeline, discovery
-- [ ] `src/scanners/builtin/` wrapping existing guardrails
-- [ ] Config settings for scanner pipeline
-- [ ] Unit tests for pipeline orchestration
-- [ ] Documentation: "Writing a Custom Scanner" guide
+- [x] `src/scanners/` package with protocol, pipeline, discovery
+- [x] `src/scanners/builtin/` wrapping existing guardrails (regex, output-redaction, tool-policy)
+- [x] Config settings for scanner pipeline (`src/config.py`)
+- [x] Unit tests for pipeline orchestration (`tests/test_scanner_framework.py`)
+- [ ] Documentation: "Writing a Custom Scanner" guide — not written (no `docs/` guide yet)
 
 ### 1.7 New Dependencies
 
@@ -199,7 +208,7 @@ None (pure Python abstractions).
 
 ---
 
-## Phase 2: ML-Based Detection Engine [COMPLETE]
+## Phase 2: ML-Based Detection Engine [SHIPPED — opt-in]
 
 **Goal**: Add ML-powered detection that catches semantic attacks regex cannot detect.
 
@@ -360,14 +369,14 @@ class FeedbackLoop:
 
 ### 2.9 Deliverables
 
-- [ ] `src/scanners/ml/` package with 4+ scanner implementations
-- [ ] `src/scanners/ml/model_manager.py` for lifecycle management
-- [ ] ONNX model export scripts in `scripts/export_models.py`
-- [ ] Pre-trained models downloadable via `bulwark-models` package or URL
-- [ ] Docker image variant with ML models included (`bulwark-gateway-proxy:0.5.0-ml`)
-- [ ] Feedback loop integration with AttackReplayDB
-- [ ] Benchmarks: latency + accuracy vs pure regex
-- [ ] Admin UI: ML scanner status, confidence distributions, drift alerts
+- [~] `src/scanners/ml/` package — **2** real scanners ship (`injection_classifier`, `toxicity_scanner`), not "4+". Topic/intent were withdrawn (§2.5/2.6); multilingual/semantic classifiers not shipped as distinct models
+- [x] `src/scanners/ml/model_manager.py` for lifecycle management (ONNX loader, SHA-256 fail-closed)
+- [x] ONNX model export scripts (`scripts/export_models.py` + `scripts/download-models.py`)
+- [~] Pre-trained models downloadable — via `scripts/download-models.py` + `config/model_manifest.json` (hash-pinned), not a `bulwark-models` package
+- [ ] Docker image variant with ML models included (`bulwark-gateway-proxy:*-ml`) — not built; ML ships only as pip extras (`ml`, `ml-gpu`)
+- [ ] Feedback loop integration with AttackReplayDB — no ML feedback loop; AttackReplayDB only does regex-candidate generation/review (no `FeedbackLoop` class)
+- [~] Benchmarks: latency + accuracy vs pure regex — `scripts/run-benchmarks.py` + `docs/BENCHMARKS.md` exist but benchmark **regex only**; ML-vs-regex comparison not done
+- [x] Admin UI: ML scanner status (`admin/routes/ml_scanners.py` + template)
 
 ### 2.10 New Dependencies
 
@@ -531,13 +540,13 @@ agents:
 
 ### 3.7 Deliverables
 
-- [ ] Language detection scanner (fasttext-based, <5ms)
-- [ ] Multilingual regex patterns (top 10 languages)
-- [ ] Multilingual ML classifier (XLM-R / mDeBERTa)
-- [ ] Vision scanner with OCR + content safety
-- [ ] Multimodal message parsing in proxy route
-- [ ] Policy schema extension for language/multimodal settings
-- [ ] Tests: multilingual attack corpus (50+ test cases per language)
+- [~] Language detection scanner — ships heuristic-by-default (`src/scanners/multilingual/language_detector.py`); fasttext/lingua backends are opt-in extras, off by default
+- [x] Multilingual regex patterns (top 10 languages) (`src/scanners/multilingual/patterns.py`)
+- [ ] Multilingual ML classifier (XLM-R / mDeBERTa) — not shipped; only the generic DeBERTa `injection_classifier` exists (no provisioned multilingual model)
+- [~] Vision scanner with OCR + content safety — file ships but OCR is inert/EXPERIMENTAL (no OCR backend in distroless); only the model-free image-hygiene guards are functional (BETA)
+- [x] Multimodal message parsing in proxy route (`_extract_image_contents`, OpenAI vision format)
+- [~] Policy schema extension for language/multimodal settings — scanners read `allowed_languages`/`multimodal` from metadata, but the policy loader does **not** parse them yet, so the enforcement path is not wired end-to-end
+- [x] Tests: multilingual attack corpus (`tests/test_multilingual_multimodal.py`)
 
 ### 3.8 New Dependencies
 
@@ -696,14 +705,14 @@ agents:
 
 ### 4.6 Deliverables
 
-- [ ] Hallucination detector (NLI-based, ONNX model)
-- [ ] JSON Schema validator with repair capability
-- [ ] Pydantic model validation support
-- [ ] Grounding scanner for RAG faithfulness
-- [ ] Relevance scorer
-- [ ] Policy schema extension for output validation
-- [ ] `config/schemas/` directory for user-defined schemas
-- [ ] Tests: hallucination test cases + schema validation edge cases
+- [x] Hallucination detector (NLI-based, ONNX model) (`src/scanners/output/hallucination_scanner.py`, BETA)
+- [x] JSON Schema validator with repair capability (`src/scanners/output/schema_validator.py`)
+- [ ] Pydantic model validation support — not implemented; validation is JSON-Schema-based only
+- [x] Grounding scanner for RAG faithfulness (`src/scanners/output/grounding_scanner.py`)
+- [x] Relevance scorer (`src/scanners/output/relevance_scanner.py`)
+- [x] Policy schema extension for output validation (`output_validation` block — parsed by loader, wired end-to-end)
+- [ ] `config/schemas/` directory for user-defined schemas — not created; schemas are supplied inline via `output_validation.output_schema`
+- [x] Tests: hallucination + schema validation (`tests/test_output_validation.py`, `tests/test_schema_validation_wiring.py`)
 
 ### 4.7 New Dependencies
 
@@ -718,7 +727,7 @@ output-validation = [
 
 ---
 
-## Phase 5: RAG Guardrails + Dialog Control [COMPLETE]
+## Phase 5: RAG Guardrails + Dialog Control [SHIPPED]
 
 **Goal**: Intercept RAG pipelines and control conversational flows.
 
@@ -845,13 +854,13 @@ class MemoryGuard(InputScanner):
 - [~] RAG chunk validation — shipped as an in-pipeline scanner, not the standalone `/v1/rag/validate` route originally sketched below
 - [x] YAML-based dialog flow engine (simplified Colang alternative) (`src/dialog/engine.py`)
 - [x] Memory guard for multi-turn manipulation (`src/scanners/rag/memory_guard.py`)
-- [ ] Session state management (Redis-backed)
+- [x] Session state management (Redis-backed, cross-replica, TTL-bounded — `src/dialog/engine.py`)
 - [x] LangChain/LlamaIndex integration example (`src/sdk/integrations/`)
 - [x] Tests: RAG poisoning scenarios, dialog flow compliance (`tests/test_phase5_phase6.py`)
 
 ---
 
-## Phase 6: SDK / Library Mode [COMPLETE]
+## Phase 6: SDK / Library Mode [SHIPPED — core; no docs/examples]
 
 **Goal**: Allow Bulwark to be used as an embeddable Python library, not just as a proxy.
 
@@ -937,18 +946,18 @@ if (result.verdict === Verdict.BLOCK) {
 
 ### 6.5 Deliverables
 
-- [ ] `bulwark-guardrails` PyPI package (separate from proxy server)
-- [ ] Guard API: `scan_input()`, `scan_output()`, `wrap()`, `@protect` decorator
-- [ ] LangChain integration module
-- [ ] LlamaIndex integration module
-- [ ] TypeScript SDK (connects to proxy or local WASM regex)
-- [ ] Shared scanner code between library and proxy (mono-repo structure)
-- [ ] Documentation: "Using as Library" guide
-- [ ] Examples: OpenAI, LangChain, LlamaIndex, custom agent
+- [~] Separate installable SDK package — ships as `bulwark-gateway-sdk` (`sdk/`, import `bulwark_sdk`), **not** the advertised `bulwark-guardrails` name; an in-tree `src/sdk/` variant also exists
+- [x] Guard API: `scan_input()`, `scan_output()`, `wrap()`, `@protect` decorator (`src/sdk/guard.py`, sync + async)
+- [x] LangChain integration module (`src/sdk/integrations/langchain.py`)
+- [x] LlamaIndex integration module (`src/sdk/integrations/llamaindex.py`; also autogen/crewai)
+- [~] TypeScript SDK — ships as `@bulwark-gateway/sdk` (`sdk/typescript/`), a thin HTTP client to the gateway, **not** the advertised `@bulwark-gateway/guardrails` local-WASM-regex engine
+- [x] Shared scanner code between library and proxy — `src/sdk` reuses `src/scanners/` (standalone `sdk/` reimplements a small regex set)
+- [ ] Documentation: "Using as Library" guide — not written
+- [ ] Examples: OpenAI, LangChain, LlamaIndex, custom agent — no `examples/` directory (only module docstrings)
 
 ---
 
-## Phase 7: Plugin Hub / Marketplace [COMPLETE]
+## Phase 7: Plugin Hub / Marketplace [PARTIAL — engine only, no hub]
 
 **Goal**: Create an ecosystem where community/third-party can contribute scanner plugins.
 
@@ -1020,17 +1029,17 @@ hub.bulwark-gateway.dev/
 
 ### 7.5 Deliverables
 
-- [ ] Plugin specification format (`bulwark-plugin.yaml`)
-- [ ] `bulwark` CLI extension for plugin management
-- [ ] Plugin scaffold generator (`bulwark plugin create`)
-- [ ] Hub web service (API + simple frontend)
-- [ ] 10+ initial plugins (migrated from built-in scanners)
-- [ ] Plugin security scanner (no malicious code in plugins)
-- [ ] Documentation: "Creating and Publishing Plugins"
+- [x] Plugin specification format (`bulwark-plugin.yaml` / `PluginSpec`, `src/plugins/spec.py`)
+- [x] `bulwark` CLI extension for plugin management (`src/plugins/cli.py`: install/uninstall/list/create/test/enable/disable)
+- [x] Plugin scaffold generator (`bulwark plugin create` → `manager.scaffold()`)
+- [ ] Hub web service (API + simple frontend) — never built; retired as fictional. `--source hub` is a stub that hard-fails; only `local` + `git` installs work
+- [ ] 10+ initial plugins (migrated from built-in scanners) — only 1 example plugin ships (`plugins/examples/input-dlp-scanner/`)
+- [x] Plugin security scanner (regex + AST audit at install time + admin `security-check` endpoint, `src/plugins/manager.py`)
+- [ ] Documentation: "Creating and Publishing Plugins" — not written
 
 ---
 
-## Phase 8: Red Teaming + Evaluation Framework [COMPLETE]
+## Phase 8: Red Teaming + Evaluation Framework [SHIPPED — core; no CI/leaderboard]
 
 **Goal**: Automated adversarial testing to validate guardrail effectiveness.
 
@@ -1127,18 +1136,18 @@ A scoring system comparing Bulwark against competitors on standard datasets:
 
 ### 8.6 Deliverables
 
-- [ ] Attack generator (template + mutation + LLM-generated)
-- [ ] Evaluation runner with metrics
-- [ ] Standard benchmark dataset (curated)
-- [ ] `bulwark evaluate` CLI command
-- [ ] CI integration template
-- [ ] HTML/JSON report generation
-- [ ] Comparison tool (A/B testing of configs)
-- [ ] Public leaderboard data format
+- [~] Attack generator — template + mutation + encoding + rule-based semantic paraphrase ship (`src/evaluation/attacks.py`); the "LLM-generated" strategy is **not** implemented (no LLM call, by hot-path design)
+- [x] Evaluation runner with metrics (`src/evaluation/runner.py`: confusion matrix, detection/FP rates, latency percentiles)
+- [x] Standard benchmark dataset (curated) (`src/evaluation/datasets.py`: benign + standard/exhaustive attacks)
+- [x] `bulwark evaluate` CLI command (`src/evaluation/cli.py`: `run` + `compare`)
+- [ ] CI integration template — no guardrail-evaluation workflow ships (`security.yml` is SAST/SCA only)
+- [x] HTML/JSON report generation (`runner.generate_report`: text/json/html)
+- [~] Comparison tool (A/B testing of configs) — CLI `compare` does A/B of two saved **report JSON files**, not a live config-vs-config runner (`compare_configs` not implemented)
+- [ ] Public leaderboard data format — not defined (leaderboard table is a placeholder)
 
 ---
 
-## Phase 9: Agent Discovery + Workforce AI Monitoring [COMPLETE]
+## Phase 9: Agent Discovery + Workforce AI Monitoring [SHIPPED — detection only]
 
 **Goal**: Discover unknown AI agents and monitor AI usage beyond the gateway.
 
@@ -1207,13 +1216,13 @@ class MCPInventory:
 
 ### 9.4 Deliverables
 
-- [ ] Network-based agent discovery (DNS + traffic patterns)
-- [ ] Kubernetes pod scanner for AI workloads
-- [ ] MCP server inventory and risk assessment
-- [ ] Shadow AI detection (DNS-based)
-- [ ] Admin UI: agent map, discovered services, risk scores
-- [ ] Automated onboarding: discovered agent → suggested policy
-- [ ] Alerting: new unregistered AI agents detected
+- [x] Network-based agent discovery (HTTP probe + fingerprinting, `src/discovery/agent_discovery.py`)
+- [x] Kubernetes scanner for AI workloads (`scan_kubernetes` — enumerates Services via K8s API)
+- [x] MCP server inventory and risk assessment (`src/discovery/mcp_inventory.py`)
+- [x] Shadow AI detection (DNS-based) (`src/discovery/shadow_ai.py`)
+- [x] Admin UI: agent map, discovered services, risk scores (`admin/routes/discovery.py` + template)
+- [ ] Automated onboarding: discovered agent → suggested policy — not implemented; discovery results are display-only
+- [ ] Alerting: new unregistered AI agents detected — not wired; `ShadowAIAlert` is returned in API responses but never dispatched to a notification channel
 
 ---
 
