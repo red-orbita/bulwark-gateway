@@ -195,10 +195,23 @@ class RiskStateStore:
     # --- key derivation ----------------------------------------------------
 
     @staticmethod
+    def scope_digest(scope_type: str, scope_id: str) -> str:
+        """Irreversible 16-hex digest identifying an origin (scope_type, scope_id).
+
+        Single source of truth for the origin-identity digest. The admin
+        ``/correlation/origins`` view, the ``bulwark:risk:*`` key, and the durable
+        event store's ``scope_digests`` pivot column all key off this exact value,
+        so an analyst can pivot a decayed risk score straight back to the events
+        that produced it. Hashing means a raw ``subject_id`` (potential PII) never
+        reaches the datastore.
+        """
+        return hashlib.sha256(f"{scope_type}:{scope_id}".encode()).hexdigest()[:16]
+
+    @staticmethod
     def _redis_key(scope_type: str, scope_id: str) -> str:
         # Hash the scope id so keys are fixed-length and never carry raw content
         # (input_hash is already a digest, but tenant/agent may be arbitrary).
-        digest = hashlib.sha256(f"{scope_type}:{scope_id}".encode()).hexdigest()[:16]
+        digest = RiskStateStore.scope_digest(scope_type, scope_id)
         return f"{_KEY_PREFIX}:{scope_type}:{digest}"
 
     def _decay(self, score: float, elapsed: float) -> float:

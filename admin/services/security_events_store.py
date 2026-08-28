@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 _INSERT_COLUMNS = (
     "event_id", "ts", "occurred_at", "tenant", "agent", "verdict", "category",
     "severity", "description", "source", "pattern", "request_id", "tool_name",
-    "snippet", "input_hash", "metadata", "created_at",
+    "snippet", "input_hash", "metadata", "incident_id", "scope_digests", "created_at",
 )
 
 _INSERT_SQL = (
@@ -138,6 +138,8 @@ def _row_to_event(row) -> dict:
         "snippet": d.get("snippet") or "",
         "input_hash": d.get("input_hash") or "",
         "metadata": meta,
+        "incident_id": d.get("incident_id") or "",
+        "scope_digests": (d.get("scope_digests") or "").split(),
     }
 
 
@@ -183,6 +185,8 @@ class SecurityEventsStore:
                     e.get("snippet") or "",
                     e.get("input_hash") or "",
                     _dump_metadata(e.get("metadata")),
+                    e.get("incident_id") or "",
+                    _normalise_scope_digests(e.get("scope_digests")),
                     now_iso,
                 ]
                 affected = await db.execute(_INSERT_SQL, params)
@@ -313,6 +317,121 @@ class SecurityEventsStore:
         )
         return affected or 0
 
+    # --- Investigation Center pivots ---------------------------------------
+
+    async def list_correlation_alerts(
+        self,
+        *,
+        tenant: Optional[str] = None,
+        verdict: Optional[str] = None,
+        since: Optional[float] = None,
+        until: Optional[float] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Return correlation-engine alerts (newest first) for the SOC queue.
+
+        The Investigation Center queue is the subset of the durable feed emitted by
+        the inline correlation engine — confirmed input↔output exfiltration
+        incidents and adaptive origin-risk enforcement decisions — identified by
+        ``source = 'correlation_engine'``. Optional ``verdict``/``tenant``/time
+        filters narrow the queue; results are backed by the ``ts DESC`` index.
+        """
+        conditions = ["source = ?"]
+        params: list = ["correlation_engine"]
+        v = (verdict or "").strip().lower()
+        if v in ("blocked", "block"):
+            conditions.append("verdict = ?")
+            params.append("block")
+        elif v in ("warned", "warn"):
+            conditions.append("verdict = ?")
+            params.append("warn")
+        if tenant:
+            conditions.append("tenant = ?")
+            params.append(tenant)
+        if since is not None:
+            conditions.append("ts >= ?")
+            params.append(float(since))
+        if until is not None:
+            conditions.append("ts < ?")
+            params.append(float(until))
+        where = " AND ".join(conditions)
+        sql = (
+            f"SELECT * FROM security_events WHERE {where} "  # noqa: S608 — bound params only
+            "ORDER BY ts DESC LIMIT ? OFFSET ?"
+        )
+        rows = await self._db().fetch_all(sql, [*params, int(limit), int(offset)])
+        return [_row_to_event(r) for r in rows]
+
+    async def find_by_incident(self, incident_id: str) -> list[dict]:
+        """Return every event tagged with ``incident_id`` (oldest first).
+
+        These are the correlation-engine event(s) carrying the incident. Their
+        ``metadata.contributing_event_ids`` point at the input/output detections
+        that produced the incident — fetch those with :meth:`find_by_event_ids`.
+        """
+        if not incident_id:
+            return []
+        rows = await self._db().fetch_all(
+            "SELECT * FROM security_events WHERE incident_id = ? ORDER BY ts ASC",
+            [incident_id],
+        )
+        return [_row_to_event(r) for r in rows]
+
+    async def find_by_event_ids(self, event_ids: list[str]) -> list[dict]:
+        """Return events whose ``event_id`` is in ``event_ids`` (oldest first).
+
+        Used to resolve an incident's ``contributing_event_ids`` into the actual
+        input/output detections. Bounded to a sane batch to keep the ``IN`` list
+        small; ``event_id`` is UNIQUE (implicitly indexed) so lookups are cheap.
+        """
+        ids = [e for e in (event_ids or []) if e][:500]
+        if not ids:
+            return []
+        placeholders = ", ".join(["?"] * len(ids))
+        sql = (
+            f"SELECT * FROM security_events WHERE event_id IN ({placeholders}) "  # noqa: S608 — placeholders only
+            "ORDER BY ts ASC"
+        )
+        rows = await self._db().fetch_all(sql, ids)
+        return [_row_to_event(r) for r in rows]
+
+    async def find_by_scope_digest(
+        self,
+        scope_token: str,
+        *,
+        since: Optional[float] = None,
+        until: Optional[float] = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Return events an origin contributed to, newest first (origin timeline).
+
+        ``scope_token`` is a ``"scope_type:digest"`` token as shown by the admin
+        ``/correlation/origins`` view. Events are stamped with a space-delimited,
+        space-padded ``scope_digests`` string, so a whole-token ``LIKE`` match
+        (``'% token %'``) pivots an origin's decayed risk score back to the exact
+        blocked/flagged requests that drove it — the durable ledger that lets the
+        Investigation Center reconstruct *why* the score rose, with no extra Redis.
+        """
+        token = (scope_token or "").strip()
+        if not token:
+            return []
+        conditions = ["scope_digests LIKE ?"]
+        params: list = [f"% {token} %"]
+        if since is not None:
+            conditions.append("ts >= ?")
+            params.append(float(since))
+        if until is not None:
+            conditions.append("ts < ?")
+            params.append(float(until))
+        where = " AND ".join(conditions)
+        sql = (
+            f"SELECT * FROM security_events WHERE {where} "  # noqa: S608 — bound params only
+            "ORDER BY ts DESC LIMIT ?"
+        )
+        rows = await self._db().fetch_all(sql, [*params, int(limit)])
+        return [_row_to_event(r) for r in rows]
+
 
 def _iso_now() -> str:
     from datetime import datetime, timezone
@@ -336,6 +455,28 @@ def _dump_metadata(meta) -> str:
         return json.dumps(meta)
     except (TypeError, ValueError):
         return "{}"
+
+
+def _normalise_scope_digests(digests) -> str:
+    """Flatten origin scope digests into a space-delimited, LIKE-pivotable string.
+
+    Accepts a list of ``"scope_type:digest"`` tokens (as stamped by the proxy) or
+    an already-joined string. Stored space-delimited and space-padded so a pivot
+    can match a whole token with ``scope_digests LIKE '% session:abcd… %'`` without
+    partial-token collisions. Empty/malformed input yields ``""``.
+    """
+    if not digests:
+        return ""
+    if isinstance(digests, str):
+        tokens = digests.split()
+    elif isinstance(digests, (list, tuple)):
+        tokens = [str(t).strip() for t in digests if str(t).strip()]
+    else:
+        return ""
+    if not tokens:
+        return ""
+    # Leading/trailing space so every token is delimited on both sides.
+    return " " + " ".join(tokens) + " "
 
 
 _store: Optional[SecurityEventsStore] = None

@@ -89,6 +89,16 @@ def _normalise(entry: dict) -> Optional[dict]:
         "snippet": entry.get("snippet") or "",
         "input_hash": entry.get("input_hash") or "",
         "metadata": entry.get("metadata") or {},
+        # Investigation Center pivots (present only when the proxy stamped them —
+        # i.e. correlation was enabled). Fall back to the correlation metadata for
+        # the incident id so a confirmed incident is always joinable even if an
+        # older proxy build didn't lift it to the top level.
+        "incident_id": (
+            entry.get("incident_id")
+            or (entry.get("metadata") or {}).get("incident_id")
+            or ""
+        ),
+        "scope_digests": entry.get("scope_digests") or [],
     }
 
 

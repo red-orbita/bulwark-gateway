@@ -1,0 +1,634 @@
+{% extends "base.html" %}
+{% block title %}Investigation Center — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Investigation Center{% endblock %}
+{% block content %}
+<div x-data="investigationPage()" class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Investigation Center</h1>
+            <p class="text-sm text-gray-400 mt-0.5">A SOC triage workspace over the correlation engine's alerts. Pick a correlated <em>block</em>/<em>warn</em> alert to see the full evidence chain — the confirmed input↔output exfiltration incident joined to the exact detections that produced it, the per-signal confidence breakdown, and an at-risk origin's decayed risk alongside the durable ledger of events that drove it up. Acknowledge, assign, resolve, and attach investigation notes. Evidence is reconstructed entirely from the durable event store and existing risk state — this view adds no request-path cost.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/correlation" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Open correlation tuning">
+                <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
+                Tune Engine
+            </a>
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Correlation Engine</p>
+            <p class="text-sm font-semibold mt-1" :class="status.correlation_enabled ? 'text-emerald-300' : 'text-gray-400'"
+               x-text="status.correlation_enabled ? 'Enabled' : 'Disabled'"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Alerts (24h)</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="fmtNum(status.alerts_last_24h)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Open</p>
+            <p class="text-sm font-semibold text-amber-300 mt-1" x-text="fmtNum(status.open_triage)"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">In Progress</p>
+            <p class="text-sm font-semibold text-cyan-300 mt-1" x-text="fmtNum(status.in_progress_triage)"></p>
+        </div>
+    </div>
+
+    <!-- Correlation-disabled banner -->
+    <div x-show="!status.correlation_enabled" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+        <div class="flex gap-3">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="text-sm font-medium text-amber-200">Correlation engine is disabled</p>
+                <p class="text-xs text-amber-200/80">New correlated alerts are only produced when <span class="font-mono">BULWARK_CORRELATION_ENABLED</span> is on. Any alerts below are historical. Enable the engine (a boot-time setting) to resume adaptive origin-risk and input↔output exfiltration correlation.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="sg-card">
+        <div class="flex flex-wrap items-end gap-4">
+            <div>
+                <label for="inv-verdict" class="text-xs text-gray-400 block mb-1.5">Verdict</label>
+                <select id="inv-verdict" x-model="filters.verdict" @change="loadAlerts()" class="sg-input">
+                    <option value="">All</option>
+                    <option value="block">Block</option>
+                    <option value="warn">Warn</option>
+                </select>
+            </div>
+            <div>
+                <label for="inv-lookback" class="text-xs text-gray-400 block mb-1.5">Lookback</label>
+                <select id="inv-lookback" x-model.number="filters.lookback_hours" @change="loadAlerts()" class="sg-input">
+                    <option :value="24">Last 24h</option>
+                    <option :value="168">Last 7 days</option>
+                    <option :value="720">Last 30 days</option>
+                    <option :value="2160">Last 90 days</option>
+                </select>
+            </div>
+            <div class="ml-auto text-xs text-gray-500 pb-2">
+                <span x-text="alerts.length"></span> alert<span x-show="alerts.length !== 1">s</span> shown
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert queue -->
+    <div class="sg-card">
+        <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="list-checks" class="w-4 h-4 text-cyan-400"></i>
+            <h2 class="text-sm font-medium text-white">Alert Queue</h2>
+        </div>
+
+        <div x-show="loading" class="text-sm text-gray-500 py-8 text-center">Loading alerts…</div>
+
+        <div x-show="!loading && alerts.length === 0" x-cloak class="sg-empty">
+            <p class="sg-empty-title">No correlation alerts in this window</p>
+            <p class="sg-empty-desc">Correlation alerts appear here as the engine confirms exfiltration incidents or hardens at-risk origins.</p>
+        </div>
+
+        <div x-show="!loading && alerts.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Verdict</th>
+                        <th>Kind</th>
+                        <th>Category</th>
+                        <th>Tenant / Agent</th>
+                        <th>Triage</th>
+                        <th class="text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(a, idx) in alerts" :key="a.request_id + ':' + idx">
+                        <tr :class="isSelected(a) ? 'bg-cyan-500/[0.06]' : ''">
+                            <td class="whitespace-nowrap text-xs text-gray-400" x-text="fmtTime(a.ts)"></td>
+                            <td>
+                                <span class="sg-badge text-[10px]" :class="verdictClass(a.verdict)" x-text="(a.verdict || '—').toUpperCase()"></span>
+                            </td>
+                            <td>
+                                <span class="text-[10px] px-1.5 py-0.5 rounded" :class="kindClass(a)" x-text="kindLabel(a)"></span>
+                            </td>
+                            <td class="text-xs text-gray-300 font-mono" x-text="a.category || '—'"></td>
+                            <td class="text-xs text-gray-400 font-mono" x-text="(a.tenant || '—') + ' / ' + (a.agent || '—')"></td>
+                            <td>
+                                <span class="sg-badge text-[10px]" :class="triageClass(a.triage_status)" x-text="a.triage_status || 'open'"></span>
+                                <span x-show="a.assignee" class="text-[10px] text-gray-500 ml-1" x-text="'· ' + a.assignee"></span>
+                            </td>
+                            <td class="text-right">
+                                <button @click="investigate(a)" class="sg-btn sg-btn-ghost sg-btn-sm" x-text="isSelected(a) ? 'Selected' : 'Investigate'"></button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Detail drawer -->
+    <div x-show="selected" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Evidence (2 cols) -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Alert summary -->
+            <div class="sg-card">
+                <div class="flex items-start justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="file-search" class="w-4 h-4 text-fuchsia-300"></i>
+                        <h2 class="text-sm font-medium text-white">Alert Evidence</h2>
+                        <span x-show="selected" class="text-[10px] px-1.5 py-0.5 rounded" :class="kindClass(selected)" x-text="kindLabel(selected)"></span>
+                    </div>
+                    <button @click="closeDetail()" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+                </div>
+
+                <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Time</dt><dd class="text-gray-300 mt-0.5" x-text="fmtTime(selected && selected.ts)"></dd></div>
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Verdict</dt><dd class="mt-0.5"><span class="sg-badge text-[10px]" :class="verdictClass(selected && selected.verdict)" x-text="((selected && selected.verdict) || '—').toUpperCase()"></span></dd></div>
+                    <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Description</dt><dd class="text-gray-300 mt-0.5" x-text="(selected && selected.description) || '—'"></dd></div>
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Tenant / Agent</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="((selected && selected.tenant) || '—') + ' / ' + ((selected && selected.agent) || '—')"></dd></div>
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Source</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(selected && selected.source) || '—'"></dd></div>
+                    <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Request ID</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="(selected && selected.request_id) || '—'"></dd></div>
+                    <div x-show="selected && selected.input_hash" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Input Hash (SHA-256)</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="selected && selected.input_hash"></dd></div>
+                </dl>
+
+                <div x-show="selected && selected.snippet" class="mt-4">
+                    <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Redacted Snippet</p>
+                    <p class="text-[11px] text-gray-500 mb-1">Secrets/PII removed, truncated. Raw input is never stored.</p>
+                    <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="selected && selected.snippet"></pre>
+                </div>
+            </div>
+
+            <!-- Incident drill-down -->
+            <div x-show="incident" x-cloak class="sg-card border-fuchsia-500/30 bg-fuchsia-500/[0.04]">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="git-merge" class="w-4 h-4 text-fuchsia-300"></i>
+                    <h2 class="text-sm font-medium text-white">Confirmed Incident</h2>
+                    <span x-show="incident" class="text-[10px] text-gray-500 font-mono break-all" x-text="incident && incident.incident_id"></span>
+                </div>
+
+                <p class="text-[11px] text-gray-400 mb-3">A suspicious input was followed by sensitive output in the same request — the signature of a working prompt-injection / exfiltration. The engine paired these categories inline:</p>
+
+                <div class="flex flex-wrap items-center gap-2 mb-4">
+                    <div class="flex flex-wrap gap-1.5">
+                        <template x-for="c in (incident ? incident.input_categories : [])" :key="'in-' + c">
+                            <span class="sg-badge text-[10px] bg-amber-400/15 text-amber-300 border border-amber-500/30" x-text="c"></span>
+                        </template>
+                    </div>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-fuchsia-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                    <div class="flex flex-wrap gap-1.5">
+                        <template x-for="c in (incident ? incident.output_categories : [])" :key="'out-' + c">
+                            <span class="sg-badge text-[10px] bg-rose-400/15 text-rose-300 border border-rose-500/30" x-text="c"></span>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Confidence breakdown -->
+                <div x-show="confidenceRows().length > 0" class="mb-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <p class="text-gray-500 uppercase tracking-wider text-xs">Confidence Breakdown</p>
+                        <span class="text-xs font-mono text-fuchsia-200" x-text="'total ' + fmtConf(incident && incident.confidence)"></span>
+                    </div>
+                    <div class="space-y-2">
+                        <template x-for="row in confidenceRows()" :key="row.key">
+                            <div>
+                                <div class="flex items-center justify-between text-[11px] mb-0.5">
+                                    <span class="text-gray-400" x-text="row.label"></span>
+                                    <span class="font-mono text-gray-300" x-text="fmtConf(row.value)"></span>
+                                </div>
+                                <div class="h-1.5 rounded-full bg-gray-700/50 overflow-hidden">
+                                    <div class="h-full rounded-full bg-gradient-to-r from-cyan-500/70 to-fuchsia-400/70" :style="'width:' + confPct(row.value) + '%'"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Contributing detections -->
+                <div>
+                    <p class="text-gray-500 uppercase tracking-wider text-xs mb-2">Contributing Detections
+                        <span class="text-gray-600" x-text="'(' + (incident ? incident.contributing_events.length : 0) + ')'"></span>
+                    </p>
+                    <div x-show="incident && incident.contributing_events.length === 0" class="text-[11px] text-gray-500 py-2">No individual detections were linked to this incident.</div>
+                    <div x-show="incident && incident.contributing_events.length > 0" class="space-y-2">
+                        <template x-for="(e, i) in (incident ? incident.contributing_events : [])" :key="'ce-' + i">
+                            <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="sg-badge text-[9px]" :class="verdictClass(e.verdict)" x-text="(e.verdict || '—').toUpperCase()"></span>
+                                    <span class="text-[10px] font-mono text-gray-300" x-text="e.category || '—'"></span>
+                                    <span class="text-[10px] text-gray-500" x-text="e.severity || ''"></span>
+                                    <span class="text-[10px] text-gray-600 ml-auto" x-text="fmtTime(e.ts)"></span>
+                                </div>
+                                <p class="text-[11px] text-gray-400 mt-1" x-text="e.description || ''"></p>
+                                <p x-show="e.pattern" class="text-[10px] text-amber-300/80 font-mono mt-1 break-all" x-text="e.pattern"></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Origin timeline drill-down -->
+            <div x-show="originDigests().length > 0" x-cloak class="sg-card">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="radar" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">At-Risk Origins</h2>
+                </div>
+                <p class="text-[11px] text-gray-500 mb-3">This request touched the origins below. Open one to see its current decayed risk score and the durable ledger of events that drove it up.</p>
+                <div class="flex flex-wrap gap-2 mb-4">
+                    <template x-for="tok in originDigests()" :key="tok">
+                        <button @click="loadOrigin(tok)" class="sg-badge text-[10px] inline-flex items-center gap-1 hover:opacity-80"
+                                :class="origin && origin.token === tok ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400/40' : 'bg-gray-500/15 text-gray-300 border border-gray-600/40'">
+                            <i data-lucide="git-branch" class="w-3 h-3"></i>
+                            <span x-text="tok"></span>
+                        </button>
+                    </template>
+                </div>
+
+                <div x-show="origin" x-cloak>
+                    <!-- Risk meter -->
+                    <div x-show="origin && origin.risk" class="mb-4">
+                        <div class="flex items-center justify-between text-[11px] mb-1">
+                            <span class="text-gray-500 uppercase tracking-wider" x-text="'Origin risk (' + (origin && origin.scope_type) + ')'"></span>
+                            <span class="font-mono text-gray-300"><span x-text="riskScore().toFixed(2)"></span><span class="text-gray-600"> / 10</span></span>
+                        </div>
+                        <div class="h-2.5 rounded-full bg-gray-700/50 overflow-hidden">
+                            <div class="h-full rounded-full" :class="riskScore() >= 7 ? 'bg-gradient-to-r from-fuchsia-500 to-rose-400' : (riskScore() >= 4 ? 'bg-gradient-to-r from-amber-500/80 to-amber-400/60' : 'bg-gradient-to-r from-cyan-500/70 to-cyan-400/50')"
+                                 :style="'width:' + (Math.min(riskScore(), 10) * 10) + '%'"></div>
+                        </div>
+                        <p class="text-[10px] text-gray-600 mt-1">Stored <span class="font-mono" x-text="origin && origin.risk ? Number(origin.risk.stored_score).toFixed(2) : '—'"></span> · TTL <span class="font-mono" x-text="origin && origin.risk && origin.risk.ttl_seconds !== null ? origin.risk.ttl_seconds + 's' : '—'"></span></p>
+                    </div>
+                    <div x-show="origin && !origin.risk" class="text-[11px] text-gray-500 mb-4">No live risk score (Redis unavailable or the origin's risk has fully decayed). The durable ledger below is unaffected.</div>
+
+                    <p class="text-gray-500 uppercase tracking-wider text-xs mb-2">Event Ledger <span class="text-gray-600" x-text="'(' + (origin ? origin.event_count : 0) + ')'"></span></p>
+                    <div x-show="origin && origin.timeline.length === 0" class="text-[11px] text-gray-500 py-2">No durable events attributed to this origin in range.</div>
+                    <div x-show="origin && origin.timeline.length > 0" class="sg-table-scroll" style="max-height: 20rem;">
+                        <table class="sg-table sg-table-compact">
+                            <thead><tr><th>Time</th><th>Verdict</th><th>Category</th><th>Severity</th></tr></thead>
+                            <tbody>
+                                <template x-for="(e, i) in (origin ? origin.timeline : [])" :key="'tl-' + i">
+                                    <tr>
+                                        <td class="whitespace-nowrap text-xs text-gray-400" x-text="fmtTime(e.ts)"></td>
+                                        <td><span class="sg-badge text-[9px]" :class="verdictClass(e.verdict)" x-text="(e.verdict || '—').toUpperCase()"></span></td>
+                                        <td class="text-xs font-mono text-gray-300" x-text="e.category || '—'"></td>
+                                        <td class="text-xs text-gray-500" x-text="e.severity || '—'"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Triage workflow (1 col) -->
+        <div class="space-y-6">
+            <div class="sg-card">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="clipboard-check" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Triage</h2>
+                </div>
+
+                <div x-show="!subjectKey()" class="text-[11px] text-gray-500 py-2">This alert has no stable triage subject (no incident id or request id), so it cannot be tracked in the workflow.</div>
+
+                <div x-show="subjectKey()">
+                    <p class="text-[11px] text-gray-500 mb-3">
+                        Subject: <span class="font-mono text-gray-400" x-text="subjectType()"></span>
+                        <span class="font-mono text-gray-500 break-all" x-text="subjectKey()"></span>
+                    </p>
+
+                    <!-- Status -->
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Status</p>
+                    <div class="flex flex-wrap gap-1.5 mb-4">
+                        <template x-for="s in (status.statuses || [])" :key="s">
+                            <button @click="setStatus(s)" :disabled="!status.can_write || saving"
+                                    class="text-[11px] px-2.5 py-1 rounded border transition-colors"
+                                    :class="currentStatus() === s ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400/40' : 'bg-white/[0.02] text-gray-400 border-gray-700 hover:border-gray-500'"
+                                    x-text="s"></button>
+                        </template>
+                    </div>
+
+                    <!-- Assignee -->
+                    <label for="inv-assignee" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Assignee</label>
+                    <div class="flex gap-2 mb-4">
+                        <input id="inv-assignee" type="text" x-model="assigneeInput" maxlength="128" placeholder="unassigned"
+                               class="sg-input flex-1" :disabled="!status.can_write">
+                        <button @click="setAssignee()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!status.can_write || saving">Set</button>
+                    </div>
+
+                    <!-- Add note -->
+                    <label for="inv-note" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Add Note</label>
+                    <textarea id="inv-note" x-model="noteInput" rows="3" maxlength="4000" placeholder="What did you find?"
+                              class="sg-input w-full mb-2" :disabled="!status.can_write"></textarea>
+                    <div class="flex justify-end mb-4">
+                        <button @click="addNote()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!status.can_write || saving || !noteInput.trim()">Add Note</button>
+                    </div>
+
+                    <!-- Notes trail -->
+                    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">History <span class="text-gray-600" x-text="'(' + triageNotes().length + ')'"></span></p>
+                    <div x-show="triageNotes().length === 0" class="text-[11px] text-gray-500 py-2">No triage activity yet.</div>
+                    <div x-show="triageNotes().length > 0" class="space-y-2" style="max-height: 24rem; overflow-y: auto;">
+                        <template x-for="(n, i) in triageNotesReversed()" :key="'note-' + i">
+                            <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5">
+                                <div class="flex items-center gap-2 text-[10px] text-gray-500">
+                                    <span class="px-1.5 py-0.5 rounded" :class="n.kind === 'action' ? 'bg-cyan-500/15 text-cyan-300' : 'bg-gray-500/15 text-gray-400'" x-text="n.kind"></span>
+                                    <span class="font-mono text-gray-400" x-text="n.author"></span>
+                                    <span class="ml-auto" x-text="fmtTime(n.ts)"></span>
+                                </div>
+                                <p class="text-[11px] text-gray-300 mt-1 whitespace-pre-wrap break-words" x-text="n.text"></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+function investigationPage() {
+    return {
+        loading: true,
+        saving: false,
+        status: {
+            correlation_enabled: false, can_write: false,
+            alerts_last_24h: 0, open_triage: 0, in_progress_triage: 0,
+            statuses: ['open', 'acknowledged', 'in_progress', 'resolved', 'dismissed'],
+            subject_types: ['incident', 'origin'],
+        },
+        filters: { verdict: '', lookback_hours: 24 },
+        alerts: [],
+        selected: null,
+        incident: null,
+        origin: null,
+        triage: null,
+        assigneeInput: '',
+        noteInput: '',
+
+        async init() {
+            await this.reloadAll();
+        },
+
+        async reloadAll() {
+            await this.loadStatus();
+            await this.loadAlerts();
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/investigation/status');
+                if (res.ok) {
+                    this.status = await res.json();
+                } else {
+                    showToast('Failed to load investigation status', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading status', 'error');
+            }
+        },
+
+        async loadAlerts() {
+            this.loading = true;
+            try {
+                const p = new URLSearchParams();
+                if (this.filters.verdict) p.set('verdict', this.filters.verdict);
+                p.set('lookback_hours', String(this.filters.lookback_hours));
+                p.set('limit', '100');
+                const res = await fetch('/admin/investigation/alerts?' + p.toString());
+                if (res.ok) {
+                    const data = await res.json();
+                    this.alerts = data.alerts || [];
+                } else {
+                    showToast('Failed to load alerts', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading alerts', 'error');
+            } finally {
+                this.loading = false;
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            }
+        },
+
+        // ─── Selection / drill-down ──────────────────────────────────────────
+        isSelected(a) {
+            return this.selected && this.selected === a;
+        },
+
+        async investigate(a) {
+            this.selected = a;
+            this.incident = null;
+            this.origin = null;
+            this.assigneeInput = a.assignee || '';
+            this.noteInput = '';
+            // Load the confirmed-incident chain if this alert is one.
+            const incId = a.incident_id || (a.metadata && a.metadata.incident_id) || '';
+            if (incId) {
+                await this.loadIncident(incId);
+            }
+            // Seed triage state from the annotated queue row; refresh from the
+            // authoritative subject record.
+            await this.refreshTriage();
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        closeDetail() {
+            this.selected = null;
+            this.incident = null;
+            this.origin = null;
+            this.triage = null;
+        },
+
+        async loadIncident(incidentId) {
+            try {
+                const res = await fetch('/admin/investigation/incident/' + encodeURIComponent(incidentId));
+                if (res.ok) {
+                    this.incident = await res.json();
+                } else if (res.status !== 404) {
+                    showToast('Failed to load incident detail', 'error');
+                }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        originDigests() {
+            const a = this.selected;
+            if (!a || !Array.isArray(a.scope_digests)) return [];
+            // Only tokens shaped "scope:digest" are drillable.
+            return a.scope_digests.filter(t => /^[a-z]+:[0-9a-f]{16}$/.test(t));
+        },
+
+        async loadOrigin(token) {
+            const parts = token.split(':');
+            if (parts.length !== 2) return;
+            try {
+                const res = await fetch('/admin/investigation/origin/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '?lookback_hours=' + this.filters.lookback_hours);
+                if (res.ok) {
+                    this.origin = await res.json();
+                    this.$nextTick(() => window.lucide && window.lucide.createIcons());
+                } else {
+                    showToast('Failed to load origin timeline', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading origin', 'error');
+            }
+        },
+
+        // ─── Confidence rendering ────────────────────────────────────────────
+        confidenceRows() {
+            const b = this.incident && this.incident.confidence_breakdown;
+            if (!b || typeof b !== 'object') return [];
+            const labels = {
+                entropy: 'Payload entropy',
+                critical: 'Critical detections',
+                pii_volume: 'PII volume',
+                lexical: 'Lexical signals',
+                corroboration: 'Content corroboration',
+            };
+            const rows = [];
+            for (const k of Object.keys(labels)) {
+                if (b[k] !== undefined && b[k] !== null) {
+                    rows.push({ key: k, label: labels[k], value: Number(b[k]) });
+                }
+            }
+            return rows;
+        },
+
+        confPct(v) { return Math.max(0, Math.min(Number(v) || 0, 1)) * 100; },
+        fmtConf(v) { return (Number(v) || 0).toFixed(3); },
+
+        riskScore() {
+            return this.origin && this.origin.risk ? Number(this.origin.risk.score) || 0 : 0;
+        },
+
+        // ─── Triage subject ──────────────────────────────────────────────────
+        subjectType() { return this.selected ? (this.selected.subject_type || null) : null; },
+        subjectKey() { return this.selected ? (this.selected.subject_key || null) : null; },
+
+        async refreshTriage() {
+            // The queue row already carries triage_status/assignee, but the
+            // authoritative record (with notes) comes from the subject detail.
+            if (this.incident && this.incident.triage) {
+                this.triage = this.incident.triage;
+                this.assigneeInput = this.triage.assignee || this.assigneeInput;
+            } else {
+                this.triage = null;
+            }
+        },
+
+        currentStatus() {
+            if (this.triage && this.triage.status) return this.triage.status;
+            return this.selected ? (this.selected.triage_status || 'open') : 'open';
+        },
+
+        triageNotes() {
+            return (this.triage && Array.isArray(this.triage.notes)) ? this.triage.notes : [];
+        },
+
+        triageNotesReversed() {
+            return this.triageNotes().slice().reverse();
+        },
+
+        _applyTriage(rec) {
+            if (!rec) return;
+            this.triage = rec;
+            this.assigneeInput = rec.assignee || '';
+            // Reflect into the selected queue row + the queue list.
+            if (this.selected) {
+                this.selected.triage_status = rec.status;
+                this.selected.assignee = rec.assignee || '';
+            }
+        },
+
+        async _post(path, payload, okMsg) {
+            if (!this.subjectKey()) { showToast('This alert has no triage subject', 'error'); return; }
+            this.saving = true;
+            try {
+                const res = await fetch(path, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Request failed', 'error');
+                    return;
+                }
+                const data = await res.json();
+                this._applyTriage(data.triage);
+                showToast(okMsg, 'success');
+                await this.loadStatus();
+            } catch (e) {
+                showToast('Network error', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async setStatus(s) {
+            await this._post('/admin/investigation/triage/state', {
+                subject_type: this.subjectType(),
+                subject_key: this.subjectKey(),
+                status: s,
+            }, 'Status updated');
+        },
+
+        async setAssignee() {
+            await this._post('/admin/investigation/triage/state', {
+                subject_type: this.subjectType(),
+                subject_key: this.subjectKey(),
+                assignee: this.assigneeInput.trim(),
+            }, 'Assignee updated');
+        },
+
+        async addNote() {
+            const text = this.noteInput.trim();
+            if (!text) return;
+            await this._post('/admin/investigation/triage/note', {
+                subject_type: this.subjectType(),
+                subject_key: this.subjectKey(),
+                text: text,
+            }, 'Note added');
+            this.noteInput = '';
+        },
+
+        // ─── Formatting helpers ──────────────────────────────────────────────
+        kindLabel(a) {
+            if (!a) return '—';
+            const meta = a.metadata || {};
+            if (a.incident_id || meta.incident_id) return 'Incident';
+            if (meta.adaptive_enforcement === true) return 'Origin risk';
+            return 'Correlation';
+        },
+        kindClass(a) {
+            const l = this.kindLabel(a);
+            if (l === 'Incident') return 'bg-fuchsia-500/15 text-fuchsia-300';
+            if (l === 'Origin risk') return 'bg-cyan-500/15 text-cyan-300';
+            return 'bg-gray-500/15 text-gray-300';
+        },
+        verdictClass(v) {
+            if (v === 'block') return 'bg-red-500/15 text-red-300 border border-red-500/30';
+            if (v === 'warn') return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
+            return 'bg-gray-500/15 text-gray-300 border border-gray-600/30';
+        },
+        triageClass(s) {
+            if (s === 'resolved') return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+            if (s === 'dismissed') return 'bg-gray-500/15 text-gray-400 border border-gray-600/30';
+            if (s === 'in_progress') return 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30';
+            if (s === 'acknowledged') return 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30';
+            return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
+        },
+        fmtTime(ts) {
+            if (!ts) return '—';
+            const d = (typeof ts === 'number') ? new Date(ts * 1000) : new Date(ts);
+            if (isNaN(d.getTime())) return String(ts);
+            return d.toLocaleString();
+        },
+        fmtNum(n) { return (Number(n) || 0).toLocaleString(); },
+    };
+}
+</script>
+{% endblock %}

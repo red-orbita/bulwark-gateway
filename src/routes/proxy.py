@@ -1905,6 +1905,40 @@ def _make_block_snippet(snippet_source: str | None) -> tuple[str | None, str | N
     return snippet, input_hash
 
 
+def _origin_scope_digests(
+    tenant_id: str,
+    agent_id: str,
+    subject_id: str | None,
+    input_hash: str | None,
+) -> list[str]:
+    """Compute the origin-risk scope digests a blocked request contributes to.
+
+    Investigation Center (zero-cost when correlation is off — the sole caller
+    gates on ``settings.correlation_enabled``). Returns ``"{scope_type}:{digest}"``
+    tokens for exactly the scopes the correlation engine accrues risk to
+    (:mod:`src.correlation.incident`): subject (when authenticated), session,
+    tenant, and the content fingerprint. The digest is produced by
+    :meth:`RiskStateStore.scope_digest` — the same function that names the
+    ``bulwark:risk:*`` keys and the admin ``/correlation/origins`` view — so an
+    analyst can pivot a decayed origin score straight to the durable events that
+    drove it. Never raises: any failure yields an empty list.
+    """
+    try:
+        from src.correlation.risk_state import RiskStateStore
+
+        scopes: list[tuple[str, str]] = [
+            ("session", f"{tenant_id}:{agent_id}"),
+            ("tenant", tenant_id),
+        ]
+        if subject_id:
+            scopes.append(("subject", f"{tenant_id}:{subject_id}"))
+        if input_hash:
+            scopes.append(("input", input_hash))
+        return [f"{st}:{RiskStateStore.scope_digest(st, sid)}" for st, sid in scopes]
+    except Exception:  # noqa: BLE001 - stamping is best-effort, never break the push
+        return []
+
+
 def _push_recent_block(
     events: list[SecurityEvent],
     tenant_id: str,
@@ -1924,6 +1958,14 @@ def _push_recent_block(
         import json as _json
         # F1: privacy-safe preview + correlation hash (computed once per push).
         snippet, input_hash = _make_block_snippet(snippet_source)
+        # Investigation Center: stamp the origin-risk scope digests this block
+        # contributes to, so the durable event store can pivot origin→events.
+        # Gated on correlation_enabled ⇒ zero added work when the engine is off.
+        scope_digests: list[str] = []
+        if getattr(settings, "correlation_enabled", False):
+            scope_digests = _origin_scope_digests(
+                tenant_id, agent_id, _request_subject.get(), input_hash
+            )
         # SECURITY FIX (SGW-XT-002): Per-tenant recent_blocks key.
         # Previously all tenants shared a single list, leaking block metadata
         # across tenant boundaries.
@@ -1932,6 +1974,11 @@ def _push_recent_block(
             category = event.category.value if event.category else "unknown"
             severity = event.severity or "high"
             pattern_id = (event.matched_pattern or "").strip()
+            # An incident_id in the event metadata (correlation engine) is lifted
+            # to a top-level field so the durable store can index it directly.
+            incident_id = ""
+            if event.metadata:
+                incident_id = str(event.metadata.get("incident_id") or "")
             entry = _json.dumps({
                 "ts": time.time(),
                 "event_id": event.event_id,
@@ -1949,6 +1996,9 @@ def _push_recent_block(
                 "metadata": event.metadata or {},
                 "snippet": snippet or "",
                 "input_hash": input_hash or "",
+                # Investigation Center pivots (empty unless correlation is on).
+                "incident_id": incident_id,
+                "scope_digests": scope_digests,
             })
             r.lpush(redis_key, entry)
             r.ltrim(redis_key, 0, max(1, settings.events_max_per_tenant) - 1)

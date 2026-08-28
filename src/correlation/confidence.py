@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import asdict, dataclass
 
 # Bounded prefix (characters) scanned per side. Caps hot-path CPU regardless of
 # response size (a multi-megabyte completion is truncated before tokenizing).
@@ -177,18 +178,54 @@ def _lexical_linkage(input_text: str, output_text: str) -> float:
     return shared / len(in_tokens)
 
 
-def correlation_confidence(
+@dataclass(frozen=True)
+class ConfidenceBreakdown:
+    """Per-signal decomposition of a corroboration confidence score.
+
+    Explainability (Investigation Center): the correlator persists this alongside
+    the incident so an analyst can see *which* evidence drove a WARN→BLOCK
+    escalation — a bulk-PII dump, a high-entropy secret blob, a critical output
+    category, lexical echo of the injected input, or multi-category corroboration —
+    rather than an opaque aggregate float. Every field is the signal's actual
+    (already weight-scaled) contribution to ``total``, so the fields sum to
+    ``total`` (pre-clamp) and each is directly comparable.
+
+    All fields are plain floats so the whole object is JSON-serialisable for
+    ``SecurityEvent.metadata`` via :meth:`as_dict`.
+    """
+
+    entropy: float = 0.0
+    critical: float = 0.0
+    pii_volume: float = 0.0
+    lexical: float = 0.0
+    corroboration: float = 0.0
+    total: float = 0.0
+
+    def as_dict(self) -> dict[str, float]:
+        """Round every contribution to 3 dp for compact, stable metadata."""
+        return {k: round(v, 3) for k, v in asdict(self).items()}
+
+
+# A confidence breakdown with every signal zeroed — the safe value returned on any
+# internal error so scoring degrades to WARN (total 0.0), never a spurious BLOCK.
+_ZERO_BREAKDOWN = ConfidenceBreakdown()
+
+
+def correlation_confidence_breakdown(
     *,
     input_text: str | None,
     output_text: str | None,
     critical: bool,
     paired_category_count: int,
-) -> float:
-    """Return a corroboration confidence in ``[0.0, 1.0]`` for a correlation.
+) -> ConfidenceBreakdown:
+    """Return the per-signal :class:`ConfidenceBreakdown` for a correlation.
 
-    Combines category signals (always available) with content signals (only when
-    the request/response text is supplied). Never raises: on any internal error it
-    returns ``0.0`` so the correlator degrades to WARN, never to a spurious BLOCK.
+    This is the single source of truth for the corroboration score; the scalar
+    :func:`correlation_confidence` is a thin wrapper over ``.total``. Combines
+    category signals (always available) with content signals (only when the
+    request/response text is supplied). Never raises: on any internal error it
+    returns :data:`_ZERO_BREAKDOWN` (total ``0.0``) so the correlator degrades to
+    WARN, never to a spurious BLOCK.
 
     Args:
         input_text: Concatenated suspicious input content (may be ``None``).
@@ -201,36 +238,76 @@ def correlation_confidence(
         in_text = (input_text or "")[:_MAX_CHARS]
         out_text = (output_text or "")[:_MAX_CHARS]
 
-        confidence = 0.0
-
         # Content signal: a secret-like blob in the output is strong evidence of a
         # real credential/key leak rather than a false regex hit.
-        if out_text and _has_secret_like_token(out_text):
-            confidence += _W_ENTROPY
+        entropy = _W_ENTROPY if (out_text and _has_secret_like_token(out_text)) else 0.0
 
         # Category signal: a critical output category is inherently decisive.
-        if critical:
-            confidence += _W_CRITICAL
+        critical_w = _W_CRITICAL if critical else 0.0
 
         # Content signal: several distinct structured identifiers in the output is
         # a bulk-PII-dump signature (a benign answer carries at most one). Gives
         # block-recall on pure-PII exfiltration, which has neither entropy nor a
         # critical category to fire the signals above.
-        if out_text and _distinct_pii_count(out_text) >= _PII_VOLUME_MIN:
-            confidence += _W_PII_VOLUME
+        pii_volume = (
+            _W_PII_VOLUME
+            if (out_text and _distinct_pii_count(out_text) >= _PII_VOLUME_MIN)
+            else 0.0
+        )
 
         # Content signal: the output echoes the suspicious input's vocabulary.
-        if in_text and out_text:
-            confidence += _W_LEXICAL * _lexical_linkage(in_text, out_text)
+        lexical = _W_LEXICAL * _lexical_linkage(in_text, out_text) if (in_text and out_text) else 0.0
 
         # Corroboration: more than one paired category means the confirmation is
         # not resting on a single detection.
-        if paired_category_count >= 2:
-            confidence += _W_CORROBORATION
+        corroboration = _W_CORROBORATION if paired_category_count >= 2 else 0.0
 
-        # Clamp to [0, 1].
-        if confidence < 0.0:
-            return 0.0
-        return 1.0 if confidence > 1.0 else confidence
+        raw_total = entropy + critical_w + pii_volume + lexical + corroboration
+        # Clamp the reported total to [0, 1]; per-signal fields keep their raw
+        # (unclamped) contribution so the decomposition stays additive/inspectable.
+        if raw_total < 0.0:
+            total = 0.0
+        elif raw_total > 1.0:
+            total = 1.0
+        else:
+            total = raw_total
+
+        return ConfidenceBreakdown(
+            entropy=entropy,
+            critical=critical_w,
+            pii_volume=pii_volume,
+            lexical=lexical,
+            corroboration=corroboration,
+            total=total,
+        )
     except Exception:  # noqa: BLE001 - confidence must never break the response path
-        return 0.0
+        return _ZERO_BREAKDOWN
+
+
+def correlation_confidence(
+    *,
+    input_text: str | None,
+    output_text: str | None,
+    critical: bool,
+    paired_category_count: int,
+) -> float:
+    """Return a corroboration confidence in ``[0.0, 1.0]`` for a correlation.
+
+    Thin backward-compatible wrapper over
+    :func:`correlation_confidence_breakdown` (``.total``). Never raises: on any
+    internal error it returns ``0.0`` so the correlator degrades to WARN, never to
+    a spurious BLOCK.
+
+    Args:
+        input_text: Concatenated suspicious input content (may be ``None``).
+        output_text: Concatenated sensitive output content (may be ``None``).
+        critical: Whether the paired output category is critical
+            (CREDENTIAL_ACCESS / MODEL_THEFT).
+        paired_category_count: Total number of paired input+output categories.
+    """
+    return correlation_confidence_breakdown(
+        input_text=input_text,
+        output_text=output_text,
+        critical=critical,
+        paired_category_count=paired_category_count,
+    ).total

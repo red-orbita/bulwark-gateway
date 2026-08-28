@@ -279,6 +279,10 @@
                 <i data-lucide="git-merge" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Correlation Engine</span>
             </a>
+            <a href="/investigation" class="nav-item" data-page="investigation" aria-label="Investigation Center">
+                <i data-lucide="search-check" class="nav-icon" aria-hidden="true"></i>
+                <span x-show="sidebarOpen" class="nav-label">Investigation Center</span>
+            </a>
             <a href="/settings" class="nav-item" data-page="settings" aria-label="Settings">
                 <i data-lucide="settings" class="nav-icon" aria-hidden="true"></i>
                 <span x-show="sidebarOpen" class="nav-label">Settings</span>
@@ -665,6 +669,7 @@
                     { id: 24, label: 'Response Cache', href: '/cache', icon: 'database-zap', section: 'Navigation' },
                     { id: 25, label: 'Session Tracker', href: '/sessions', icon: 'list-tree', section: 'Navigation' },
                     { id: 26, label: 'Correlation Engine', href: '/correlation', icon: 'git-merge', section: 'Navigation' },
+                    { id: 27, label: 'Investigation Center', href: '/investigation', icon: 'search-check', section: 'Navigation' },
                 ],
                 get filtered() {
                     if (!this.query) return this.items;

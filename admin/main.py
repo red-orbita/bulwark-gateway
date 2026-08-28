@@ -44,6 +44,7 @@ from .routes import (
     gdpr,
     guardrails,
     health,
+    investigation,
     iocs,
     ml_scanners,
     notifications,
@@ -238,7 +239,7 @@ async def auth_guard_pages(request: Request, call_next):
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
                  "/rate-limits", "/enrichment", "/events", "/tenant-analytics",
                  "/gdpr", "/virtual-keys", "/quotas", "/cost", "/cache",
-                 "/sessions", "/correlation")
+                 "/sessions", "/correlation", "/investigation")
     )
 
     if is_page_route:
@@ -371,6 +372,7 @@ app.include_router(cost.router, prefix="/admin/cost", tags=["cost"])
 app.include_router(cache.router, prefix="/admin/cache", tags=["cache"])
 app.include_router(sessions.router, prefix="/admin/sessions", tags=["sessions"])
 app.include_router(correlation.router, prefix="/admin/correlation", tags=["correlation"])
+app.include_router(investigation.router, prefix="/admin/investigation", tags=["investigation"])
 app.include_router(dashboards.router, prefix="/admin/dashboards", tags=["dashboards"])
 
 
@@ -571,3 +573,9 @@ async def sessions_page(request: Request):
 async def correlation_page(request: Request):
     """Adaptive correlation engine — enforcement tuning, active origins, reset."""
     return templates.TemplateResponse(request, "pages/correlation.html")
+
+
+@app.get("/investigation", response_class=HTMLResponse)
+async def investigation_page(request: Request):
+    """Investigation Center — SOC triage workspace for correlated alerts."""
+    return templates.TemplateResponse(request, "pages/investigation.html")

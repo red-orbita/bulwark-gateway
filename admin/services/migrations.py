@@ -395,6 +395,69 @@ MIGRATIONS: list[Migration] = [
                 ON security_events(tenant, ts DESC);
         """,
     ),
+
+    # Version 6: Investigation Center. Two additions on top of the durable event
+    # history (v5) so an analyst can pivot a correlated alert to its full chain
+    # and drive a triage workflow — all reconstructed from durable rows, with no
+    # new hot-path Redis structures:
+    #   1. Two indexed pivot columns on security_events, populated by the sync
+    #      task from correlation metadata: `incident_id` (join a confirmed
+    #      exfiltration incident to its contributing detections) and
+    #      `scope_digests` (space-joined "scope_type:digest" tokens — the same
+    #      digests the admin /correlation/origins view shows — so an origin's
+    #      decayed risk score can be traced back to the events that drove it).
+    #   2. `investigation_triage`: per-subject (incident|origin) analyst workflow
+    #      state (status/assignee/notes) keyed by a stable subject identifier.
+    Migration(
+        version=6,
+        description="Investigation Center: event pivot columns + triage workflow table",
+        sqlite_sql="""
+            ALTER TABLE security_events ADD COLUMN incident_id TEXT;
+            ALTER TABLE security_events ADD COLUMN scope_digests TEXT;
+            CREATE INDEX IF NOT EXISTS idx_secevents_incident
+                ON security_events(incident_id);
+
+            CREATE TABLE IF NOT EXISTS investigation_triage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_type TEXT NOT NULL,
+                subject_key TEXT NOT NULL,
+                tenant TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                assignee TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(subject_type, subject_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_triage_status ON investigation_triage(status);
+            CREATE INDEX IF NOT EXISTS idx_triage_tenant ON investigation_triage(tenant);
+            CREATE INDEX IF NOT EXISTS idx_triage_updated
+                ON investigation_triage(updated_at DESC);
+        """,
+        postgresql_sql="""
+            ALTER TABLE security_events ADD COLUMN IF NOT EXISTS incident_id TEXT;
+            ALTER TABLE security_events ADD COLUMN IF NOT EXISTS scope_digests TEXT;
+            CREATE INDEX IF NOT EXISTS idx_secevents_incident
+                ON security_events(incident_id);
+
+            CREATE TABLE IF NOT EXISTS investigation_triage (
+                id SERIAL PRIMARY KEY,
+                subject_type TEXT NOT NULL,
+                subject_key TEXT NOT NULL,
+                tenant TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                assignee TEXT,
+                notes TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL,
+                UNIQUE(subject_type, subject_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_triage_status ON investigation_triage(status);
+            CREATE INDEX IF NOT EXISTS idx_triage_tenant ON investigation_triage(tenant);
+            CREATE INDEX IF NOT EXISTS idx_triage_updated
+                ON investigation_triage(updated_at DESC);
+        """,
+    ),
 ]
 
 

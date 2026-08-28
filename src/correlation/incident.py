@@ -33,7 +33,7 @@ from typing import Iterable, Optional
 import structlog
 from pydantic import Field
 
-from src.correlation.confidence import correlation_confidence
+from src.correlation.confidence import ConfidenceBreakdown, correlation_confidence_breakdown
 from src.correlation.risk_state import get_risk_state_store
 from src.correlation.runtime import get_correlation_runtime
 from src.models import SecurityEvent, StrictModel, ThreatCategory, Verdict
@@ -105,6 +105,13 @@ class Incident(StrictModel):
     # Content-corroboration confidence in [0, 1] (Phase 4b). Gates the WARN→BLOCK
     # escalation: a bare category co-occurrence scores low and stays WARN.
     confidence: float = 0.0
+    # Per-signal decomposition of ``confidence`` (Investigation Center). Explains
+    # *which* evidence drove the score so an analyst can audit the escalation.
+    confidence_breakdown: dict[str, float] = Field(default_factory=dict)
+    # event_id of every input+output SecurityEvent that this incident correlated.
+    # Lets the Investigation Center pivot the incident back to its contributing
+    # detections in the durable event store without re-deriving the chain.
+    contributing_event_ids: list[str] = Field(default_factory=list)
 
     def to_security_event(self) -> SecurityEvent:
         """Render the incident as a SecurityEvent for logging / SIEM export.
@@ -131,6 +138,8 @@ class Incident(StrictModel):
                 "input_hash": self.input_hash or "",
                 "risk_score": round(self.risk_score, 2),
                 "confidence": round(self.confidence, 2),
+                "confidence_breakdown": self.confidence_breakdown,
+                "contributing_event_ids": self.contributing_event_ids,
             },
         )
 
@@ -202,6 +211,24 @@ def _categories(events: Iterable[SecurityEvent], allowed: frozenset[ThreatCatego
     return out
 
 
+def _event_ids(*event_groups: Iterable[SecurityEvent]) -> list[str]:
+    """Collect the ``event_id`` of every event across ``event_groups``.
+
+    Order-stable and de-duplicated so the Investigation Center can pivot a
+    confirmed incident back to exactly the input+output detections that produced
+    it. Events without an ``event_id`` are skipped (never fabricated).
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for group in event_groups:
+        for e in group:
+            eid = getattr(e, "event_id", None)
+            if eid and eid not in seen:
+                seen.add(eid)
+                out.append(eid)
+    return out
+
+
 class InputOutputCorrelator:
     """Correlate a request's suspicious INPUT with its sensitive OUTPUT.
 
@@ -256,8 +283,12 @@ class InputOutputCorrelator:
             return None
 
         try:
-            in_cats = _categories(input_events, _SUSPICIOUS_INPUT)
-            out_cats = _categories(output_events, _SENSITIVE_OUTPUT)
+            # Materialise once: the events are iterated twice (category pairing +
+            # contributing-id collection) and may arrive as single-use generators.
+            in_events = list(input_events)
+            out_events = list(output_events)
+            in_cats = _categories(in_events, _SUSPICIOUS_INPUT)
+            out_cats = _categories(out_events, _SENSITIVE_OUTPUT)
             if not in_cats or not out_cats:
                 return None
 
@@ -283,13 +314,15 @@ class InputOutputCorrelator:
 
             # Corroboration confidence gates the WARN→BLOCK escalation. Computed
             # from the paired categories plus (when available) the raw content;
-            # never raises (returns 0.0 on error → the safe WARN side).
-            confidence = correlation_confidence(
+            # never raises (returns a zeroed breakdown on error → the safe WARN
+            # side). The per-signal breakdown is persisted for explainability.
+            breakdown: ConfidenceBreakdown = correlation_confidence_breakdown(
                 input_text=input_text,
                 output_text=output_text,
                 critical=critical,
                 paired_category_count=len(in_cats) + len(out_cats),
             )
+            confidence = breakdown.total
             blocking = bool(rc.blocking)
             block = blocking and confidence >= float(rc.confidence_block_threshold)
             verdict = Verdict.BLOCK if block else Verdict.WARN
@@ -331,6 +364,8 @@ class InputOutputCorrelator:
                 request_id=request_id,
                 risk_score=risk_score,
                 confidence=confidence,
+                confidence_breakdown=breakdown.as_dict(),
+                contributing_event_ids=_event_ids(in_events, out_events),
             )
             return incident
         except Exception as e:  # noqa: BLE001 - correlation must never break responses

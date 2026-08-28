@@ -159,6 +159,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "cache:read", "cache:write",
         "sessions:read", "sessions:write",
         "correlation:read", "correlation:write",
+        "investigation:read", "investigation:write",
     },
     UserRole.SECURITY: {
         "policies:read", "policies:write", "policies:apply",
@@ -178,6 +179,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "cache:read", "cache:write",
         "sessions:read", "sessions:write",
         "correlation:read", "correlation:write",
+        "investigation:read", "investigation:write",
     },
     UserRole.AUDITOR: {
         "policies:read",
@@ -197,6 +199,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "cache:read",
         "sessions:read",
         "correlation:read",
+        "investigation:read",
     },
     UserRole.VIEWER: {
         "policies:read",
@@ -211,5 +214,6 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "cache:read",
         "sessions:read",
         "correlation:read",
+        "investigation:read",
     },
 }
