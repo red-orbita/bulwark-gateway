@@ -26,6 +26,7 @@ from src.config import settings
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
 from src.models import GuardrailResult, SecurityEvent, Verdict
+from src.telemetry.compliance import compliance_for
 from src.telemetry.counters import get_counters
 from src.telemetry.notifications import AlertPayload, get_notification_engine
 from src.telemetry.queue import get_telemetry_queue
@@ -44,24 +45,19 @@ _output_filter = OutputFilter(
 # Severity ranking for threshold filtering
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
-# MITRE ATT&CK mapping for threat categories
-_MITRE_MAP: dict[str, str] = {
-    "prompt_injection": "T1059",
-    "jailbreak": "T1190",
-    "tool_abuse": "T1059.004",
-    "exfiltration": "T1041",
-    "credential_access": "T1552",
-    "reverse_shell": "T1059.004",
-    "malicious_domain": "T1071.001",
-    "pii_leak": "T1552.005",
-    "policy_violation": "T1078",
-    "insecure_output": "T1203",
-    "denial_of_service": "T1498",
-    "excessive_agency": "T1078.004",
-    "plan_corruption": "T1565",
-    "cross_agent_injection": "T1557",
-    "memory_manipulation": "T1565.001",
-}
+
+def _primary_mitre_attack(category: str) -> str | None:
+    """Primary MITRE ATT&CK technique for a threat category, from the SSOT.
+
+    Derived from the central compliance mapping (src/telemetry/compliance.py) so
+    the scan API's ATT&CK annotation can never drift from the SIEM export. Returns
+    the first (primary) ATT&CK technique, or ``None`` when the category maps to no
+    ATT&CK technique (e.g. purely AI-specific ATLAS/agency categories).
+    """
+    mapping = compliance_for(category)
+    if mapping and mapping.mitre_attack:
+        return mapping.mitre_attack[0]
+    return None
 
 
 # === Request/Response Models ===
@@ -275,8 +271,8 @@ def _events_to_findings(
             pattern_id=event.matched_pattern[:20] if event.matched_pattern and options.include_patterns else None,
             matched_text=event.matched_pattern[:100] if event.matched_pattern and options.include_patterns else None,
             confidence=0.95 if options.include_score else 1.0,
-            mitre_attack=_MITRE_MAP.get(
-                event.category.value if event.category else "", None
+            mitre_attack=_primary_mitre_attack(
+                event.category.value if event.category else ""
             ),
         )
         findings.append(finding)

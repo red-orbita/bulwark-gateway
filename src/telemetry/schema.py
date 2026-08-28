@@ -79,11 +79,13 @@ class ComplianceFields(BaseModel):
 
     Every axis is optional; empty axes are dropped from the ECS export. Mirrors
     src/telemetry/compliance.ComplianceMapping so a SIEM can pivot a detection to
-    OWASP LLM / MITRE ATT&CK / NIST AI RMF / EU AI Act without a lookup table.
+    OWASP LLM / MITRE ATLAS / MITRE ATT&CK / NIST AI RMF / EU AI Act without a
+    lookup table.
     """
 
     owasp_llm: Optional[list[str]] = None
     owasp_llm_version: Optional[str] = None
+    mitre_atlas: Optional[list[str]] = None
     mitre_attack: Optional[list[str]] = None
     nist_ai_rmf: Optional[list[str]] = None
     eu_ai_act: Optional[list[str]] = None
@@ -199,6 +201,7 @@ class SecurityTelemetryEvent(BaseModel):
         """Convert to LEEF 2.0 (Log Event Extended Format) for IBM QRadar."""
         comp = self.bulwark.compliance
         owasp = ",".join(comp.owasp_llm) if comp and comp.owasp_llm else "none"
+        atlas = ",".join(comp.mitre_atlas) if comp and comp.mitre_atlas else "none"
         mitre = ",".join(comp.mitre_attack) if comp and comp.mitre_attack else "none"
         eu_ai_act = ",".join(comp.eu_ai_act) if comp and comp.eu_ai_act else "none"
         return (
@@ -214,6 +217,7 @@ class SecurityTelemetryEvent(BaseModel):
             f"allowedByException={str(self.bulwark.allowed_by_exception).lower()}\t"
             f"exceptionScope={self.bulwark.exception_scope or 'none'}\t"
             f"owaspLlm={owasp}\t"
+            f"mitreAtlas={atlas}\t"
             f"mitreAttack={mitre}\t"
             f"euAiAct={eu_ai_act}\t"
             f"msg={self.message}"
@@ -273,6 +277,7 @@ def from_security_event(
         compliance_fields = ComplianceFields(
             owasp_llm=list(mapping.owasp_llm) or None,
             owasp_llm_version=OWASP_LLM_VERSION if mapping.owasp_llm else None,
+            mitre_atlas=list(mapping.mitre_atlas) or None,
             mitre_attack=list(mapping.mitre_attack) or None,
             nist_ai_rmf=list(mapping.nist_ai_rmf) or None,
             eu_ai_act=list(mapping.eu_ai_act) or None,

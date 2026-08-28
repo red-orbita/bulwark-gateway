@@ -97,3 +97,35 @@ async def test_summary_counts_full_history(seeded_store):
     assert summary["total"] == 2  # block + warn
     assert summary["allowed_recorded"] == 1
     assert summary["by_tenant"] == {"acme": 2}
+
+
+async def test_compliance_mappings_serves_the_ssot():
+    """The endpoint reflects src/telemetry/compliance.py (no separate hardcoded copy)."""
+    data = await events_mod.compliance_mappings(user=None)
+
+    assert data["owasp_version"] == "2025"
+
+    catalog = data["catalog"]
+    assert catalog["LLM01"]["framework"] == "owasp"
+    assert catalog["LLM01"]["url"].startswith("https://")
+    assert catalog["LLM01"]["label"]
+
+    refs = data["category_refs"]
+    # Ordered OWASP → ATLAS → ATT&CK, straight from the SSOT.
+    assert refs["prompt_injection"] == ["LLM01", "AML.T0051", "T1059"]
+    assert refs["model_theft"][0] == "LLM10"  # 2025 Unbounded Consumption
+
+    # Every code the UI is asked to render must have a catalog entry.
+    for category, codes in refs.items():
+        for code in codes:
+            assert code in catalog, f"{category}: {code} missing from served catalog"
+
+
+async def test_compliance_mappings_matches_module_source():
+    """The served payload is a faithful projection of the compliance module."""
+    from src.telemetry.compliance import all_mappings, reference_catalog
+
+    data = await events_mod.compliance_mappings(user=None)
+    assert set(data["catalog"]) == set(reference_catalog())
+    assert set(data["category_refs"]) == set(all_mappings())
+

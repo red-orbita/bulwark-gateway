@@ -38,11 +38,12 @@ class ThreatCategory(str, Enum):
     PII_LEAK = "pii_leak"
     POLICY_VIOLATION = "policy_violation"
     RATE_LIMIT = "rate_limit"
-    # OWASP LLM Top 10 additions
-    INSECURE_OUTPUT = "insecure_output"  # LLM02
-    DENIAL_OF_SERVICE = "denial_of_service"  # LLM04
-    EXCESSIVE_AGENCY = "excessive_agency"  # LLM08/LLM09
-    MODEL_THEFT = "model_theft"  # LLM10
+    # OWASP LLM Top 10 additions (codes = 2025 revision; SSOT in
+    # src/telemetry/compliance.py)
+    INSECURE_OUTPUT = "insecure_output"  # LLM05 Improper Output Handling
+    DENIAL_OF_SERVICE = "denial_of_service"  # LLM10 Unbounded Consumption
+    EXCESSIVE_AGENCY = "excessive_agency"  # LLM06 Excessive Agency
+    MODEL_THEFT = "model_theft"  # LLM10 Unbounded Consumption (model extraction)
     # Adversarial ML
     PRIVACY_ATTACK = "privacy_attack"  # Model inversion / Membership inference
     # Agentic attacks

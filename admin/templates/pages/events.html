@@ -452,7 +452,7 @@
                                                 <template x-for="ref in categoryReferences(evt.category)" :key="ref.url">
                                                     <a :href="ref.url" target="_blank" rel="noopener noreferrer"
                                                        class="sg-badge text-[10px] inline-flex items-center gap-1 hover:opacity-80 transition-opacity"
-                                                       :style="refBadgeStyle(ref.fw)"
+                                                       :style="refBadgeStyle(ref.framework)"
                                                        :title="ref.label">
                                                         <span x-text="ref.label"></span>
                                                         <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/></svg>
@@ -701,55 +701,23 @@ function eventsManager() {
         },
 
         // ─── Threat-intel references ────────────────────────────────────────
-        // Static registry mapping each ThreatCategory to the authoritative
-        // OWASP GenAI (2025) risk and the MITRE technique/tactic it maps to.
-        // IDs verified against genai.owasp.org, atlas.mitre.org and
-        // attack.mitre.org. Kept small and explicit so the mapping is auditable
-        // rather than heuristic.
-        refCatalog: {
-            // OWASP GenAI 2025 — LLM Top 10
-            'LLM01': { label: 'OWASP LLM01: Prompt Injection', url: 'https://genai.owasp.org/llmrisk/llm01-prompt-injection/', fw: 'owasp' },
-            'LLM02': { label: 'OWASP LLM02: Sensitive Information Disclosure', url: 'https://genai.owasp.org/llmrisk/llm022025-sensitive-information-disclosure/', fw: 'owasp' },
-            'LLM05': { label: 'OWASP LLM05: Improper Output Handling', url: 'https://genai.owasp.org/llmrisk/llm052025-improper-output-handling/', fw: 'owasp' },
-            'LLM06': { label: 'OWASP LLM06: Excessive Agency', url: 'https://genai.owasp.org/llmrisk/llm062025-excessive-agency/', fw: 'owasp' },
-            'LLM07': { label: 'OWASP LLM07: System Prompt Leakage', url: 'https://genai.owasp.org/llmrisk/llm072025-system-prompt-leakage/', fw: 'owasp' },
-            'LLM08': { label: 'OWASP LLM08: Vector & Embedding Weaknesses', url: 'https://genai.owasp.org/llmrisk/llm082025-vector-and-embedding-weaknesses/', fw: 'owasp' },
-            'LLM10': { label: 'OWASP LLM10: Unbounded Consumption', url: 'https://genai.owasp.org/llmrisk/llm102025-unbounded-consumption/', fw: 'owasp' },
-            // MITRE ATLAS — AI-specific adversary techniques
-            'AML.T0024': { label: 'ATLAS AML.T0024: Exfiltration via AI Inference API', url: 'https://atlas.mitre.org/techniques/AML.T0024', fw: 'atlas' },
-            'AML.T0029': { label: 'ATLAS AML.T0029: Denial of AI Service', url: 'https://atlas.mitre.org/techniques/AML.T0029', fw: 'atlas' },
-            'AML.T0048': { label: 'ATLAS AML.T0048: External Harms', url: 'https://atlas.mitre.org/techniques/AML.T0048', fw: 'atlas' },
-            'AML.T0051': { label: 'ATLAS AML.T0051: LLM Prompt Injection', url: 'https://atlas.mitre.org/techniques/AML.T0051', fw: 'atlas' },
-            'AML.T0054': { label: 'ATLAS AML.T0054: LLM Jailbreak', url: 'https://atlas.mitre.org/techniques/AML.T0054', fw: 'atlas' },
-            'AML.T0057': { label: 'ATLAS AML.T0057: LLM Data Leakage', url: 'https://atlas.mitre.org/techniques/AML.T0057', fw: 'atlas' },
-            'AML.T0070': { label: 'ATLAS AML.T0070: RAG Poisoning', url: 'https://atlas.mitre.org/techniques/AML.T0070', fw: 'atlas' },
-            // MITRE ATT&CK — classic enterprise techniques/tactics
-            'T1059': { label: 'ATT&CK T1059: Command & Scripting Interpreter', url: 'https://attack.mitre.org/techniques/T1059/', fw: 'attack' },
-            'T1071': { label: 'ATT&CK T1071: Application Layer Protocol', url: 'https://attack.mitre.org/techniques/T1071/', fw: 'attack' },
-            'T1499': { label: 'ATT&CK T1499: Endpoint Denial of Service', url: 'https://attack.mitre.org/techniques/T1499/', fw: 'attack' },
-            'TA0006': { label: 'ATT&CK TA0006: Credential Access', url: 'https://attack.mitre.org/tactics/TA0006/', fw: 'attack' },
-            'TA0010': { label: 'ATT&CK TA0010: Exfiltration', url: 'https://attack.mitre.org/tactics/TA0010/', fw: 'attack' },
-        },
-        // ThreatCategory (src/models.py) → reference IDs.
-        categoryRefs: {
-            prompt_injection: ['LLM01', 'AML.T0051'],
-            jailbreak: ['LLM01', 'AML.T0054'],
-            tool_abuse: ['LLM06', 'T1059'],
-            exfiltration: ['LLM02', 'TA0010'],
-            credential_access: ['LLM02', 'TA0006'],
-            reverse_shell: ['LLM05', 'T1059'],
-            malicious_domain: ['T1071'],
-            pii_leak: ['LLM02', 'AML.T0057'],
-            policy_violation: ['LLM06'],
-            rate_limit: ['LLM10', 'T1499'],
-            insecure_output: ['LLM05', 'T1059'],
-            denial_of_service: ['LLM10', 'AML.T0029'],
-            excessive_agency: ['LLM06', 'AML.T0048'],
-            model_theft: ['LLM10', 'AML.T0024'],
-            privacy_attack: ['LLM02', 'AML.T0024'],
-            plan_corruption: ['LLM01', 'AML.T0051'],
-            cross_agent_injection: ['LLM01', 'AML.T0051'],
-            memory_manipulation: ['LLM08', 'AML.T0070'],
+        // Populated at init() from GET /admin/events/compliance-mappings, whose
+        // single source of truth is src/telemetry/compliance.py — the SAME table
+        // that tags every exported SIEM event. Kept here (not hardcoded) so the
+        // UI badges can never drift from the export mapping.
+        refCatalog: {},      // code → { label, url, framework }
+        categoryRefs: {},    // ThreatCategory → ordered display codes
+        owaspVersion: '',
+
+        async loadComplianceMappings() {
+            try {
+                const resp = await fetch('/admin/events/compliance-mappings');
+                if (!resp.ok) return;  // section simply stays hidden on failure
+                const data = await resp.json();
+                this.refCatalog = data.catalog || {};
+                this.categoryRefs = data.category_refs || {};
+                this.owaspVersion = data.owasp_version || '';
+            } catch (_) { /* non-fatal: references are supplementary */ }
         },
 
         // Resolve a category to its ordered, deduped reference objects. Unknown
@@ -840,7 +808,7 @@ function eventsManager() {
 
         async init() {
             this.compact = localStorage.getItem('sg-events-density') === 'compact';
-            await this.refresh();
+            await Promise.all([this.loadComplianceMappings(), this.refresh()]);
         },
 
         toggleDensity() {

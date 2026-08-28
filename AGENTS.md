@@ -1037,16 +1037,28 @@ Every exported event carries declarative regulatory/standards references derived
 from its `ThreatCategory`, so a SIEM can pivot a detection to a framework without
 its own lookup table. The single source of truth is `src/telemetry/compliance.py`
 (a pure, side-effect-free table; a unit test enforces that **every** ThreatCategory
-has a non-empty mapping). Emitted under `bulwark.compliance` in ECS, and summarised
-in the CEF (`cs6Label=Compliance`) and LEEF (`owaspLlm` / `mitreAttack` / `euAiAct`)
-converters:
+has a non-empty mapping). The admin UI's threat-intel reference badges (events
+viewer) fetch this same table via `GET /admin/events/compliance-mappings` instead
+of keeping their own copy, and the `/v2/scan` API derives its MITRE ATT&CK tag from
+it too — so no surface re-hardcodes the mapping. Emitted under `bulwark.compliance`
+in ECS, and summarised in the CEF (`cs6Label=Compliance`) and LEEF (`owaspLlm` /
+`mitreAtlas` / `mitreAttack` / `euAiAct`) converters:
 
 | Field | Framework | Example |
 |-------|-----------|---------|
-| `owasp_llm` (+ `owasp_llm_version`) | OWASP Top 10 for LLM Apps (2023) | `["LLM01"]` |
+| `owasp_llm` (+ `owasp_llm_version`) | OWASP Top 10 for LLM Apps (**2025**) | `["LLM01"]` |
+| `mitre_atlas` | MITRE ATLAS AI-specific techniques | `["AML.T0051"]` |
 | `mitre_attack` | MITRE ATT&CK techniques | `["T1041"]` |
 | `nist_ai_rmf` | NIST AI RMF (AI 100-1) subcategories | `["MEASURE-2.7","MANAGE-4.1"]` |
 | `eu_ai_act` | EU AI Act (Reg. 2024/1689) articles | `["Article 15"]` |
+
+`REFERENCE_CATALOG` in the same module gives every OWASP/ATLAS/ATT&CK code its
+human label + canonical URL (a unit test enforces that no mapping references a code
+absent from the catalog). OWASP codes use the **2025** revision — notably the
+former *LLM10 Model Theft* is folded into **LLM10 Unbounded Consumption**, *Insecure
+Output Handling* became **LLM05 Improper Output Handling**, and *Sensitive
+Information Disclosure* moved to **LLM02**; `owasp_llm_version` records the revision
+on every event.
 
 Mappings are intentionally conservative (each ref is auditor-defensible, not an
 exhaustive spray). Empty axes are dropped from the export; unmapped/ad-hoc category

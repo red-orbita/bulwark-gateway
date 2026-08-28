@@ -64,6 +64,39 @@ async def list_security_events(
         return []
 
 
+@router.get("/compliance-mappings")
+async def compliance_mappings(
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
+):
+    """Serve the canonical ThreatCategory → framework reference table.
+
+    Single source of truth is ``src/telemetry/compliance.py`` (the same table that
+    tags every exported SIEM event). The events viewer fetches this instead of
+    keeping its own hardcoded copy, so the UI badges can never drift from the
+    export. Returns:
+
+      * ``owasp_version`` — the OWASP LLM Top 10 revision the codes refer to.
+      * ``catalog``       — code → {label, url, framework} for clickable badges.
+      * ``category_refs`` — threat category → ordered display codes (OWASP → ATLAS
+                            → ATT&CK); NIST/EU axes are export-only, not badged.
+    """
+    from src.telemetry.compliance import (
+        OWASP_LLM_VERSION,
+        all_mappings,
+        reference_catalog,
+    )
+
+    catalog = {code: ref.to_dict() for code, ref in reference_catalog().items()}
+    category_refs = {
+        category: mapping.display_codes() for category, mapping in all_mappings().items()
+    }
+    return {
+        "owasp_version": OWASP_LLM_VERSION,
+        "catalog": catalog,
+        "category_refs": category_refs,
+    }
+
+
 @router.get("/summary")
 async def event_summary(
     user: TokenPayload = Depends(require_permission("guardrails:read")),
