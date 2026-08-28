@@ -1275,6 +1275,19 @@ async def chat_completions(request: Request):
             await _log_events([_corr_event], source_ip)
             asyncio.create_task(_fire_webhook_alert([_corr_event], tenant_id, agent_id))
             _push_recent_block([_corr_event], tenant_id, agent_id, snippet_source=_corr_input)
+            # Persist the sensitive-OUTPUT detections that corroborated this
+            # incident. They were logged (SIEM) but not written to the durable
+            # buffer, so without this the incident's output-side
+            # ``contributing_event_ids`` could not resolve in the Investigation
+            # Center drill-down (the input-side events are already pushed at the
+            # Phase-1 WARN gate). Pushing with their original event_id makes the
+            # pivot join; the UNIQUE constraint keeps it idempotent. Gated on a
+            # confirmed incident ⇒ zero cost on the common path. snippet_source is
+            # omitted: the output text carries the leaked secret and must not seed
+            # a stored preview (the redacted incident snippet already covers it).
+            _push_recent_block(
+                _output_events_corr, tenant_id, agent_id, snippet_source=None
+            )
             if incident.verdict == Verdict.BLOCK:
                 # Confirmed exfiltration — scrub the response before it ships.
                 for choice in choices:

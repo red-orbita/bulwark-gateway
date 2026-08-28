@@ -30,6 +30,36 @@ def test_event_id_differs_when_identifying_fields_change():
     assert sync_mod._event_id(a) != sync_mod._event_id(b)
 
 
+def test_event_id_prefers_proxy_stamped_id():
+    # The proxy stamps the originating SecurityEvent's id into the buffer entry;
+    # it MUST be preserved verbatim so a correlation incident's
+    # contributing_event_ids resolve to this durable row (drill-down pivot).
+    entry = {
+        "event_id": "9254207c34154bc0bf977df6956123bf",
+        "ts": 1.0, "tenant": "acme", "verdict": "warn", "pattern": "P",
+    }
+    assert sync_mod._event_id(entry) == "9254207c34154bc0bf977df6956123bf"
+    # And it survives normalisation onto the durable dict.
+    assert sync_mod._normalise(entry)["event_id"] == "9254207c34154bc0bf977df6956123bf"
+
+
+def test_event_id_falls_back_to_hash_without_stamp():
+    # Legacy/other push paths omit event_id → the stable content hash still
+    # applies (and stays idempotent for the same identifying fields).
+    entry = {"ts": 1.0, "tenant": "acme", "verdict": "block", "pattern": "P"}
+    eid = sync_mod._event_id(entry)
+    assert eid == sync_mod._event_id(dict(entry))
+    assert len(eid) == 64  # sha256 hex, distinct from a uuid4-style stamp
+
+
+def test_event_id_ignores_blank_stamp():
+    # A present-but-empty event_id must not shadow the content-hash fallback.
+    entry = {"event_id": "  ", "ts": 1.0, "tenant": "acme", "verdict": "block"}
+    assert sync_mod._event_id(entry) == sync_mod._event_id(
+        {"ts": 1.0, "tenant": "acme", "verdict": "block"}
+    )
+
+
 # ─── normalisation ───────────────────────────────────────────────────────────
 
 def test_normalise_fills_defaults_and_event_id():
@@ -119,3 +149,50 @@ async def test_sync_once_empty_buffer(wired_store, monkeypatch):
     monkeypatch.setattr(sync_mod, "_drain_redis", lambda max_items: [])
     sync = sync_mod.SecurityEventsSync(interval_seconds=999)
     assert await sync.sync_once() == 0
+
+
+async def test_contributing_event_ids_resolve_after_sync(wired_store, monkeypatch):
+    """End-to-end drill-down pivot: an incident's contributing_event_ids (the
+    original SecurityEvent ids captured in-memory) must resolve to the durable
+    rows after those same events drain through the buffer→sync path.
+
+    This is the guarantee the Investigation Center relies on and that the
+    recompute-the-id behaviour silently broke: the input/output detections
+    persisted under a *different* id than the incident recorded, so the pivot
+    returned nothing.
+    """
+    # Buffer entries as the proxy's _push_recent_block writes them: the input
+    # WARN detections and the corroborating output detection each carry their
+    # originating event_id verbatim.
+    in_evt = {"event_id": "aaaa1111", "ts": 10.0, "tenant": "acme", "agent": "bot",
+              "verdict": "warn", "category": "exfiltration", "severity": "medium",
+              "source": "input_guardrail", "pattern": "EX-1"}
+    out_evt = {"event_id": "bbbb2222", "ts": 10.1, "tenant": "acme", "agent": "bot",
+               "verdict": "warn", "category": "credential_access", "severity": "critical",
+               "source": "output_filter", "pattern": "CRED-1"}
+    incident = {"event_id": "cccc3333", "ts": 10.2, "tenant": "acme", "agent": "bot",
+                "verdict": "warn", "category": "exfiltration", "severity": "critical",
+                "source": "correlation_engine",
+                "incident_id": "INC-42",
+                "metadata": {"incident_id": "INC-42",
+                             "contributing_event_ids": ["aaaa1111", "bbbb2222"]}}
+    monkeypatch.setattr(sync_mod, "_drain_redis", lambda max_items: [
+        sync_mod._normalise(in_evt),
+        sync_mod._normalise(out_evt),
+        sync_mod._normalise(incident),
+    ])
+
+    sync = sync_mod.SecurityEventsSync(interval_seconds=999, prune_every_n=999)
+    assert await sync.sync_once() == 3
+
+    # The incident row carries the contributing ids…
+    carriers = await wired_store.find_by_incident("INC-42")
+    assert len(carriers) == 1
+    ids = carriers[0]["metadata"]["contributing_event_ids"]
+    assert ids == ["aaaa1111", "bbbb2222"]
+    # …and every one of them resolves to a durable detection (pivot works).
+    # Before the fix these persisted under a recomputed hash id and returned 0.
+    resolved = await wired_store.find_by_event_ids(ids)
+    assert len(resolved) == 2
+    assert {r["source"] for r in resolved} == {"input_guardrail", "output_filter"}
+    assert {r["category"] for r in resolved} == {"exfiltration", "credential_access"}

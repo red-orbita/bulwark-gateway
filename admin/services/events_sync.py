@@ -51,12 +51,23 @@ def resolve_retention_days() -> int:
 def _event_id(entry: dict) -> str:
     """Derive a stable, collision-resistant id for a Redis buffer entry.
 
-    Hashes the immutable identifying fields so the same buffer entry always maps
-    to the same row — making re-syncs idempotent under the UNIQUE constraint.
-    ``ts`` (a float wall-clock from the proxy) plus tenant/verdict/pattern/hash
-    is unique in practice; the snippet + request_id disambiguate the rare
+    Prefer the proxy-stamped ``event_id`` (``_push_recent_block`` writes the
+    originating :class:`SecurityEvent`'s id verbatim). Preserving it end-to-end is
+    what lets a correlation incident's ``contributing_event_ids`` — captured from
+    those same in-memory events — resolve to these durable rows in the
+    Investigation Center drill-down. It is a uuid4 hex, so it is already stable
+    and collision-resistant, and ``event_id`` is UNIQUE + ``INSERT OR IGNORE`` so
+    re-syncing the same buffer entry stays idempotent.
+
+    Fall back to a content hash of the immutable identifying fields only for
+    entries that predate the stamp (or arrive from another push path without one):
+    ``ts`` (a float wall-clock from the proxy) plus tenant/verdict/pattern/hash is
+    unique in practice; the snippet + request_id disambiguate the rare
     same-millisecond collision.
     """
+    explicit = str(entry.get("event_id") or "").strip()
+    if explicit:
+        return explicit
     parts = "|".join(
         str(entry.get(k, ""))
         for k in (
