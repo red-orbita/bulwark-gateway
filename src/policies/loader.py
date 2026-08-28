@@ -90,6 +90,9 @@ class PolicyLoader:
             allow_network_access=data.get("allow_network_access", True),
             sandbox_level=data.get("sandbox_level", "standard"),
             output_validation=data.get("output_validation", {}) or {},
+            allowed_languages=data.get("allowed_languages", []) or [],
+            block_unknown_language=bool(data.get("block_unknown_language", False)),
+            multimodal=data.get("multimodal", {}) or {},
         )
 
     async def reload(self):

@@ -410,6 +410,22 @@ async def _async_is_ssrf_target(url: str, *, allow_private: bool = False) -> boo
 _MAX_STRUCTURED_IMAGES = 5
 
 
+def _get_agent_policy(request, tenant_id: str, agent_id: str):
+    """Return the AgentPolicy for a tenant/agent, or None if unavailable.
+
+    Safe accessor over ``request.app.state.policy_loader.engine`` that never
+    raises on the hot path (missing loader/engine in some test or boot contexts
+    simply yields ``None`` — callers then skip policy-driven metadata).
+    """
+    try:
+        engine = request.app.state.policy_loader.engine
+    except AttributeError:
+        return None
+    if engine is None:
+        return None
+    return engine.get_policy(tenant_id, agent_id)
+
+
 def _content_to_text(content: object) -> str:
     """Flatten an OpenAI message ``content`` field to plain scannable text.
 
@@ -571,6 +587,17 @@ async def chat_completions(request: Request):
         if _image_contents:
             _scan_ctx.metadata["image_contents"] = _image_contents
             _scan_ctx.content_type = "multimodal"
+        # Thread the agent's opt-in multilingual + multimodal policy into the input
+        # scan context so the LanguageDetector / ImageHygiene / Vision scanners can
+        # enforce per-agent `allowed_languages` / `multimodal` settings. Without this
+        # the scanners' enforcement branches never receive policy data and fail open.
+        _in_policy = _get_agent_policy(request, tenant_id, agent_id)
+        if _in_policy is not None:
+            if _in_policy.allowed_languages:
+                _scan_ctx.metadata["allowed_languages"] = _in_policy.allowed_languages
+                _scan_ctx.metadata["block_unknown_language"] = _in_policy.block_unknown_language
+            if _in_policy.multimodal:
+                _scan_ctx.metadata["multimodal"] = _in_policy.multimodal
         # SECURITY FIX (M-08): Scan ALL role messages, not just 'user'.
         # System/tool messages can contain attacker-controlled content that bypasses scanning.
         # Join all message content for cross-message pattern detection.

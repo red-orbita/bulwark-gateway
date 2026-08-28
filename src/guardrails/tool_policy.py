@@ -312,6 +312,18 @@ class AgentPolicy:
     #   output_schema (inline dict) | output_schema_path (str) | on_schema_fail
     #   (block|warn|repair) | require_json (bool).
     output_validation: dict = field(default_factory=dict)
+    # Optional multilingual policy (consumed by the LanguageDetector input scanner
+    # when BULWARK_MULTILINGUAL_ENABLED). Empty list = no language restriction.
+    #   allowed_languages: ISO 639-1 codes permitted for this agent.
+    #   block_unknown_language: BLOCK when detected language is not in the list
+    #   (default WARN).
+    allowed_languages: list[str] = field(default_factory=list)
+    block_unknown_language: bool = False
+    # Optional multimodal policy (consumed by the ImageHygiene/Vision input
+    # scanners when their master flags are on). Empty dict = defaults (images
+    # allowed). Supported keys: allow_images (bool) | max_image_size_mb (int) |
+    # ocr_scan (bool) | nsfw_detection (bool).
+    multimodal: dict = field(default_factory=dict)
 
 
 class ToolPolicyEngine:
