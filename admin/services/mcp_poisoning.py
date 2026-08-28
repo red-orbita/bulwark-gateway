@@ -294,13 +294,13 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
     # --- TP3: Parameter Description Injection ---
 
     for pattern in _INJECTION_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            sev = "high" if "override" in match.group().lower() else "medium"
+        m = pattern.search(text)
+        if m:
+            sev = "high" if "override" in m.group().lower() else "medium"
             findings.append({
                 "rule_id": "BWK-MCP-TP3",
                 "severity": sev,
-                "message": f"Injection pattern in {context}: '{match.group()}'",
+                "message": f"Injection pattern in {context}: '{m.group()}'",
                 "confidence": 82,
                 "pattern": "description_injection",
                 "category": "mcp_poisoning",
@@ -309,12 +309,12 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
     # --- TP4: Description-Behavior Mismatch ---
 
     for pattern in _DECEPTION_KEYWORDS:
-        match = pattern.search(text)
-        if match:
+        m = pattern.search(text)
+        if m:
             findings.append({
                 "rule_id": "BWK-MCP-TP4",
                 "severity": "medium",
-                "message": f"Potential description-behavior mismatch: '{match.group()}'",
+                "message": f"Potential description-behavior mismatch: '{m.group()}'",
                 "confidence": 65,
                 "pattern": "behavior_mismatch",
                 "category": "mcp_poisoning",

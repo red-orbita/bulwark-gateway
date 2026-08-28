@@ -88,6 +88,8 @@ async def update_user(user_id: str, req: UserUpdate, user: TokenPayload = Depend
     if not existing:
         raise HTTPException(status_code=404, detail="User not found")
     updated = store.update_user(user_id, **req.model_dump(exclude_none=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
     audit = get_audit_logger()
     await audit.log(
         actor=user.sub,
@@ -214,6 +216,8 @@ async def update_profile(req: ProfileUpdate, user: TokenPayload = Depends(get_cu
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     updated = store.update_user(u["id"], **req.model_dump(exclude_none=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
     audit = get_audit_logger()
     await audit.log(
         actor=user.sub,

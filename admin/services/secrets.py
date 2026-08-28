@@ -43,9 +43,9 @@ def read_secret(env_name: str, default: str | None = None, required: bool = Fals
                 return value
 
     # 2. Check direct env var
-    value = os.getenv(env_name)
-    if value:
-        return value
+    env_value = os.getenv(env_name)
+    if env_value:
+        return env_value
 
     # 3. Default or fail
     if default is not None:

@@ -124,6 +124,13 @@ class UserStore:
         self._lock = threading.Lock()
         self._encrypted = False
 
+    @property
+    def _cx(self) -> sqlite3.Connection:
+        """Return the live connection, failing closed if not initialized."""
+        if self._conn is None:
+            raise RuntimeError("UserStore not initialized; call initialize() first")
+        return self._conn
+
     def initialize(self) -> None:
         """Create tables and seed default users if empty.
 
@@ -141,9 +148,9 @@ class UserStore:
             if not _re.match(r'^[a-zA-Z0-9+/=\-_]+$', encryption_key):
                 raise SystemExit("FATAL: DB_ENCRYPTION_KEY contains invalid characters (must be hex/base64)")
             self._conn = sqlcipher.connect(str(self._path), check_same_thread=False)
-            self._conn.execute(f"PRAGMA key = \"x'{encryption_key}'\"")
-            self._conn.execute("PRAGMA cipher_page_size = 4096")
-            self._conn.execute("PRAGMA kdf_iter = 256000")
+            self._cx.execute(f"PRAGMA key = \"x'{encryption_key}'\"")
+            self._cx.execute("PRAGMA cipher_page_size = 4096")
+            self._cx.execute("PRAGMA kdf_iter = 256000")
             self._encrypted = True
             import logging
             logging.getLogger(__name__).info("User database: SQLCipher encryption ACTIVE")
@@ -161,14 +168,14 @@ class UserStore:
             def dict_row_factory(cursor, row):
                 columns = [col[0] for col in cursor.description]
                 return dict(zip(columns, row, strict=True))
-            self._conn.row_factory = dict_row_factory
+            self._cx.row_factory = dict_row_factory
         else:
-            self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+            self._cx.row_factory = sqlite3.Row
+        self._cx.execute("PRAGMA journal_mode=WAL")
+        self._cx.execute("PRAGMA foreign_keys=ON")
 
         with self._lock:
-            self._conn.executescript("""
+            self._cx.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
                     username TEXT UNIQUE NOT NULL,
@@ -204,18 +211,18 @@ class UserStore:
             # Migrate: add new profile columns if they don't exist (for existing DBs)
             for col in ("email", "phone", "first_name", "last_name"):
                 try:
-                    self._conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+                    self._cx.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
                 except Exception:  # noqa: S110 - idempotent column add; ignore duplicate-column on already-migrated DBs
                     pass  # Column already exists
 
             # Migrate: add last_activity to sessions
             try:
-                self._conn.execute("ALTER TABLE sessions ADD COLUMN last_activity TEXT")
+                self._cx.execute("ALTER TABLE sessions ADD COLUMN last_activity TEXT")
             except Exception:  # noqa: S110 - idempotent column add; ignore duplicate-column on already-migrated DBs
                 pass
 
             # Seed default users if table is empty
-            count = self._conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()["cnt"]
+            count = self._cx.execute("SELECT COUNT(*) as cnt FROM users").fetchone()["cnt"]
             if count == 0:
                 self._seed_defaults()
             else:
@@ -261,13 +268,13 @@ class UserStore:
             )
 
         for username, password, role in defaults:
-            self._conn.execute(
+            self._cx.execute(
                 "INSERT INTO users (id, username, password_hash, role, active, "
                 "created_at, updated_at, force_password_change) "
                 "VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
                 (str(uuid4()), username, _hash_password(password), role.value, now, now),
             )
-        self._conn.commit()
+        self._cx.commit()
 
     def _sync_passwords(self) -> None:
         """Sync default user passwords with current secrets.
@@ -292,7 +299,7 @@ class UserStore:
             if current_secret == fallback:
                 continue
 
-            row = self._conn.execute(
+            row = self._cx.execute(
                 "SELECT password_hash FROM users WHERE username = ?", (username,)
             ).fetchone()
             if not row:
@@ -306,11 +313,11 @@ class UserStore:
             # Secret changed — update hash and force password change on next login
             new_hash = _hash_password(current_secret)
             now = datetime.now(timezone.utc).isoformat()
-            self._conn.execute(
+            self._cx.execute(
                 "UPDATE users SET password_hash = ?, force_password_change = 1, updated_at = ? WHERE username = ?",
                 (new_hash, now, username),
             )
-            self._conn.commit()
+            self._cx.commit()
             log.info(f"Password synced for user '{username}' (secret rotation detected, force_password_change=1)")
 
     def create_user(self, username: str, password: str, role: str, tenant_scope: Optional[str] = None,
@@ -323,7 +330,7 @@ class UserStore:
         now = datetime.now(timezone.utc).isoformat()
         user_id = str(uuid4())
         with self._lock:
-            self._conn.execute(
+            self._cx.execute(
                 "INSERT INTO users (id, username, password_hash, role, tenant_scope, email, phone, "
                 "first_name, last_name, active, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
@@ -341,25 +348,28 @@ class UserStore:
                     now,
                 ),
             )
-            self._conn.commit()
-        return self.get_user_by_id(user_id)
+            self._cx.commit()
+        user = self.get_user_by_id(user_id)
+        if user is None:
+            raise RuntimeError("User creation failed: row missing after insert")
+        return user
 
     def get_user(self, username: str) -> Optional[dict]:
         """Get user by username."""
         with self._lock:
-            row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+            row = self._cx.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return dict(row) if row else None
 
     def get_user_by_id(self, user_id: str) -> Optional[dict]:
         """Get user by ID."""
         with self._lock:
-            row = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            row = self._cx.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
 
     def list_users(self) -> list[dict]:
         """List all users."""
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM users ORDER BY created_at").fetchall()
+            rows = self._cx.execute("SELECT * FROM users ORDER BY created_at").fetchall()
         return [dict(r) for r in rows]
 
     def update_user(self, user_id: str, **fields) -> Optional[dict]:
@@ -375,19 +385,19 @@ class UserStore:
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [user_id]
         with self._lock:
-            self._conn.execute(
+            self._cx.execute(
                 f"UPDATE users SET {set_clause} WHERE id = ?", values  # noqa: S608  # nosec B608
             )
-            self._conn.commit()
+            self._cx.commit()
         return self.get_user_by_id(user_id)
 
     def delete_user(self, user_id: str) -> bool:
         """Hard-delete user from database."""
         with self._lock:
             # Also delete related sessions
-            self._conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
-            cur = self._conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            self._conn.commit()
+            self._cx.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            cur = self._cx.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            self._cx.commit()
         return cur.rowcount > 0
 
     def change_password(self, user_id: str, new_password: str) -> bool:
@@ -396,11 +406,11 @@ class UserStore:
         if not valid:
             raise ValueError(err)
         with self._lock:
-            cur = self._conn.execute(
+            cur = self._cx.execute(
                 "UPDATE users SET password_hash = ?, force_password_change = 0, updated_at = ? WHERE id = ?",
                 (_hash_password(new_password), datetime.now(timezone.utc).isoformat(), user_id),
             )
-            self._conn.commit()
+            self._cx.commit()
         return cur.rowcount > 0
 
     def verify_password(self, username: str, password: str) -> Optional[dict]:
@@ -418,11 +428,11 @@ class UserStore:
             if not user["password_hash"].startswith("$2"):
                 new_hash = _hash_password(password)
                 with self._lock:
-                    self._conn.execute(
+                    self._cx.execute(
                         "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
                         (new_hash, datetime.now(timezone.utc).isoformat(), user["id"]),
                     )
-                    self._conn.commit()
+                    self._cx.commit()
             # Update last_login
             self.update_user(user["id"], last_login=datetime.now(timezone.utc).isoformat())
             return user
@@ -436,12 +446,14 @@ class UserStore:
             raise RuntimeError("pyotp is not installed — MFA unavailable")
         secret = pyotp.random_base32()
         with self._lock:
-            self._conn.execute(
+            self._cx.execute(
                 "UPDATE users SET mfa_secret = ?, updated_at = ? WHERE id = ?",
                 (secret, datetime.now(timezone.utc).isoformat(), user_id),
             )
-            self._conn.commit()
+            self._cx.commit()
         user = self.get_user_by_id(user_id)
+        if user is None:
+            raise RuntimeError(f"User {user_id} not found after MFA secret update")
         totp = pyotp.TOTP(secret)
         uri = totp.provisioning_uri(name=user["username"], issuer_name="BulwarkGateway")
         return {"secret": secret, "provisioning_uri": uri}
@@ -459,11 +471,11 @@ class UserStore:
     def disable_mfa(self, user_id: str) -> bool:
         """Remove MFA secret from user."""
         with self._lock:
-            cur = self._conn.execute(
+            cur = self._cx.execute(
                 "UPDATE users SET mfa_secret = NULL, updated_at = ? WHERE id = ?",
                 (datetime.now(timezone.utc).isoformat(), user_id),
             )
-            self._conn.commit()
+            self._cx.commit()
         return cur.rowcount > 0
 
     # --- Sessions ---
@@ -485,46 +497,46 @@ class UserStore:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             # Before creating new session, count existing and delete oldest if over limit:
-            cursor = self._conn.execute(
+            cursor = self._cx.execute(
                 "SELECT COUNT(*) as cnt FROM sessions WHERE user_id = ?", (user_id,)
             )
             row = cursor.fetchone()
             existing_count = row["cnt"] if isinstance(row, dict) else row[0]
             if existing_count >= MAX_SESSIONS_PER_USER:
                 # Delete oldest sessions to make room
-                self._conn.execute(
+                self._cx.execute(
                     "DELETE FROM sessions WHERE id IN "
                     "(SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
                     (user_id, existing_count - MAX_SESSIONS_PER_USER + 1),
                 )
-            self._conn.execute(
+            self._cx.execute(
                 "INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, "
                 "revoked, ip_address, user_agent) "
                 "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
                 (session_id, user_id, token_hash, now, expires_at, ip, user_agent),
             )
-            self._conn.commit()
+            self._cx.commit()
         return {"id": session_id, "token_hash": token_hash, "created_at": now, "expires_at": expires_at}
 
     def revoke_session(self, session_id: str) -> bool:
         """Revoke a session by ID."""
         with self._lock:
-            cur = self._conn.execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
-            self._conn.commit()
+            cur = self._cx.execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
+            self._cx.commit()
         return cur.rowcount > 0
 
     def revoke_all_sessions(self, user_id: str) -> int:
         """Revoke all sessions for a user."""
         with self._lock:
-            cur = self._conn.execute("UPDATE sessions SET revoked = 1 WHERE user_id = ? AND revoked = 0", (user_id,))
-            self._conn.commit()
+            cur = self._cx.execute("UPDATE sessions SET revoked = 1 WHERE user_id = ? AND revoked = 0", (user_id,))
+            self._cx.commit()
         return cur.rowcount
 
     def get_active_sessions(self, user_id: str) -> list[dict]:
         """Get all non-revoked, non-expired sessions for user."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            rows = self._conn.execute(
+            rows = self._cx.execute(
                 "SELECT * FROM sessions WHERE user_id = ? AND revoked = 0 AND expires_at > ? ORDER BY created_at DESC",
                 (user_id, now),
             ).fetchall()
@@ -534,7 +546,7 @@ class UserStore:
         """Check if a session with this token hash is active."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            row = self._conn.execute(
+            row = self._cx.execute(
                 "SELECT id FROM sessions WHERE token_hash = ? AND revoked = 0 AND expires_at > ?",
                 (token_hash, now),
             ).fetchone()
@@ -549,7 +561,7 @@ class UserStore:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         with self._lock:
-            row = self._conn.execute(
+            row = self._cx.execute(
                 "SELECT id, last_activity FROM sessions WHERE token_hash = ? AND revoked = 0",
                 (token_hash,),
             ).fetchone()
@@ -566,8 +578,8 @@ class UserStore:
                     age_seconds = (now - last_dt).total_seconds()
                     if age_seconds > idle_timeout_minutes * 60:
                         # Idle timeout exceeded — revoke session
-                        self._conn.execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
-                        self._conn.commit()
+                        self._cx.execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))
+                        self._cx.commit()
                         return False
                     # Throttle: skip write if last activity was within 60s
                     if age_seconds < 60:
@@ -575,8 +587,8 @@ class UserStore:
                 except (ValueError, TypeError):
                     pass
             # Update last_activity
-            self._conn.execute("UPDATE sessions SET last_activity = ? WHERE token_hash = ?", (now_iso, token_hash))
-            self._conn.commit()
+            self._cx.execute("UPDATE sessions SET last_activity = ? WHERE token_hash = ?", (now_iso, token_hash))
+            self._cx.commit()
         return True
 
 
@@ -641,9 +653,9 @@ class PostgreSQLUserStore(UserStore):
             # built-in account's secret was rotated since the last boot, the
             # stored hash is stale and the operator would be locked out. Mirror
             # the SQLCipher backend's _sync_passwords so rotation propagates.
-            self._sync_passwords(db)
+            self._sync_passwords_pg(db)
 
-    def _sync_passwords(self, db) -> None:
+    def _sync_passwords_pg(self, db) -> None:
         """Sync built-in user passwords with current secrets (PostgreSQL, sync version).
 
         Only touches admin/security/auditor, and only when the current secret
@@ -785,7 +797,10 @@ class PostgreSQLUserStore(UserStore):
                 now,
             ),
         )
-        return self.get_user_by_id(user_id)
+        user = self.get_user_by_id(user_id)
+        if user is None:
+            raise RuntimeError("User creation failed: row missing after insert")
+        return user
 
     def update_user(self, user_id: str, **fields) -> Optional[dict]:
         allowed = {"role", "tenant_scope", "active", "last_login", "email", "phone", "first_name", "last_name"}
@@ -926,7 +941,7 @@ def get_user_store() -> UserStore:
             if _store is None:
                 from .database import ADMIN_DB_URL
                 if ADMIN_DB_URL.startswith("postgresql") or ADMIN_DB_URL.startswith("postgres://"):
-                    store = PostgreSQLUserStore()
+                    store: UserStore = PostgreSQLUserStore()
                     store.initialize()
                     _store = store
                 else:

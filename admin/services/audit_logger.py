@@ -214,7 +214,7 @@ class AuditLogger:
             head = r.get(REDIS_KEY_CHAIN_HEAD)
             if seq is not None and head is not None:
                 self._sequence_id = int(seq)
-                self._chain_head = head
+                self._chain_head = head.decode() if isinstance(head, bytes) else head
                 logger.info(
                     "Restored chain state from Redis: seq=%d head=%s",
                     self._sequence_id, self._chain_head[:20] + "...",
@@ -598,6 +598,8 @@ class PostgreSQLAuditLogger(AuditLogger):
         ts = row.get("timestamp")
         if isinstance(ts, str):
             ts = datetime.fromisoformat(ts)
+        elif not isinstance(ts, datetime):
+            ts = datetime.now(timezone.utc)
         return AuditEntry(
             id=row["id"],
             timestamp=ts,

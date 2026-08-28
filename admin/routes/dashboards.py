@@ -172,19 +172,19 @@ async def _resolve_from_prometheus(
     if all(r is None for r in results):
         return None
     # Treat failed individual targets as empty series.
-    results = [r if r is not None else [] for r in results]
+    clean: list[list[Sample]] = [r if r is not None else [] for r in results]
 
     out = _base_panel(panel)
     out["source"] = "prometheus"
 
     if panel.type == "timeseries":
-        out["series"] = _shape_timeseries(panel, results)
+        out["series"] = _shape_timeseries(panel, clean)
     elif panel.type in ("stat", "gauge"):
-        out.update(_shape_stat(panel, results))
+        out.update(_shape_stat(panel, clean))
     elif panel.type in ("piechart", "barchart"):
-        out["items"] = _shape_items(panel, results)
+        out["items"] = _shape_items(panel, clean)
     elif panel.type == "table":
-        out.update(_shape_table(panel, results))
+        out.update(_shape_table(panel, clean))
     else:  # unknown type — expose nothing rather than guess
         out["series"] = []
     return out
@@ -368,12 +368,12 @@ def _resolve_from_redis(panel: Panel, ds: dict) -> dict | None:
             ("block", ds["usage_block"]), ("allow", ds["usage_allow"]),
             ("warn", ds["usage_warn"]), ("redact", ds["usage_redact"]),
         )
-        rows: list[dict] = []
+        vrows: list[dict] = []
         for verdict, m in verdict_maps:
             for tenant, count in m.items():
-                rows.append({panel.key_column: tenant, "Verdict": verdict, "Count": count})
-        rows.sort(key=lambda row: row["Count"], reverse=True)
-        out["rows"] = rows
+                vrows.append({panel.key_column: tenant, "Verdict": verdict, "Count": count})
+        vrows.sort(key=lambda row: row["Count"], reverse=True)
+        out["rows"] = vrows
     elif fb == "correlation_counters":
         counters = ds["correlation_counters"]
         out["columns"] = [panel.key_column, "Count"]

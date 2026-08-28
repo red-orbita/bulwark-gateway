@@ -490,7 +490,10 @@ async def run_evaluation(
 
 @router.post("/run/quick")
 async def run_quick_evaluation(
-    req: QuickEvaluationRequest = QuickEvaluationRequest(),
+    # pydantic Field(None,...) defaults are valid at runtime; the pydantic.mypy
+    # plugin (which teaches mypy these are optional) is incompatible with the
+    # pinned mypy, so the no-arg construction is flagged as missing-arg here.
+    req: QuickEvaluationRequest = QuickEvaluationRequest(),  # type: ignore[call-arg]
     user: TokenPayload = Depends(require_permission("guardrails:test")),
 ) -> dict:
     """Quick evaluation with 5 attacks per category (preset).
@@ -521,7 +524,9 @@ async def run_quick_evaluation(
 
 @router.post("/corpus")
 async def run_corpus_evaluation(
-    req: RunCorpusRequest = RunCorpusRequest(),
+    # See note in run_quick_evaluation: pydantic.mypy plugin incompatible with
+    # the pinned mypy, so Field-defaulted optional fields read as required.
+    req: RunCorpusRequest = RunCorpusRequest(),  # type: ignore[call-arg]
     user: TokenPayload = Depends(require_permission("guardrails:test")),
 ) -> dict:
     """Evaluate the guardrail pipeline against the EXTERNAL labeled corpora.

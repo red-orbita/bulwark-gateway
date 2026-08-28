@@ -79,7 +79,7 @@ def get_effective_permissions() -> dict[str, list[str]]:
     """Get the effective permission matrix (base + overrides + custom roles)."""
     overrides = _load_overrides()
     custom_roles = _load_custom_roles()
-    result = {}
+    result: dict[str, list[str]] = {}
     # Built-in roles
     for role in UserRole:
         if role.value in overrides:

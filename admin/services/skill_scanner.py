@@ -890,7 +890,7 @@ class SkillScanner:
                 continue
             findings.append(SkillFinding(
                 rule_id=f.get("rule_id", "SP-???"),
-                message=f.get("message", f.get("finding", "")),
+                message=str(f.get("message") or f.get("finding") or ""),
                 severity=_map_skillspector_severity(f.get("severity", "LOW")),
                 confidence=f.get("confidence", 0.85) / 100 if f.get("confidence", 0) > 1 else f.get("confidence", 0.85),
                 location=f.get("location", ""),
@@ -1331,7 +1331,7 @@ class SkillScanner:
 
     def _extract_tools(self, data: dict) -> list[str]:
         """Extract tool names from various skill definition formats."""
-        tools = []
+        tools: list[str] = []
         for key in ("tools", "allowed_tools", "functions", "actions"):
             val = data.get(key, [])
             if isinstance(val, list):

@@ -59,13 +59,14 @@ class FeedScheduler:
 
             # Determine if feed is due
             if feed.last_run:
-                try:
-                    last = datetime.fromisoformat(feed.last_run.replace("Z", "+00:00"))
-                    elapsed_minutes = (now - last).total_seconds() / 60
-                    if elapsed_minutes < feed.interval_minutes:
-                        continue
-                except (ValueError, TypeError):
-                    pass  # If can't parse, run it
+                # last_run is a datetime (ioc_store constructs it via
+                # fromisoformat); normalize to tz-aware before comparing.
+                last = feed.last_run
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                elapsed_minutes = (now - last).total_seconds() / 60
+                if elapsed_minutes < feed.interval_minutes:
+                    continue
 
             # Run in executor to not block the event loop (fetchers use requests/httpx sync)
             loop = asyncio.get_event_loop()

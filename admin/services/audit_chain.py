@@ -346,7 +346,7 @@ async def publish_anchor_to_redis() -> Optional[str]:
         client.hset("bulwark:audit:anchor", mapping={
             "chain_head": audit.chain_head,
             "sequence_id": str(audit.sequence_id),
-            "timestamp": anchor_data["timestamp"],
+            "timestamp": str(anchor_data["timestamp"]),
             "hmac": anchor_hmac,
         })
         return anchor_hmac

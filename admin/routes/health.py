@@ -8,7 +8,7 @@ import json
 import os
 import time as _time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -93,7 +93,7 @@ def _check_redis_health() -> dict:
         from ..services.redis_sync import get_redis_client
         r = get_redis_client(timeout=1.0)
         if r is None:
-            result = {"status": "not_configured"}
+            result: dict[str, Any] = {"status": "not_configured"}
         else:
             start = _t.perf_counter()
             r.ping()
@@ -817,7 +817,7 @@ async def health_infra(
 def _fetch_redis_all_sync() -> tuple[dict, dict]:
     """Fetch Redis counters + health in a single call (for background task)."""
     counters = {}
-    health = {"status": "unknown"}
+    health: dict[str, Any] = {"status": "unknown"}
     try:
         from ..services.redis_sync import get_redis_client
         r = get_redis_client(timeout=1.0)

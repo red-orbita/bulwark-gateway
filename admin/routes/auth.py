@@ -9,7 +9,7 @@ import time
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from ..models.auth import ChangePasswordRequest, LoginRequest, LoginResponse, TokenPayload, UserInfo
+from ..models.auth import ChangePasswordRequest, LoginRequest, LoginResponse, TokenPayload, UserInfo, UserRole
 from ..services.audit_logger import get_audit_logger
 from ..services.auth_service import AuthService, get_current_user
 from ..services.user_store import get_user_store
@@ -202,7 +202,7 @@ async def login(req: LoginRequest, request: Request, response: Response):
         if result.get("mfa_required"):
             return LoginResponse(
                 access_token="",
-                role="admin",
+                role=UserRole.VIEWER,
                 username=req.username,
                 mfa_required=True,
                 expires_in=0,
@@ -383,7 +383,6 @@ async def force_change_password(request: Request):
     )
 
     # Issue token immediately (no need for second login round-trip)
-    from ..models.auth import UserRole
     role = UserRole(db_user["role"])
     user_agent = request.headers.get("user-agent")
     token = AuthService.create_token(username, role, user_id=db_user["id"], ip=ip, user_agent=user_agent)

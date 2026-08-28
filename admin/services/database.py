@@ -453,7 +453,9 @@ class SQLiteEngine(DatabaseEngine):
 
     def __init__(self, url: str):
         super().__init__(url)
-        self._conn = None
+        # Runtime type is aiosqlite.Connection | sqlite3.Connection, chosen
+        # dynamically based on _aiosqlite_available; typed Any to bridge both.
+        self._conn: Any = None
         self._lock = asyncio.Lock()
         self._aiosqlite_available = False
         self._db_path = self._parse_path(url)
@@ -736,7 +738,8 @@ class PostgreSQLEngine(DatabaseEngine):
     def __init__(self, url: str, pool_min: int = 2, pool_max: int = 20,
                  ssl: bool = False, ssl_mode: str = "require"):
         super().__init__(url)
-        self._pool = None
+        # Runtime type is asyncpg.Pool; typed Any since asyncpg is optional.
+        self._pool: Any = None
         self._pool_min = pool_min
         self._pool_max = pool_max
         self._ssl = ssl
@@ -764,6 +767,7 @@ class PostgreSQLEngine(DatabaseEngine):
         connect_kwargs: dict[str, Any] = {}
         if self._ssl:
             import ssl as ssl_module
+            ssl_ctx: ssl_module.SSLContext | bool
             if self._ssl_mode == "verify-full":
                 ssl_ctx = ssl_module.create_default_context()
             elif self._ssl_mode == "verify-ca":

@@ -48,7 +48,7 @@ def list_iocs(
     user: TokenPayload = Depends(require_permission("iocs:read")),
 ):
     """List IOCs with filtering and pagination."""
-    entries, total = store.list(
+    entries, total = store.list_entries(
         ioc_type=type, source=source, severity=severity,
         active=active, search=search, page=page, per_page=per_page,
     )

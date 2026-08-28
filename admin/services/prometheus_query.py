@@ -114,7 +114,7 @@ class PrometheusClient:
     """
 
     def __init__(self, base_url: str | None = None) -> None:
-        self.base_url = (base_url or os.getenv("BULWARK_PROMETHEUS_URL", _DEFAULT_URL)).rstrip("/")
+        self.base_url = (base_url or os.getenv("BULWARK_PROMETHEUS_URL") or _DEFAULT_URL).rstrip("/")
         self._client: httpx.AsyncClient | None = None
         self._available_cache: bool | None = None
         self._available_ts: float = 0.0

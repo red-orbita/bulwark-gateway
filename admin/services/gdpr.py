@@ -21,7 +21,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -30,6 +30,14 @@ from .audit_logger import get_audit_logger
 from .redis_sync import get_redis_client
 
 logger = logging.getLogger(__name__)
+
+
+def _redis_str(value: Any) -> str:
+    """Normalize a Redis string response (bytes or str) to str."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    return str(value)
+
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -149,7 +157,7 @@ class DataCategory(BaseModel):
 class GDPRService:
     """GDPR compliance operations — pseudonymization, export, retention."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._requests_conn: Optional[sqlite3.Connection] = None
         # Ensure directories exist
@@ -579,7 +587,7 @@ class GDPRService:
             try:
                 last_run = client.get("bulwark:gdpr:retention:last_run")
                 if last_run:
-                    status.last_enforcement = last_run
+                    status.last_enforcement = _redis_str(last_run)
                 archived = client.get("bulwark:gdpr:retention:archived")
                 if archived:
                     status.records_archived = int(archived)
@@ -611,7 +619,7 @@ class GDPRService:
             try:
                 existing = client.get(redis_key)
                 if existing:
-                    return bytes.fromhex(existing)
+                    return bytes.fromhex(_redis_str(existing))
                 # Generate new salt and atomically set only if not exists
                 salt = os.urandom(32)
                 was_set = client.set(redis_key, salt.hex(), ex=86400, nx=True)
@@ -620,7 +628,7 @@ class GDPRService:
                 # Another process set it first — read their value
                 existing = client.get(redis_key)
                 if existing:
-                    return bytes.fromhex(existing)
+                    return bytes.fromhex(_redis_str(existing))
                 return salt  # Fallback: use ours if read fails
             except Exception:  # noqa: S110 - best-effort Redis salt read; falls back to local salt
                 pass
@@ -797,7 +805,7 @@ class GDPRService:
 
     async def _find_rate_limit_history(self, subject_id: str) -> list[dict]:
         """Find rate limit records for a subject (tenant-based)."""
-        history = []
+        history: list[dict[str, Any]] = []
         client = get_redis_client()
         if not client:
             return history
@@ -805,7 +813,10 @@ class GDPRService:
         try:
             # Rate limit keys are per-tenant
             key = f"bulwark:rate_limit:{subject_id}"
-            members = client.zrangebyscore(key, "-inf", "+inf", withscores=True)
+            members = cast(
+                "list[tuple[str, float]]",
+                client.zrangebyscore(key, "-inf", "+inf", withscores=True),
+            )
             for member, score in (members or []):
                 history.append({
                     "timestamp": datetime.fromtimestamp(score, tz=timezone.utc).isoformat(),
@@ -975,7 +986,7 @@ class GDPRService:
                 for entry in recent_entries:
                     entry_str = entry if isinstance(entry, str) else entry.decode("utf-8", errors="ignore")
                     if subject_id in entry_str:
-                        client.lrem(recent_key, 0, entry)
+                        client.lrem(recent_key, 0, entry_str)
                         erased += 1
 
             logger.info(

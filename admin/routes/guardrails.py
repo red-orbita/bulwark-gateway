@@ -89,11 +89,12 @@ def _load_patterns() -> list[dict]:
             # at match-time (input_guardrail.py: is_disabled / exception lookup).
             # Falling back to positional id only if pattern_id is unset.
             real_id = getattr(p, "pattern_id", "") or f"input-{i}"
+            regex_obj = getattr(p, 'regex', None)
             patterns.append({
                 "id": real_id,
                 "layer": "input",
                 "description": getattr(p, 'description', f'Pattern {i}'),
-                "regex": getattr(p, 'regex', None).pattern[:120] if getattr(p, 'regex', None) else '',
+                "regex": regex_obj.pattern[:120] if regex_obj else '',
                 "severity": getattr(p, 'severity', 'medium'),
                 "category": p.category.value if hasattr(p, 'category') and p.category else 'unknown',
                 "enabled": True,
@@ -705,50 +706,44 @@ async def get_tool_policy(
     user: TokenPayload = Depends(require_permission("guardrails:read")),
 ):
     """Get tool policy rules for a specific tenant/agent."""
-    try:
-        from src.guardrails.tool_policy import ToolPolicy
-        tp = ToolPolicy()
-        rules = tp.get_rules(tenant_id, agent_id)
-        return {"tenant_id": tenant_id, "agent_id": agent_id, "rules": rules}
-    except Exception:
-        # Fallback: read from policy YAML files (search by tenant field)
-        from pathlib import Path
+    # Read from policy YAML files (search by tenant field).
+    from pathlib import Path
 
-        import yaml
-        policies_dir = Path("config/policies")
-        if not policies_dir.exists():
-            raise HTTPException(status_code=404, detail=f"No policy for tenant: {tenant_id}") from None
+    import yaml
+    policies_dir = Path("config/policies")
+    if not policies_dir.exists():
+        raise HTTPException(status_code=404, detail=f"No policy for tenant: {tenant_id}")
 
-        # Find policy file that matches this tenant
-        agent_policy = None
-        for policy_file in policies_dir.glob("*.yaml"):
-            try:
-                with open(policy_file) as f:
-                    policy = yaml.safe_load(f)
-                if policy.get("tenant") == tenant_id:
-                    for agent in policy.get("agents", []):
-                        if agent.get("id") == agent_id:
-                            agent_policy = agent
-                            break
-                    if agent_policy:
+    # Find policy file that matches this tenant
+    agent_policy = None
+    for policy_file in policies_dir.glob("*.yaml"):
+        try:
+            with open(policy_file) as f:
+                policy = yaml.safe_load(f)
+            if policy.get("tenant") == tenant_id:
+                for agent in policy.get("agents", []):
+                    if agent.get("id") == agent_id:
+                        agent_policy = agent
                         break
-            except Exception:  # noqa: S112 - skip an unparseable policy file; one bad YAML must not break tenant lookup
-                continue
+                if agent_policy:
+                    break
+        except Exception:  # noqa: S112 - skip an unparseable policy file; one bad YAML must not break tenant lookup
+            continue
 
-        if not agent_policy:
-            raise HTTPException(status_code=404, detail=f"No policy for {tenant_id}/{agent_id}") from None
+    if not agent_policy:
+        raise HTTPException(status_code=404, detail=f"No policy for {tenant_id}/{agent_id}")
 
-        return {
-            "tenant_id": tenant_id,
-            "agent_id": agent_id,
-            "rules": {
-                "allowed_tools": agent_policy.get("allowed_tools", []),
-                "denied_tools": agent_policy.get("denied_tools", []),
-                "max_tool_calls": agent_policy.get("max_tool_calls", 0),
-                "sandbox_level": agent_policy.get("sandbox_level", "standard"),
-                "tool_policies": agent_policy.get("tool_policies", []),
-            },
-        }
+    return {
+        "tenant_id": tenant_id,
+        "agent_id": agent_id,
+        "rules": {
+            "allowed_tools": agent_policy.get("allowed_tools", []),
+            "denied_tools": agent_policy.get("denied_tools", []),
+            "max_tool_calls": agent_policy.get("max_tool_calls", 0),
+            "sandbox_level": agent_policy.get("sandbox_level", "standard"),
+            "tool_policies": agent_policy.get("tool_policies", []),
+        },
+    }
 
 
 @router.put("/tool-policy/{tenant_id}/{agent_id}")
@@ -830,12 +825,12 @@ async def test_guardrail(
         })
 
     matched_patterns_info = []
-    for e in events:
-        if e.get("matched_pattern"):
+    for ev in events:
+        if ev.get("matched_pattern"):
             matched_patterns_info.append({
-                "id": e.get("matched_pattern", ""),
-                "description": e.get("description", ""),
-                "category": e.get("category", ""),
+                "id": ev.get("matched_pattern", ""),
+                "description": ev.get("description", ""),
+                "category": ev.get("category", ""),
             })
 
     return GuardrailTestResult(
@@ -860,7 +855,7 @@ async def validate_pattern(
 async def guardrail_stats(user: TokenPayload = Depends(require_permission("guardrails:read"))):
     """Get guardrail pattern statistics."""
     patterns = _load_patterns()
-    layers = {}
+    layers: dict[str, int] = {}
     for p in patterns:
         layers[p["layer"]] = layers.get(p["layer"], 0) + 1
 

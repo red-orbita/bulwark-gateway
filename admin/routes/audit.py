@@ -28,13 +28,13 @@ router = APIRouter()
 
 @router.get("")
 async def query_audit_log(
-    actor: str = None,
-    action: str = None,
-    resource_type: str = None,
-    tenant_id: str = None,
-    search: str = None,
-    date_from: str = None,
-    date_to: str = None,
+    actor: str | None = None,
+    action: str | None = None,
+    resource_type: str | None = None,
+    tenant_id: str | None = None,
+    search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     limit: int = 50,
     offset: int = 0,
     user: TokenPayload = Depends(require_permission("audit:read")),

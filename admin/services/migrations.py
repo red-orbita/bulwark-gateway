@@ -561,11 +561,11 @@ async def _apply_migration(engine: DatabaseEngine, migration: Migration, sql: st
 
         # Record migration
         elapsed_ms = int((_time.monotonic() - start) * 1000)
-        now = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         await engine.execute(
             "INSERT INTO schema_migrations (version, description, applied_at, execution_ms) "
             "VALUES (?, ?, ?, ?)",
-            (migration.version, migration.description, now, elapsed_ms),
+            (migration.version, migration.description, now_iso, elapsed_ms),
         )
 
 

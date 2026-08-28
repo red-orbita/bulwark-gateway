@@ -252,7 +252,7 @@ async def ml_scanner_status(
     # - Only fall back to local check if proxy is unreachable
     if proxy_reachable:
         deps_available = True  # Proxy loaded successfully = deps present on proxy
-        missing_deps = []
+        missing_deps: list[str] = []
     else:
         # Fallback: check locally (admin pod doesn't have ML deps — warn user)
         deps_available = True

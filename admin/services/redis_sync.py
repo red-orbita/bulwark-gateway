@@ -14,7 +14,7 @@ import logging
 import os
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional, cast
 
 import redis
 
@@ -271,7 +271,9 @@ def sync_exceptions(exceptions: dict[str, list[str]]) -> None:
     pipe = r.pipeline()
     pipe.delete(KEY_EXCEPTIONS)
     if mapping:
-        pipe.hset(KEY_EXCEPTIONS, mapping=mapping)
+        # redis-py's hset mapping key type is an invariant Union; a plain
+        # dict[str, str] is valid at runtime but not assignable under the stub.
+        pipe.hset(KEY_EXCEPTIONS, mapping=cast("dict[Any, Any]", mapping))
     pipe.incr(KEY_VERSION)
     pipe.execute()
 

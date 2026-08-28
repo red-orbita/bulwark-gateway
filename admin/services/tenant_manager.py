@@ -147,7 +147,8 @@ class TenantManager:
         with self._rw_lock:
             if req.id in self._data["tenants"]:
                 raise ValueError(f"Tenant '{req.id}' already exists")
-            now = datetime.now(timezone.utc).isoformat()
+            now_dt = datetime.now(timezone.utc)
+            now = now_dt.isoformat()
             self._data["tenants"][req.id] = {
                 "_meta": {
                     "name": req.name,
@@ -164,7 +165,7 @@ class TenantManager:
                 status=TenantStatus.ACTIVE,
                 agent_count=0,
                 contact_email=req.contact_email,
-                created_at=now,
+                created_at=now_dt,
             )
 
     def update_tenant(self, tenant_id: str, req: TenantUpdate) -> Optional[TenantInfo]:
@@ -379,7 +380,7 @@ class TenantManager:
                 return None
             quotas = tdata.get("quotas")
             configured = isinstance(quotas, dict)
-            q = quotas if configured else {}
+            q = quotas if isinstance(quotas, dict) else {}
             return TenantQuotaInfo(
                 tenant_id=tenant_id,
                 configured=configured,

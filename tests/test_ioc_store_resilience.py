@@ -21,7 +21,7 @@ def test_valid_ioc_file_loads(tmp_path):
     ioc_path.write_text(json.dumps({"domains": ["evil.example"], "ips": ["1.2.3.4"]}))
 
     store = IOCStore(ioc_path=ioc_path, feed_state_path=feed_path)
-    entries, total = store.list()
+    entries, total = store.list_entries()
 
     assert total == 2
     values = {e.value for e in entries}
@@ -35,7 +35,7 @@ def test_corrupt_ioc_file_does_not_crash(tmp_path):
 
     # Must NOT raise.
     store = IOCStore(ioc_path=ioc_path, feed_state_path=feed_path)
-    entries, total = store.list()
+    entries, total = store.list_entries()
 
     assert total == 0
     assert entries == []
@@ -67,7 +67,7 @@ def test_store_usable_after_corruption_recovery(tmp_path):
 
     # A fresh valid file was written back and reloads cleanly.
     reloaded = IOCStore(ioc_path=ioc_path, feed_state_path=feed_path)
-    _, total = reloaded.list()
+    _, total = reloaded.list_entries()
     assert total == 1
 
 
@@ -77,7 +77,7 @@ def test_corrupt_feed_state_does_not_crash(tmp_path):
     feed_path.write_text('{"threatfox": {truncated')
 
     store = IOCStore(ioc_path=ioc_path, feed_state_path=feed_path)
-    _, total = store.list()
+    _, total = store.list_entries()
 
     assert total == 1
     assert not feed_path.exists()
@@ -89,7 +89,7 @@ def test_non_object_json_is_treated_as_corrupt(tmp_path):
     ioc_path.write_text("[1, 2, 3]")  # valid JSON, wrong shape
 
     store = IOCStore(ioc_path=ioc_path, feed_state_path=feed_path)
-    _, total = store.list()
+    _, total = store.list_entries()
 
     assert total == 0
     assert len(list(tmp_path.glob("iocs.json.corrupt-*"))) == 1

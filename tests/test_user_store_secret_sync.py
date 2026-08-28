@@ -5,7 +5,7 @@ was empty. On a persistent volume, rotating a Docker/K8s secret (e.g.
 ADMIN_PASSWORD) left a stale bcrypt hash in the DB, locking the operator out
 because login verifies against the stored hash, not the mounted secret.
 
-These tests pin the fixed behaviour of ``PostgreSQLUserStore._sync_passwords``
+These tests pin the fixed behaviour of ``PostgreSQLUserStore._sync_passwords_pg``
 and its wiring through ``_sync_seed_defaults``:
 
 * rotation detected  -> hash updated + force_password_change=1
@@ -86,7 +86,7 @@ def test_rotation_detected_updates_hash_and_forces_change(store, monkeypatch):
     })
     _set_secret(monkeypatch, {"ADMIN_PASSWORD": new_pw})
 
-    store._sync_passwords(db)
+    store._sync_passwords_pg(db)
 
     stored = db.users["admin"]["password_hash"]
     assert _verify_password(new_pw, stored), "hash should now match the rotated secret"
@@ -103,7 +103,7 @@ def test_no_rotation_is_idempotent(store, monkeypatch):
     })
     _set_secret(monkeypatch, {"ADMIN_PASSWORD": pw})
 
-    store._sync_passwords(db)
+    store._sync_passwords_pg(db)
 
     # Secret already matches stored hash -> no UPDATE, flag untouched
     assert db.update_count == 0
@@ -119,7 +119,7 @@ def test_default_secret_is_never_synced(store, monkeypatch):
     })
     _set_secret(monkeypatch, {})  # everything falls back to defaults
 
-    store._sync_passwords(db)
+    store._sync_passwords_pg(db)
 
     assert db.update_count == 0
     assert db.users["admin"]["force_password_change"] == 0
@@ -129,7 +129,7 @@ def test_missing_user_row_is_skipped(store, monkeypatch):
     db = FakeDB({})  # no admin row present
     _set_secret(monkeypatch, {"ADMIN_PASSWORD": "AnythingStrong123!"})
 
-    store._sync_passwords(db)  # must not raise
+    store._sync_passwords_pg(db)  # must not raise
 
     assert db.update_count == 0
 
@@ -141,7 +141,7 @@ def test_only_builtin_accounts_are_targeted(store, monkeypatch):
     })
     _set_secret(monkeypatch, {"ADMIN_PASSWORD": "RotatedSecretPassw0rd!"})
 
-    store._sync_passwords(db)
+    store._sync_passwords_pg(db)
 
     assert db.update_count == 0
     assert db.users["alice"]["force_password_change"] == 0
@@ -170,7 +170,7 @@ def test_seed_dispatch_runs_sync_when_table_populated(store, monkeypatch):
     })
     _set_secret(monkeypatch, {"ADMIN_PASSWORD": new_pw})
 
-    # Non-empty table -> _sync_seed_defaults must dispatch to _sync_passwords
+    # Non-empty table -> _sync_seed_defaults must dispatch to _sync_passwords_pg
     store._sync_seed_defaults(db)
 
     assert db.update_count == 1

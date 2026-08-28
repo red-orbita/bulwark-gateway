@@ -239,7 +239,7 @@ class IOCStore:
         with self._lock:
             return self._entries.get(ioc_id)
 
-    def list(
+    def list_entries(
         self,
         ioc_type: Optional[IOCType] = None,
         source: Optional[str] = None,
@@ -894,7 +894,7 @@ class IOCStore:
                     value = item.strip()
                     ioc_type = self._guess_ioc_type(value)
                 elif isinstance(item, dict):
-                    value = item.get("value", item.get("indicator", ""))
+                    value = str(item.get("value", item.get("indicator", "")) or "")
                     ioc_type = self._type_from_string(item.get("type", ""))
                 else:
                     continue
