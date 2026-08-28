@@ -180,6 +180,13 @@ class _Rule:
     target: str = "both"  # "keys", "values", "both"
 
 
+# OWASP tags use the **2025** LLM Top 10 numbering, consistent with the compliance
+# SSOT (src/telemetry/compliance.py). Under 2025, "Excessive Agency" is LLM06 (it
+# was LLM08 in 2023) and absorbs the tool-abuse / over-privileged capability risks
+# below; "Overreliance" (2023 LLM09) is retired — those rules are excessive-agency,
+# not the unrelated 2025 LLM09 "Misinformation". A unit test
+# (tests/test_skill_scanner_owasp_2025.py) pins these codes against the SSOT so they
+# cannot silently drift back to the 2023 revision.
 _BULWARK_RULES: list[_Rule] = [
     # ── Tool Poisoning (TP) ──────────────────────────────────────
     _Rule(
@@ -188,7 +195,7 @@ _BULWARK_RULES: list[_Rule] = [
         pattern=re.compile(
             r"\b(run_command|exec|shell|bash|system|subprocess|os\.system|popen|spawn)\b", re.I
         ),
-        score=3.0, tags=["OWASP-LLM08", "MITRE-T1059"], target="both",
+        score=3.0, tags=["OWASP-LLM06", "MITRE-T1059"], target="both",
     ),
     _Rule(
         id="BWK-TP-002", category="tool_abuse", severity=RiskSeverity.HIGH,
@@ -196,7 +203,7 @@ _BULWARK_RULES: list[_Rule] = [
         pattern=re.compile(
             r"\b(write_file|delete_file|remove_file|create_file|overwrite|unlink|rmtree)\b", re.I
         ),
-        score=2.5, tags=["OWASP-LLM08"], target="both",
+        score=2.5, tags=["OWASP-LLM06"], target="both",
     ),
     _Rule(
         id="BWK-TP-003", category="tool_abuse", severity=RiskSeverity.HIGH,
@@ -204,7 +211,7 @@ _BULWARK_RULES: list[_Rule] = [
         pattern=re.compile(
             r"\b(eval|compile|exec_code|run_python|execute_script|dynamic_eval)\b", re.I
         ),
-        score=2.5, tags=["OWASP-LLM08", "MITRE-T1059.006"], target="both",
+        score=2.5, tags=["OWASP-LLM06", "MITRE-T1059.006"], target="both",
     ),
     _Rule(
         id="BWK-TP-004", category="tool_abuse", severity=RiskSeverity.MEDIUM,
@@ -212,7 +219,7 @@ _BULWARK_RULES: list[_Rule] = [
         pattern=re.compile(
             r"\b(drop_table|truncate|delete_all|db_execute|raw_sql|sql_exec)\b", re.I
         ),
-        score=2.0, tags=["OWASP-LLM08"], target="both",
+        score=2.0, tags=["OWASP-LLM06"], target="both",
     ),
 
     # ── Privilege Escalation (PE) ────────────────────────────────
@@ -230,7 +237,7 @@ _BULWARK_RULES: list[_Rule] = [
         pattern=re.compile(
             r"\b(bypass_sandbox|disable_guardrail|override_policy|skip_validation|no_restrict)\b", re.I
         ),
-        score=2.5, tags=["OWASP-LLM08"], target="both",
+        score=2.5, tags=["OWASP-LLM06"], target="both",
     ),
     _Rule(
         id="BWK-PE-003", category="privilege_escalation", severity=RiskSeverity.MEDIUM,
@@ -238,7 +245,7 @@ _BULWARK_RULES: list[_Rule] = [
         pattern=re.compile(
             r"(allow_all|permissions?\s*:\s*\*|tools?\s*:\s*\*|\"?\*\"?\s*$)", re.I | re.M
         ),
-        score=2.0, tags=["OWASP-LLM09"], target="both",
+        score=2.0, tags=["OWASP-LLM06"], target="both",
     ),
 
     # ── Data Exfiltration (DE) ───────────────────────────────────
@@ -326,7 +333,7 @@ _BULWARK_RULES: list[_Rule] = [
             r"sandbox_level\s*:\s*['\"]?none['\"]?)",
             re.I
         ),
-        score=1.5, tags=["OWASP-LLM08", "OWASP-LLM09"], target="both",
+        score=1.5, tags=["OWASP-LLM06"], target="both",
     ),
     _Rule(
         id="BWK-EA-002", category="excessive_agency", severity=RiskSeverity.HIGH,
@@ -336,7 +343,7 @@ _BULWARK_RULES: list[_Rule] = [
             r"human_in_loop\s*:\s*(false|no|0))",
             re.I
         ),
-        score=2.0, tags=["OWASP-LLM09"], target="both",
+        score=2.0, tags=["OWASP-LLM06"], target="both",
     ),
 
     # ── Cross-Agent Injection (CS) ───────────────────────────────
@@ -1093,7 +1100,7 @@ class SkillScanner:
                 severity=RiskSeverity.MEDIUM,
                 confidence=0.8,
                 location=source,
-                tags=["OWASP-LLM09"],
+                tags=["OWASP-LLM06"],
                 category="excessive_agency",
                 source="bulwark",
             ))
@@ -1107,7 +1114,7 @@ class SkillScanner:
                 severity=RiskSeverity.MEDIUM,
                 confidence=0.7,
                 location=source,
-                tags=["OWASP-LLM09"],
+                tags=["OWASP-LLM06"],
                 category="excessive_agency",
                 source="bulwark",
             ))
