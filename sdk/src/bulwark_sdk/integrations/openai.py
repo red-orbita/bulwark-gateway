@@ -24,7 +24,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class _ChatCompletions:
     Routes requests through Bulwark Gateway instead of directly to OpenAI.
     """
 
-    def __init__(self, openai_client: "BulwarkOpenAI") -> None:
+    def __init__(self, openai_client: BulwarkOpenAI) -> None:
         self._client = openai_client
 
     async def create(
@@ -43,11 +43,11 @@ class _ChatCompletions:
         *,
         model: str,
         messages: list[dict[str, Any]],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
         stream: bool = False,
-        tools: Optional[list[dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
         **kwargs: Any,
     ) -> Any:
         """Create a chat completion via Bulwark Gateway.
@@ -104,7 +104,7 @@ class _ChatCompletions:
 class _Chat:
     """Proxy for OpenAI's chat namespace."""
 
-    def __init__(self, openai_client: "BulwarkOpenAI") -> None:
+    def __init__(self, openai_client: BulwarkOpenAI) -> None:
         self.completions = _ChatCompletions(openai_client)
 
 
@@ -161,7 +161,7 @@ class BulwarkOpenAI:
         """Close the underlying HTTP client."""
         await self._bulwark_client.close()
 
-    async def __aenter__(self) -> "BulwarkOpenAI":
+    async def __aenter__(self) -> BulwarkOpenAI:
         """Enter async context manager."""
         await self._bulwark_client.__aenter__()
         return self

@@ -8,7 +8,7 @@ with the Bulwark Gateway API and for local guard operations.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -68,11 +68,11 @@ class SecurityEvent(BaseModel):
         matched_pattern: The regex/rule that triggered (if applicable).
     """
 
-    category: Optional[ThreatCategory] = None
+    category: ThreatCategory | None = None
     severity: Severity = Severity.MEDIUM
     description: str = ""
-    pattern_id: Optional[str] = None
-    matched_pattern: Optional[str] = None
+    pattern_id: str | None = None
+    matched_pattern: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -90,7 +90,7 @@ class ScanResult(BaseModel):
 
     verdict: Verdict = Verdict.ALLOW
     events: list[SecurityEvent] = Field(default_factory=list)
-    modified_content: Optional[str] = None
+    modified_content: str | None = None
     latency_ms: float = 0.0
 
     @property
@@ -116,9 +116,9 @@ class Message(BaseModel):
 
     role: str
     content: str
-    name: Optional[str] = None
-    tool_calls: Optional[list[dict[str, Any]]] = None
-    tool_call_id: Optional[str] = None
+    name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -126,18 +126,18 @@ class ChatCompletionRequest(BaseModel):
 
     model: str
     messages: list[Message]
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
+    temperature: float | None = None
+    max_tokens: int | None = None
     stream: bool = False
-    tools: Optional[list[dict[str, Any]]] = None
-    tool_choice: Optional[Any] = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any | None = None
 
 
 class HealthStatus(BaseModel):
     """Health check response from Bulwark Gateway."""
 
     status: str = "healthy"
-    version: Optional[str] = None
-    uptime_seconds: Optional[float] = None
-    requests_total: Optional[int] = None
-    blocks_total: Optional[int] = None
+    version: str | None = None
+    uptime_seconds: float | None = None
+    requests_total: int | None = None
+    blocks_total: int | None = None

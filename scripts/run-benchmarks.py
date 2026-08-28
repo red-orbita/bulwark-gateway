@@ -29,13 +29,11 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.evaluation.attacks import AttackGenerator
-from src.evaluation.datasets import BenignDataset, get_standard_attacks, get_exhaustive_attacks
+from src.evaluation.datasets import BenignDataset, get_exhaustive_attacks, get_standard_attacks
 from src.evaluation.runner import EvaluationRunner
-from src.scanners.pipeline import get_scanner_pipeline, reset_scanner_pipeline
-from src.scanners.builtin import RegexInputScanner, OutputRedactionScanner
 from src.models import ThreatCategory
-
+from src.scanners.builtin import RegexInputScanner
+from src.scanners.pipeline import get_scanner_pipeline, reset_scanner_pipeline
 
 # Additional external-style attack payloads inspired by public benchmarks
 # (BIPIA, PromptBench, Garak-style prompts)

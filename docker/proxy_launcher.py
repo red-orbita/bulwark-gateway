@@ -58,7 +58,9 @@ def main() -> None:
         "uvicorn",
         "src.main:app",
         "--host",
-        "0.0.0.0",  # nosec B104 — container binds all interfaces; network exposure is controlled by the orchestrator / NetworkPolicies, not the app.
+        # Container binds all interfaces; network exposure is controlled by the
+        # orchestrator / NetworkPolicies, not the app.
+        "0.0.0.0",  # noqa: S104  # nosec B104
         "--port",
         "8080",
         "--access-log",
@@ -69,7 +71,7 @@ def main() -> None:
         workers,
     ]
     # Replace this process so uvicorn becomes PID 1 (direct SIGTERM handling).
-    os.execv(sys.executable, argv)
+    os.execv(sys.executable, argv)  # noqa: S606 - intentional exec of a fixed argv (sys.executable), no shell
 
 
 if __name__ == "__main__":

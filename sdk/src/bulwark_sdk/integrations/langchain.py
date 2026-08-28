@@ -21,8 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional, Sequence
-from uuid import UUID
+from typing import Any
 
 from bulwark_sdk.exceptions import SecurityError
 from bulwark_sdk.guard import BulwarkGuard
@@ -40,11 +39,11 @@ def _get_base_callback_class() -> type:
         try:
             from langchain.callbacks.base import BaseCallbackHandler
             return BaseCallbackHandler
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "LangChain integration requires 'langchain-core>=0.2'. "
                 "Install with: pip install bulwark-gateway-sdk[langchain]"
-            )
+            ) from exc
 
 
 class BulwarkCallbackHandler:
@@ -101,7 +100,7 @@ class BulwarkCallbackHandler:
     def _init_impl(
         self: Any,
         client: Any = None,
-        guard: Optional[BulwarkGuard] = None,
+        guard: BulwarkGuard | None = None,
         block_on_detect: bool = True,
         scan_output: bool = True,
         **kwargs: Any,
@@ -191,7 +190,7 @@ class BulwarkCallbackHandler:
                     )
                 break
 
-    def _scan_content(self: Any, content: str, direction: str = "input") -> Optional[ScanResult]:
+    def _scan_content(self: Any, content: str, direction: str = "input") -> ScanResult | None:
         """Scan content using either the client or local guard."""
         try:
             if self._guard:

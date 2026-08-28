@@ -111,6 +111,11 @@ select = ["E", "F", "W", "I", "S", "B"]
 # Same rationale as the input_guardrail/output_filter pattern files above.
 "src/guardrails/patterns/*" = ["E501"]
 "src/scanners/multilingual/patterns.py" = ["E501"]
+# Attack-payload corpora: long single-string adversarial payloads (encoded /
+# zero-width / hex-escaped) where splitting would risk byte changes and hurt
+# readability of the corpus — same rationale as the regex pattern files above.
+"scripts/run-benchmarks.py" = ["E501"]
+"scripts/pentest-guardrails.py" = ["E501"]
 # S311: the red-team attack generator needs a *reproducible* (seeded) PRNG to
 # synthesise adversarial payloads — this is deliberately non-cryptographic and
 # never used for secrets/tokens.

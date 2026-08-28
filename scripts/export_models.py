@@ -239,7 +239,7 @@ def export_model(
         tokenizer_json = output_dir / "tokenizer.json"
         if not tokenizer_json.exists():
             # Some tokenizers don't have fast version; use the saved files
-            logger.warning(f"  tokenizer.json not generated (slow tokenizer). Using vocab files.")
+            logger.warning("  tokenizer.json not generated (slow tokenizer). Using vocab files.")
 
         # Step 4: Optional quantization
         if quantize:

@@ -37,7 +37,7 @@ class SecurityError(BulwarkError):
         self.reason = message
 
 
-class ConnectionError(BulwarkError):
+class ConnectionError(BulwarkError):  # noqa: A001 - public SDK exception, mirrors requests.exceptions.ConnectionError
     """Raised when the SDK cannot connect to the Bulwark Gateway."""
 
     def __init__(self, message: str, url: str | None = None) -> None:

@@ -19,22 +19,20 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
 from bulwark_sdk.exceptions import (
     AuthenticationError,
     ConfigurationError,
-    ConnectionError,
+    ConnectionError,  # noqa: A004 - public SDK exception, mirrors requests.exceptions.ConnectionError
     GatewayError,
     RateLimitError,
     SecurityError,
 )
 from bulwark_sdk.models import (
-    ChatCompletionRequest,
     HealthStatus,
-    Message,
     ScanResult,
     SecurityEvent,
     Severity,
@@ -91,7 +89,7 @@ class BulwarkClient:
         self._agent_id = agent_id
         self._timeout = timeout
         self._max_retries = max_retries
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     @property
     def base_url(self) -> str:
@@ -108,7 +106,7 @@ class BulwarkClient:
         """The agent ID used for requests."""
         return self._agent_id
 
-    async def __aenter__(self) -> "BulwarkClient":
+    async def __aenter__(self) -> BulwarkClient:
         """Enter async context manager — creates the HTTP client."""
         self._client = self._create_client()
         return self
@@ -127,8 +125,8 @@ class BulwarkClient:
         self,
         content: str,
         *,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
     ) -> ScanResult:
         """Scan user input for security threats via the Bulwark Gateway.
 
@@ -166,9 +164,9 @@ class BulwarkClient:
         self,
         content: str,
         *,
-        input_messages: Optional[list[dict[str, str]]] = None,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
+        input_messages: list[dict[str, str]] | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
     ) -> ScanResult:
         """Scan LLM output for sensitive data and policy violations.
 
@@ -207,13 +205,13 @@ class BulwarkClient:
         *,
         model: str,
         messages: list[dict[str, Any]],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
         stream: bool = False,
-        tools: Optional[list[dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
     ) -> dict[str, Any]:
         """Proxy a chat completion request through Bulwark Gateway.
 
@@ -333,9 +331,9 @@ class BulwarkClient:
         method: str,
         path: str,
         *,
-        json: Optional[dict[str, Any]] = None,
-        tenant_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
+        json: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
     ) -> dict[str, Any]:
         """Make an authenticated HTTP request to the gateway.
 
@@ -380,7 +378,11 @@ class BulwarkClient:
             )
         elif resp.status_code == 403:
             # 403 from Bulwark means the guardrail blocked the request
-            body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            body = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
             detail = body.get("detail", "Request blocked by security guardrail")
             result = ScanResult(
                 verdict=Verdict.BLOCK,

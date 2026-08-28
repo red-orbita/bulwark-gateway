@@ -23,12 +23,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import functools
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
 
 from bulwark_sdk.exceptions import SecurityError

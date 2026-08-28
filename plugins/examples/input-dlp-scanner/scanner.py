@@ -19,11 +19,9 @@ All detection is pure regex + algorithmic — zero external dependencies.
 from __future__ import annotations
 
 import re
-from typing import Optional
 
-from src.models import GuardrailResult, SecurityEvent, Verdict, ThreatCategory
+from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
-
 
 # ---------------------------------------------------------------------------
 # Detection patterns

@@ -26,12 +26,12 @@ Quick start:
 from bulwark_sdk.client import BulwarkClient
 from bulwark_sdk.exceptions import (
     AuthenticationError,
+    BulwarkError,
     ConfigurationError,
-    ConnectionError,
+    ConnectionError,  # noqa: A004 - public SDK exception, mirrors requests.exceptions.ConnectionError
     GatewayError,
     RateLimitError,
     SecurityError,
-    BulwarkError,
 )
 from bulwark_sdk.guard import BulwarkGuard
 from bulwark_sdk.models import (
@@ -46,22 +46,19 @@ from bulwark_sdk.models import (
 __version__ = "0.2.0"
 
 __all__ = [
-    # Core classes
+    "AuthenticationError",
     "BulwarkClient",
+    "BulwarkError",
     "BulwarkGuard",
-    # Models
+    "ConfigurationError",
+    "ConnectionError",
+    "GatewayError",
     "HealthStatus",
+    "RateLimitError",
     "ScanResult",
+    "SecurityError",
     "SecurityEvent",
     "Severity",
     "ThreatCategory",
     "Verdict",
-    # Exceptions
-    "AuthenticationError",
-    "ConfigurationError",
-    "ConnectionError",
-    "GatewayError",
-    "RateLimitError",
-    "SecurityError",
-    "BulwarkError",
 ]
