@@ -189,7 +189,7 @@ class CostTracker:
                         "total_requests": int(data.get(b"requests", data.get("requests", 0))),
                         "estimated_cost_usd": float(data.get(b"cost_usd", data.get("cost_usd", 0.0))),
                     }
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort; cost read must not break the request path
                 pass
 
         # Fallback

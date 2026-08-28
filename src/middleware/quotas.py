@@ -142,7 +142,7 @@ class TokenBudgetTracker:
             try:
                 val = self._redis.get(self._redis_key(tenant_id))
                 return int(val) if val else 0
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort; quota read must not break the request path
                 pass
 
         # Fallback
@@ -159,7 +159,7 @@ class TokenBudgetTracker:
                 pipe.expire(key, _ttl_until_day_end())
                 results = pipe.execute()
                 return int(results[0])
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort; quota accounting must not break the request path
                 pass
 
         # Fallback

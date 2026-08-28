@@ -27,6 +27,8 @@ from typing import Optional
 
 import redis
 
+from src.config import settings
+
 # --- ReDoS protection ---
 # Reject patterns with dangerous quantifier nesting (e.g., (a+)+ or (a*)*b)
 _REDOS_DANGEROUS = re.compile(
@@ -49,7 +51,6 @@ def _safe_compile(pattern: str) -> re.Pattern:
         raise ValueError("Pattern contains potentially dangerous quantifier nesting (ReDoS risk)")
     return re.compile(pattern, re.IGNORECASE)
 
-from src.config import settings
 
 # SECURITY FIX (M-04): Reduced cache TTL from 5s to 1s.
 # 5s staleness window allowed disabled patterns to still trigger for too long

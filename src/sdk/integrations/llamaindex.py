@@ -222,7 +222,7 @@ def _extract_response_text(response: Any) -> str | None:
             resp = response.get_response()
             if isinstance(resp, str):
                 return resp
-        except Exception:
+        except Exception:  # noqa: S110 — best-effort response extraction across LlamaIndex versions
             pass
 
     # Fallback: str() representation if it has meaningful content

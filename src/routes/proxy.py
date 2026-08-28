@@ -28,6 +28,7 @@ from uuid import uuid4
 
 import httpx
 import structlog
+from cachetools import TTLCache
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -203,8 +204,6 @@ _BLOCKED_IPS = {
 
 # PERFORMANCE (M-03 fix): Cache DNS resolutions for SSRF checks (5s TTL).
 # Prevents blocking the event loop on repeated getaddrinfo() calls.
-from cachetools import TTLCache
-
 _DNS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=5.0)
 
 # H-04 fix: Maximum size for accumulated tool call arguments in streaming responses.
@@ -1005,7 +1004,7 @@ async def chat_completions(request: Request):
                         try:
                             r.decr(tenant_stream_key)
                             r.decr(_STREAM_KEY_GLOBAL)
-                        except Exception:
+                        except Exception:  # noqa: S110 — best-effort stream-counter decrement; Redis TTL reclaims it
                             pass  # Best effort — TTL will clean up
                     else:
                         async with _tenant_stream_lock:

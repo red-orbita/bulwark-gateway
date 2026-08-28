@@ -68,7 +68,7 @@ def _extract_domain(url: str) -> str | None:
             return None
         if "." in host and len(host) > 3:
             return host.lower()
-    except Exception:
+    except Exception:  # noqa: S110 — best-effort host extraction; unparseable indicator is skipped
         pass
     return None
 

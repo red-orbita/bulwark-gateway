@@ -32,14 +32,14 @@ class Settings(BaseSettings):
     # nosec B104: binding all interfaces is required so the proxy is reachable
     # inside its container/pod network namespace. External exposure is controlled
     # by Kubernetes Services/NetworkPolicies and the ingress layer, not this bind.
-    host: str = "0.0.0.0"  # nosec B104
+    host: str = "0.0.0.0"  # noqa: S104 — bind inside container netns; exposure gated by K8s Services/NetworkPolicies
     port: int = 8080
     workers: int = 4
     debug: bool = False
     mode: str = "proxy"  # "proxy" or "sidecar"
 
     # Auth
-    jwt_secret: str = "change-me-in-production"
+    jwt_secret: str = "change-me-in-production"  # noqa: S105 — placeholder default rejected at startup validation
     jwt_algorithm: str = "HS256"
     # Asymmetric JWT (RS256/ES256) — enterprise mode
     # When set, takes precedence over jwt_secret for verification

@@ -136,13 +136,11 @@ class InputScanner(ABC):
         """
         ...
 
-    async def startup(self) -> None:
+    async def startup(self) -> None:  # noqa: B027 — optional no-op lifecycle hook, subclasses override as needed
         """Called once during application startup. Load models, warm caches."""
-        pass
 
-    async def shutdown(self) -> None:
+    async def shutdown(self) -> None:  # noqa: B027 — optional no-op lifecycle hook, subclasses override as needed
         """Called once during application shutdown. Release resources."""
-        pass
 
     async def health(self) -> bool:
         """Return True if scanner is operational."""
@@ -235,13 +233,11 @@ class OutputScanner(ABC):
         """
         ...
 
-    async def startup(self) -> None:
+    async def startup(self) -> None:  # noqa: B027 — optional no-op lifecycle hook, subclasses override as needed
         """Called once during application startup."""
-        pass
 
-    async def shutdown(self) -> None:
+    async def shutdown(self) -> None:  # noqa: B027 — optional no-op lifecycle hook, subclasses override as needed
         """Called once during application shutdown."""
-        pass
 
     async def health(self) -> bool:
         """Return True if scanner is operational."""

@@ -887,7 +887,7 @@ class OutputFilter:
                         )
                     )
                     break  # One event is enough
-            except Exception:
+            except Exception:  # noqa: S112 — undecodable base64 candidate; logging each is noise/DoS
                 continue
 
         return events

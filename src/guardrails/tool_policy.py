@@ -787,7 +787,7 @@ class ToolPolicyEngine:
                 import urllib.parse
                 try:
                     value_urldecoded = urllib.parse.unquote(urllib.parse.unquote(value_urldecoded))
-                except Exception:
+                except Exception:  # noqa: S110 — best-effort URL-decode; falls back to raw value which is still scanned
                     pass
             # Cyrillic confusable normalization (comprehensive)
             _confusable_map = str.maketrans(

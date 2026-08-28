@@ -111,6 +111,10 @@ select = ["E", "F", "W", "I", "S", "B"]
 # Same rationale as the input_guardrail/output_filter pattern files above.
 "src/guardrails/patterns/*" = ["E501"]
 "src/scanners/multilingual/patterns.py" = ["E501"]
+# S311: the red-team attack generator needs a *reproducible* (seeded) PRNG to
+# synthesise adversarial payloads — this is deliberately non-cryptographic and
+# never used for secrets/tokens.
+"src/evaluation/attacks.py" = ["S311"]
 # B008: FastAPI's `Depends()`/`Security()`-in-default is the framework-mandated
 # idiom for dependency injection, not a mutable-default bug. Scoped to the route
 # layers where it is pervasive and intentional.

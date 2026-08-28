@@ -265,7 +265,7 @@ class VirtualKeyManager:
                 )
                 if isinstance(active_key_id, bytes):
                     active_key_id = active_key_id.decode()
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort key lookup; falls back to in-memory store
                 pass
 
         if not active_key_id:
@@ -287,7 +287,7 @@ class VirtualKeyManager:
                 if key_data_raw:
                     key_data = json.loads(key_data_raw)
                     encrypted = key_data.get("encrypted_key")
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort key fetch; falls back to in-memory store
                 pass
 
         if not encrypted:
@@ -386,7 +386,7 @@ class VirtualKeyManager:
                         active = active.decode()
                     if active == key_id:
                         self._redis.hdel(f"bulwark:vkeys:{tenant_id}:active", provider)
-                except Exception:
+                except Exception:  # noqa: S110 — Redis best-effort active-key cleanup; never break rotation
                     pass
             return True
         return False
@@ -451,7 +451,7 @@ class VirtualKeyManager:
             try:
                 self._redis.lpush("bulwark:vkeys:audit", entry)
                 self._redis.ltrim("bulwark:vkeys:audit", 0, 999)  # Keep last 1000
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort audit append; never break key operations
                 pass
         logger.info("vkey_audit", extra={"action": action, "tenant": tenant_id, "provider": provider})
 

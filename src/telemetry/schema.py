@@ -20,7 +20,7 @@ from src.telemetry.compliance import OWASP_LLM_VERSION, compliance_for
 # Placeholder used in CEF/LEEF `src` fields when the originating IP is unknown.
 # These formats require a syntactically valid IP; "0.0.0.0" is the conventional
 # "unspecified address" sentinel. This is a log-record value, NOT a socket bind.
-_UNKNOWN_SRC_IP = "0.0.0.0"  # nosec B104
+_UNKNOWN_SRC_IP = "0.0.0.0"  # noqa: S104 — log-record sentinel value, not a socket bind
 
 
 class TelemetryEventCategory(str, Enum):

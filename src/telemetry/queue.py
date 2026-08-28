@@ -100,7 +100,7 @@ class DiskFallback:
                     (self._ROTATION_BATCH,),
                 )
                 self._conn.execute("PRAGMA incremental_vacuum(100)")
-        except Exception:
+        except Exception:  # noqa: S110 — non-critical DB rotation/vacuum; do not break event flow
             pass  # Non-critical: don't break event flow
 
     def drain(self, batch_size: int = 100) -> list[SecurityTelemetryEvent]:
@@ -119,13 +119,13 @@ class DiskFallback:
                 try:
                     data = json.loads(payload)
                     events.append(SecurityTelemetryEvent.model_validate(data))
-                except Exception:
+                except Exception:  # noqa: S110 — skip corrupted persisted event entries
                     pass  # Skip corrupted entries
             # nosec B608: only "?" placeholders are interpolated into the SQL;
             # the actual id values are bound as parameters (never string-formatted).
             placeholders = ",".join("?" * len(ids))
             self._conn.execute(
-                f"DELETE FROM events WHERE id IN ({placeholders})", ids  # nosec B608
+                f"DELETE FROM events WHERE id IN ({placeholders})", ids  # noqa: S608 — only "?" placeholders interpolated; ids bound as params
             )
         return events
 

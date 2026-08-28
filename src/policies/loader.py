@@ -137,7 +137,7 @@ class PolicyLoader:
         try:
             from src.services.response_cache import get_response_cache
             get_response_cache().clear()
-        except Exception:
+        except Exception:  # noqa: S110 — cache may not be initialized yet; invalidation is best-effort
             pass  # Cache may not be initialized yet
 
         await logger.ainfo("policy_reload_complete", count=len(new_policies), version=self._policy_version)

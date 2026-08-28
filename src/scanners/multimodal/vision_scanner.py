@@ -291,7 +291,7 @@ class VisionScanner(InputScanner):
 
                 # Filter by confidence threshold
                 texts = []
-                for bbox, text, confidence in results:
+                for _bbox, text, confidence in results:
                     if confidence >= self._ocr_threshold:
                         texts.append(text)
 

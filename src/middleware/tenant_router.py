@@ -190,7 +190,7 @@ class TenantRouterMiddleware(BaseHTTPMiddleware):
                         for t in tenants
                         if isinstance(t, str) and t.strip()
                     }
-        except Exception:
+        except Exception:  # noqa: S110 — keep existing routing config on parse/Redis error
             pass  # Keep existing config on error
 
     def _get_http_client(self) -> httpx.AsyncClient:

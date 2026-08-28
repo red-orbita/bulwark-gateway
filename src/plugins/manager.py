@@ -165,7 +165,7 @@ class SandboxedScanner:
         try:
             with self._sandbox.activate():
                 await self._scanner.shutdown()
-        except Exception:
+        except Exception:  # noqa: S110 — sandboxed plugin shutdown is best-effort; never break teardown
             pass
 
     # Make isinstance() checks work

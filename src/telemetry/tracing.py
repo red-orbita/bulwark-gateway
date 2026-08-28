@@ -279,7 +279,7 @@ def shutdown_tracing() -> None:
             provider.force_flush(timeout_millis=5000)
         if hasattr(provider, "shutdown"):
             provider.shutdown()
-    except Exception:
+    except Exception:  # noqa: S110 — OTel provider flush/shutdown is best-effort
         pass
     finally:
         _tracer = None
@@ -515,7 +515,7 @@ def inject_trace_context(headers: dict[str, str]) -> dict[str, str]:
         from opentelemetry.propagate import inject
 
         inject(headers)
-    except Exception:
+    except Exception:  # noqa: S110 — OTel context injection is best-effort; tracing is optional
         pass
 
     return headers

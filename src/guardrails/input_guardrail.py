@@ -407,7 +407,7 @@ class InputGuardrail:
                                     )
                                 )
                                 return events
-                except Exception:
+                except Exception:  # noqa: S110 — best-effort attack decode; malformed input just skips this layer
                     pass
 
         return events
@@ -528,7 +528,7 @@ class InputGuardrail:
                                 second_decode = base64.b64decode(decoded).decode("utf-8", errors="ignore")
                                 if second_decode and len(second_decode) >= 4:
                                     decode_layers.append(second_decode)
-                        except Exception:
+                        except Exception:  # noqa: S110 — best-effort second-layer base64 decode; skip if not valid base64
                             pass
 
                         for decoded_layer in decode_layers:
@@ -565,7 +565,7 @@ class InputGuardrail:
                                 )
                                 break
                         break
-                except Exception:
+                except Exception:  # noqa: S110 — best-effort decode probe; malformed input skips this layer
                     pass
 
         # 4. Hex blocks (continuous or space-separated) — decode and check OR flag long hex

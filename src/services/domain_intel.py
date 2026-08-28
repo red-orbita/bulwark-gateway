@@ -40,7 +40,7 @@ def extract_domain_from_url(url_or_value: str) -> str | None:
             host = parsed.hostname
             if host:
                 return host.lower()
-        except Exception:
+        except Exception:  # noqa: S110 — best-effort URL host parse; unparseable input yields no host
             pass
         return None
 

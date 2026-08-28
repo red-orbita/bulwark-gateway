@@ -66,7 +66,7 @@ def _is_ssrf_target(url: str) -> bool:
         except (socket.gaierror, OSError):
             return True  # Fail-closed: unresolvable = blocked
 
-        for family, _, _, _, sockaddr in addrs:
+        for _family, _, _, _, sockaddr in addrs:
             ip = ipaddress.ip_address(sockaddr[0])
             for network in _BLOCKED_NETWORKS:
                 if ip in network:

@@ -214,7 +214,7 @@ async def register_agent(request: Request, _=Depends(require_admin)):
     blocked_hosts = {
         "metadata.google.internal", "metadata.google.internal.",
         "169.254.169.254", "metadata", "localhost", "127.0.0.1",
-        "0.0.0.0", "kubernetes.default", "kubernetes.default.svc",  # nosec B104
+        "0.0.0.0", "kubernetes.default", "kubernetes.default.svc",  # noqa: S104 — SSRF deny-list entry, not a bind
     }
     if hostname.lower().rstrip(".") in blocked_hosts or hostname.endswith(".internal") or hostname.endswith(".local"):
         return JSONResponse(

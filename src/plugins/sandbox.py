@@ -140,7 +140,7 @@ class SeccompEnforcer:
                 for name in _ALLOWED_SYSCALLS:
                     try:
                         f.add_rule(_seccomp_module.ALLOW, name)
-                    except Exception:
+                    except Exception:  # noqa: S110 — syscall may not exist on this arch; skip adding that seccomp rule
                         pass  # Syscall may not exist on this arch
                 f.load()
                 self._applied = True
@@ -830,7 +830,7 @@ class FilesystemBlocker:
         # access to), not locations where a temp file is created.
         _BLOCKED_PATHS = {
             "/proc", "/sys", "/dev", "/run", "/etc",
-            "/var", "/tmp", "/root", "/home",  # nosec B108
+            "/var", "/tmp", "/root", "/home",  # noqa: S108 — deny-list entry, not a temp-file location
         }
         for blocked in _BLOCKED_PATHS:
             if str(target).startswith(blocked):

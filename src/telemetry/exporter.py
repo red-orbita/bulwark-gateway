@@ -225,7 +225,7 @@ class TelemetryExporter:
         """Write current stats to Redis (atomic, multi-pod safe) + file fallback."""
         try:
             self._persist_stats_redis()
-        except Exception:
+        except Exception:  # noqa: S110 — stats persistence to Redis is best-effort (file fallback follows)
             pass
         try:
             STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +242,7 @@ class TelemetryExporter:
                 "updated_at": time.time(),
             }
             STATS_FILE.write_text(json.dumps(stats_data))
-        except Exception:
+        except Exception:  # noqa: S110 — stats file fallback is best-effort; never break export
             pass
 
     def _persist_stats_redis(self) -> None:
@@ -256,7 +256,7 @@ class TelemetryExporter:
         if pw_file:
             try:
                 password = open(pw_file).read().strip()
-            except Exception:
+            except Exception:  # noqa: S110 — optional Redis password file; missing/unreadable is tolerated
                 pass
         kwargs: dict = {"password": password, "decode_responses": True, "socket_timeout": 1.0}
         if redis_url.startswith("rediss://"):

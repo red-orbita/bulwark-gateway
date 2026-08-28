@@ -308,7 +308,7 @@ class SchemaValidator(OutputScanner):
                 return repaired
         except ImportError:
             pass
-        except Exception:
+        except Exception:  # noqa: S110 — optional jsonschema repair; validation failure leaves output unchanged
             pass
 
         # Manual repair: common fixes
@@ -324,7 +324,7 @@ class SchemaValidator(OutputScanner):
                 import jsonschema
                 jsonschema.validate(parsed, schema)
             return fixed
-        except Exception:
+        except Exception:  # noqa: S110 — optional jsonschema validation; failure leaves output unchanged
             pass
 
         return None

@@ -18,6 +18,7 @@ import re
 from typing import Any, Set
 
 import jwt
+from cachetools import TTLCache
 from fastapi import Request
 from jwt import InvalidTokenError as JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -43,8 +44,6 @@ _revocation_redis_init = False
 # - Positive cache (not-revoked): short TTL (2s) so revocations are detected quickly.
 # - Negative cache (revoked): long TTL (60s) to avoid hammering Redis for
 #   tokens already confirmed revoked.
-from cachetools import TTLCache
-
 _AUTH_CACHE_TTL = float(os.environ.get("BULWARK_AUTH_CACHE_TTL", "2.0"))
 _auth_cache: TTLCache = TTLCache(maxsize=1024, ttl=_AUTH_CACHE_TTL)
 

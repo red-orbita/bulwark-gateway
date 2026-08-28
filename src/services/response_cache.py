@@ -218,7 +218,7 @@ class ResponseCache:
         if self._redis:
             try:
                 self._redis.hincrby("bulwark:cache:stats", "misses", 1)
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort cache-stats counter; never break the request path
                 pass
         return None
 
@@ -287,7 +287,7 @@ class ResponseCache:
         if self._redis:
             try:
                 self._redis.delete(f"bulwark:cache:{cache_key}")
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort cache eviction; never break the request path
                 pass
         return removed
 
@@ -310,7 +310,7 @@ class ResponseCache:
                         self._redis.delete(*keys)
                     if cursor == 0:
                         break
-            except Exception:
+            except Exception:  # noqa: S110 — Redis best-effort cache scan/clear; never break the request path
                 pass
 
     def _compute_key(self, request_body: dict[str, Any], tenant_id: str = "", agent_id: str = "") -> str:

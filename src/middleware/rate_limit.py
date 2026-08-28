@@ -211,7 +211,7 @@ def _load_tenant_limits(r: Optional[redis.Redis]) -> None:
             if raw:
                 _tenant_limits = json.loads(raw)
                 _tenant_limits_version = int(ver)
-    except Exception:
+    except Exception:  # noqa: S110 — tenant-limit refresh is best-effort; keep prior config on Redis error
         pass
 
 
