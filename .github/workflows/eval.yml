@@ -1,0 +1,78 @@
+# Bulwark Gateway — Guardrail Evaluation (Red-Team Regression Gate)
+#
+# Runs the built-in adversarial evaluation harness against the always-on
+# deterministic scanner pipeline (regex input guardrail + output redaction +
+# tool policy) and fails the build if detection regresses or false positives
+# spike. This is a security regression gate: pattern edits that quietly stop
+# catching known attack classes are caught here before merge.
+#
+# The harness runs fully in-process — no gateway server, no network, no LLM
+# backend, no models. It is deterministic (seeded), so the pass/fail is stable.
+#
+# Thresholds (absolute floors, deliberately below the current deterministic
+# score so legitimate pattern tuning has headroom but real regressions fail):
+#   detection rate >= 90%   (current standard-set score: 93%)
+#   false-positive rate <= 2%   (current: 0%)
+
+name: Guardrail Evaluation
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  # Required at import time by src.config startup validation (32+ chars).
+  BULWARK_JWT_SECRET: "ci-evaluation-secret-not-a-real-key-000000"
+
+jobs:
+  evaluate:
+    name: "Red-Team Evaluation"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install proxy dependencies (pinned)
+        run: pip install -r requirements.lock
+
+      - name: Run evaluation (standard attack set, regression gate)
+        run: |
+          python -m src.evaluation.cli run \
+            --attacks standard \
+            --min-detection-rate 0.90 \
+            --max-fp-rate 0.02 \
+            --report json \
+            --output evaluation-report.json
+          echo "## Guardrail Evaluation" >> "$GITHUB_STEP_SUMMARY"
+          python -c "
+          import json
+          d = json.load(open('evaluation-report.json'))
+          print(f\"- Detection rate: {d['detection_rate']:.1%}\")
+          print(f\"- False-positive rate: {d['false_positive_rate']:.1%}\")
+          print(f\"- Bypass rate: {d['bypass_rate']:.1%}\")
+          print(f\"- Total attacks: {d['total_attacks']}\")
+          " >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Human-readable report (logs)
+        if: always()
+        run: |
+          python -m src.evaluation.cli run \
+            --attacks standard \
+            --report text || true
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: evaluation-report
+          path: evaluation-report.json
+          retention-days: 90
