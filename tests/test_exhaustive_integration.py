@@ -11,7 +11,6 @@ This is NOT unit testing — it's integration/behavioral testing.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import tempfile
@@ -20,7 +19,6 @@ from pathlib import Path
 import pytest
 
 from src.models import ThreatCategory, Verdict
-
 
 # =============================================================================
 # PHASE 7: Plugin Security — Verify dangerous patterns ARE blocked
@@ -294,7 +292,6 @@ class TestEvaluationWithRealScanner:
     async def test_specific_attacks_detected(self, pipeline_with_regex):
         """Verify specific known-bad payloads are blocked."""
         from src.evaluation.runner import EvaluationRunner
-        from src.scanners.protocol import ScanContext
 
         runner = EvaluationRunner(pipeline=pipeline_with_regex)
 
@@ -330,7 +327,6 @@ class TestEvaluationWithRealScanner:
     async def test_encoded_attack_detection(self, pipeline_with_regex):
         """Encoded attacks should still be detected (multi-layer decoding)."""
         from src.evaluation.runner import EvaluationRunner
-        from src.scanners.protocol import ScanContext
 
         runner = EvaluationRunner(pipeline=pipeline_with_regex)
 

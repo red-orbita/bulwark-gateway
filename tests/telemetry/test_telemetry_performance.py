@@ -8,10 +8,8 @@ import asyncio
 import tempfile
 import time
 
-import pytest
-
-from src.telemetry.schema import from_security_event
 from src.telemetry.queue import TelemetryQueue
+from src.telemetry.schema import from_security_event
 
 
 class TestTelemetryPerformance:
@@ -49,7 +47,7 @@ class TestTelemetryPerformance:
                 p99 = latencies[9900]
                 max_lat = latencies[-1]
 
-                print(f"\n[TELEMETRY PERF] Enqueue 10k events:")
+                print("\n[TELEMETRY PERF] Enqueue 10k events:")
                 print(f"  p50: {p50:.4f}ms")
                 print(f"  p95: {p95:.4f}ms")
                 print(f"  p99: {p99:.4f}ms")

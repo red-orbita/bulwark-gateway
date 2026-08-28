@@ -120,7 +120,10 @@ select = ["E", "F", "W", "I", "S", "B"]
 # layers where it is pervasive and intentional.
 "src/routes/*" = ["B008"]
 "admin/routes/*" = ["B008"]
-"tests/*" = ["E501", "S101"]
+# S101 (assert) is the pytest idiom; S105/S106 (test credential fixtures),
+# S104 (bind-all in deployment-manifest assertions), S108/S306 (throwaway /tmp
+# test paths) are all test-only constructs, never shipped.
+"tests/*" = ["E501", "S101", "S104", "S105", "S106", "S108", "S306"]
 "examples/*" = ["S101"]
 
 [tool.pytest.ini_options]

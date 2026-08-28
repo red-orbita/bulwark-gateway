@@ -5,7 +5,6 @@ maintain backward compatibility.
 Run: pytest tests/contract/ -q
 """
 
-import pytest
 
 
 class TestV1Contract:

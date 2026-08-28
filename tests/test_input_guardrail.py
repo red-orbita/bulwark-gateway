@@ -1,6 +1,7 @@
 """Tests for input guardrail."""
 
 import pytest
+
 from src.guardrails.input_guardrail import InputGuardrail
 from src.models import Verdict
 

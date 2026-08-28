@@ -1,8 +1,5 @@
 """Tests for the enrichment layer: EmbeddingScanner + AttackReplayDB."""
 
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
 

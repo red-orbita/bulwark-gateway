@@ -6,8 +6,6 @@ Tests the chunk-level output filtering in the SSE streaming path.
 
 import json
 
-import pytest
-
 from src.routes.proxy import _filter_chunk, _make_content_event, _make_error_event
 
 
@@ -61,7 +59,7 @@ class TestMakeErrorEvent:
         event = _make_error_event("blocked")
         assert "data: [DONE]" in event
         # First data line is the error
-        lines = [l for l in event.split("\n") if l.startswith("data: ")]
+        lines = [ln for ln in event.split("\n") if ln.startswith("data: ")]
         error_data = json.loads(lines[0][6:])
         assert error_data["error"]["type"] == "security_violation"
         assert error_data["error"]["message"] == "blocked"

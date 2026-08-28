@@ -9,13 +9,12 @@ Tests cover:
   - Policy configuration handling
 """
 
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from src.models import GuardrailResult, Verdict
+from src.models import Verdict
 from src.scanners.protocol import ScanContext, ScannerType
 
 

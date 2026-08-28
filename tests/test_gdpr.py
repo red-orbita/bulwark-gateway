@@ -14,16 +14,10 @@ Coverage targets:
 """
 
 import json
-import os
-import sqlite3
-import tempfile
-import threading
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -177,7 +171,7 @@ class TestGDPRServiceInit:
     @pytest.mark.asyncio
     async def test_initialize_creates_directories(self, gdpr_tmp_dirs):
         """Initialize should create salt and archive directories."""
-        from admin.services.gdpr import GDPRService, GDPR_SALT_DIR, GDPR_ARCHIVE_DIR
+        from admin.services.gdpr import GDPR_ARCHIVE_DIR, GDPR_SALT_DIR, GDPRService
 
         service = GDPRService()
         await service.initialize()
@@ -242,8 +236,9 @@ class TestPseudonymization:
     @pytest.mark.asyncio
     async def test_pseudonymize_is_irreversible(self, gdpr_service, audit_logger_with_data, gdpr_tmp_dirs):
         """After pseudonymization, the salt is deleted — no recovery possible."""
-        from admin.services.gdpr import GDPR_SALT_DIR
         import hashlib
+
+        from admin.services.gdpr import GDPR_SALT_DIR
 
         with patch("admin.services.gdpr.get_audit_logger", return_value=audit_logger_with_data):
             with patch("admin.services.gdpr.get_redis_client", return_value=None):
@@ -288,8 +283,9 @@ class TestSaltManagement:
 
     def test_salt_created_on_first_access(self, gdpr_service, gdpr_tmp_dirs):
         """First access to a subject's salt should generate and store it."""
-        from admin.services.gdpr import GDPR_SALT_DIR
         import hashlib
+
+        from admin.services.gdpr import GDPR_SALT_DIR
 
         with patch("admin.services.gdpr.get_redis_client", return_value=None):
             salt = gdpr_service._get_or_create_salt("new-subject")
@@ -313,6 +309,7 @@ class TestSaltManagement:
     def test_salt_deletion(self, gdpr_service, gdpr_tmp_dirs):
         """_delete_salt should remove both file and Redis key."""
         import hashlib
+
         from admin.services.gdpr import GDPR_SALT_DIR
 
         with patch("admin.services.gdpr.get_redis_client", return_value=None):
@@ -698,7 +695,7 @@ class TestFactoryFunction:
         monkeypatch.setattr("admin.services.gdpr._service", None)
         monkeypatch.setattr("admin.services.database.ADMIN_DB_URL", "sqlite:///data/admin.db")
 
-        from admin.services.gdpr import get_gdpr_service, GDPRService
+        from admin.services.gdpr import GDPRService, get_gdpr_service
 
         service = get_gdpr_service()
         assert type(service) is GDPRService
@@ -711,7 +708,7 @@ class TestFactoryFunction:
             "postgresql://user:pass@localhost/bulwark"
         )
 
-        from admin.services.gdpr import get_gdpr_service, PostgreSQLGDPRService
+        from admin.services.gdpr import PostgreSQLGDPRService, get_gdpr_service
 
         service = get_gdpr_service()
         assert isinstance(service, PostgreSQLGDPRService)
@@ -724,7 +721,7 @@ class TestFactoryFunction:
             "postgres://user:pass@localhost/bulwark"
         )
 
-        from admin.services.gdpr import get_gdpr_service, PostgreSQLGDPRService
+        from admin.services.gdpr import PostgreSQLGDPRService, get_gdpr_service
 
         service = get_gdpr_service()
         assert isinstance(service, PostgreSQLGDPRService)

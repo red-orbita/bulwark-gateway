@@ -7,14 +7,12 @@
 """
 
 import json
-import tempfile
 import time
-from pathlib import Path
 
 import pytest
 
 from src.guardrails.output_filter import OutputFilter
-from src.guardrails.tool_policy import ToolPolicyEngine, AgentPolicy
+from src.guardrails.tool_policy import AgentPolicy, ToolPolicyEngine
 from src.ioc.manager import IOCManager
 from src.models import ToolCall, Verdict
 from src.services.domain_intel import (
@@ -24,7 +22,6 @@ from src.services.domain_intel import (
     is_allowlisted,
     is_subdomain_of,
 )
-
 
 # === IOC Manager mtime cache tests ===
 

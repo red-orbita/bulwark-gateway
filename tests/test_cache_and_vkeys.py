@@ -1,12 +1,10 @@
 """Tests for response cache and virtual keys services."""
 
-import json
 import os
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Response Cache Tests

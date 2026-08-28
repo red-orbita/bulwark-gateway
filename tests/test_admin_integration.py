@@ -218,8 +218,8 @@ class TestHealthFlow:
 
     async def test_pages_accessible(self, client):
         """All HTML pages should return 200 with valid auth, or redirect to login without auth."""
-        from admin.services.auth_service import AuthService
         from admin.models.auth import UserRole
+        from admin.services.auth_service import AuthService
         token = AuthService.create_token("admin", UserRole.ADMIN)
         headers = {"Authorization": f"Bearer {token}"}
 

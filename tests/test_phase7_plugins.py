@@ -225,7 +225,7 @@ class TestPluginManager:
 
         mgr = PluginManager(plugin_dir=tmp_path / "plugins")
         # Create a minimal plugin
-        plugin_path = mgr.scaffold("toggle-test", output_dir=tmp_path / "plugins")
+        mgr.scaffold("toggle-test", output_dir=tmp_path / "plugins")
 
         mgr.enable("toggle-test")
         state = json.loads((tmp_path / "plugins" / "plugin-state.json").read_text())
@@ -450,7 +450,7 @@ class TestPluginCLI:
             output_dir=tmp_path / "plugins",
         )
         _cmd_create(args)
-        captured = capsys.readouterr()
+        capsys.readouterr()
         # Plugin directory should have been created
         assert (tmp_path / "plugins" / "new-scanner").exists()
 

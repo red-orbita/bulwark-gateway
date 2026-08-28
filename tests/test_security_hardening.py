@@ -1,14 +1,8 @@
 """Tests for auth middleware, rate limiting, profile endpoints, and security hardening."""
 
-import hashlib
-import json
-import time
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # --- Auth Middleware Tests ---
 
@@ -50,8 +44,8 @@ class TestAuthGuardMiddleware:
         assert resp.status_code == 200
 
     def test_page_accessible_with_valid_cookie(self):
-        from admin.services.auth_service import AuthService
         from admin.models.auth import UserRole
+        from admin.services.auth_service import AuthService
         token = AuthService.create_token("admin", UserRole.ADMIN)
         resp = self.client.get("/", cookies={"admin_token": token}, follow_redirects=False)
         # Should not redirect (either 200 or passthrough)
@@ -256,8 +250,9 @@ class TestDefaultDenyPolicy:
         assert policy_path.exists()
 
     def test_default_deny_policy_valid_yaml(self):
-        import yaml
         from pathlib import Path
+
+        import yaml
         policy_path = Path("config/policies/default-deny.yaml")
         data = yaml.safe_load(policy_path.read_text())
         assert data["tenant_id"] == "__default__"
@@ -272,9 +267,8 @@ class TestSIEMPersistence:
     """Test SIEM transport persistence."""
 
     def test_save_and_load_transports(self):
-        from pathlib import Path
         import tempfile
-        import json as json_mod
+        from pathlib import Path
 
         # Use temp file
         tmp = Path(tempfile.mktemp(suffix=".json"))

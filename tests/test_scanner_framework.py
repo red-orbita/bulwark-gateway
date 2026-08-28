@@ -12,12 +12,11 @@ Tests cover:
 """
 
 import asyncio
-import time
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
+from src.scanners.pipeline import ScannerPipeline
 from src.scanners.protocol import (
     InputScanner,
     OutputScanner,
@@ -25,8 +24,6 @@ from src.scanners.protocol import (
     ScannerInfo,
     ScannerType,
 )
-from src.scanners.pipeline import ScannerPipeline, reset_scanner_pipeline
-
 
 # === Test Fixtures ===
 
@@ -616,6 +613,7 @@ class MyTestScanner(InputScanner):
 
     def test_discover_nonexistent_directory(self):
         from pathlib import Path
+
         from src.scanners.discovery import discover_directory_scanners
 
         scanners = discover_directory_scanners(Path("/nonexistent/path"))

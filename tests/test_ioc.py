@@ -1,9 +1,9 @@
 """Tests for IOC manager."""
 
-import pytest
 import json
-import tempfile
-from pathlib import Path
+
+import pytest
+
 from src.ioc.manager import IOCManager
 
 

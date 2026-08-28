@@ -5,13 +5,10 @@ Integration tests — Mock SIEM receivers, format validation, end-to-end flow.
 import asyncio
 import json
 import tempfile
-from typing import Any
 
-import pytest
-
-from src.telemetry.schema import SecurityTelemetryEvent, from_security_event
-from src.telemetry.queue import TelemetryQueue
 from src.telemetry.exporter import TelemetryExporter
+from src.telemetry.queue import TelemetryQueue
+from src.telemetry.schema import SecurityTelemetryEvent, from_security_event
 from src.telemetry.transports.file_shipper import FileShipperConfig, FileShipperTransport
 
 
@@ -127,7 +124,7 @@ class TestExporterIntegration:
                 mock = MockTransport(fail_count=6)
                 exporter.add_transport(mock)
 
-                for i in range(10):
+                for _i in range(10):
                     event = from_security_event(
                         verdict="block",
                         rule_id="R1",

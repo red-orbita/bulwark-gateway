@@ -12,8 +12,6 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
 os.environ.setdefault("ADMIN_JWT_SECRET", "test-secret-that-is-at-least-32-characters-long-xx")
 os.environ.setdefault("BULWARK_JWT_SECRET", "test-secret-that-is-at-least-32-characters-long-xx")
 

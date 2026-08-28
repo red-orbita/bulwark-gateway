@@ -4,23 +4,18 @@ Unit tests for telemetry schema, queue, and exporter.
 
 import asyncio
 import json
-import os
 import tempfile
 import time
 
-import pytest
-
+from src.telemetry.exporter import CircuitBreaker, CircuitState
+from src.telemetry.queue import TelemetryQueue
 from src.telemetry.schema import (
-    SecurityTelemetryEvent,
     BulwarkFields,
-    TenantFields,
-    TelemetryEventCategory,
+    SecurityTelemetryEvent,
     TelemetrySeverity,
+    TenantFields,
     from_security_event,
 )
-from src.telemetry.queue import TelemetryQueue
-from src.telemetry.exporter import CircuitBreaker, CircuitState
-
 
 # === Schema Tests ===
 

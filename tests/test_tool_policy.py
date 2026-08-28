@@ -1,7 +1,8 @@
 """Tests for tool policy engine."""
 
 import pytest
-from src.guardrails.tool_policy import ToolPolicyEngine, AgentPolicy, ToolPolicy
+
+from src.guardrails.tool_policy import AgentPolicy, ToolPolicy, ToolPolicyEngine
 from src.models import ToolCall, Verdict
 
 

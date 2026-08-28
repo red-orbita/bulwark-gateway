@@ -10,7 +10,6 @@ import pytest
 
 from src.models import ThreatCategory, Verdict
 
-
 # =============================================================================
 # Attack Generator
 # =============================================================================
@@ -246,7 +245,7 @@ class TestEvaluationRunner:
 
     @pytest.mark.asyncio
     async def test_run_evaluation_basic(self):
-        from src.evaluation.attacks import Attack, AttackGenerator
+        from src.evaluation.attacks import AttackGenerator
         from src.evaluation.runner import EvaluationReport, EvaluationRunner
         from src.scanners.pipeline import ScannerPipeline
 
@@ -268,8 +267,8 @@ class TestEvaluationRunner:
 
     @pytest.mark.asyncio
     async def test_run_evaluation_with_benign(self):
-        from src.evaluation.attacks import Attack, AttackGenerator
-        from src.evaluation.runner import EvaluationReport, EvaluationRunner
+        from src.evaluation.attacks import AttackGenerator
+        from src.evaluation.runner import EvaluationRunner
         from src.scanners.pipeline import ScannerPipeline
 
         pipeline = ScannerPipeline()
