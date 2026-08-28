@@ -92,8 +92,8 @@ class BulwarkCallbackHandler:
                 "on_chain_start": cls._on_chain_start_impl,
             },
         )
-        instance = object.__new__(combined)
-        combined.__init__(instance, **kwargs)
+        instance: Any = object.__new__(combined)
+        combined.__init__(instance, **kwargs)  # type: ignore[misc]
         return instance
 
     @staticmethod

@@ -61,10 +61,23 @@ line-length = 100
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "RUF"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+# Optional integration dependencies ship without type stubs and are imported
+# lazily. Ignore missing imports for them so `strict` still covers core code.
+[[tool.mypy.overrides]]
+module = ["langchain.*", "langchain_core.*", "openai.*"]
+ignore_missing_imports = true
+
+# The LangChain handler composes its base class at runtime from an optional
+# dependency, so instance/self are deliberately dynamic (Any). Relax return-any
+# for this module only; core modules keep full strict coverage.
+[[tool.mypy.overrides]]
+module = ["bulwark_sdk.integrations.langchain"]
+warn_return_any = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

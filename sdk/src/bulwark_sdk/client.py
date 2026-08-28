@@ -19,7 +19,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -412,7 +412,7 @@ class BulwarkClient:
                 response_body=body_text,
             )
 
-        return resp.json()
+        return cast("dict[str, Any]", resp.json())
 
     def _parse_scan_response(self, response: dict[str, Any], content: str) -> ScanResult:
         """Parse a chat completion response into a ScanResult.

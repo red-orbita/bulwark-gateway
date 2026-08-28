@@ -523,8 +523,9 @@ class BulwarkGuard:
 def _extract_input(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
     """Extract the input text from function arguments."""
     for key in ("prompt", "content", "input", "query", "message"):
-        if key in kwargs and isinstance(kwargs[key], str):
-            return kwargs[key]
+        value = kwargs.get(key)
+        if isinstance(value, str):
+            return value
 
     if "messages" in kwargs and isinstance(kwargs["messages"], list):
         user_msgs = [
