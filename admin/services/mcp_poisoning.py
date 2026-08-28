@@ -23,7 +23,6 @@ import json
 import re
 from typing import Any, Optional
 
-
 # ---------------------------------------------------------------------------
 # TP1: Hidden Instructions patterns
 # ---------------------------------------------------------------------------
@@ -128,7 +127,7 @@ def _decode_base64_safe(data: str) -> Optional[str]:
         )
         if any(kw in decoded.lower() for kw in suspicious):
             return decoded
-    except Exception:
+    except Exception:  # noqa: S110 - non-decodable input is simply not flagged by this probe
         pass
     return None
 
@@ -162,7 +161,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
     # --- TP1: Hidden Instructions ---
 
     for match in _HTML_COMMENT.finditer(text):
-        comment_content = match.group().strip("<!->- \n\t")
+        comment_content = match.group().strip("<!->- \n\t")  # noqa: B005 - stripping the delimiter char-set (<, !, -, >, whitespace), not a substring
         if len(comment_content) > 5:
             findings.append({
                 "rule_id": "BWK-MCP-TP1",
@@ -217,7 +216,7 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
                 "category": "mcp_poisoning",
             })
 
-    for match in _DATA_URI.finditer(text):
+    for _ in _DATA_URI.finditer(text):
         findings.append({
             "rule_id": "BWK-MCP-TP1",
             "severity": "medium",

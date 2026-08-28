@@ -5,12 +5,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..models.auth import (
-    UserRole, TokenPayload,
-    UserCreate, UserUpdate, UserResponse, SessionResponse,
-    MFASetupResponse, ChangePasswordRequest, ProfileUpdate,
+    ChangePasswordRequest,
+    MFASetupResponse,
+    ProfileUpdate,
+    SessionResponse,
+    TokenPayload,
+    UserCreate,
+    UserResponse,
+    UserRole,
+    UserUpdate,
 )
-from ..services.auth_service import require_role, get_current_user
 from ..services.audit_logger import get_audit_logger
+from ..services.auth_service import get_current_user, require_role
 from ..services.user_store import get_user_store
 
 router = APIRouter()
@@ -58,13 +64,19 @@ async def create_user(req: UserCreate, user: TokenPayload = Depends(require_role
             first_name=req.first_name, last_name=req.last_name,
         )
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         if "UNIQUE" in str(e):
-            raise HTTPException(status_code=409, detail="Username already exists")
+            raise HTTPException(status_code=409, detail="Username already exists") from e
         raise
     audit = get_audit_logger()
-    await audit.log(actor=user.sub, action="user.create", resource_type="user", resource_id=new_user["id"], details=f"username={req.username} role={req.role}")
+    await audit.log(
+        actor=user.sub,
+        action="user.create",
+        resource_type="user",
+        resource_id=new_user["id"],
+        details=f"username={req.username} role={req.role}",
+    )
     return _user_to_response(new_user)
 
 
@@ -77,7 +89,13 @@ async def update_user(user_id: str, req: UserUpdate, user: TokenPayload = Depend
         raise HTTPException(status_code=404, detail="User not found")
     updated = store.update_user(user_id, **req.model_dump(exclude_none=True))
     audit = get_audit_logger()
-    await audit.log(actor=user.sub, action="user.update", resource_type="user", resource_id=user_id, details=str(req.model_dump(exclude_none=True)))
+    await audit.log(
+        actor=user.sub,
+        action="user.update",
+        resource_type="user",
+        resource_id=user_id,
+        details=str(req.model_dump(exclude_none=True)),
+    )
     return _user_to_response(updated)
 
 
@@ -94,7 +112,11 @@ async def delete_user(user_id: str, user: TokenPayload = Depends(require_role(Us
 
 
 @router.post("/users/{user_id}/reset-password")
-async def reset_password(user_id: str, req: ChangePasswordRequest, user: TokenPayload = Depends(require_role(UserRole.ADMIN))):
+async def reset_password(
+    user_id: str,
+    req: ChangePasswordRequest,
+    user: TokenPayload = Depends(require_role(UserRole.ADMIN)),
+):
     """Reset user password (admin only)."""
     store = get_user_store()
     if not store.get_user_by_id(user_id):
@@ -102,7 +124,7 @@ async def reset_password(user_id: str, req: ChangePasswordRequest, user: TokenPa
     try:
         store.change_password(user_id, req.new_password)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
     store.revoke_all_sessions(user_id)
     audit = get_audit_logger()
     await audit.log(actor=user.sub, action="user.reset_password", resource_type="user", resource_id=user_id)
@@ -141,7 +163,7 @@ async def mfa_setup(user_id: str, user: TokenPayload = Depends(get_current_user)
     try:
         result = store.setup_mfa(user_id)
     except RuntimeError as e:
-        raise HTTPException(status_code=501, detail=str(e))
+        raise HTTPException(status_code=501, detail=str(e)) from e
     audit = get_audit_logger()
     await audit.log(actor=user.sub, action="mfa.setup", resource_type="user", resource_id=user_id)
     return MFASetupResponse(
@@ -193,5 +215,11 @@ async def update_profile(req: ProfileUpdate, user: TokenPayload = Depends(get_cu
         raise HTTPException(status_code=404, detail="User not found")
     updated = store.update_user(u["id"], **req.model_dump(exclude_none=True))
     audit = get_audit_logger()
-    await audit.log(actor=user.sub, action="profile.update", resource_type="user", resource_id=u["id"], details=str(req.model_dump(exclude_none=True)))
+    await audit.log(
+        actor=user.sub,
+        action="profile.update",
+        resource_type="user",
+        resource_id=u["id"],
+        details=str(req.model_dump(exclude_none=True)),
+    )
     return _user_to_response(updated)

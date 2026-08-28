@@ -12,14 +12,15 @@ import os
 import sys
 import time
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ..models.auth import UserRole, TokenPayload, ROLE_PERMISSIONS
+from ..models.auth import ROLE_PERMISSIONS, TokenPayload, UserRole
+from .secrets import read_secret
 
 # ─── Session validation cache ─────────────────────────────────────────
 # SQLCipher is slow (50-800ms per operation). Cache session validity
@@ -30,7 +31,6 @@ from ..models.auth import UserRole, TokenPayload, ROLE_PERMISSIONS
 # For zero-delay revocation, deploy with Redis and set ADMIN_SESSION_CACHE_TTL=0.
 _session_cache: dict[str, float] = {}  # token_hash -> last_validated_at (monotonic)
 _SESSION_CACHE_TTL = float(os.getenv("ADMIN_SESSION_CACHE_TTL", "2.0"))  # seconds (was 5s, was 30s)
-from .secrets import read_secret
 
 # Read JWT secret from Docker secret file or env var
 JWT_SECRET = read_secret("ADMIN_JWT_SECRET", default="bulwark-admin-change-me-in-production")
@@ -89,7 +89,7 @@ class AuthService:
                 from .user_store import get_user_store
                 store = get_user_store()
                 store.create_session(user_id, token, ip, user_agent, expires_at.isoformat())
-            except Exception:
+            except Exception:  # noqa: S110 - session recording is best-effort; must not fail auth
                 pass  # Don't fail auth if session recording fails
 
         return token
@@ -233,7 +233,10 @@ def require_role(*roles: UserRole):
     """FastAPI dependency factory: require specific role(s)."""
     async def _check(user: TokenPayload = Depends(get_current_user)) -> TokenPayload:
         if user.role not in roles:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Requires role: {[r.value for r in roles]}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires role: {[r.value for r in roles]}",
+            )
         return user
     return _check
 

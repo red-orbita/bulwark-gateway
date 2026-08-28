@@ -41,7 +41,7 @@ def _load_overrides() -> dict[str, list[str]]:
     if _RBAC_FILE.exists():
         try:
             return json.loads(_RBAC_FILE.read_text())
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort overrides load; falls back to defaults
             pass
     return {}
 
@@ -57,7 +57,7 @@ def _load_custom_roles() -> dict[str, dict]:
     if _CUSTOM_ROLES_FILE.exists():
         try:
             return json.loads(_CUSTOM_ROLES_FILE.read_text())
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort custom-roles load; falls back to defaults
             pass
     return {}
 
@@ -124,7 +124,11 @@ def get_rbac_matrix(_user: TokenPayload = Depends(require_permission("admin:read
     for r in UserRole:
         role_meta[r.value] = {"builtin": True}
     for name, data in custom_roles.items():
-        role_meta[name] = {"builtin": False, "label": data.get("label", name), "description": data.get("description", "")}
+        role_meta[name] = {
+            "builtin": False,
+            "label": data.get("label", name),
+            "description": data.get("description", ""),
+        }
 
     return {
         "roles": list(effective.keys()),

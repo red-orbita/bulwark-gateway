@@ -5,10 +5,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from ..models.auth import TokenPayload, UserRole
-from ..services.auth_service import require_role
-from ..services.config_manager import get_config_manager, SECTIONS
-from ..services.audit_logger import get_audit_logger
 from ..models.metrics import AuditQuery
+from ..services.audit_logger import get_audit_logger
+from ..services.auth_service import require_role
+from ..services.config_manager import SECTIONS, get_config_manager
 
 router = APIRouter()
 
@@ -75,7 +75,7 @@ async def get_section_config(
     try:
         return mgr.get_config(section)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.put("/{section}")
@@ -89,7 +89,7 @@ async def update_section_config(
     try:
         result = await mgr.update_config(section, data, actor=user.sub)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return result
 
 

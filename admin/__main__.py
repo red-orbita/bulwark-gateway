@@ -51,7 +51,7 @@ def cmd_reset_password(username: str):
 
     print(f"Password reset for user '{username}'")
     print(f"Temporary password: {temp_password}")
-    print(f"User must change password on next login.")
+    print("User must change password on next login.")
 
 
 def cmd_list_users():

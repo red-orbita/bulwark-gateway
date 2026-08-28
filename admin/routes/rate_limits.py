@@ -8,8 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from ..models.auth import TokenPayload
-from ..services.auth_service import require_permission
 from ..services.audit_logger import get_audit_logger
+from ..services.auth_service import require_permission
 
 router = APIRouter()
 
@@ -29,7 +29,7 @@ def _load_config() -> None:
             data = json.loads(_CONFIG_FILE.read_text())
             _tenant_limits = data.get("tenants", {})
             _global_settings.update(data.get("global", {}))
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort config load; falls back to defaults
             pass
 
 
@@ -41,7 +41,7 @@ def _save_config() -> None:
             "global": _global_settings,
             "tenants": _tenant_limits,
         }, indent=2))
-    except Exception:
+    except Exception:  # noqa: S110 - best-effort persistence; must not break the request
         pass
 
 
@@ -54,7 +54,7 @@ def _sync_to_redis() -> None:
             return
         r.set("bulwark:rate_limits:config", json.dumps(_tenant_limits))
         r.incr("bulwark:rate_limits:version")
-    except Exception:
+    except Exception:  # noqa: S110 - best-effort Redis publish; in-memory state stays authoritative
         pass
 
 

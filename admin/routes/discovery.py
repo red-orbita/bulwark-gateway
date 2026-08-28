@@ -11,15 +11,15 @@ from pydantic import BaseModel, Field
 from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
 from src.discovery.agent_discovery import (
-    AgentDiscovery,
-    KNOWN_PORTS,
     KNOWN_PATHS,
+    KNOWN_PORTS,
+    AgentDiscovery,
 )
-from src.discovery.shadow_ai import ShadowAIMonitor
 from src.discovery.mcp_inventory import (
     MCPInventory,
     MCPTool,
 )
+from src.discovery.shadow_ai import ShadowAIMonitor
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/discovery", tags=["discovery"])
@@ -207,7 +207,7 @@ async def scan_network(
         agents = await discovery.scan_network(req.targets)
     except Exception as exc:
         logger.error("Network scan failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Network scan failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Network scan failed: {exc}") from exc
 
     agent_responses = [DiscoveredAgentResponse(**asdict(a)) for a in agents]
     return NetworkScanResponse(
@@ -228,7 +228,7 @@ async def scan_kubernetes(
         agents = await discovery.scan_kubernetes(namespace=req.namespace)
     except Exception as exc:
         logger.error("Kubernetes scan failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Kubernetes scan failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Kubernetes scan failed: {exc}") from exc
 
     agent_responses = [DiscoveredAgentResponse(**asdict(a)) for a in agents]
     return NetworkScanResponse(
@@ -364,7 +364,7 @@ async def mcp_enumerate(
         raise HTTPException(
             status_code=500,
             detail=f"MCP tool enumeration failed: {exc}",
-        )
+        ) from exc
 
     tool_responses = [MCPToolResponse(**asdict(t)) for t in tools]
     return MCPEnumerateResponse(

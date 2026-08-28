@@ -16,9 +16,9 @@ from pydantic import BaseModel, Field
 from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
 from src.evaluation.attacks import SUPPORTED_CATEGORIES, AttackGenerator
-from src.evaluation.harness import run_corpus_report, run_evaluation_report
-from src.evaluation.runner import EvaluationRunner, EvaluationReport
 from src.evaluation.datasets import STANDARD_BENIGN
+from src.evaluation.harness import run_corpus_report, run_evaluation_report
+from src.evaluation.runner import EvaluationReport, EvaluationRunner
 from src.models import ThreatCategory, Verdict
 from src.scanners.builtin.regex_scanner import RegexInputScanner
 from src.scanners.pipeline import ScannerPipeline
@@ -158,7 +158,7 @@ def _resolve_categories(raw: list[str] | None) -> list[ThreatCategory]:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unknown category: '{name}'. Supported: {_SUPPORTED_CATEGORIES}",
-            )
+            ) from None
         # A valid enum member is not enough: the generator only has payload
         # templates for the input-attack surface. Reject anything without
         # templates so a run never silently produces zero attacks.
@@ -258,7 +258,7 @@ async def _delegate_corpus_to_proxy(
             detail = "corpus evaluation rejected by proxy"
             try:
                 detail = resp.json().get("detail", detail)
-            except Exception:
+            except Exception:  # noqa: S110 - keep default detail when proxy body is not JSON
                 pass
             raise HTTPException(status_code=400, detail=detail)
         logger.warning(
@@ -485,7 +485,7 @@ async def run_evaluation(
         raise
     except Exception as e:
         logger.exception("evaluation_run_failed error=%s", str(e))
-        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}") from e
 
 
 @router.post("/run/quick")
@@ -516,7 +516,7 @@ async def run_quick_evaluation(
         raise
     except Exception as e:
         logger.exception("quick_evaluation_failed error=%s", str(e))
-        raise HTTPException(status_code=500, detail=f"Quick evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Quick evaluation failed: {str(e)}") from e
 
 
 @router.post("/corpus")
@@ -553,7 +553,7 @@ async def run_corpus_evaluation(
         raise
     except Exception as e:
         logger.exception("corpus_evaluation_failed error=%s", str(e))
-        raise HTTPException(status_code=500, detail=f"Corpus evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Corpus evaluation failed: {str(e)}") from e
 
 
 @router.get("/attacks/preview", response_model=AttackPreviewResponse)
@@ -597,7 +597,7 @@ def preview_attacks(
         raise
     except Exception as e:
         logger.exception("attack_preview_failed error=%s", str(e))
-        raise HTTPException(status_code=500, detail=f"Attack preview failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Attack preview failed: {str(e)}") from e
 
 
 @router.get("/datasets/benign")
@@ -653,7 +653,7 @@ def generate_formatted_report(
         raise
     except Exception as e:
         logger.exception("report_generation_failed error=%s", str(e))
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}") from e
 
 
 # --- QA Validation (migrated from orchestrator) ---

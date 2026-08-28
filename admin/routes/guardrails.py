@@ -7,14 +7,15 @@ import re
 import time
 import uuid
 from pathlib import Path
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from ..models.auth import TokenPayload
 from ..models.config import GuardrailTestRequest, GuardrailTestResult
+from ..services.audit_logger import get_audit_logger
 from ..services.auth_service import require_permission
 from ..services.config_validator import ConfigValidator
-from ..services.audit_logger import get_audit_logger
 from ..services.guardrails_store import get_guardrails_store
 from ..services.redis_sync import (
     sync_all,
@@ -52,7 +53,7 @@ def _load_persisted_state():
                 _params.update(data["params"])
             if "modules" in data:
                 _module_state.update(data["modules"])
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort config load; falls back to defaults
             pass
 
 
@@ -61,7 +62,7 @@ def _save_persisted_state():
     try:
         _PARAMS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _PARAMS_FILE.write_text(json.dumps({"params": _params, "modules": _module_state}, indent=2))
-    except Exception:
+    except Exception:  # noqa: S110 - best-effort persistence; must not break the request
         pass
 
 
@@ -97,13 +98,11 @@ def _load_patterns() -> list[dict]:
                 "category": p.category.value if hasattr(p, 'category') and p.category else 'unknown',
                 "enabled": True,
             })
-    except Exception:
+    except Exception:  # noqa: S110 - skip a malformed pattern entry; list is advisory
         pass
 
     try:
-        from src.guardrails.output_filter import (
-            REDACTION_PATTERNS, DANGEROUS_OUTPUT_PATTERNS, HUMAN_REVIEW_PATTERNS
-        )
+        from src.guardrails.output_filter import DANGEROUS_OUTPUT_PATTERNS, HUMAN_REVIEW_PATTERNS, REDACTION_PATTERNS
         # REDACTION_PATTERNS: list of (compiled_regex, label) tuples
         for i, p in enumerate(REDACTION_PATTERNS):
             regex_str = p[0].pattern[:120] if hasattr(p[0], 'pattern') else str(p[0])[:120]
@@ -143,13 +142,14 @@ def _load_patterns() -> list[dict]:
                 "category": "overreliance",
                 "enabled": True,
             })
-    except Exception:
+    except Exception:  # noqa: S110 - skip a malformed pattern entry; list is advisory
         pass
 
     # Load tool policy rules from YAML policy files — show generic capabilities
     try:
-        import yaml
         from pathlib import Path
+
+        import yaml
         policies_dir = Path("config/policies")
         if policies_dir.exists():
             # Collect unique rule types across all tenants (generic, not tenant-specific)
@@ -216,7 +216,7 @@ def _load_patterns() -> list[dict]:
                     "category": "session_limit",
                     "enabled": True,
                 })
-    except Exception:
+    except Exception:  # noqa: S110 - skip a malformed pattern entry; list is advisory
         pass
 
     _patterns_cache = patterns
@@ -712,11 +712,12 @@ async def get_tool_policy(
         return {"tenant_id": tenant_id, "agent_id": agent_id, "rules": rules}
     except Exception:
         # Fallback: read from policy YAML files (search by tenant field)
-        import yaml
         from pathlib import Path
+
+        import yaml
         policies_dir = Path("config/policies")
         if not policies_dir.exists():
-            raise HTTPException(status_code=404, detail=f"No policy for tenant: {tenant_id}")
+            raise HTTPException(status_code=404, detail=f"No policy for tenant: {tenant_id}") from None
 
         # Find policy file that matches this tenant
         agent_policy = None
@@ -731,11 +732,11 @@ async def get_tool_policy(
                             break
                     if agent_policy:
                         break
-            except Exception:
+            except Exception:  # noqa: S112 - skip an unparseable policy file; one bad YAML must not break tenant lookup
                 continue
 
         if not agent_policy:
-            raise HTTPException(status_code=404, detail=f"No policy for {tenant_id}/{agent_id}")
+            raise HTTPException(status_code=404, detail=f"No policy for {tenant_id}/{agent_id}") from None
 
         return {
             "tenant_id": tenant_id,
@@ -758,8 +759,9 @@ async def update_tool_policy(
     user: TokenPayload = Depends(require_permission("guardrails:write")),
 ):
     """Update tool policy rules for a specific tenant/agent."""
-    import yaml
     from pathlib import Path
+
+    import yaml
 
     # Sanitize tenant_id and agent_id against path traversal
     if "/" in tenant_id or "\\" in tenant_id or ".." in tenant_id:

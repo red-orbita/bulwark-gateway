@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import sys
 import uuid
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from ..models.auth import TokenPayload
-from ..services.auth_service import require_permission
 from ..services.audit_logger import get_audit_logger
+from ..services.auth_service import require_permission
 
-import sys
 sys.path.insert(0, ".")
 from src.telemetry.notifications import (
     NotificationChannel,

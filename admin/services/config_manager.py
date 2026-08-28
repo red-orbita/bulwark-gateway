@@ -145,7 +145,10 @@ class ConfigManager:
                 if isinstance(current, float) and isinstance(value, (int, float)):
                     pass
                 else:
-                    errors.append(f"Type mismatch for '{key}': expected {type(current).__name__}, got {type(value).__name__}")
+                    errors.append(
+                        f"Type mismatch for '{key}': expected {type(current).__name__}, "
+                        f"got {type(value).__name__}"
+                    )
 
         return {
             "valid": len(errors) == 0,

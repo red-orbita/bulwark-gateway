@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+
+from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from ..models.auth import LoginRequest, LoginResponse, UserInfo, TokenPayload, ChangePasswordRequest
-from ..services.auth_service import AuthService, get_current_user
+from ..models.auth import ChangePasswordRequest, LoginRequest, LoginResponse, TokenPayload, UserInfo
 from ..services.audit_logger import get_audit_logger
+from ..services.auth_service import AuthService, get_current_user
 from ..services.user_store import get_user_store
 
 router = APIRouter()
@@ -21,8 +23,6 @@ _WINDOW_SECONDS = 300  # 5 minutes
 _LOCKOUT_SECONDS = 900  # 15 minutes after max attempts
 
 # Uses TTLCache to auto-evict entries after lockout period (prevents memory leak)
-from cachetools import TTLCache
-
 _LOGIN_ATTEMPTS: TTLCache = TTLCache(maxsize=5000, ttl=_LOCKOUT_SECONDS)
 _USERNAME_ATTEMPTS: TTLCache = TTLCache(maxsize=5000, ttl=_LOCKOUT_SECONDS)
 
@@ -66,7 +66,6 @@ def _get_rate_limit_redis():
     try:
         redis_url = os.getenv("BULWARK_REDIS_URL")
         if redis_url:
-            import redis
             from admin.services.redis_sync import get_redis_client
             _rate_limit_redis = get_redis_client()
     except Exception:
@@ -85,7 +84,7 @@ def _check_login_rate_limit(ip: str, username: str | None = None) -> None:
     if r:
         try:
             return _check_rate_limit_redis(r, ip, username)
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort Redis rate-limit; falls back to local limiter
             pass  # Fall through to local rate limiting
 
     # Fallback: local in-memory rate limiting (per-process)
@@ -170,7 +169,7 @@ def _record_login_attempt(ip: str, username: str | None = None) -> None:
                 pipe.expire(user_key, _LOCKOUT_SECONDS)
             pipe.execute()
             return
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort Redis write; falls back to local limiter
             pass  # Fall through to local
 
     # Fallback: local in-memory
@@ -228,7 +227,13 @@ async def login(req: LoginRequest, request: Request, response: Response):
     token = AuthService.create_token(username, role, user_id=user_id, ip=ip, user_agent=user_agent)
 
     audit = get_audit_logger()
-    await audit.log(actor=username, action="auth.login", resource_type="user", resource_id=user_id, details=str({"ip": ip}))
+    await audit.log(
+        actor=username,
+        action="auth.login",
+        resource_type="user",
+        resource_id=user_id,
+        details=str({"ip": ip}),
+    )
 
     response = Response(
         content=LoginResponse(
@@ -314,7 +319,7 @@ async def change_password(req: ChangePasswordRequest, request: Request, user: To
     try:
         await loop.run_in_executor(None, store.change_password, db_user["id"], req.new_password)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     audit = get_audit_logger()
     await audit.log(actor=user.sub, action="auth.change_password", resource_type="user", resource_id=db_user["id"])
@@ -325,7 +330,7 @@ async def change_password(req: ChangePasswordRequest, request: Request, user: To
 @router.post("/force-change-password")
 async def force_change_password(request: Request):
     """Change password without token — only for users with force_password_change=true.
-    
+
     Requires username + current_password verification (rate-limited).
     On success, returns a full login token so the client doesn't need a second login.
     """
@@ -367,10 +372,15 @@ async def force_change_password(request: Request):
     try:
         await loop.run_in_executor(None, store.change_password, db_user["id"], new_password)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     audit = get_audit_logger()
-    await audit.log(actor=username, action="auth.force_change_password", resource_type="user", resource_id=db_user["id"])
+    await audit.log(
+        actor=username,
+        action="auth.force_change_password",
+        resource_type="user",
+        resource_id=db_user["id"],
+    )
 
     # Issue token immediately (no need for second login round-trip)
     from ..models.auth import UserRole

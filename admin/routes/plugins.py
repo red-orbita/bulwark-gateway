@@ -15,13 +15,13 @@ import logging
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import zipfile
-import tarfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from admin.models.auth import TokenPayload
@@ -105,7 +105,7 @@ def _get_plugin_manager() -> PluginManager:
         raise HTTPException(
             status_code=503,
             detail=f"Plugin directory not available: {e}. Mount a writable volume at /app/plugins.",
-        )
+        ) from e
 
 
 def _spec_to_response(spec: PluginSpec, manager: PluginManager) -> PluginResponse:
@@ -219,7 +219,7 @@ def _extract_archive(file_path: Path, dest_dir: Path) -> Path:
         raise ValueError("Unsupported archive format. Use .zip or .tar.gz")
 
     # Find the plugin root (directory containing bulwark-plugin.yaml)
-    for root, dirs, files in os.walk(dest_dir):
+    for root, _dirs, files in os.walk(dest_dir):
         if "bulwark-plugin.yaml" in files:
             return Path(root)
 
@@ -334,10 +334,10 @@ async def install_from_upload(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error("plugin_upload_error", extra={"error": str(e)})
-        raise HTTPException(status_code=500, detail=f"Installation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Installation error: {str(e)}") from e
     finally:
         if tmp_dir and tmp_dir.exists():
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -372,9 +372,16 @@ async def install_from_url(
         tmp_dir = Path(tempfile.mkdtemp(prefix="bulwark-plugin-git-"))
         clone_dir = tmp_dir / "repo"
 
-        # Clone with depth 1 (minimal), timeout 30s
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", req.branch, req.url, str(clone_dir)],
+        # Clone with depth 1 (minimal), timeout 30s. Resolve git to an absolute
+        # path (avoids PATH-hijack / partial-executable risk) and fail cleanly if
+        # git is unavailable in the runtime image.
+        git_bin = shutil.which("git")
+        if not git_bin:
+            raise HTTPException(status_code=500, detail="git is not available on this server")
+        # Args are a fixed list (no shell); req.branch is validated above against
+        # --option injection and req.url passed through URL validation.
+        result = subprocess.run(  # noqa: S603 - list form, shell=False; inputs validated above
+            [git_bin, "clone", "--depth", "1", "--branch", req.branch, req.url, str(clone_dir)],
             capture_output=True, text=True, timeout=30,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
@@ -452,10 +459,10 @@ async def install_from_url(
     except HTTPException:
         raise
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Git clone timed out (30s)")
+        raise HTTPException(status_code=408, detail="Git clone timed out (30s)") from None
     except Exception as e:
         logger.error("plugin_git_install_error", extra={"url": req.url, "error": str(e)})
-        raise HTTPException(status_code=500, detail=f"Installation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Installation error: {str(e)}") from e
     finally:
         if tmp_dir and tmp_dir.exists():
             shutil.rmtree(tmp_dir, ignore_errors=True)

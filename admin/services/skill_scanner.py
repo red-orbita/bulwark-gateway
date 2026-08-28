@@ -52,13 +52,19 @@ from typing import Any, Optional
 import yaml
 
 from admin.services.mcp_poisoning import (
-    analyze_content as mcp_poisoning_analyze,
     PATTERN_COUNT as MCP_POISONING_PATTERNS,
+)
+from admin.services.mcp_poisoning import (
+    analyze_content as mcp_poisoning_analyze,
+)
+from admin.services.mcp_privilege import (
+    PATTERN_COUNT as MCP_PRIVILEGE_PATTERNS,
 )
 from admin.services.mcp_privilege import (
     analyze_content as mcp_privilege_analyze,
+)
+from admin.services.mcp_privilege import (
     analyze_directory as mcp_privilege_analyze_dir,
-    PATTERN_COUNT as MCP_PRIVILEGE_PATTERNS,
 )
 from src.scanners.artifacts import model_artifact_scanner
 
@@ -72,8 +78,9 @@ _SKILLSPECTOR_AVAILABLE = False
 _SKILLSPECTOR_VERSION = "unavailable"
 
 try:
-    from skillspector import graph as _skillspector_graph
     import importlib.metadata
+
+    from skillspector import graph as _skillspector_graph
     _SKILLSPECTOR_AVAILABLE = True
     try:
         _SKILLSPECTOR_VERSION = importlib.metadata.version("skillspector")
@@ -115,7 +122,7 @@ class RiskSeverity(str, Enum):
 
 
 class ScanVerdict(str, Enum):
-    PASS = "pass"
+    PASS = "pass"  # noqa: S105 - verdict enum value, not a credential
     WARN = "warn"
     BLOCK = "block"
     ERROR = "error"
@@ -1208,8 +1215,8 @@ class SkillScanner:
             findings.append(SkillFinding(
                 rule_id="BWK-DF-002",
                 message=(
-                    f"DATA FLOW: Read + Write tools combined with sensitive path references. "
-                    f"Classic credential staging pattern: read secrets → write to accessible location."
+                    "DATA FLOW: Read + Write tools combined with sensitive path references. "
+                    "Classic credential staging pattern: read secrets → write to accessible location."
                 ),
                 severity=RiskSeverity.CRITICAL,
                 confidence=0.97,
@@ -1229,8 +1236,8 @@ class SkillScanner:
             findings.append(SkillFinding(
                 rule_id="BWK-DF-003",
                 message=(
-                    f"DATA FLOW: Read + Network tools with sensitive paths. "
-                    f"Direct exfiltration vector: read credentials → send externally."
+                    "DATA FLOW: Read + Network tools with sensitive paths. "
+                    "Direct exfiltration vector: read credentials → send externally."
                 ),
                 severity=RiskSeverity.CRITICAL,
                 confidence=0.97,
@@ -1357,13 +1364,13 @@ class SkillScanner:
             data = yaml.safe_load(content)
             if isinstance(data, dict):
                 return data
-        except Exception:
+        except Exception:  # noqa: S110 - try YAML then JSON; failure falls through to next parser
             pass
         try:
             data = json.loads(content)
             if isinstance(data, dict):
                 return data
-        except Exception:
+        except Exception:  # noqa: S110 - content is neither valid YAML nor JSON; caller handles empty
             pass
         return None
 

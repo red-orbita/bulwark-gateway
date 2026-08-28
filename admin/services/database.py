@@ -193,7 +193,7 @@ class QueryTranslator:
             # (table/columns/values) are extracted from trusted, developer-authored
             # SQL already present in this codebase, never from request data.
             translated = (
-                f"INSERT INTO {table} ({columns}) VALUES ({values}) "  # nosec B608
+                f"INSERT INTO {table} ({columns}) VALUES ({values}) "  # noqa: S608  # nosec B608
                 f"ON CONFLICT ({pk_col}) DO UPDATE SET {set_clause}"
             )
 
@@ -373,6 +373,7 @@ class DatabaseEngine(ABC):
         self._translator: Optional[QueryTranslator] = None
 
     @property
+    @abstractmethod
     def backend(self) -> str:
         """Return backend type: 'sqlite' or 'postgresql'."""
         ...
@@ -542,7 +543,7 @@ class SQLiteEngine(DatabaseEngine):
                 if row is None:
                     return None
                 columns = [desc[0] for desc in cursor.description]
-                return Row(_data=dict(zip(columns, row)))
+                return Row(_data=dict(zip(columns, row, strict=True)))
             else:
                 loop = asyncio.get_event_loop()
                 return await loop.run_in_executor(
@@ -555,7 +556,7 @@ class SQLiteEngine(DatabaseEngine):
         if row is None:
             return None
         columns = [desc[0] for desc in cursor.description]
-        return Row(_data=dict(zip(columns, row)))
+        return Row(_data=dict(zip(columns, row, strict=True)))
 
     async def fetch_all(self, query: str, params: Optional[Sequence] = None) -> list[Row]:
         translated, translated_params = self.translator.translate(query, params)
@@ -569,7 +570,7 @@ class SQLiteEngine(DatabaseEngine):
                 if not rows:
                     return []
                 columns = [desc[0] for desc in cursor.description]
-                return [Row(_data=dict(zip(columns, r))) for r in rows]
+                return [Row(_data=dict(zip(columns, r, strict=True))) for r in rows]
             else:
                 loop = asyncio.get_event_loop()
                 return await loop.run_in_executor(
@@ -582,7 +583,7 @@ class SQLiteEngine(DatabaseEngine):
         if not rows:
             return []
         columns = [desc[0] for desc in cursor.description]
-        return [Row(_data=dict(zip(columns, r))) for r in rows]
+        return [Row(_data=dict(zip(columns, r, strict=True))) for r in rows]
 
     async def execute_script(self, script: str) -> None:
         """Execute multi-statement SQL script."""
@@ -678,7 +679,7 @@ class _SQLiteTransaction(Transaction):
             if row is None:
                 return None
             columns = [desc[0] for desc in cursor.description]
-            return Row(_data=dict(zip(columns, row)))
+            return Row(_data=dict(zip(columns, row, strict=True)))
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
@@ -691,7 +692,7 @@ class _SQLiteTransaction(Transaction):
         if row is None:
             return None
         columns = [desc[0] for desc in cursor.description]
-        return Row(_data=dict(zip(columns, row)))
+        return Row(_data=dict(zip(columns, row, strict=True)))
 
     async def fetch_all(self, query: str, params: Optional[Sequence] = None) -> list[Row]:
         translated, translated_params = self._translator.translate(query, params)
@@ -703,7 +704,7 @@ class _SQLiteTransaction(Transaction):
             if not rows:
                 return []
             columns = [desc[0] for desc in cursor.description]
-            return [Row(_data=dict(zip(columns, r))) for r in rows]
+            return [Row(_data=dict(zip(columns, r, strict=True))) for r in rows]
         else:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
@@ -716,7 +717,7 @@ class _SQLiteTransaction(Transaction):
         if not rows:
             return []
         columns = [desc[0] for desc in cursor.description]
-        return [Row(_data=dict(zip(columns, r))) for r in rows]
+        return [Row(_data=dict(zip(columns, r, strict=True))) for r in rows]
 
 
 # ─── PostgreSQL Engine ────────────────────────────────────────────────────────
@@ -757,7 +758,7 @@ class PostgreSQLEngine(DatabaseEngine):
             raise RuntimeError(
                 "asyncpg is required for PostgreSQL backend. "
                 "Install: pip install asyncpg"
-            )
+            ) from None
 
         # Build connection kwargs
         connect_kwargs: dict[str, Any] = {}

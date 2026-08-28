@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
-from .audit_logger import get_audit_logger
 from ..models.metrics import AuditQuery
+from .audit_logger import get_audit_logger
 
 CONFIG_PATH = Path("data/custom_patterns.json")
 

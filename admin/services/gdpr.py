@@ -19,7 +19,7 @@ import logging
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -378,8 +378,8 @@ class GDPRService:
             # encryption with key derived from JWT secret. Archives contain PII
             # and must not be stored in cleartext.
             try:
-                from hashlib import sha256
                 import base64
+                from hashlib import sha256
                 # Derive a Fernet key from the JWT secret (deterministic)
                 jwt_secret = os.getenv("BULWARK_JWT_SECRET", "")
                 key_material = sha256(f"gdpr-archive-key:{jwt_secret}".encode()).digest()
@@ -543,7 +543,7 @@ class GDPRService:
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         # SQLi-safe (B608): `where` is built only from the fixed "request_type = ?"
         # fragment above; all values (incl. LIMIT/OFFSET) are bound params.
-        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"  # nosec B608
+        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"  # noqa: S608  # nosec B608
         params.extend([limit, offset])
 
         records = []
@@ -586,7 +586,7 @@ class GDPRService:
                 deleted = client.get("bulwark:gdpr:retention:deleted")
                 if deleted:
                     status.records_deleted = int(deleted)
-            except Exception:
+            except Exception:  # noqa: S110 - best-effort Redis retention read; degrade silently
                 pass
 
         return status
@@ -622,7 +622,7 @@ class GDPRService:
                 if existing:
                     return bytes.fromhex(existing)
                 return salt  # Fallback: use ours if read fails
-            except Exception:
+            except Exception:  # noqa: S110 - best-effort Redis salt read; falls back to local salt
                 pass
 
         # Fallback: file-based salt storage (use lock for atomicity)
@@ -645,7 +645,7 @@ class GDPRService:
         if client:
             try:
                 client.delete(redis_key)
-            except Exception:
+            except Exception:  # noqa: S110 - best-effort Redis delete; degrade silently
                 pass
 
         salt_file = GDPR_SALT_DIR / f"{key_hash}.salt"
@@ -910,7 +910,7 @@ class GDPRService:
             client.set("bulwark:gdpr:retention:last_run", now)
             client.set("bulwark:gdpr:retention:archived", str(archived))
             client.set("bulwark:gdpr:retention:deleted", str(deleted))
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort Redis retention bookkeeping; degrade silently
             pass
 
     async def close(self) -> None:
@@ -1220,7 +1220,7 @@ class PostgreSQLGDPRService(GDPRService):
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         # SQLi-safe (B608): `where` is built only from the fixed "request_type = ?"
         # fragment above; all values (incl. LIMIT/OFFSET) are bound params.
-        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"  # nosec B608
+        sql = f"SELECT * FROM gdpr_requests {where} ORDER BY requested_at DESC LIMIT ? OFFSET ?"  # noqa: S608  # nosec B608
         params.extend([limit, offset])
 
         try:

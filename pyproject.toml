@@ -120,6 +120,10 @@ select = ["E", "F", "W", "I", "S", "B"]
 # layers where it is pervasive and intentional.
 "src/routes/*" = ["B008"]
 "admin/routes/*" = ["B008"]
+# auth_service hosts the FastAPI DI dependency factories (get_current_user,
+# require_permission, require_role) that back every admin route — same
+# Depends()-in-defaults idiom as the route modules themselves.
+"admin/services/auth_service.py" = ["B008"]
 # S101 (assert) is the pytest idiom; S105/S106 (test credential fixtures),
 # S104 (bind-all in deployment-manifest assertions), S108/S306 (throwaway /tmp
 # test paths) are all test-only constructs, never shipped.

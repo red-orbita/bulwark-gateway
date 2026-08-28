@@ -47,7 +47,7 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 - OAuth2 token_type literal, not a credential
     expires_in: int = 3600
     role: UserRole
     username: str

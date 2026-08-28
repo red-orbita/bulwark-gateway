@@ -96,7 +96,7 @@ class ConfigValidator:
         def _test():
             try:
                 compiled.search(test_input)
-            except Exception:
+            except Exception:  # noqa: S110 - pattern under test may throw; we only assert it does not crash the validator
                 pass
 
         t = threading.Thread(target=_test, daemon=True)

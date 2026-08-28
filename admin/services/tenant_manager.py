@@ -258,7 +258,15 @@ class TenantManager:
             if agent_id not in agents:
                 return None
             cfg = agents[agent_id]
-            for field in ("backend_url", "model", "timeout", "health_endpoint", "path_prefix", "auth_header", "description"):
+            for field in (
+                "backend_url",
+                "model",
+                "timeout",
+                "health_endpoint",
+                "path_prefix",
+                "auth_header",
+                "description",
+            ):
                 val = getattr(req, field, None)
                 if val is not None:
                     cfg[field] = val

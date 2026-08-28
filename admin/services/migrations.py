@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, cast
 
 from .database import DatabaseEngine
 
@@ -421,7 +421,7 @@ async def run_migrations(engine: DatabaseEngine) -> None:
     lock_acquired = True
     if backend == "postgresql":
         from .database import PostgreSQLEngine
-        assert isinstance(engine, PostgreSQLEngine)
+        engine = cast(PostgreSQLEngine, engine)  # narrowing: branch guarantees PostgreSQL
         lock_acquired = await engine.acquire_advisory_lock(MIGRATION_LOCK_ID)
         if not lock_acquired:
             logger.info("Another instance is running migrations, waiting...")
@@ -481,7 +481,7 @@ async def run_migrations(engine: DatabaseEngine) -> None:
         # Release PostgreSQL advisory lock
         if backend == "postgresql" and lock_acquired:
             from .database import PostgreSQLEngine
-            assert isinstance(engine, PostgreSQLEngine)
+            engine = cast(PostgreSQLEngine, engine)  # narrowing: branch guarantees PostgreSQL
             await engine.release_advisory_lock(MIGRATION_LOCK_ID)
 
 
@@ -536,7 +536,7 @@ async def _apply_migration(engine: DatabaseEngine, migration: Migration, sql: st
         # PostgreSQL: execute within transaction for atomicity
         # Note: DDL in PostgreSQL IS transactional (unlike MySQL)
         from .database import PostgreSQLEngine
-        assert isinstance(engine, PostgreSQLEngine)
+        engine = cast(PostgreSQLEngine, engine)  # narrowing: branch guarantees PostgreSQL
 
         # Split and filter out empty statements
         statements = [s.strip() for s in sql.split(";") if s.strip()]
@@ -586,7 +586,7 @@ async def get_migration_status(engine: DatabaseEngine) -> dict:
             "FROM schema_migrations ORDER BY version DESC"
         )
         history = [row.to_dict() for row in rows]
-    except Exception:
+    except Exception:  # noqa: S110 - migration history is advisory; return empty on read failure
         pass
 
     return {

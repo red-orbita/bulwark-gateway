@@ -367,7 +367,21 @@ class IOCStore:
             entries = list(self._entries.values())
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["id", "type", "value", "source", "severity", "confidence", "active", "first_seen", "last_seen", "notes", "tags"])
+        writer.writerow(
+            [
+                "id",
+                "type",
+                "value",
+                "source",
+                "severity",
+                "confidence",
+                "active",
+                "first_seen",
+                "last_seen",
+                "notes",
+                "tags",
+            ]
+        )
         for e in entries:
             writer.writerow([
                 e.id, e.type.value, e.value, e.source, e.severity.value,
@@ -380,10 +394,38 @@ class IOCStore:
 
     # Default feed definitions (seeded on first load if no state exists)
     _DEFAULT_FEEDS = [
-        {"id": "urlhaus", "name": "URLhaus", "feed_type": "urlhaus", "url": "https://urlhaus.abuse.ch/downloads/csv_recent/", "auth_header": "", "enabled": True},
-        {"id": "threatfox", "name": "ThreatFox", "feed_type": "threatfox", "url": "https://threatfox.abuse.ch/downloads/hostfile/", "auth_header": "", "enabled": True},
-        {"id": "otx", "name": "AlienVault OTX", "feed_type": "otx", "url": "https://otx.alienvault.com/api/v1/pulses/subscribed", "auth_header": "X-OTX-API-KEY", "enabled": True},
-        {"id": "abuseipdb", "name": "AbuseIPDB", "feed_type": "abuseipdb", "url": "https://api.abuseipdb.com/api/v2/blacklist", "auth_header": "Key", "enabled": True},
+        {
+            "id": "urlhaus",
+            "name": "URLhaus",
+            "feed_type": "urlhaus",
+            "url": "https://urlhaus.abuse.ch/downloads/csv_recent/",
+            "auth_header": "",
+            "enabled": True,
+        },
+        {
+            "id": "threatfox",
+            "name": "ThreatFox",
+            "feed_type": "threatfox",
+            "url": "https://threatfox.abuse.ch/downloads/hostfile/",
+            "auth_header": "",
+            "enabled": True,
+        },
+        {
+            "id": "otx",
+            "name": "AlienVault OTX",
+            "feed_type": "otx",
+            "url": "https://otx.alienvault.com/api/v1/pulses/subscribed",
+            "auth_header": "X-OTX-API-KEY",
+            "enabled": True,
+        },
+        {
+            "id": "abuseipdb",
+            "name": "AbuseIPDB",
+            "feed_type": "abuseipdb",
+            "url": "https://api.abuseipdb.com/api/v2/blacklist",
+            "auth_header": "Key",
+            "enabled": True,
+        },
     ]
 
     def _ensure_default_feeds(self) -> None:
@@ -653,7 +695,12 @@ class IOCStore:
 
         data = resp.json()
         count = 0
-        type_map = {"domain": IOCType.DOMAIN, "IPv4": IOCType.IP, "URL": IOCType.URL, "FileHash-SHA256": IOCType.HASH_SHA256}
+        type_map = {
+            "domain": IOCType.DOMAIN,
+            "IPv4": IOCType.IP,
+            "URL": IOCType.URL,
+            "FileHash-SHA256": IOCType.HASH_SHA256,
+        }
         for pulse in data.get("results", [])[:5]:
             for indicator in pulse.get("indicators", [])[:20]:
                 ioc_type = type_map.get(indicator.get("type"))

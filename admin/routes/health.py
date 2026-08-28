@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import time as _time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -13,7 +14,7 @@ import httpx
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from ..models.auth import TokenPayload, ROLE_PERMISSIONS
+from ..models.auth import ROLE_PERMISSIONS, TokenPayload
 from ..services.auth_service import AuthService, require_permission, require_permission_or_scrape_token
 from ..services.prometheus_client import get_metrics
 
@@ -563,7 +564,9 @@ async def metrics_stream(request: Request, token: Optional[str] = Query(None)):
                 # Detection rate: (blocked + warned) / total — shows guardrail trigger %
                 data["detection_rate"] = round(((blocked + warned) / total) * 100, 1) if total > 0 else 0.0
                 # False positive rate: approximated as warned / (blocked + warned)
-                data["false_positive_rate"] = round((warned / (blocked + warned)) * 100, 1) if (blocked + warned) > 0 else 0.0
+                data["false_positive_rate"] = (
+                    round((warned / (blocked + warned)) * 100, 1) if (blocked + warned) > 0 else 0.0
+                )
             elif redis_counters:
                 # Proxy unreachable but Redis has persistent counters
                 blocked = redis_counters.get("blocked", 0)
@@ -575,7 +578,9 @@ async def metrics_stream(request: Request, token: Optional[str] = Query(None)):
                 data["events_warned"] = warned
                 data["events_allowed"] = allowed
                 data["detection_rate"] = round(((blocked + warned) / total) * 100, 1) if total > 0 else 0.0
-                data["false_positive_rate"] = round((warned / (blocked + warned)) * 100, 1) if (blocked + warned) > 0 else 0.0
+                data["false_positive_rate"] = (
+                    round((warned / (blocked + warned)) * 100, 1) if (blocked + warned) > 0 else 0.0
+                )
                 data.pop("bypass_rate", None)
             else:
                 # No proxy stats, no Redis — remove bypass_rate so frontend keeps persisted value
@@ -594,8 +599,6 @@ async def metrics_stream(request: Request, token: Optional[str] = Query(None)):
 # ─── Telemetry Cache ─────────────────────────────────────────────────
 # A background task refreshes telemetry data independently of SSE/requests.
 # All SSE clients and API endpoints read from this cache (zero-latency).
-
-import time as _time
 
 _telemetry_cache: dict = {
     "proxy": {},
@@ -632,7 +635,7 @@ async def _background_telemetry_refresh():
                 resp = await client.get(f"{PROXY_URL}/health/stats")
                 if resp.status_code == 200:
                     proxy_stats = resp.json()
-            except Exception:
+            except Exception:  # noqa: S110 - best-effort telemetry fetch; dashboard must still render
                 pass
 
             # Fetch Redis counters + health (in executor)
@@ -642,7 +645,7 @@ async def _background_telemetry_refresh():
                 redis_counters, redis_health = await asyncio.get_event_loop().run_in_executor(
                     None, _fetch_redis_all_sync
                 )
-            except Exception:
+            except Exception:  # noqa: S110 - best-effort Redis fetch; dashboard must still render
                 pass
 
             # Fetch scanner pipeline status from the proxy internal endpoint
@@ -662,7 +665,7 @@ async def _background_telemetry_refresh():
                 "scanners": scanners,
                 "ts": _time.monotonic(),
             }
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort telemetry cache refresh; keep last snapshot
             pass
 
         await asyncio.sleep(_CACHE_TTL)

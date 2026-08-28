@@ -53,7 +53,7 @@ USER_DB_PATH = "data/users.db"
 # Minimum password complexity requirements
 _MIN_PASSWORD_LENGTH = 10
 _PASSWORD_REQUIREMENTS = (
-    "Password must be at least 10 characters with uppercase, lowercase, digit, and special character."
+    "Password must be at least 10 characters with uppercase, lowercase, digit, and special character."  # noqa: S105 - user-facing policy message, not a credential
 )
 
 
@@ -160,7 +160,7 @@ class UserStore:
             # sqlcipher3/pysqlcipher3 don't support sqlite3.Row; use a dict factory
             def dict_row_factory(cursor, row):
                 columns = [col[0] for col in cursor.description]
-                return dict(zip(columns, row))
+                return dict(zip(columns, row, strict=True))
             self._conn.row_factory = dict_row_factory
         else:
             self._conn.row_factory = sqlite3.Row
@@ -205,13 +205,13 @@ class UserStore:
             for col in ("email", "phone", "first_name", "last_name"):
                 try:
                     self._conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
-                except Exception:
+                except Exception:  # noqa: S110 - idempotent column add; ignore duplicate-column on already-migrated DBs
                     pass  # Column already exists
 
             # Migrate: add last_activity to sessions
             try:
                 self._conn.execute("ALTER TABLE sessions ADD COLUMN last_activity TEXT")
-            except Exception:
+            except Exception:  # noqa: S110 - idempotent column add; ignore duplicate-column on already-migrated DBs
                 pass
 
             # Seed default users if table is empty
@@ -230,6 +230,7 @@ class UserStore:
         """
         import logging
         import sys
+
         from .secrets import read_secret
         now = datetime.now(timezone.utc).isoformat()
 
@@ -261,7 +262,9 @@ class UserStore:
 
         for username, password, role in defaults:
             self._conn.execute(
-                "INSERT INTO users (id, username, password_hash, role, active, created_at, updated_at, force_password_change) VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
+                "INSERT INTO users (id, username, password_hash, role, active, "
+                "created_at, updated_at, force_password_change) "
+                "VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
                 (str(uuid4()), username, _hash_password(password), role.value, now, now),
             )
         self._conn.commit()
@@ -321,8 +324,22 @@ class UserStore:
         user_id = str(uuid4())
         with self._lock:
             self._conn.execute(
-                "INSERT INTO users (id, username, password_hash, role, tenant_scope, email, phone, first_name, last_name, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (user_id, username, _hash_password(password), role, tenant_scope, email, phone, first_name, last_name, now, now),
+                "INSERT INTO users (id, username, password_hash, role, tenant_scope, email, phone, "
+                "first_name, last_name, active, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (
+                    user_id,
+                    username,
+                    _hash_password(password),
+                    role,
+                    tenant_scope,
+                    email,
+                    phone,
+                    first_name,
+                    last_name,
+                    now,
+                    now,
+                ),
             )
             self._conn.commit()
         return self.get_user_by_id(user_id)
@@ -359,7 +376,7 @@ class UserStore:
         values = list(updates.values()) + [user_id]
         with self._lock:
             self._conn.execute(
-                f"UPDATE users SET {set_clause} WHERE id = ?", values  # nosec B608
+                f"UPDATE users SET {set_clause} WHERE id = ?", values  # noqa: S608  # nosec B608
             )
             self._conn.commit()
         return self.get_user_by_id(user_id)
@@ -388,7 +405,7 @@ class UserStore:
 
     def verify_password(self, username: str, password: str) -> Optional[dict]:
         """Verify credentials. Returns user dict if valid, None otherwise.
-        
+
         Uses constant-time comparison to prevent username enumeration via timing.
         """
         user = self.get_user(username)
@@ -451,7 +468,14 @@ class UserStore:
 
     # --- Sessions ---
 
-    def create_session(self, user_id: str, token: str, ip: Optional[str], user_agent: Optional[str], expires_at: str) -> dict:
+    def create_session(
+        self,
+        user_id: str,
+        token: str,
+        ip: Optional[str],
+        user_agent: Optional[str],
+        expires_at: str,
+    ) -> dict:
         """Create a new session record."""
         # SECURITY FIX (M-06): Limit sessions per user to prevent session flood DoS.
         MAX_SESSIONS_PER_USER = 10
@@ -469,11 +493,14 @@ class UserStore:
             if existing_count >= MAX_SESSIONS_PER_USER:
                 # Delete oldest sessions to make room
                 self._conn.execute(
-                    "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
+                    "DELETE FROM sessions WHERE id IN "
+                    "(SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
                     (user_id, existing_count - MAX_SESSIONS_PER_USER + 1),
                 )
             self._conn.execute(
-                "INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, revoked, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+                "INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, "
+                "revoked, ip_address, user_agent) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
                 (session_id, user_id, token_hash, now, expires_at, ip, user_agent),
             )
             self._conn.commit()
@@ -586,7 +613,7 @@ class PostgreSQLUserStore(UserStore):
             db = self._get_db()
             if hasattr(db, 'sync_fetch_one'):
                 self._sync_seed_defaults(db)
-        except Exception:
+        except Exception:  # noqa: S110 - DB may be uninitialized during startup; seeding retried later
             # DB may not be initialized yet during app startup; seeding
             # will happen on first request via lifespan hook
             pass
@@ -604,7 +631,8 @@ class PostgreSQLUserStore(UserStore):
             ]
             for username, password, role in defaults:
                 db.sync_execute(
-                    "INSERT INTO users (id, username, password_hash, role, active, created_at, updated_at, force_password_change) "
+                    "INSERT INTO users (id, username, password_hash, role, active, "
+                    "created_at, updated_at, force_password_change) "
                     "VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
                     (str(uuid4()), username, _hash_password(password), role.value, now, now),
                 )
@@ -740,9 +768,22 @@ class PostgreSQLUserStore(UserStore):
         now = datetime.now(timezone.utc).isoformat()
         db = self._get_db()
         db.sync_execute(
-            "INSERT INTO users (id, username, password_hash, role, tenant_scope, email, phone, first_name, last_name, active, created_at, updated_at) "
+            "INSERT INTO users (id, username, password_hash, role, tenant_scope, email, phone, "
+            "first_name, last_name, active, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-            (user_id, username, _hash_password(password), role, tenant_scope, email, phone, first_name, last_name, now, now),
+            (
+                user_id,
+                username,
+                _hash_password(password),
+                role,
+                tenant_scope,
+                email,
+                phone,
+                first_name,
+                last_name,
+                now,
+                now,
+            ),
         )
         return self.get_user_by_id(user_id)
 
@@ -757,7 +798,7 @@ class PostgreSQLUserStore(UserStore):
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [user_id]
         db = self._get_db()
-        db.sync_execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)  # nosec B608
+        db.sync_execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)  # noqa: S608  # nosec B608
         return self.get_user_by_id(user_id)
 
     def delete_user(self, user_id: str) -> bool:
@@ -778,7 +819,14 @@ class PostgreSQLUserStore(UserStore):
         )
         return True
 
-    def create_session(self, user_id: str, token: str, ip: Optional[str], user_agent: Optional[str], expires_at: str) -> dict:
+    def create_session(
+        self,
+        user_id: str,
+        token: str,
+        ip: Optional[str],
+        user_agent: Optional[str],
+        expires_at: str,
+    ) -> dict:
         MAX_SESSIONS_PER_USER = 10
         session_id = str(uuid4())
         token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -789,7 +837,8 @@ class PostgreSQLUserStore(UserStore):
         existing = row["cnt"] if row else 0
         if existing >= MAX_SESSIONS_PER_USER:
             db.sync_execute(
-                "DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
+                "DELETE FROM sessions WHERE id IN "
+                "(SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at ASC LIMIT ?)",
                 (user_id, existing - MAX_SESSIONS_PER_USER + 1),
             )
         db.sync_execute(
@@ -842,7 +891,11 @@ class PostgreSQLUserStore(UserStore):
         last_activity = row.get("last_activity")
         if last_activity:
             try:
-                last_dt = datetime.fromisoformat(str(last_activity)) if not isinstance(last_activity, datetime) else last_activity
+                last_dt = (
+                    datetime.fromisoformat(str(last_activity))
+                    if not isinstance(last_activity, datetime)
+                    else last_activity
+                )
                 age_seconds = (now - last_dt).total_seconds()
                 if age_seconds > idle_timeout_minutes * 60:
                     db.sync_execute("UPDATE sessions SET revoked = 1 WHERE token_hash = ?", (token_hash,))

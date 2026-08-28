@@ -8,13 +8,14 @@ import socket
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
-from fastapi import APIRouter, Body, Depends, HTTPException
+
 import yaml
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from ..models.auth import TokenPayload
 from ..models.config import SIEMTestResult
-from ..services.auth_service import require_permission
 from ..services.audit_logger import get_audit_logger
+from ..services.auth_service import require_permission
 
 router = APIRouter()
 
@@ -97,7 +98,7 @@ async def list_platforms(user: TokenPayload = Depends(require_permission("siem:r
                 "platform": data.get("platform", path.stem),
                 "transport": data.get("transport", "unknown"),
             })
-        except Exception:
+        except Exception:  # noqa: S110 - skip an unreadable SIEM config file; list is advisory
             pass
     return platforms
 
@@ -141,7 +142,7 @@ async def siem_status(user: TokenPayload = Depends(require_permission("siem:read
                     "transports": transports,
                     "updated_at": updated,
                 }
-    except Exception:
+    except Exception:  # noqa: S110 - best-effort stats read; dashboard must still render
         pass
     # Fallback: read from shared stats file
     stats_file = Path("shared/siem/siem_stats.json")
@@ -149,16 +150,22 @@ async def siem_status(user: TokenPayload = Depends(require_permission("siem:read
         if stats_file.exists():
             data = json.loads(stats_file.read_text())
             return data
-    except Exception:
+    except Exception:  # noqa: S110 - best-effort stats read; returns empty on failure
         pass
-    return {"status": "not_configured", "events_exported": 0, "batches_sent": 0, "queue_memory_depth": 0, "export_errors": 0}
+    return {
+        "status": "not_configured",
+        "events_exported": 0,
+        "batches_sent": 0,
+        "queue_memory_depth": 0,
+        "export_errors": 0,
+    }
 
 
 def _mask_transport(t: dict) -> dict:
     """H-07: Mask sensitive fields in transport responses."""
     masked = dict(t)
     if masked.get("wazuh_password"):
-        masked["wazuh_password"] = "***"
+        masked["wazuh_password"] = "***"  # noqa: S105 - masking placeholder, redacts the real secret
     return masked
 
 
@@ -222,7 +229,19 @@ async def update_transport(
 
     for t in _transports:
         if t["id"] == transport_id:
-            for key in ("platform", "transport_type", "endpoint", "port", "auth_type", "batch_size", "flush_interval", "format", "wazuh_api_url", "wazuh_user", "wazuh_password"):
+            for key in (
+                "platform",
+                "transport_type",
+                "endpoint",
+                "port",
+                "auth_type",
+                "batch_size",
+                "flush_interval",
+                "format",
+                "wazuh_api_url",
+                "wazuh_user",
+                "wazuh_password",
+            ):
                 if key in config:
                     t[key] = config[key]
             _save_transports()
@@ -576,7 +595,7 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
         if hostname.lower() not in _allowed_hosts:
             try:
                 addrs = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-                for family, _, _, _, sockaddr in addrs:
+                for _family, _, _, _, sockaddr in addrs:
                     ip = ipaddress.ip_address(sockaddr[0])
                     for net in _blocked_nets:
                         if ip in net:
@@ -592,7 +611,13 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
             latency_ms=0, error="Invalid wazuh_api_url",
         )
 
-    results = {"api_reachable": False, "authenticated": False, "analysisd_running": False, "logcollector_running": False, "log_file_exists": False}
+    results = {
+        "api_reachable": False,
+        "authenticated": False,
+        "analysisd_running": False,
+        "logcollector_running": False,
+        "log_file_exists": False,
+    }
     start = time.time()
 
     try:
@@ -630,7 +655,11 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
                     results["logcollector_running"] = daemon_map.get("wazuh-logcollector") == "running"
 
             # Step 3: Check if log file path is monitored
-            logcol_resp = await client.get(f"{wazuh_url}/manager/configuration", headers=headers, params={"section": "localfile"})
+            logcol_resp = await client.get(
+                f"{wazuh_url}/manager/configuration",
+                headers=headers,
+                params={"section": "localfile"},
+            )
             if logcol_resp.status_code == 200:
                 items = logcol_resp.json().get("data", {}).get("affected_items", [])
                 for item in items:

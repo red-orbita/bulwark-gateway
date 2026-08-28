@@ -13,11 +13,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from ..models.auth import UserRole, TokenPayload
+from ..models.auth import TokenPayload, UserRole
 from ..services.auth_service import require_role
 from ..services.gdpr import (
-    PseudonymizeRequest,
     ExportRequest,
+    PseudonymizeRequest,
     controller_identity,
     get_gdpr_service,
 )
@@ -61,8 +61,8 @@ def _validate_confirmation(confirmation: str, expected_count: int) -> None:
             detail={
                 "error": "Confirmation mismatch",
                 "expected_format": "I confirm this action affects N records",
-                "hint": f"Use the count endpoint first to determine affected records, "
-                        f"then confirm with the exact count.",
+                "hint": "Use the count endpoint first to determine affected records, "
+                        "then confirm with the exact count.",
             }
         )
 

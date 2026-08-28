@@ -22,7 +22,6 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-
 # ---------------------------------------------------------------------------
 # Capability detection: what code actually does
 # ---------------------------------------------------------------------------

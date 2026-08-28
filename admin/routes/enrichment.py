@@ -301,4 +301,4 @@ async def review_regex_candidate(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Review failed: {str(e)}")
+        raise HTTPException(500, f"Review failed: {str(e)}") from e

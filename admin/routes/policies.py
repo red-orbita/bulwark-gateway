@@ -11,11 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..models.auth import TokenPayload
 from ..models.config import (
-    PolicySummary, PolicyDetail, PolicyCreateRequest, PolicyUpdateRequest,
+    PolicyCreateRequest,
+    PolicyDetail,
+    PolicySummary,
+    PolicyUpdateRequest,
 )
-from ..services.auth_service import require_permission
-from ..services.config_validator import ConfigValidator, HotReloader, POLICIES_DIR
 from ..services.audit_logger import get_audit_logger
+from ..services.auth_service import require_permission
+from ..services.config_validator import POLICIES_DIR, ConfigValidator, HotReloader
 
 router = APIRouter()
 
@@ -185,7 +188,13 @@ async def toggle_policy(
     path.write_text(yaml.dump(data, default_flow_style=False), encoding="utf-8")
 
     audit = get_audit_logger()
-    await audit.log(actor=user.sub, action="toggle", resource_type="policy", resource_id=name, details=f"active={data['active']}")
+    await audit.log(
+        actor=user.sub,
+        action="toggle",
+        resource_type="policy",
+        resource_id=name,
+        details=f"active={data['active']}",
+    )
     return {"name": name, "active": data["active"]}
 
 
@@ -207,5 +216,11 @@ async def rollback_policy(
         raise HTTPException(status_code=404, detail="No backup version available")
 
     audit = get_audit_logger()
-    await audit.log(actor=user.sub, action="rollback", resource_type="policy", resource_id=name, details=f"version={version}")
+    await audit.log(
+        actor=user.sub,
+        action="rollback",
+        resource_type="policy",
+        resource_id=name,
+        details=f"version={version}",
+    )
     return {"status": "rolled_back", "policy": name, "version": version or "latest"}

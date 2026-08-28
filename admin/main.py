@@ -28,17 +28,41 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+# Routes
+from .routes import (
+    audit,
+    auth,
+    cache,
+    config,
+    correlation,
+    cost,
+    dashboards,
+    discovery,
+    enrichment,
+    evaluation,
+    events,
+    gdpr,
+    guardrails,
+    health,
+    iocs,
+    ml_scanners,
+    notifications,
+    plugins,
+    policies,
+    quotas,
+    rate_limits,
+    rbac,
+    sessions,
+    siem,
+    skills,
+    tenants,
+    users,
+    validate,
+    virtual_keys,
+)
+from .routes.auth import _should_set_secure_cookie
 from .services.audit_logger import get_audit_logger
 from .services.prometheus_client import get_metrics
-from .routes.auth import _should_set_secure_cookie
-
-# Routes
-from .routes import policies, guardrails, siem, audit, health, validate, auth, users, tenants, config, iocs, rbac, notifications, skills
-from .routes import (
-    plugins, evaluation, discovery, ml_scanners, rate_limits, enrichment,
-    events, gdpr, virtual_keys, quotas, cost, cache, sessions, correlation,
-    dashboards,
-)
 
 logger = logging.getLogger("bulwark.admin")
 
@@ -59,7 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # This runs schema migrations and provides the async engine for new code.
     # Existing services (user_store, audit_logger) continue using their own
     # connections until individually migrated to use the shared engine.
-    from .services.database import init_database, close_database
+    from .services.database import close_database, init_database
     db_engine = await init_database()
     app.state.db = db_engine
 
@@ -273,7 +297,13 @@ async def body_size_limit(request: Request, call_next):
 
 
 # P9-04: CSRF protection middleware for state-changing requests
-_CSRF_EXEMPT = {"/admin/auth/login", "/admin/auth/force-change-password", "/admin/health", "/admin/health/detailed", "/admin/health/sse"}
+_CSRF_EXEMPT = {
+    "/admin/auth/login",
+    "/admin/auth/force-change-password",
+    "/admin/health",
+    "/admin/health/detailed",
+    "/admin/health/sse",
+}
 
 
 @app.middleware("http")
