@@ -174,6 +174,114 @@ class MCPInventory:
             recommendations=recommendations,
         )
 
+    def suggest_policy(
+        self,
+        tools: list[MCPTool],
+        *,
+        tenant_id: str = "default",
+        agent_id: str = "mcp-agent",
+    ) -> dict:
+        """Derive a conservative starter AgentPolicy from enumerated MCP tools.
+
+        This closes the "discovered agent -> suggested policy" gap: instead of
+        leaving discovery results display-only, we synthesize a **deny-by-default
+        starter scaffold** grounded entirely in the tools actually enumerated on
+        the server and the capabilities inferred for each. It is a *suggestion*
+        for an operator to review — never auto-applied — and is emitted in the
+        exact YAML shape consumed by ``src/policies/loader.py`` so it can be
+        dropped into ``config/policies/`` verbatim after review.
+
+        Grounding rules (all derived from observed capabilities, nothing invented):
+
+        - A tool is **denied** when it carries an execution- or write-class
+          capability (``shell_exec`` / ``code_execution`` / ``process_spawn`` /
+          ``file_write``) — the genuine RCE / persistence vectors. This mirrors
+          the project's own example posture (``denied_tools: [run_command, bash,
+          write_file, ...]`` in ``config/policies/``). Everything else is allowed.
+        - ``allow_command_execution`` / ``allow_file_write`` stay ``False``
+          (deny-by-default), consistent with those tools being denied.
+        - ``allow_network_access`` mirrors whether any *allowed* tool actually
+          needs network access — blocking egress otherwise.
+        - ``sandbox_level`` is ``strict`` when anything was denied or any allowed
+          tool still scores high-risk, else ``standard``.
+        - Each *allowed* medium/high-risk tool gets a per-tool rate cap so the
+          scaffold is defensive out of the box.
+
+        Args:
+            tools: Tools enumerated from the MCP server.
+            tenant_id: Tenant the policy is scoped to.
+            agent_id: Agent id the policy is scoped to.
+
+        Returns:
+            A dict in policy-file YAML shape with an extra ``_rationale`` block
+            (per-tool score + why it landed in allow/deny) for operator review.
+            The ``_rationale`` key is advisory metadata; the loader ignores
+            unknown keys, so the dict remains loadable as-is.
+        """
+        # Execution/write-class capabilities are denied by default — these are
+        # the RCE and persistence vectors an operator must consciously enable.
+        _DENY_CAPS = {"shell_exec", "code_execution", "process_spawn", "file_write"}
+        _HIGH_RISK_SCORE = 7.0
+
+        allowed_tools: list[str] = []
+        denied_tools: list[str] = []
+        tool_policies: list[dict] = []
+        rationale: list[dict] = []
+        network_needed = False
+        has_high_risk_allowed = False
+
+        for tool in tools:
+            assessment = self.assess_risk(tool)
+            caps = set(tool.capabilities)
+            deny_caps = caps & _DENY_CAPS
+            deny = bool(deny_caps)
+
+            if deny:
+                denied_tools.append(tool.name)
+                reason = f"execution/write-class capability {sorted(deny_caps)}"
+            else:
+                allowed_tools.append(tool.name)
+                if "network_access" in caps:
+                    network_needed = True
+                if assessment.score >= _HIGH_RISK_SCORE:
+                    has_high_risk_allowed = True
+                # Rate-cap non-trivial allowed tools (anything above the low tier).
+                if assessment.score >= 4.0:
+                    tool_policies.append(
+                        {"name": tool.name, "allowed": True, "max_calls": 5}
+                    )
+                reason = f"no execution/write capability (score {assessment.score})"
+
+            rationale.append(
+                {
+                    "tool": tool.name,
+                    "score": assessment.score,
+                    "capabilities": sorted(caps),
+                    "decision": "deny" if deny else "allow",
+                    "reason": reason,
+                }
+            )
+
+        strict = bool(denied_tools) or has_high_risk_allowed
+        agent: dict = {
+            "id": agent_id,
+            "sandbox_level": "strict" if strict else "standard",
+            "allowed_tools": sorted(allowed_tools),
+            "denied_tools": sorted(denied_tools),
+            "allow_command_execution": False,
+            "allow_file_write": False,
+            "allow_network_access": network_needed,
+            "max_tool_calls": 20,
+        }
+        if tool_policies:
+            agent["tool_policies"] = sorted(tool_policies, key=lambda p: p["name"])
+
+        return {
+            "tenant": tenant_id,
+            "agents": [agent],
+            "_rationale": rationale,
+        }
+
     async def monitor_usage(self, server_url: str) -> dict:
         """Track usage statistics for an MCP server.
 

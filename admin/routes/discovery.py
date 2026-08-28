@@ -137,6 +137,27 @@ class MCPRiskAssessmentResponse(BaseModel):
     recommendations: list[str]
 
 
+class MCPToolSpec(BaseModel):
+    """A single MCP tool description for policy suggestion."""
+    name: str = Field(..., min_length=1, description="Tool name")
+    description: str = Field("", description="Tool description")
+    capabilities: list[str] = Field(default_factory=list, description="Tool capabilities")
+
+
+class MCPSuggestPolicyRequest(BaseModel):
+    """Request to derive a starter AgentPolicy from enumerated MCP tools."""
+    tools: list[MCPToolSpec] = Field(..., min_length=1, description="Enumerated MCP tools")
+    tenant_id: str = Field("default", description="Tenant the policy is scoped to")
+    agent_id: str = Field("mcp-agent", description="Agent id the policy is scoped to")
+
+
+class MCPSuggestPolicyResponse(BaseModel):
+    """Suggested starter policy plus per-tool rationale."""
+    policy: dict = Field(..., description="Suggested policy in policy-file shape (incl. _rationale)")
+    policy_yaml: str = Field(..., description="Loadable YAML (no _rationale) for config/policies/")
+    rationale: list[dict] = Field(default_factory=list, description="Per-tool allow/deny reasoning")
+
+
 class MCPEnumerateRequest(BaseModel):
     """Request to enumerate tools on an MCP server."""
     server_url: str = Field(..., min_length=1, description="MCP server URL")
@@ -293,6 +314,40 @@ def mcp_assess_risk(
     )
     assessment = inventory.assess_risk(tool)
     return MCPRiskAssessmentResponse(**asdict(assessment))
+
+
+@router.post("/mcp/suggest-policy", response_model=MCPSuggestPolicyResponse)
+def mcp_suggest_policy(
+    req: MCPSuggestPolicyRequest,
+    user: TokenPayload = Depends(require_permission("admin:read")),
+) -> MCPSuggestPolicyResponse:
+    """Derive a conservative starter AgentPolicy from enumerated MCP tools.
+
+    Deny-by-default scaffold grounded in each tool's inferred capabilities and
+    risk score. Returned for operator review — never auto-applied. The
+    ``policy_yaml`` field is a ready-to-review file for ``config/policies/``.
+    """
+    import yaml as _yaml
+
+    inventory = MCPInventory()
+    tools = [
+        MCPTool(name=t.name, description=t.description, capabilities=t.capabilities)
+        for t in req.tools
+    ]
+    policy = inventory.suggest_policy(
+        tools, tenant_id=req.tenant_id, agent_id=req.agent_id
+    )
+
+    rationale = policy.get("_rationale", [])
+    # Loadable YAML must not carry the advisory _rationale annotation.
+    loadable = {k: v for k, v in policy.items() if k != "_rationale"}
+    policy_yaml = _yaml.safe_dump(loadable, sort_keys=False, default_flow_style=False)
+
+    return MCPSuggestPolicyResponse(
+        policy=policy,
+        policy_yaml=policy_yaml,
+        rationale=rationale,
+    )
 
 
 @router.post("/mcp/enumerate", response_model=MCPEnumerateResponse)

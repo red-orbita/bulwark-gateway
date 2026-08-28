@@ -835,6 +835,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/discovery/shadow-ai/classify` | Session | Classify hostname |
 | GET | `/admin/discovery/mcp/status` | Session | MCP inventory status |
 | POST | `/admin/discovery/mcp/assess-risk` | Session | Assess MCP tool risk |
+| POST | `/admin/discovery/mcp/suggest-policy` | Session | Derive a deny-by-default starter AgentPolicy (loadable YAML) from enumerated MCP tools |
 | POST | `/admin/discovery/mcp/enumerate` | Session | Enumerate MCP server tools |
 | GET | `/admin/correlation/status` | Session | Correlation engine status (enabled/blocking, effective config, Redis health) |
 | GET | `/admin/correlation/config/fields` | Session | Tunable field metadata (defaults + numeric bounds) |

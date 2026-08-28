@@ -412,3 +412,106 @@ class TestMCPInventory:
         # Mixed
         score_mixed = inventory._score_capabilities(["file_read", "search"])
         assert score_low <= score_mixed <= score
+
+
+# =============================================================================
+# MCP suggested starter policy (discovered agent -> policy)
+# =============================================================================
+
+
+class TestMCPSuggestPolicy:
+    """Tests for MCPInventory.suggest_policy — grounded starter scaffold."""
+
+    def _sample_tools(self):
+        from src.discovery.mcp_inventory import MCPTool
+
+        return [
+            MCPTool(name="run_shell", description="Runs a shell command",
+                    capabilities=["shell_exec"]),
+            MCPTool(name="fetch_url", description="HTTP fetch a url",
+                    capabilities=["network_access"]),
+            MCPTool(name="search_docs", description="Search the knowledge base",
+                    capabilities=["search"]),
+            MCPTool(name="read_db", description="Query the database",
+                    capabilities=["database_read"]),
+        ]
+
+    def test_execution_tools_denied_by_default(self):
+        from src.discovery.mcp_inventory import MCPInventory
+
+        policy = MCPInventory().suggest_policy(self._sample_tools())
+        agent = policy["agents"][0]
+        # shell_exec tool must be denied; safe tools allowed.
+        assert "run_shell" in agent["denied_tools"]
+        assert "search_docs" in agent["allowed_tools"]
+        assert "run_shell" not in agent["allowed_tools"]
+        # Deny-by-default execution/file-write flags.
+        assert agent["allow_command_execution"] is False
+        assert agent["allow_file_write"] is False
+
+    def test_network_flag_grounded_in_allowed_tools(self):
+        from src.discovery.mcp_inventory import MCPInventory, MCPTool
+
+        inv = MCPInventory()
+        # An allowed tool needing network -> allow_network_access True.
+        with_net = inv.suggest_policy([
+            MCPTool(name="fetch_url", description="fetch", capabilities=["network_access"]),
+        ])
+        assert with_net["agents"][0]["allow_network_access"] is True
+
+        # No allowed tool needs network -> False.
+        no_net = inv.suggest_policy([
+            MCPTool(name="search_docs", description="search", capabilities=["search"]),
+        ])
+        assert no_net["agents"][0]["allow_network_access"] is False
+
+    def test_sandbox_strict_when_anything_denied(self):
+        from src.discovery.mcp_inventory import MCPInventory, MCPTool
+
+        inv = MCPInventory()
+        strict = inv.suggest_policy([
+            MCPTool(name="run_shell", description="shell", capabilities=["shell_exec"]),
+        ])
+        assert strict["agents"][0]["sandbox_level"] == "strict"
+
+        standard = inv.suggest_policy([
+            MCPTool(name="search_docs", description="search", capabilities=["search"]),
+        ])
+        assert standard["agents"][0]["sandbox_level"] == "standard"
+
+    def test_rationale_covers_every_tool(self):
+        from src.discovery.mcp_inventory import MCPInventory
+
+        tools = self._sample_tools()
+        policy = MCPInventory().suggest_policy(tools)
+        rationale = policy["_rationale"]
+        assert {r["tool"] for r in rationale} == {t.name for t in tools}
+        for r in rationale:
+            assert r["decision"] in {"allow", "deny"}
+            assert r["reason"]
+
+    def test_suggested_policy_is_loadable_by_real_parser(self):
+        """The emitted YAML must round-trip through the production PolicyLoader."""
+        import yaml
+
+        from src.discovery.mcp_inventory import MCPInventory
+        from src.policies.loader import PolicyLoader
+
+        policy = MCPInventory().suggest_policy(
+            self._sample_tools(), tenant_id="acme", agent_id="mcp-agent"
+        )
+        loadable = {k: v for k, v in policy.items() if k != "_rationale"}
+        yaml_text = yaml.safe_dump(loadable, sort_keys=False)
+
+        # Feed through the exact production parser (no invented schema).
+        data = yaml.safe_load(yaml_text)
+        loader = PolicyLoader(policies_dir=__import__("pathlib").Path("."))
+        parsed = loader._parse_agent_policy(data["tenant"], data["agents"][0])
+
+        assert parsed.tenant_id == "acme"
+        assert parsed.agent_id == "mcp-agent"
+        assert "run_shell" in parsed.denied_tools
+        assert "search_docs" in parsed.allowed_tools
+        assert parsed.allow_command_execution is False
+        assert parsed.sandbox_level == "strict"
+

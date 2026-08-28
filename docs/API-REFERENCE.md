@@ -785,6 +785,40 @@ Assess risk of an MCP tool based on its capabilities.
 
 **Response**: RiskAssessment (score 0-10, findings, recommendations).
 
+#### POST /admin/discovery/mcp/suggest-policy
+
+Derive a conservative **deny-by-default** starter `AgentPolicy` from enumerated
+MCP tools. Grounded entirely in each tool's inferred capabilities + risk score;
+returned for operator review, never auto-applied.
+
+**Body**:
+```json
+{
+  "tools": [
+    {"name": "run_shell", "description": "Runs shell commands", "capabilities": ["shell_exec"]},
+    {"name": "search_docs", "description": "Search the knowledge base", "capabilities": ["search"]}
+  ],
+  "tenant_id": "acme",
+  "agent_id": "mcp-agent"
+}
+```
+
+**Response**:
+```json
+{
+  "policy": { "tenant": "acme", "agents": [ ... ], "_rationale": [ ... ] },
+  "policy_yaml": "tenant: acme\nagents:\n- id: mcp-agent\n  ...",
+  "rationale": [ {"tool": "run_shell", "score": 8.0, "decision": "deny", "reason": "..."} ]
+}
+```
+
+- `policy_yaml` is a ready-to-review file for `config/policies/` (no `_rationale`);
+  it round-trips through the production policy loader.
+- Execution/write-class tools (`shell_exec`, `code_execution`, `process_spawn`,
+  `file_write`) are denied by default; `allow_network_access` reflects whether any
+  *allowed* tool needs network egress; `sandbox_level` is `strict` when anything
+  was denied or any allowed tool is high-risk.
+
 #### POST /admin/discovery/mcp/enumerate
 
 Enumerate tools on an MCP server via JSON-RPC.

@@ -1221,7 +1221,7 @@ class MCPInventory:
 - [x] MCP server inventory and risk assessment (`src/discovery/mcp_inventory.py`)
 - [x] Shadow AI detection (DNS-based) (`src/discovery/shadow_ai.py`)
 - [x] Admin UI: agent map, discovered services, risk scores (`admin/routes/discovery.py` + template)
-- [ ] Automated onboarding: discovered agent → suggested policy — not implemented; discovery results are display-only
+- [x] Automated onboarding: discovered agent → suggested policy — `MCPInventory.suggest_policy()` derives a deny-by-default starter `AgentPolicy` (loadable `config/policies/` YAML + per-tool rationale) grounded in each tool's inferred capabilities; exposed via `POST /admin/discovery/mcp/suggest-policy`. Reviewed by an operator, never auto-applied
 - [x] Alerting: new unregistered AI agents detected — `ShadowAIMonitor.dispatch_alerts()` fans out detected alerts to the shared `NotificationEngine` (advisory `warn` verdict, `shadow_ai` category); opt-in via the `notify` flag on `POST /admin/discovery/shadow-ai/analyze`
 
 ---
