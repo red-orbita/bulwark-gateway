@@ -3,13 +3,28 @@
 {% block breadcrumb %}Quotas{% endblock %}
 {% block content %}
 <div x-data="quotasPage()" class="space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-xl font-semibold text-white">Per-Tenant Resource Quotas</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Prevent "noisy neighbour" abuse in multi-tenancy. Limits are enforced by the proxy quota middleware and persisted in <span class="font-mono text-gray-300">agents.yaml</span> — changes take effect without a restart. A value of <span class="font-mono">0</span> means unlimited. All edits are audit-logged.</p>
-        </div>
-        <div class="flex items-center gap-2">
+    <!-- Module header -->
+    <div>
+        <h1 class="text-xl font-semibold text-white">Rate Limits &amp; Quotas</h1>
+        <p class="text-sm text-gray-400 mt-0.5">Per-tenant request throttling and resource-consumption limits.</p>
+    </div>
+
+    <!-- Sub-navigation -->
+    <nav class="flex items-center gap-1 p-1 rounded-lg" aria-label="Rate limits and quotas" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <a href="/rate-limits" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive text-gray-400 hover:text-gray-200 hover:bg-white/5">
+            <i data-lucide="gauge" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Rate Limits
+        </a>
+        <a href="/quotas" aria-current="page" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive bg-cyan-500/10 text-cyan-300 shadow-sm">
+            <i data-lucide="layers" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Quotas
+        </a>
+    </nav>
+
+    <!-- Section actions -->
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <p class="text-sm text-gray-400 max-w-3xl">Prevent "noisy neighbour" abuse in multi-tenancy. Limits are enforced by the proxy quota middleware and persisted in <span class="font-mono text-gray-300">agents.yaml</span> — changes take effect without a restart. A value of <span class="font-mono">0</span> means unlimited. All edits are audit-logged.</p>
+        <div class="flex items-center gap-2 shrink-0">
             <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                 Refresh

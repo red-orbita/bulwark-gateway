@@ -289,13 +289,9 @@
                 </button>
             </div>
             <div x-show="!sidebarOpen || navSections.traffic">
-                <a href="/rate-limits" class="nav-item" data-page="rate-limits" data-section="traffic" aria-label="Rate Limits">
+                <a href="/rate-limits" class="nav-item" data-page="rate-limits" data-alias="quotas" data-section="traffic" aria-label="Rate Limits and Quotas">
                     <i data-lucide="gauge" class="nav-icon" aria-hidden="true"></i>
-                    <span x-show="sidebarOpen" class="nav-label">Rate Limits</span>
-                </a>
-                <a href="/quotas" class="nav-item" data-page="quotas" data-section="traffic" aria-label="Quotas">
-                    <i data-lucide="sliders-horizontal" class="nav-icon" aria-hidden="true"></i>
-                    <span x-show="sidebarOpen" class="nav-label">Quotas</span>
+                    <span x-show="sidebarOpen" class="nav-label">Rate Limits &amp; Quotas</span>
                 </a>
                 <a href="/cost" class="nav-item" data-page="cost" data-section="traffic" aria-label="Cost and Usage">
                     <i data-lucide="coins" class="nav-icon" aria-hidden="true"></i>
@@ -649,9 +645,11 @@
                     const path = window.location.pathname;
                     document.querySelectorAll('.nav-item').forEach(item => {
                         const page = item.dataset.page;
+                        const alias = item.dataset.alias;
                         const isActive = (path === '/' && page === 'dashboard') ||
                                         (path === '/' + page) ||
-                                        (path.startsWith('/' + page + '/'));
+                                        (path.startsWith('/' + page + '/')) ||
+                                        (alias && (path === '/' + alias || path.startsWith('/' + alias + '/')));
                         item.classList.toggle('active', isActive);
                         // Keep the group containing the active page expanded so it stays visible.
                         if (isActive && item.dataset.section) this.navSections[item.dataset.section] = true;
