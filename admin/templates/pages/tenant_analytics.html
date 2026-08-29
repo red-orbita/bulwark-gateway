@@ -3,13 +3,28 @@
 {% block breadcrumb %}Tenant Analytics{% endblock %}
 {% block content %}
 <div x-data="tenantAnalytics()" class="space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-xl font-semibold text-white">Tenant Analytics</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Per-tenant usage metrics, block rates, and threat breakdown</p>
-        </div>
-        <div class="flex items-center gap-2">
+    <!-- Module header -->
+    <div>
+        <h1 class="text-xl font-semibold text-white">Tenants</h1>
+        <p class="text-sm text-gray-400 mt-0.5">Multi-tenant organizations, their configurations, and usage analytics.</p>
+    </div>
+
+    <!-- Sub-navigation -->
+    <nav class="flex items-center gap-1 p-1 rounded-lg" aria-label="Tenant views" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <a href="/tenants" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive text-gray-400 hover:text-gray-200 hover:bg-white/5">
+            <i data-lucide="building-2" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Overview
+        </a>
+        <a href="/tenant-analytics" aria-current="page" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive bg-cyan-500/10 text-cyan-300 shadow-sm">
+            <i data-lucide="bar-chart-3" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Analytics
+        </a>
+    </nav>
+
+    <!-- Section actions -->
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <p class="text-sm text-gray-400 max-w-2xl">Per-tenant usage metrics, block rates, and threat breakdown.</p>
+        <div class="flex items-center gap-2 shrink-0">
             <button @click="refresh()" class="sg-btn sg-btn-secondary sg-btn-sm">
                 <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
                 Refresh

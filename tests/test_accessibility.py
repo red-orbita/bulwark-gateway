@@ -1516,7 +1516,7 @@ def test_rbac_page_title_matches_the_standard_heading():
     """Every page titles itself with a single <h1> in the shared style; rbac
     previously used an <h2>, breaking heading order and visual consistency."""
     src = (PAGES_DIR / "rbac.html").read_text(encoding="utf-8")
-    assert '<h1 class="text-xl font-semibold text-white">Access Control</h1>' in src, (
+    assert '<h1 class="text-xl font-semibold text-white">Users &amp; Roles</h1>' in src, (
         "rbac page title must be an <h1> matching the shared header style"
     )
 

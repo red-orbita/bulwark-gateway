@@ -3,13 +3,28 @@
 {% block breadcrumb %}Tenants{% endblock %}
 {% block content %}
 <div x-data="tenantsManager()" class="space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-xl font-semibold text-white">Tenant Management</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Manage multi-tenant organizations and their agent configurations</p>
-        </div>
-        <div class="flex items-center gap-2">
+    <!-- Module header -->
+    <div>
+        <h1 class="text-xl font-semibold text-white">Tenants</h1>
+        <p class="text-sm text-gray-400 mt-0.5">Multi-tenant organizations, their configurations, and usage analytics.</p>
+    </div>
+
+    <!-- Sub-navigation -->
+    <nav class="flex items-center gap-1 p-1 rounded-lg" aria-label="Tenant views" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <a href="/tenants" aria-current="page" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive bg-cyan-500/10 text-cyan-300 shadow-sm">
+            <i data-lucide="building-2" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Overview
+        </a>
+        <a href="/tenant-analytics" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive text-gray-400 hover:text-gray-200 hover:bg-white/5">
+            <i data-lucide="bar-chart-3" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Analytics
+        </a>
+    </nav>
+
+    <!-- Section actions -->
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <p class="text-sm text-gray-400 max-w-2xl">Manage multi-tenant organizations and their agent configurations.</p>
+        <div class="flex items-center gap-2 shrink-0">
             <button @click="openDefaults()" class="sg-btn sg-btn-secondary sg-btn-sm">
                 <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
                 Global Defaults

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Access Control — Bulwark Gateway Admin{% endblock %}
+{% block title %}Users & Roles — Bulwark Gateway Admin{% endblock %}
 {% block content %}
 <div class="space-y-6" x-data="accessControlManager()">
     <!-- Header -->
     <div class="flex justify-between items-center">
         <div>
-            <h1 class="text-xl font-semibold text-white">Access Control</h1>
+            <h1 class="text-xl font-semibold text-white">Users &amp; Roles</h1>
             <p class="text-sm text-gray-400 mt-0.5">Manage users, roles, and permissions</p>
         </div>
         <button x-show="activeTab === 'users'" @click="openCreateUser()"

@@ -195,9 +195,9 @@
                     <i data-lucide="shield-check" class="nav-icon" aria-hidden="true"></i>
                     <span x-show="sidebarOpen" class="nav-label">Allowlist</span>
                 </a>
-                <a href="/ml-scanners" class="nav-item" data-page="ml-scanners" data-section="detect" aria-label="Advanced Scanners">
+                <a href="/ml-scanners" class="nav-item" data-page="ml-scanners" data-section="detect" aria-label="ML Scanners">
                     <i data-lucide="brain" class="nav-icon" aria-hidden="true"></i>
-                    <span x-show="sidebarOpen" class="nav-label">Advanced Scanners</span>
+                    <span x-show="sidebarOpen" class="nav-label">ML Scanners</span>
                 </a>
                 <a href="/skills" class="nav-item" data-page="skills" data-section="detect" aria-label="SkillSpector">
                     <i data-lucide="scan-search" class="nav-icon" aria-hidden="true"></i>
@@ -251,13 +251,9 @@
                 </button>
             </div>
             <div x-show="!sidebarOpen || navSections.govern">
-                <a href="/tenants" class="nav-item" data-page="tenants" data-section="govern" aria-label="Tenants">
+                <a href="/tenants" class="nav-item" data-page="tenants" data-alias="tenant-analytics" data-section="govern" aria-label="Tenants">
                     <i data-lucide="building-2" class="nav-icon" aria-hidden="true"></i>
                     <span x-show="sidebarOpen" class="nav-label">Tenants</span>
-                </a>
-                <a href="/tenant-analytics" class="nav-item" data-page="tenant-analytics" data-section="govern" aria-label="Tenant Analytics">
-                    <i data-lucide="bar-chart-3" class="nav-icon" aria-hidden="true"></i>
-                    <span x-show="sidebarOpen" class="nav-label">Tenant Analytics</span>
                 </a>
                 <a href="/agents" class="nav-item" data-page="agents" data-section="govern" aria-label="Agents">
                     <i data-lucide="bot" class="nav-icon" aria-hidden="true"></i>
@@ -267,9 +263,9 @@
                     <i data-lucide="file-lock" class="nav-icon" aria-hidden="true"></i>
                     <span x-show="sidebarOpen" class="nav-label">Policies</span>
                 </a>
-                <a href="/rbac" class="nav-item" data-page="rbac" data-section="govern" aria-label="Access Control">
+                <a href="/rbac" class="nav-item" data-page="rbac" data-section="govern" aria-label="Users and Roles">
                     <i data-lucide="users" class="nav-icon" aria-hidden="true"></i>
-                    <span x-show="sidebarOpen" class="nav-label">Access Control</span>
+                    <span x-show="sidebarOpen" class="nav-label">Users &amp; Roles</span>
                 </a>
                 <a href="/gdpr" class="nav-item" data-page="gdpr" data-section="govern" aria-label="GDPR and Privacy">
                     <i data-lucide="scale" class="nav-icon" aria-hidden="true"></i>
@@ -706,7 +702,7 @@
                     { id: 4, label: 'Status', href: '/status', icon: 'heart-pulse', section: 'Monitor' },
                     { id: 5, label: 'Guardrails', href: '/guardrails', icon: 'shield-alert', section: 'Detect & Protect' },
                     { id: 6, label: 'Allowlist', href: '/allowlist', icon: 'shield-check', section: 'Detect & Protect' },
-                    { id: 7, label: 'Advanced Scanners', href: '/ml-scanners', icon: 'brain', section: 'Detect & Protect' },
+                    { id: 7, label: 'ML Scanners', href: '/ml-scanners', icon: 'brain', section: 'Detect & Protect' },
                     { id: 8, label: 'SkillSpector', href: '/skills', icon: 'scan-search', section: 'Detect & Protect' },
                     { id: 9, label: 'IOCs', href: '/iocs', icon: 'bug', section: 'Detect & Protect' },
                     { id: 10, label: 'Enrichment', href: '/enrichment', icon: 'layers', section: 'Detect & Protect' },
@@ -719,7 +715,7 @@
                     { id: 17, label: 'Tenant Analytics', href: '/tenant-analytics', icon: 'bar-chart-3', section: 'Govern' },
                     { id: 18, label: 'Agents', href: '/agents', icon: 'bot', section: 'Govern' },
                     { id: 19, label: 'Policies', href: '/policies', icon: 'file-lock', section: 'Govern' },
-                    { id: 20, label: 'Access Control', href: '/rbac', icon: 'users', section: 'Govern' },
+                    { id: 20, label: 'Users & Roles', href: '/rbac', icon: 'users', section: 'Govern' },
                     { id: 21, label: 'GDPR / Privacy', href: '/gdpr', icon: 'scale', section: 'Govern' },
                     { id: 22, label: 'Audit Log', href: '/audit', icon: 'scroll-text', section: 'Govern' },
                     { id: 23, label: 'Rate Limits', href: '/rate-limits', icon: 'gauge', section: 'Traffic & Cost' },
