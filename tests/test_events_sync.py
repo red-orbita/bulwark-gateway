@@ -151,6 +151,40 @@ async def test_sync_once_empty_buffer(wired_store, monkeypatch):
     assert await sync.sync_once() == 0
 
 
+async def test_query_exposes_unique_event_id_per_row(wired_store, monkeypatch):
+    """The events viewer keys its x-for on ``event_id``; duplicate keys make
+    Alpine render zero rows. A single proxy request emits several events sharing
+    one ``request_id`` (input guardrail + correlation + output filter), so the
+    query MUST expose a distinct, non-empty ``event_id`` per row instead."""
+    # Three detections from ONE request → identical request_id, distinct events.
+    rid = "916fc0ec9ee943a4a663fabe9b522d6f"
+    detections = [
+        {"ts": 10.0, "tenant": "acme", "verdict": "warn", "category": "jailbreak",
+         "severity": "medium", "source": "input_guardrail", "request_id": rid,
+         "pattern": "P1", "input_hash": "h1"},
+        {"ts": 10.1, "tenant": "acme", "verdict": "warn", "category": "exfiltration",
+         "severity": "high", "source": "input_guardrail", "request_id": rid,
+         "pattern": "P2", "input_hash": "h1"},
+        {"ts": 10.2, "tenant": "acme", "verdict": "block", "category": "credential_access",
+         "severity": "high", "source": "output_filter", "request_id": rid,
+         "pattern": "P3", "input_hash": "h1"},
+    ]
+    monkeypatch.setattr(sync_mod, "_drain_redis", lambda max_items: [
+        sync_mod._normalise(d) for d in detections
+    ])
+    sync = sync_mod.SecurityEventsSync(interval_seconds=999, prune_every_n=999)
+    assert await sync.sync_once() == 3
+
+    rows = await wired_store.query(limit=10)
+    assert len(rows) == 3
+    # Every row carries a non-empty event_id …
+    assert all(r.get("event_id") for r in rows)
+    # … the shared request_id is NOT unique (would collide as a render key) …
+    assert len({r["request_id"] for r in rows}) == 1
+    # … but event_id IS row-unique, so the viewer's x-for key never duplicates.
+    assert len({r["event_id"] for r in rows}) == 3
+
+
 async def test_contributing_event_ids_resolve_after_sync(wired_store, monkeypatch):
     """End-to-end drill-down pivot: an incident's contributing_event_ids (the
     original SecurityEvent ids captured in-memory) must resolve to the durable

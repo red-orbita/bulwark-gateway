@@ -112,7 +112,8 @@ def _row_to_event(row) -> dict:
     Kept wire-compatible with the historical Redis-backed payload so the
     frontend (events.html) needs no changes: ``ts``/``tenant``/``agent``/
     ``verdict``/``category``/``severity``/``description``/``source``/``pattern``/
-    ``request_id``/``tool_name``/``snippet``/``input_hash``/``metadata``.
+    ``request_id``/``tool_name``/``snippet``/``input_hash``/``metadata``. Adds the
+    UNIQUE ``event_id`` (additive) so the viewer can use a row-unique render key.
     """
     d = row.to_dict() if hasattr(row, "to_dict") else dict(row)
     meta = d.get("metadata")
@@ -124,6 +125,10 @@ def _row_to_event(row) -> dict:
     elif meta is None:
         meta = {}
     return {
+        # Stable UNIQUE identity (dedup key). Exposed so the viewer's x-for can key
+        # on it: a single proxy request emits several events sharing one request_id,
+        # so request_id is NOT row-unique and cannot be a render key.
+        "event_id": d.get("event_id") or "",
         "ts": d.get("ts"),
         "tenant": d.get("tenant"),
         "agent": d.get("agent") or "",

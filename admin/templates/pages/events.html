@@ -641,11 +641,16 @@ function eventsManager() {
             this.settingsSaving = false;
         },
 
-        // Stable identity for a row: prefer request_id, else a composite of the
-        // fields that make an event unique within the loaded window.
+        // Stable, ROW-UNIQUE identity for a row. Must be unique across the loaded
+        // window or Alpine's x-for throws "Duplicate key" and renders no rows: a
+        // single proxy request emits several events (input guardrail + correlation
+        // + output filter) that all share one request_id, so request_id is NOT
+        // unique. Prefer the store's UNIQUE event_id; fall back to a composite only
+        // for legacy payloads that predate event_id exposure.
         rowKey(evt) {
             if (!evt) return '';
-            return evt.request_id
+            return evt.event_id
+                || evt.request_id
                 || `${evt.ts || ''}|${evt.tenant || ''}|${evt.category || ''}|${evt.pattern || ''}|${evt.description || ''}`;
         },
 
