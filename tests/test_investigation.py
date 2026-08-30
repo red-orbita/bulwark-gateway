@@ -424,6 +424,61 @@ class TestInvestigationEndpoints:
         assert all(a["tenant"] == "acme" for a in out["alerts"])
         assert out["count"] == 1
 
+    async def test_triage_workqueue_lists_records(self, wired):
+        """GET /triage backs the workqueue card — lists persistent triage records
+        independent of the alert lookback window, newest-updated first."""
+        inv, _, triage, _ = wired
+        await triage.set_state(
+            subject_type="incident", subject_key="INC-1", tenant="acme",
+            actor="a", status="open",
+        )
+        await triage.set_state(
+            subject_type="origin", subject_key="request:r1", tenant="acme",
+            actor="a", status="in_progress", assignee="carol",
+        )
+        out = await inv.investigation_triage_list(
+            user=_admin(), status=None, subject_type=None, limit=100, offset=0,
+        )
+        assert out["count"] == 2
+        keys = {r["subject_key"] for r in out["records"]}
+        assert keys == {"INC-1", "request:r1"}
+
+    async def test_triage_workqueue_filters_by_status_and_type(self, wired):
+        inv, _, triage, _ = wired
+        await triage.set_state(
+            subject_type="incident", subject_key="INC-1", tenant="acme",
+            actor="a", status="open",
+        )
+        await triage.set_state(
+            subject_type="origin", subject_key="request:r1", tenant="acme",
+            actor="a", status="in_progress",
+        )
+        by_status = await inv.investigation_triage_list(
+            user=_admin(), status="in_progress", subject_type=None, limit=100, offset=0,
+        )
+        assert [r["subject_key"] for r in by_status["records"]] == ["request:r1"]
+
+        by_type = await inv.investigation_triage_list(
+            user=_admin(), status=None, subject_type="incident", limit=100, offset=0,
+        )
+        assert [r["subject_key"] for r in by_type["records"]] == ["INC-1"]
+
+    async def test_triage_workqueue_tenant_scoped(self, wired):
+        inv, _, triage, _ = wired
+        await triage.set_state(
+            subject_type="incident", subject_key="MINE", tenant="acme",
+            actor="a", status="open",
+        )
+        await triage.set_state(
+            subject_type="incident", subject_key="THEIRS", tenant="evil",
+            actor="a", status="open",
+        )
+        out = await inv.investigation_triage_list(
+            user=_admin(tenant="acme"), status=None, subject_type=None,
+            limit=100, offset=0,
+        )
+        assert [r["subject_key"] for r in out["records"]] == ["MINE"]
+
     async def test_incident_drilldown(self, wired):
         inv, events, _, _ = wired
         meta = {

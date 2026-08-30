@@ -234,6 +234,71 @@
         </div>
     </div>
 
+    <!-- Triage workqueue -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between gap-2 mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="list-checks" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Triage Workqueue</h2>
+            </div>
+            <button @click="loadTriageQueue()" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Refresh triage workqueue">
+                <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="triageQueueLoading ? 'animate-spin' : ''"></i>
+            </button>
+        </div>
+        <p class="text-[11px] text-gray-500 mb-3">Every subject an analyst has triaged, independent of the alert queue's lookback window — so in-flight work whose originating alert has aged out is never lost. Open one to act on it in the triage panel.</p>
+
+        <div class="flex flex-wrap items-end gap-2 mb-4">
+            <select x-model="triageQueueFilters.status" @change="loadTriageQueue()" class="sg-input sg-input-sm" aria-label="Filter workqueue by status">
+                <option value="">All statuses</option>
+                <template x-for="s in triageStatuses" :key="'tqs-' + s">
+                    <option :value="s" x-text="s"></option>
+                </template>
+            </select>
+            <select x-model="triageQueueFilters.subject_type" @change="loadTriageQueue()" class="sg-input sg-input-sm" aria-label="Filter workqueue by subject type">
+                <option value="">All subjects</option>
+                <template x-for="t in triageSubjectTypes" :key="'tqt-' + t">
+                    <option :value="t" x-text="t"></option>
+                </template>
+            </select>
+        </div>
+
+        <div x-show="triageQueueLoading && triageQueue.length === 0" class="text-sm text-gray-500 py-6 text-center">Loading workqueue…</div>
+
+        <div x-show="!triageQueueLoading && triageQueue.length === 0" x-cloak class="sg-empty">
+            <p class="sg-empty-title">Nothing in the workqueue</p>
+            <p class="sg-empty-desc">Triaged subjects appear here as analysts set status, assign owners or add notes.</p>
+        </div>
+
+        <div x-show="triageQueue.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
+                <thead>
+                    <tr>
+                        <th>Subject</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Assignee</th>
+                        <th>Updated</th>
+                        <th class="text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(r, idx) in triageQueue" :key="r.subject_type + ':' + r.subject_key + ':' + idx">
+                        <tr :class="(subject && subject.type === r.subject_type && subject.key === r.subject_key) ? 'bg-cyan-500/[0.06]' : ''">
+                            <td class="font-mono text-xs text-gray-300 break-all" x-text="r.subject_key"></td>
+                            <td class="text-xs text-gray-400" x-text="r.subject_type"></td>
+                            <td><span class="sg-badge text-[10px]" :class="triageClass(r.status)" x-text="r.status || 'open'"></span></td>
+                            <td class="text-xs text-gray-400" x-text="r.assignee || '—'"></td>
+                            <td class="text-xs text-gray-500" x-text="fmtTime(r.updated_at)"></td>
+                            <td class="text-right">
+                                <button @click="openTriageRecord(r)" class="sg-btn sg-btn-ghost sg-btn-sm">Open</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <!-- Cases -->
     <div class="sg-card">
         <div class="flex items-center justify-between gap-2 mb-4">
@@ -672,9 +737,23 @@
     </div>
 
     <!-- Detail drawer -->
-    <div x-show="selected || session" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div id="investigation-detail" x-show="selected || session || subject" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Evidence (2 cols) -->
         <div class="lg:col-span-2 space-y-6">
+            <!-- Subject summary (workqueue drill-in with no alert/session detail loaded) -->
+            <div x-show="subject && !selected && !session" x-cloak class="sg-card">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="crosshair" class="w-4 h-4 text-cyan-300"></i>
+                    <h2 class="text-sm font-medium text-white">Triage Subject</h2>
+                </div>
+                <p class="text-[11px] text-gray-500 mb-3">Opened from the triage workqueue. Its status, assignee and note trail are in the panel alongside; the originating alert has aged out of the live queue.</p>
+                <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Subject Type</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="subject && subject.type"></dd></div>
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Status</dt><dd class="mt-0.5"><span class="sg-badge text-[10px]" :class="triageClass(currentStatus())" x-text="currentStatus()"></span></dd></div>
+                    <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Subject Key</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="subject && subject.key"></dd></div>
+                </dl>
+            </div>
+
             <!-- Alert summary -->
             <div x-show="selected" x-cloak class="sg-card">
                 <div class="flex items-start justify-between gap-3 mb-4">
@@ -1136,6 +1215,15 @@ function investigationPage() {
             // set from either an alert row or a session row.
             subject: null,
 
+            // Triage workqueue — persistent triage records (all statuses) beyond
+            // the alert queue's lookback window. Lets an analyst pick up in-flight
+            // work whose originating alert has aged out.
+            triageQueue: [],
+            triageQueueLoading: false,
+            triageQueueFilters: { status: '', subject_type: '' },
+            triageStatuses: ['open', 'acknowledged', 'in_progress', 'resolved', 'dismissed'],
+            triageSubjectTypes: ['incident', 'origin', 'session'],
+
             // Cases (Fase 2: grouping subjects into one investigation).
             cases: [],
             casesLoading: true,
@@ -1173,6 +1261,7 @@ function investigationPage() {
                 await this.loadStatus();
                 await this.loadAlerts();
                 await this.loadSessions();
+                await this.loadTriageQueue();
                 await this.loadCases();
                 await this.loadCaseStats();
                 this.$nextTick(() => window.lucide && window.lucide.createIcons());
@@ -1722,6 +1811,15 @@ function investigationPage() {
                         }
                     });
                 }
+                // Reflect into the persistent triage workqueue rows.
+                this.triageQueue.forEach(r => {
+                    if (r.subject_type === rec.subject_type && r.subject_key === rec.subject_key) {
+                        r.status = rec.status;
+                        r.assignee = rec.assignee || '';
+                        r.notes = rec.notes || r.notes;
+                        r.updated_at = rec.updated_at || r.updated_at;
+                    }
+                });
             },
 
         async _post(path, payload, okMsg) {
