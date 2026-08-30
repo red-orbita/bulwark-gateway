@@ -132,12 +132,70 @@
         </div>
     </div>
 
+    <!-- At-risk decomposition sessions -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between gap-2 mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="split" class="w-4 h-4 text-fuchsia-400"></i>
+                <h2 class="text-sm font-medium text-white">At-Risk Sessions</h2>
+            </div>
+            <div class="flex items-center gap-2">
+                <span x-show="!sessionsConnected" x-cloak class="text-[10px] text-gray-500">Redis offline</span>
+                <button @click="loadSessions()" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Refresh sessions">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
+        <p class="text-[11px] text-gray-500 mb-3">Origins accumulating decomposed / multi-turn attack signal across the 5-minute and 30-minute windows the proxy's Session Decomposition Tracker maintains. Digests are irreversible SHA-256 pseudonyms — scores and signal ids only, never message content. Open one to see its per-window breakdown and triage it.</p>
+
+        <div x-show="sessionsLoading" class="text-sm text-gray-500 py-6 text-center">Loading sessions…</div>
+
+        <div x-show="!sessionsLoading && sessions.length === 0" x-cloak class="sg-empty">
+            <p class="sg-empty-title" x-text="sessionsConnected ? 'No at-risk sessions right now' : 'Session tracker unavailable'"></p>
+            <p class="sg-empty-desc" x-text="sessionsConnected ? 'Sessions appear here as the decomposition tracker accumulates multi-turn attack signal.' : 'The tracker needs Redis to accumulate cross-request signal. Live sessions will appear when it is reachable.'"></p>
+        </div>
+
+        <div x-show="!sessionsLoading && sessions.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Window</th>
+                        <th>Score</th>
+                        <th>Verdict</th>
+                        <th>Signals</th>
+                        <th>Triage</th>
+                        <th class="text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(s, idx) in sessions" :key="s.session_key + ':' + s.window + ':' + idx">
+                        <tr :class="isSessionSelected(s) ? 'bg-fuchsia-500/[0.06]' : ''">
+                            <td class="font-mono text-xs text-gray-300" x-text="s.session_key"></td>
+                            <td class="text-xs text-gray-400" x-text="s.window"></td>
+                            <td class="font-mono text-xs text-gray-300" x-text="Number(s.score).toFixed(2)"></td>
+                            <td><span class="sg-badge text-[10px]" :class="verdictClass(s.verdict)" x-text="(s.verdict || '—').toUpperCase()"></span></td>
+                            <td class="text-xs text-gray-400" x-text="s.signal_count"></td>
+                            <td>
+                                <span class="sg-badge text-[10px]" :class="triageClass(s.triage_status)" x-text="s.triage_status || 'open'"></span>
+                                <span x-show="s.assignee" class="text-[10px] text-gray-500 ml-1" x-text="'· ' + s.assignee"></span>
+                            </td>
+                            <td class="text-right">
+                                <button @click="investigateSession(s)" class="sg-btn sg-btn-ghost sg-btn-sm" x-text="isSessionSelected(s) ? 'Selected' : 'Investigate'"></button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <!-- Detail drawer -->
-    <div x-show="selected" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div x-show="selected || session" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Evidence (2 cols) -->
         <div class="lg:col-span-2 space-y-6">
             <!-- Alert summary -->
-            <div class="sg-card">
+            <div x-show="selected" x-cloak class="sg-card">
                 <div class="flex items-start justify-between gap-3 mb-4">
                     <div class="flex items-center gap-2">
                         <i data-lucide="file-search" class="w-4 h-4 text-fuchsia-300"></i>
@@ -283,6 +341,51 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Session decomposition drill-down -->
+            <div x-show="session" x-cloak class="sg-card border-fuchsia-500/30 bg-fuchsia-500/[0.04]">
+                <div class="flex items-start justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="split" class="w-4 h-4 text-fuchsia-300"></i>
+                        <h2 class="text-sm font-medium text-white">Session Decomposition</h2>
+                        <span class="text-[10px] text-gray-500 font-mono break-all" x-text="session && session.digest"></span>
+                    </div>
+                    <button @click="closeDetail()" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+                </div>
+
+                <p class="text-[11px] text-gray-400 mb-4">A decomposed / multi-turn attack spreads malicious intent across many individually-innocuous requests. The tracker accumulates weighted signal per origin over two sliding windows and escalates when the total crosses a threshold. This session's current accumulators:</p>
+
+                <div x-show="session && session.windows.length === 0" class="text-[11px] text-gray-500 py-2">No live signal for this session (Redis unavailable or the windows have expired). It may still carry triage history alongside.</div>
+
+                <div class="space-y-4">
+                    <template x-for="w in (session ? session.windows : [])" :key="w.window">
+                        <div class="rounded border border-gray-800 bg-gray-950/50 p-3">
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[11px] font-medium text-gray-200" x-text="w.window + ' window'"></span>
+                                    <span class="sg-badge text-[10px]" :class="verdictClass(w.verdict)" x-text="(w.verdict || '—').toUpperCase()"></span>
+                                </div>
+                                <span class="font-mono text-xs text-gray-300"><span x-text="Number(w.score).toFixed(2)"></span><span class="text-gray-600"> score</span></span>
+                            </div>
+                            <div class="h-2 rounded-full bg-gray-700/50 overflow-hidden mb-1">
+                                <div class="h-full rounded-full" :class="w.verdict === 'block' ? 'bg-gradient-to-r from-fuchsia-500 to-rose-400' : (w.verdict === 'warn' ? 'bg-gradient-to-r from-amber-500/80 to-amber-400/60' : 'bg-gradient-to-r from-cyan-500/70 to-cyan-400/50')"
+                                     :style="'width:' + sessionPct(w) + '%'"></div>
+                            </div>
+                            <p class="text-[10px] text-gray-600 mb-2">
+                                warn <span class="font-mono" x-text="fmtThr(w.warn_threshold)"></span> ·
+                                block <span class="font-mono" x-text="fmtThr(w.block_threshold)"></span> ·
+                                TTL <span class="font-mono" x-text="(w.ttl_seconds !== null && w.ttl_seconds !== undefined) ? w.ttl_seconds + 's' : '—'"></span>
+                            </p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <template x-for="sig in (w.distinct_signals || [])" :key="w.window + '-' + sig">
+                                    <span class="sg-badge text-[10px] bg-fuchsia-400/10 text-fuchsia-200 border border-fuchsia-500/25 font-mono" x-text="sig"></span>
+                                </template>
+                                <span x-show="!w.distinct_signals || w.distinct_signals.length === 0" class="text-[10px] text-gray-600">no distinct signals</span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
         </div>
 
         <!-- Triage workflow (1 col) -->
@@ -358,26 +461,38 @@ function investigationPage() {
             correlation_enabled: false, can_write: false,
             alerts_last_24h: 0, open_triage: 0, in_progress_triage: 0,
             statuses: ['open', 'acknowledged', 'in_progress', 'resolved', 'dismissed'],
-            subject_types: ['incident', 'origin'],
-        },
-        filters: { verdict: '', lookback_hours: 24 },
-        alerts: [],
-        selected: null,
-        incident: null,
-        origin: null,
-        triage: null,
-        assigneeInput: '',
-        noteInput: '',
+                subject_types: ['incident', 'origin', 'session'],
+            },
+            filters: { verdict: '', lookback_hours: 24 },
+            alerts: [],
+            selected: null,
+            incident: null,
+            origin: null,
+            triage: null,
+            assigneeInput: '',
+            noteInput: '',
 
-        async init() {
-            await this.reloadAll();
-        },
+            // Session decomposition (at-risk sessions surface + drill-down).
+            sessions: [],
+            sessionsLoading: true,
+            sessionsConnected: true,
+            session: null,
+            sessionSummary: null,
 
-        async reloadAll() {
-            await this.loadStatus();
-            await this.loadAlerts();
-            this.$nextTick(() => window.lucide && window.lucide.createIcons());
-        },
+            // Unified triage subject ({type, key}) the workflow column binds to,
+            // set from either an alert row or a session row.
+            subject: null,
+
+            async init() {
+                await this.reloadAll();
+            },
+
+            async reloadAll() {
+                await this.loadStatus();
+                await this.loadAlerts();
+                await this.loadSessions();
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            },
 
         async loadStatus() {
             try {
@@ -415,33 +530,95 @@ function investigationPage() {
         },
 
         // ─── Selection / drill-down ──────────────────────────────────────────
-        isSelected(a) {
-            return this.selected && this.selected === a;
-        },
+            isSelected(a) {
+                return this.selected && this.selected === a;
+            },
 
-        async investigate(a) {
-            this.selected = a;
-            this.incident = null;
-            this.origin = null;
-            this.assigneeInput = a.assignee || '';
-            this.noteInput = '';
-            // Load the confirmed-incident chain if this alert is one.
-            const incId = a.incident_id || (a.metadata && a.metadata.incident_id) || '';
-            if (incId) {
-                await this.loadIncident(incId);
-            }
-            // Seed triage state from the annotated queue row; refresh from the
-            // authoritative subject record.
-            await this.refreshTriage();
-            this.$nextTick(() => window.lucide && window.lucide.createIcons());
-        },
+            async investigate(a) {
+                this.selected = a;
+                this.incident = null;
+                this.origin = null;
+                this.session = null;
+                this.sessionSummary = null;
+                this.subject = (a.subject_type && a.subject_key)
+                    ? { type: a.subject_type, key: a.subject_key } : null;
+                this.assigneeInput = a.assignee || '';
+                this.noteInput = '';
+                // Load the confirmed-incident chain if this alert is one.
+                const incId = a.incident_id || (a.metadata && a.metadata.incident_id) || '';
+                if (incId) {
+                    await this.loadIncident(incId);
+                }
+                // Seed triage state from the annotated queue row; refresh from the
+                // authoritative subject record.
+                await this.refreshTriage();
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            },
 
-        closeDetail() {
-            this.selected = null;
-            this.incident = null;
-            this.origin = null;
-            this.triage = null;
-        },
+            closeDetail() {
+                this.selected = null;
+                this.incident = null;
+                this.origin = null;
+                this.session = null;
+                this.sessionSummary = null;
+                this.subject = null;
+                this.triage = null;
+            },
+
+            // ─── Session decomposition ───────────────────────────────────────────
+            async loadSessions() {
+                this.sessionsLoading = true;
+                try {
+                    const res = await fetch('/admin/investigation/sessions?limit=50');
+                    if (res.ok) {
+                        const data = await res.json();
+                        this.sessions = data.sessions || [];
+                        this.sessionsConnected = !!data.redis_connected;
+                    } else {
+                        showToast('Failed to load sessions', 'error');
+                    }
+                } catch (e) {
+                    showToast('Network error loading sessions', 'error');
+                } finally {
+                    this.sessionsLoading = false;
+                    this.$nextTick(() => window.lucide && window.lucide.createIcons());
+                }
+            },
+
+            isSessionSelected(s) {
+                return this.subject && this.subject.type === 'session'
+                    && this.subject.key === s.session_key;
+            },
+
+            async investigateSession(s) {
+                this.selected = null;
+                this.incident = null;
+                this.origin = null;
+                this.sessionSummary = s;
+                this.subject = { type: 'session', key: s.session_key };
+                this.assigneeInput = s.assignee || '';
+                this.noteInput = '';
+                await this.loadSession(s.session_key);
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            },
+
+            async loadSession(digest) {
+                try {
+                    const res = await fetch('/admin/investigation/session/' + encodeURIComponent(digest));
+                    if (res.ok) {
+                        this.session = await res.json();
+                        this.triage = this.session.triage;
+                        if (this.triage && this.triage.assignee) {
+                            this.assigneeInput = this.triage.assignee;
+                        }
+                        this.$nextTick(() => window.lucide && window.lucide.createIcons());
+                    } else {
+                        showToast('Failed to load session detail', 'error');
+                    }
+                } catch (e) {
+                    showToast('Network error loading session', 'error');
+                }
+            },
 
         async loadIncident(incidentId) {
             try {
@@ -501,28 +678,41 @@ function investigationPage() {
         fmtConf(v) { return (Number(v) || 0).toFixed(3); },
 
         riskScore() {
-            return this.origin && this.origin.risk ? Number(this.origin.risk.score) || 0 : 0;
-        },
+                return this.origin && this.origin.risk ? Number(this.origin.risk.score) || 0 : 0;
+            },
+
+            // Fill a session window's meter against its block threshold (falling
+            // back to warn, then a 0–10 scale) so the bar tracks the escalation.
+            sessionPct(w) {
+                if (!w) return 0;
+                let denom = Number(w.block_threshold);
+                if (!(denom > 0)) denom = Number(w.warn_threshold);
+                if (!(denom > 0)) denom = 10;
+                return Math.max(0, Math.min((Number(w.score) || 0) / denom * 100, 100));
+            },
+            fmtThr(v) { return (v === null || v === undefined) ? '—' : Number(v).toFixed(1); },
 
         // ─── Triage subject ──────────────────────────────────────────────────
-        subjectType() { return this.selected ? (this.selected.subject_type || null) : null; },
-        subjectKey() { return this.selected ? (this.selected.subject_key || null) : null; },
+            subjectType() { return this.subject ? this.subject.type : null; },
+            subjectKey() { return this.subject ? this.subject.key : null; },
 
-        async refreshTriage() {
-            // The queue row already carries triage_status/assignee, but the
-            // authoritative record (with notes) comes from the subject detail.
-            if (this.incident && this.incident.triage) {
-                this.triage = this.incident.triage;
-                this.assigneeInput = this.triage.assignee || this.assigneeInput;
-            } else {
-                this.triage = null;
-            }
-        },
+            async refreshTriage() {
+                // The queue row already carries triage_status/assignee, but the
+                // authoritative record (with notes) comes from the subject detail.
+                if (this.incident && this.incident.triage) {
+                    this.triage = this.incident.triage;
+                    this.assigneeInput = this.triage.assignee || this.assigneeInput;
+                } else {
+                    this.triage = null;
+                }
+            },
 
-        currentStatus() {
-            if (this.triage && this.triage.status) return this.triage.status;
-            return this.selected ? (this.selected.triage_status || 'open') : 'open';
-        },
+            currentStatus() {
+                if (this.triage && this.triage.status) return this.triage.status;
+                if (this.selected) return this.selected.triage_status || 'open';
+                if (this.sessionSummary) return this.sessionSummary.triage_status || 'open';
+                return 'open';
+            },
 
         triageNotes() {
             return (this.triage && Array.isArray(this.triage.notes)) ? this.triage.notes : [];
@@ -533,15 +723,29 @@ function investigationPage() {
         },
 
         _applyTriage(rec) {
-            if (!rec) return;
-            this.triage = rec;
-            this.assigneeInput = rec.assignee || '';
-            // Reflect into the selected queue row + the queue list.
-            if (this.selected) {
-                this.selected.triage_status = rec.status;
-                this.selected.assignee = rec.assignee || '';
-            }
-        },
+                if (!rec) return;
+                this.triage = rec;
+                this.assigneeInput = rec.assignee || '';
+                // Reflect into the selected queue row + the queue list.
+                if (this.selected) {
+                    this.selected.triage_status = rec.status;
+                    this.selected.assignee = rec.assignee || '';
+                }
+                // Reflect into the session drill-down + every matching session row
+                // (a digest can appear once per window).
+                if (this.sessionSummary) {
+                    this.sessionSummary.triage_status = rec.status;
+                    this.sessionSummary.assignee = rec.assignee || '';
+                }
+                if (rec.subject_type === 'session') {
+                    this.sessions.forEach(s => {
+                        if (s.session_key === rec.subject_key) {
+                            s.triage_status = rec.status;
+                            s.assignee = rec.assignee || '';
+                        }
+                    });
+                }
+            },
 
         async _post(path, payload, okMsg) {
             if (!this.subjectKey()) { showToast('This alert has no triage subject', 'error'); return; }
