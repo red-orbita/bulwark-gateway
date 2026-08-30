@@ -557,6 +557,58 @@
                     <p class="text-[11px] text-gray-500 mb-1">Secrets/PII removed, truncated. Raw input is never stored.</p>
                     <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="selected && selected.snippet"></pre>
                 </div>
+
+                <!-- IOC cross-reference (Fase 4B): extract network indicators from the
+                     evidence snippet and match them against the local IOC store, which
+                     is kept current by the external threat-intel feeds. A hit names the
+                     feed that flagged the indicator — no live network call is made. -->
+                <div x-show="selected && selected.snippet" class="mt-4">
+                    <div class="flex items-center justify-between gap-3 mb-1">
+                        <p class="text-gray-500 uppercase tracking-wider text-xs">Threat Intel</p>
+                        <button @click="runIocCheck()" :disabled="iocCheck.loading"
+                                class="sg-btn sg-btn-ghost sg-btn-sm inline-flex items-center gap-1.5">
+                            <i data-lucide="radar" class="w-3.5 h-3.5"></i>
+                            <span x-text="iocCheck.loading ? 'Checking…' : (iocCheck.done ? 'Re-check indicators' : 'Check indicators')"></span>
+                        </button>
+                    </div>
+                    <p class="text-[11px] text-gray-500 mb-2">Extract URLs / IPs / domains from the evidence and match them against the IOC store (populated by URLhaus, ThreatFox, OTX, AbuseIPDB, MISP, OpenCTI).</p>
+
+                    <div x-show="iocCheck.done" x-cloak>
+                        <!-- Summary line -->
+                        <div class="flex items-center gap-2 mb-2 text-[11px]">
+                            <span class="sg-badge text-[10px]"
+                                  :class="iocCheck.matched > 0 ? 'bg-rose-400/15 text-rose-300 border border-rose-500/30' : 'bg-emerald-400/15 text-emerald-300 border border-emerald-500/30'"
+                                  x-text="iocCheck.matched > 0 ? (iocCheck.matched + ' IOC match' + (iocCheck.matched === 1 ? '' : 'es')) : 'No IOC matches'"></span>
+                            <span class="text-gray-500" x-text="iocCheck.extracted + ' indicator' + (iocCheck.extracted === 1 ? '' : 's') + ' extracted'"></span>
+                        </div>
+
+                        <!-- No indicators extracted at all -->
+                        <div x-show="iocCheck.extracted === 0" class="text-[11px] text-gray-500 py-1">No network indicators (URL / IP / domain) were found in the evidence.</div>
+
+                        <!-- Indicator rows -->
+                        <div x-show="iocCheck.indicators.length > 0" class="space-y-1.5">
+                            <template x-for="(ind, i) in iocCheck.indicators" :key="'ioc-' + i">
+                                <div class="rounded border p-2"
+                                     :class="ind.matched ? 'border-rose-500/30 bg-rose-500/[0.04]' : 'border-gray-800 bg-gray-950/50'">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="sg-badge text-[9px] bg-gray-700/40 text-gray-300 border border-gray-600/40 uppercase" x-text="ind.type"></span>
+                                        <span class="font-mono text-[11px] text-gray-300 break-all" x-text="ind.value"></span>
+                                        <span x-show="ind.matched" class="sg-badge text-[9px] bg-rose-400/15 text-rose-300 border border-rose-500/30">MATCH</span>
+                                    </div>
+                                    <div x-show="ind.matched && ind.sources.length > 0" class="mt-1 flex flex-wrap gap-1.5">
+                                        <template x-for="(src, j) in ind.sources" :key="'src-' + i + '-' + j">
+                                            <span class="sg-badge text-[9px]" :class="iocBadgeClass(src.severity)"
+                                                  :title="'severity ' + src.severity + ' · confidence ' + src.confidence">
+                                                <span x-text="src.source"></span>
+                                                <span class="opacity-70" x-text="' · ' + src.severity"></span>
+                                            </span>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Incident drill-down -->
@@ -862,6 +914,10 @@ function investigationPage() {
             categoryRefs: {},    // ThreatCategory → ordered display codes
             owaspVersion: '',
 
+            // IOC cross-reference (Fase 4B). Result of checking the selected alert's
+            // evidence snippet against the local IOC store (fed by external feeds).
+            iocCheck: { loading: false, done: false, extracted: 0, matched: 0, indicators: [] },
+
             // Bulk triage selection — a map of "type:key" → {subject_type, subject_key}
             // spanning both the alert queue and the at-risk session list.
             bulkSel: {},
@@ -1135,6 +1191,7 @@ function investigationPage() {
                 this.origin = null;
                 this.session = null;
                 this.sessionSummary = null;
+                this._resetIocCheck();
                 this.subject = (a.subject_type && a.subject_key)
                     ? { type: a.subject_type, key: a.subject_key } : null;
                 this.assigneeInput = a.assignee || '';
@@ -1162,6 +1219,53 @@ function investigationPage() {
                 this.triage = null;
                 this.subjectCases = [];
                 this.addToCaseId = '';
+                this._resetIocCheck();
+            },
+
+            // ─── IOC cross-reference (Fase 4B) ───────────────────────────────────
+            _resetIocCheck() {
+                this.iocCheck = { loading: false, done: false, extracted: 0, matched: 0, indicators: [] };
+            },
+
+            // POST the selected alert's redacted snippet to the IOC cross-reference
+            // endpoint. Indicators are extracted server-side (shared proxy regexes)
+            // and exact-matched against the IOC store; a hit names the feed source.
+            async runIocCheck() {
+                const content = (this.selected && this.selected.snippet) || '';
+                if (!content) {
+                    showToast('No evidence snippet to check', 'error');
+                    return;
+                }
+                this.iocCheck.loading = true;
+                try {
+                    const res = await fetch('/admin/investigation/ioc-check', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content }),
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        showToast(err.detail || 'IOC check failed', 'error');
+                        return;
+                    }
+                    const data = await res.json();
+                    this.iocCheck.extracted = data.extracted || 0;
+                    this.iocCheck.matched = data.matched || 0;
+                    this.iocCheck.indicators = data.indicators || [];
+                    this.iocCheck.done = true;
+                    this.$nextTick(() => window.lucide && window.lucide.createIcons());
+                } catch (e) {
+                    showToast('Network error running IOC check', 'error');
+                } finally {
+                    this.iocCheck.loading = false;
+                }
+            },
+
+            iocBadgeClass(sev) {
+                const s = (sev || '').toLowerCase();
+                if (s === 'critical' || s === 'high') return 'bg-rose-400/15 text-rose-300 border border-rose-500/30';
+                if (s === 'medium') return 'bg-amber-400/15 text-amber-300 border border-amber-500/30';
+                return 'bg-gray-500/15 text-gray-300 border border-gray-500/30';
             },
 
             // ─── Session decomposition ───────────────────────────────────────────

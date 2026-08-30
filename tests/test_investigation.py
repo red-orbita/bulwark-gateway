@@ -858,3 +858,91 @@ class TestBulkTriage:
         assert out["failed"] == 1
         assert out["results"][0]["ok"] is False
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# IOC cross-reference (Fase 4B)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def ioc_wired(wired, monkeypatch, tmp_path):
+    """Wire the investigation route against a real, empty, temp-backed IOC store."""
+    from admin.services import ioc_store as ioc_mod
+    from admin.services.ioc_store import IOCStore
+
+    store = IOCStore(
+        ioc_path=tmp_path / "iocs.json",
+        feed_state_path=tmp_path / "feeds.json",
+    )
+    monkeypatch.setattr(ioc_mod, "get_ioc_store", lambda: store)
+    inv, events, triage, audit = wired
+    return inv, store
+
+
+class TestIOCCheck:
+    def _create(self, store, ioc_type, value, *, source="urlhaus", severity=None):
+        from admin.models.iocs import IOCCreate, IOCSeverity, IOCType
+
+        return store.create(
+            IOCCreate(
+                type=IOCType(ioc_type),
+                value=value,
+                severity=severity or IOCSeverity.HIGH,
+            ),
+            source=source,
+        )
+
+    async def test_extract_only_no_matches(self, ioc_wired):
+        inv, _store = ioc_wired
+        req = inv.IOCCheckRequest(content="visit http://benign.example/path and 10.0.0.9")
+        out = await inv.investigation_ioc_check(req, user=_viewer())
+        assert out["extracted"] > 0
+        assert out["matched"] == 0
+        assert all(not ind["matched"] for ind in out["indicators"])
+        assert all(ind["sources"] == [] for ind in out["indicators"])
+
+    async def test_domain_match_surfaces_feed_source(self, ioc_wired):
+        inv, store = ioc_wired
+        self._create(store, "domain", "evil.test", source="threatfox")
+        req = inv.IOCCheckRequest(content="exfil to http://evil.test/steal now")
+        out = await inv.investigation_ioc_check(req, user=_viewer())
+        assert out["matched"] >= 1
+        hit = next(i for i in out["indicators"] if i["value"] == "evil.test")
+        assert hit["type"] == "domain"
+        assert hit["matched"] is True
+        assert hit["sources"][0]["source"] == "threatfox"
+        assert hit["sources"][0]["severity"] == "high"
+
+    async def test_ip_match(self, ioc_wired):
+        inv, store = ioc_wired
+        self._create(store, "ip", "203.0.113.5", source="abuseipdb")
+        req = inv.IOCCheckRequest(content="callback 203.0.113.5:4444")
+        out = await inv.investigation_ioc_check(req, user=_viewer())
+        hit = next(i for i in out["indicators"] if i["value"] == "203.0.113.5")
+        assert hit["matched"] is True
+        assert hit["sources"][0]["source"] == "abuseipdb"
+
+    async def test_inactive_entry_is_not_a_hit(self, ioc_wired):
+        inv, store = ioc_wired
+        entry = self._create(store, "domain", "muted.test", source="misp")
+        entry.active = False  # analyst deliberately disabled it
+        req = inv.IOCCheckRequest(content="see muted.test")
+        out = await inv.investigation_ioc_check(req, user=_viewer())
+        hit = next(i for i in out["indicators"] if i["value"] == "muted.test")
+        assert hit["matched"] is False
+        assert out["matched"] == 0
+
+    async def test_homoglyph_normalization_matches(self, ioc_wired):
+        """Zero-width evasion in the evidence must not defeat the store match."""
+        inv, store = ioc_wired
+        self._create(store, "domain", "evil.test", source="otx")
+        req = inv.IOCCheckRequest(content="reach ev\u200bil.test covertly")
+        out = await inv.investigation_ioc_check(req, user=_viewer())
+        assert any(i["value"] == "evil.test" and i["matched"] for i in out["indicators"])
+
+    async def test_candidates_deduped(self, ioc_wired):
+        inv, _store = ioc_wired
+        req = inv.IOCCheckRequest(content="10.0.0.1 10.0.0.1 10.0.0.1")
+        out = await inv.investigation_ioc_check(req, user=_viewer())
+        ips = [i for i in out["indicators"] if i["type"] == "ip"]
+        assert len(ips) == 1

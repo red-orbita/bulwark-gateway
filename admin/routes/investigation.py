@@ -77,6 +77,12 @@ _MAX_LOOKBACK_HOURS = 24 * 90  # 90 days
 _MAX_ALERTS = 500
 _MAX_TIMELINE = 500
 
+# Bounds for the IOC cross-reference endpoint (Fase 4B). The content is a redacted
+# alert snippet, but callers may pass arbitrary text — cap both the scanned length
+# and the number of distinct candidates so extraction stays O(bounded).
+_MAX_IOC_CONTENT = 20_000
+_MAX_IOC_CANDIDATES = 200
+
 
 def _scoped_tenant(user: TokenPayload, requested: Optional[str]) -> Optional[str]:
     """Resolve the effective tenant filter, enforcing tenant scoping.
@@ -164,6 +170,67 @@ class BulkTriageRequest(BaseModel):
     subjects: list[BulkTriageSubject] = Field(..., min_length=1, max_length=100)
     status: Optional[str] = Field(default=None, description=f"one of {STATUSES}")
     assignee: Optional[str] = Field(default=None, max_length=128)
+
+
+class IOCCheckRequest(BaseModel):
+    """Cross-reference free text (typically a redacted alert snippet) against IOCs.
+
+    The analyst pastes / passes the evidence snippet and the endpoint extracts
+    network indicators (URLs / IPs / domains) and matches them against the local
+    IOC store — which is itself continuously populated by the external threat-intel
+    feeds (URLhaus, ThreatFox, OTX, AbuseIPDB, MISP, OpenCTI). A match therefore
+    already tells the analyst *which* external feed flagged the indicator, without
+    any live per-request network call on the admin path.
+    """
+
+    content: str = Field(..., min_length=1, max_length=_MAX_IOC_CONTENT)
+
+
+def _extract_ioc_candidates(content: str) -> list[tuple[str, str]]:
+    """Extract deduped (ioc_type, value) indicator candidates from free text.
+
+    Reuses the proxy IOC manager's normalization + pre-compiled extraction regexes
+    (admin→src is allowed) so extraction is byte-identical to the hot-path scanner:
+    NFKC + zero-width stripping + percent/punycode decoding defeats homoglyph / IDN
+    evasion before matching. Only network indicators are extracted — URLs, IPv4s and
+    domains. File hashes are intentionally *not* derived: an alert's ``input_hash``
+    is Bulwark's own request digest, not a file hash, so cross-referencing it against
+    threat-intel hashes would be meaningless.
+    """
+    from src.ioc.manager import (
+        _DOMAIN_RE,
+        _IP_RE,
+        _URL_RE,
+        _normalize_for_ioc,
+    )
+
+    normalized = _normalize_for_ioc(content)
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+
+    def _add(ioc_type: str, value: str) -> None:
+        value = value.strip().rstrip(".,;)")
+        if not value:
+            return
+        key = (ioc_type, value)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(key)
+
+    for url in _URL_RE.findall(normalized):
+        _add("url", url)
+        if len(out) >= _MAX_IOC_CANDIDATES:
+            return out
+    for ip in _IP_RE.findall(normalized):
+        _add("ip", ip)
+        if len(out) >= _MAX_IOC_CANDIDATES:
+            return out
+    for domain in _DOMAIN_RE.findall(normalized):
+        _add("domain", domain)
+        if len(out) >= _MAX_IOC_CANDIDATES:
+            return out
+    return out
 
 
 def _alert_subject(evt: dict) -> tuple[str, str] | None:
@@ -305,6 +372,70 @@ async def investigation_alerts(
             "assignee": (rec or {}).get("assignee", ""),
         })
     return {"alerts": out, "count": len(out)}
+
+
+@router.post("/ioc-check")
+async def investigation_ioc_check(
+    req: IOCCheckRequest,
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """Cross-reference an alert's evidence against the IOC store (Fase 4B).
+
+    Extracts network indicators (URL / IP / domain) from the supplied text and
+    exact-matches each against the local IOC store. The store is kept current by
+    the external threat-intel feeds, so every match carries the ``source`` feed
+    that flagged it — giving external-intel coverage with no live network call on
+    the request path (fail-safe: the extraction/match is pure-local and cannot hang
+    on a slow third party). Only *active* entries count as a hit; a disabled entry
+    is reported with ``active=false`` so the analyst sees it was deliberately muted.
+    """
+    from ..models.iocs import IOCType
+    from ..services.ioc_store import _generate_id, get_ioc_store
+
+    store = get_ioc_store()
+    candidates = _extract_ioc_candidates(req.content)
+
+    # Only the network indicator types the store can hold are looked up.
+    _type_map = {
+        "url": IOCType.URL,
+        "ip": IOCType.IP,
+        "domain": IOCType.DOMAIN,
+    }
+
+    indicators: list[dict] = []
+    match_count = 0
+    for ioc_type, value in candidates:
+        entry = store.get(_generate_id(ioc_type, value))
+        matched = bool(entry and entry.active)
+        if matched:
+            match_count += 1
+        indicators.append({
+            "type": ioc_type,
+            "value": value,
+            "matched": matched,
+            # `sources` is a list so a future live-lookup layer can append external
+            # verdicts without breaking this contract; today it holds the single
+            # local-store hit (if any). Only surfaced for a real match.
+            "sources": (
+                [{
+                    "source": entry.source,
+                    "severity": entry.severity.value,
+                    "confidence": entry.confidence,
+                    "active": entry.active,
+                    "first_seen": entry.first_seen.isoformat() if entry.first_seen else None,
+                    "last_seen": entry.last_seen.isoformat() if entry.last_seen else None,
+                    "tags": list(entry.tags),
+                    "notes": entry.notes,
+                }]
+                if entry else []
+            ),
+        })
+
+    return {
+        "extracted": len(candidates),
+        "matched": match_count,
+        "indicators": indicators,
+    }
 
 
 @router.get("/incident/{incident_id}")
