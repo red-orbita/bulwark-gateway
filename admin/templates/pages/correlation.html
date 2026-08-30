@@ -3,13 +3,31 @@
 {% block breadcrumb %}Correlation Engine{% endblock %}
 {% block content %}
 <div x-data="correlationPage()" class="space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <!-- Module header -->
+    <div>
+        <h1 class="text-xl font-semibold text-white">Correlation &amp; Sessions</h1>
+        <p class="text-sm text-gray-400 mt-0.5">Inline adaptive detection engines — per-origin risk correlation and multi-turn session decomposition.</p>
+    </div>
+
+    <!-- Sub-navigation -->
+    <nav class="flex items-center gap-1 p-1 rounded-lg" aria-label="Correlation and sessions" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <a href="/correlation" aria-current="page" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive bg-cyan-500/10 text-cyan-300 shadow-sm">
+            <i data-lucide="git-merge" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Correlation
+        </a>
+        <a href="/sessions" class="px-4 py-2 rounded-md text-xs font-medium sg-interactive text-gray-400 hover:text-gray-200 hover:bg-white/5">
+            <i data-lucide="list-tree" class="w-3.5 h-3.5 inline-block mr-1.5" aria-hidden="true"></i>
+            Sessions
+        </a>
+    </nav>
+
+    <!-- Section header -->
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-            <h1 class="text-xl font-semibold text-white">Adaptive Correlation Engine</h1>
-            <p class="text-sm text-gray-400 mt-0.5">Correlates security signals <em>per origin</em> into a decaying risk score. Risk accrues from confirmed input↔output exfiltration and from ongoing WARN/BLOCK events folded in by the event tap. When an origin crosses the threshold, the <em>next</em> request from that origin is hardened — WARN, or BLOCK when blocking is on. Config changes below write to Redis and the proxy honors them within ~5s <em>without a restart</em>. Origin keys are irreversible SHA-256 digests. All mutations are audit-logged. This is inline enforcement only — multi-source, forensic, and cross-tenant correlation is delegated to your SIEM.</p>
+            <h2 class="text-sm font-medium text-white">Adaptive Correlation Engine</h2>
+            <p class="text-sm text-gray-400 mt-0.5 max-w-3xl">Correlates security signals <em>per origin</em> into a decaying risk score. Risk accrues from confirmed input↔output exfiltration and from ongoing WARN/BLOCK events folded in by the event tap. When an origin crosses the threshold, the <em>next</em> request from that origin is hardened — WARN, or BLOCK when blocking is on. Config changes below write to Redis and the proxy honors them within ~5s <em>without a restart</em>. Origin keys are irreversible SHA-256 digests. All mutations are audit-logged. This is inline enforcement only — multi-source, forensic, and cross-tenant correlation is delegated to your SIEM.</p>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 shrink-0">
             <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                 Refresh
