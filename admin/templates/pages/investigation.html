@@ -190,6 +190,200 @@
         </div>
     </div>
 
+    <!-- Cases -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between gap-2 mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="folder-kanban" class="w-4 h-4 text-indigo-400"></i>
+                <h2 class="text-sm font-medium text-white">Cases</h2>
+            </div>
+            <div class="flex items-center gap-2">
+                <select x-model="caseFilters.status" @change="loadCases()" class="sg-input sg-input-sm" aria-label="Filter cases by status">
+                    <option value="">All statuses</option>
+                    <template x-for="s in caseStatuses" :key="'cf-' + s">
+                        <option :value="s" x-text="s"></option>
+                    </template>
+                </select>
+                <button @click="showCaseCreate = !showCaseCreate" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!caseCanWrite" x-show="caseCanWrite">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                    New Case
+                </button>
+                <button @click="loadCases()" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Refresh cases">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
+        <p class="text-[11px] text-gray-500 mb-3">Group several related subjects — confirmed incidents, at-risk origins and decomposition sessions — under one analyst-owned investigation with its own status, severity, assignee and shared, append-only note trail. A working campaign usually spans many correlated detections; a case pins them together.</p>
+
+        <!-- Create form -->
+        <div x-show="showCaseCreate" x-cloak class="rounded border border-gray-800 bg-gray-950/50 p-3 mb-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div class="sm:col-span-2">
+                    <label for="case-title" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Title</label>
+                    <input id="case-title" type="text" x-model="caseCreate.title" maxlength="200" placeholder="e.g. Prompt-injection campaign — acme support-bot" class="sg-input w-full">
+                </div>
+                <div>
+                    <label for="case-severity" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Severity</label>
+                    <select id="case-severity" x-model="caseCreate.severity" class="sg-input w-full">
+                        <template x-for="sv in caseSeverities" :key="'cs-' + sv">
+                            <option :value="sv" x-text="sv"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="sm:col-span-2">
+                    <label for="case-summary" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Summary <span class="text-gray-600 normal-case">(optional)</span></label>
+                    <textarea id="case-summary" x-model="caseCreate.summary" rows="2" maxlength="4000" placeholder="What ties these subjects together?" class="sg-input w-full"></textarea>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-3">
+                <button @click="showCaseCreate = false" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                <button @click="createCase()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="saving || !caseCreate.title.trim()">Create Case</button>
+            </div>
+        </div>
+
+        <div x-show="casesLoading" class="text-sm text-gray-500 py-6 text-center">Loading cases…</div>
+
+        <div x-show="!casesLoading && cases.length === 0" x-cloak class="sg-empty">
+            <p class="sg-empty-title">No cases yet</p>
+            <p class="sg-empty-desc">Open a case to collect related incidents, origins and sessions under one investigation.</p>
+        </div>
+
+        <div x-show="!casesLoading && cases.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Status</th>
+                        <th>Severity</th>
+                        <th>Subjects</th>
+                        <th>Assignee</th>
+                        <th>Updated</th>
+                        <th class="text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(c, idx) in cases" :key="c.case_id + ':' + idx">
+                        <tr :class="caseDetail && caseDetail.case_id === c.case_id ? 'bg-indigo-500/[0.06]' : ''">
+                            <td class="text-xs text-gray-200" x-text="c.title || '—'"></td>
+                            <td><span class="sg-badge text-[10px]" :class="caseStatusClass(c.status)" x-text="c.status || 'open'"></span></td>
+                            <td><span class="sg-badge text-[10px]" :class="caseSeverityClass(c.severity)" x-text="c.severity || '—'"></span></td>
+                            <td class="text-xs text-gray-400" x-text="c.subject_count"></td>
+                            <td class="text-xs text-gray-400 font-mono" x-text="c.assignee || '—'"></td>
+                            <td class="whitespace-nowrap text-xs text-gray-500" x-text="fmtTime(c.updated_at)"></td>
+                            <td class="text-right">
+                                <button @click="openCase(c.case_id)" class="sg-btn sg-btn-ghost sg-btn-sm">Open</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Case detail -->
+    <div x-show="caseDetail" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Subjects + metadata (2 cols) -->
+        <div class="lg:col-span-2 space-y-6">
+            <div class="sg-card border-indigo-500/30 bg-indigo-500/[0.04]">
+                <div class="flex items-start justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="folder-open" class="w-4 h-4 text-indigo-300"></i>
+                        <h2 class="text-sm font-medium text-white" x-text="(caseDetail && caseDetail.title) || 'Case'"></h2>
+                        <span class="text-[10px] text-gray-500 font-mono break-all" x-text="caseDetail && caseDetail.case_id"></span>
+                    </div>
+                    <button @click="closeCase()" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+                </div>
+
+                <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs mb-4">
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Status</dt><dd class="mt-0.5"><span class="sg-badge text-[10px]" :class="caseStatusClass(caseDetail && caseDetail.status)" x-text="(caseDetail && caseDetail.status) || 'open'"></span></dd></div>
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Severity</dt><dd class="mt-0.5"><span class="sg-badge text-[10px]" :class="caseSeverityClass(caseDetail && caseDetail.severity)" x-text="(caseDetail && caseDetail.severity) || '—'"></span></dd></div>
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Tenant</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(caseDetail && caseDetail.tenant) || '—'"></dd></div>
+                    <div><dt class="text-gray-500 uppercase tracking-wider">Opened by</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(caseDetail && caseDetail.created_by) || '—'"></dd></div>
+                    <div class="sm:col-span-2" x-show="caseDetail && caseDetail.summary"><dt class="text-gray-500 uppercase tracking-wider">Summary</dt><dd class="text-gray-300 mt-0.5 whitespace-pre-wrap break-words" x-text="caseDetail && caseDetail.summary"></dd></div>
+                </dl>
+
+                <p class="text-gray-500 uppercase tracking-wider text-xs mb-2">Linked Subjects
+                    <span class="text-gray-600" x-text="'(' + (caseDetail ? caseDetail.subjects.length : 0) + ')'"></span>
+                </p>
+                <div x-show="caseDetail && caseDetail.subjects.length === 0" class="text-[11px] text-gray-500 py-2">No subjects linked yet. Investigate an alert or session above, then use “Add to case”.</div>
+                <div x-show="caseDetail && caseDetail.subjects.length > 0" class="space-y-2">
+                    <template x-for="(s, i) in (caseDetail ? caseDetail.subjects : [])" :key="'cse-' + i">
+                        <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5 flex items-center gap-2">
+                            <span class="text-[10px] px-1.5 py-0.5 rounded" :class="subjectKindClass(s.subject_type)" x-text="s.subject_type"></span>
+                            <span class="text-[11px] font-mono text-gray-300 break-all" x-text="s.subject_key"></span>
+                            <span class="text-[10px] text-gray-600 ml-auto whitespace-nowrap" x-text="fmtTime(s.added_at)"></span>
+                            <button @click="unlinkSubject(s.subject_type, s.subject_key)" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!caseCanWrite || saving" aria-label="Unlink subject">
+                                <i data-lucide="unlink" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Case controls (1 col) -->
+        <div class="space-y-6">
+            <div class="sg-card">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="settings-2" class="w-4 h-4 text-indigo-400"></i>
+                    <h2 class="text-sm font-medium text-white">Case Controls</h2>
+                </div>
+
+                <!-- Status -->
+                <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Status</p>
+                <div class="flex flex-wrap gap-1.5 mb-4">
+                    <template x-for="s in caseStatuses" :key="'cst-' + s">
+                        <button @click="setCaseStatus(s)" :disabled="!caseCanWrite || saving"
+                                class="text-[11px] px-2.5 py-1 rounded border transition-colors"
+                                :class="(caseDetail && caseDetail.status) === s ? 'bg-indigo-500/20 text-indigo-200 border-indigo-400/40' : 'bg-white/[0.02] text-gray-400 border-gray-700 hover:border-gray-500'"
+                                x-text="s"></button>
+                    </template>
+                </div>
+
+                <!-- Severity -->
+                <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Severity</p>
+                <div class="flex flex-wrap gap-1.5 mb-4">
+                    <template x-for="sv in caseSeverities" :key="'csv-' + sv">
+                        <button @click="setCaseSeverity(sv)" :disabled="!caseCanWrite || saving"
+                                class="text-[11px] px-2.5 py-1 rounded border transition-colors"
+                                :class="(caseDetail && caseDetail.severity) === sv ? 'bg-indigo-500/20 text-indigo-200 border-indigo-400/40' : 'bg-white/[0.02] text-gray-400 border-gray-700 hover:border-gray-500'"
+                                x-text="sv"></button>
+                    </template>
+                </div>
+
+                <!-- Assignee -->
+                <label for="case-assignee" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Assignee</label>
+                <div class="flex gap-2 mb-4">
+                    <input id="case-assignee" type="text" x-model="caseAssigneeInput" maxlength="128" placeholder="unassigned" class="sg-input flex-1" :disabled="!caseCanWrite">
+                    <button @click="setCaseAssignee()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!caseCanWrite || saving">Set</button>
+                </div>
+
+                <!-- Add note -->
+                <label for="case-note" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Add Note</label>
+                <textarea id="case-note" x-model="caseNoteInput" rows="3" maxlength="4000" placeholder="Investigation notes…" class="sg-input w-full mb-2" :disabled="!caseCanWrite"></textarea>
+                <div class="flex justify-end mb-4">
+                    <button @click="addCaseNote()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!caseCanWrite || saving || !caseNoteInput.trim()">Add Note</button>
+                </div>
+
+                <!-- Notes trail -->
+                <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">History <span class="text-gray-600" x-text="'(' + caseNotes().length + ')'"></span></p>
+                <div x-show="caseNotes().length === 0" class="text-[11px] text-gray-500 py-2">No activity yet.</div>
+                <div x-show="caseNotes().length > 0" class="space-y-2" style="max-height: 24rem; overflow-y: auto;">
+                    <template x-for="(n, i) in caseNotesReversed()" :key="'cnote-' + i">
+                        <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5">
+                            <div class="flex items-center gap-2 text-[10px] text-gray-500">
+                                <span class="px-1.5 py-0.5 rounded" :class="n.kind === 'action' ? 'bg-indigo-500/15 text-indigo-300' : 'bg-gray-500/15 text-gray-400'" x-text="n.kind"></span>
+                                <span class="font-mono text-gray-400" x-text="n.author"></span>
+                                <span class="ml-auto" x-text="fmtTime(n.ts)"></span>
+                            </div>
+                            <p class="text-[11px] text-gray-300 mt-1 whitespace-pre-wrap break-words" x-text="n.text"></p>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Detail drawer -->
     <div x-show="selected || session" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Evidence (2 cols) -->
@@ -404,6 +598,28 @@
                         <span class="font-mono text-gray-500 break-all" x-text="subjectKey()"></span>
                     </p>
 
+                    <!-- Add to case -->
+                    <div class="rounded border border-indigo-500/20 bg-indigo-500/[0.03] p-2.5 mb-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="folder-plus" class="w-3.5 h-3.5 text-indigo-300"></i>
+                            <span class="text-[11px] text-gray-400">Add this subject to a case</span>
+                        </div>
+                        <div x-show="subjectCases.length > 0" class="flex flex-wrap gap-1.5 mb-2">
+                            <template x-for="c in subjectCases" :key="'sc-' + c.case_id">
+                                <button @click="openCase(c.case_id)" class="sg-badge text-[10px] bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 hover:opacity-80" x-text="c.title || c.case_id"></button>
+                            </template>
+                        </div>
+                        <div class="flex gap-2" x-show="caseCanWrite">
+                            <select x-model="addToCaseId" class="sg-input sg-input-sm flex-1" aria-label="Select a case">
+                                <option value="">Select a case…</option>
+                                <template x-for="c in cases" :key="'atc-' + c.case_id">
+                                    <option :value="c.case_id" x-text="c.title || c.case_id"></option>
+                                </template>
+                            </select>
+                            <button @click="addCurrentSubjectToCase()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="saving || !addToCaseId">Add</button>
+                        </div>
+                        <p x-show="!caseCanWrite" class="text-[10px] text-gray-600">Read-only role — cannot modify cases.</p>
+                    </div>
                     <!-- Status -->
                     <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Status</p>
                     <div class="flex flex-wrap gap-1.5 mb-4">
@@ -483,6 +699,21 @@ function investigationPage() {
             // set from either an alert row or a session row.
             subject: null,
 
+            // Cases (Fase 2: grouping subjects into one investigation).
+            cases: [],
+            casesLoading: true,
+            caseCanWrite: false,
+            caseStatuses: ['open', 'investigating', 'contained', 'resolved', 'closed'],
+            caseSeverities: ['low', 'medium', 'high', 'critical'],
+            caseFilters: { status: '' },
+            showCaseCreate: false,
+            caseCreate: { title: '', severity: 'medium', summary: '' },
+            caseDetail: null,
+            caseAssigneeInput: '',
+            caseNoteInput: '',
+            subjectCases: [],
+            addToCaseId: '',
+
             async init() {
                 await this.reloadAll();
             },
@@ -491,6 +722,7 @@ function investigationPage() {
                 await this.loadStatus();
                 await this.loadAlerts();
                 await this.loadSessions();
+                await this.loadCases();
                 this.$nextTick(() => window.lucide && window.lucide.createIcons());
             },
 
@@ -544,6 +776,8 @@ function investigationPage() {
                     ? { type: a.subject_type, key: a.subject_key } : null;
                 this.assigneeInput = a.assignee || '';
                 this.noteInput = '';
+                this.addToCaseId = '';
+                await this.loadSubjectCases();
                 // Load the confirmed-incident chain if this alert is one.
                 const incId = a.incident_id || (a.metadata && a.metadata.incident_id) || '';
                 if (incId) {
@@ -563,6 +797,8 @@ function investigationPage() {
                 this.sessionSummary = null;
                 this.subject = null;
                 this.triage = null;
+                this.subjectCases = [];
+                this.addToCaseId = '';
             },
 
             // ─── Session decomposition ───────────────────────────────────────────
@@ -598,6 +834,8 @@ function investigationPage() {
                 this.subject = { type: 'session', key: s.session_key };
                 this.assigneeInput = s.assignee || '';
                 this.noteInput = '';
+                this.addToCaseId = '';
+                await this.loadSubjectCases();
                 await this.loadSession(s.session_key);
                 this.$nextTick(() => window.lucide && window.lucide.createIcons());
             },
@@ -797,6 +1035,231 @@ function investigationPage() {
                 text: text,
             }, 'Note added');
             this.noteInput = '';
+        },
+
+        // ─── Cases ───────────────────────────────────────────────────────────
+        async loadCases() {
+            this.casesLoading = true;
+            try {
+                const p = new URLSearchParams();
+                if (this.caseFilters.status) p.set('status', this.caseFilters.status);
+                p.set('limit', '100');
+                const res = await fetch('/admin/investigation/cases?' + p.toString());
+                if (res.ok) {
+                    const data = await res.json();
+                    this.cases = data.cases || [];
+                    this.caseCanWrite = !!data.can_write;
+                    if (Array.isArray(data.statuses) && data.statuses.length) this.caseStatuses = data.statuses;
+                    if (Array.isArray(data.severities) && data.severities.length) this.caseSeverities = data.severities;
+                } else {
+                    showToast('Failed to load cases', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading cases', 'error');
+            } finally {
+                this.casesLoading = false;
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            }
+        },
+
+        async createCase() {
+            const title = this.caseCreate.title.trim();
+            if (!title) return;
+            this.saving = true;
+            try {
+                const res = await fetch('/admin/investigation/cases', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        severity: this.caseCreate.severity,
+                        summary: this.caseCreate.summary.trim() || null,
+                    }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to create case', 'error');
+                    return;
+                }
+                const data = await res.json();
+                showToast('Case created', 'success');
+                this.showCaseCreate = false;
+                this.caseCreate = { title: '', severity: 'medium', summary: '' };
+                await this.loadCases();
+                if (data.case && data.case.case_id) await this.openCase(data.case.case_id);
+            } catch (e) {
+                showToast('Network error creating case', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async openCase(caseId) {
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(caseId));
+                if (res.ok) {
+                    const data = await res.json();
+                    this.caseDetail = data.case;
+                    this.caseAssigneeInput = (data.case && data.case.assignee) || '';
+                    this.caseNoteInput = '';
+                    this.$nextTick(() => window.lucide && window.lucide.createIcons());
+                } else if (res.status === 404) {
+                    showToast('Case not found', 'error');
+                } else {
+                    showToast('Failed to load case', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading case', 'error');
+            }
+        },
+
+        closeCase() {
+            this.caseDetail = null;
+            this.caseNoteInput = '';
+        },
+
+        caseNotes() {
+            return (this.caseDetail && Array.isArray(this.caseDetail.notes)) ? this.caseDetail.notes : [];
+        },
+
+        caseNotesReversed() {
+            return this.caseNotes().slice().reverse();
+        },
+
+        async _caseMutate(path, payload, okMsg, method) {
+            if (!this.caseDetail) return;
+            this.saving = true;
+            try {
+                const opts = { method: method || 'POST' };
+                if (payload) {
+                    opts.headers = { 'Content-Type': 'application/json' };
+                    opts.body = JSON.stringify(payload);
+                }
+                const res = await fetch(path, opts);
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Request failed', 'error');
+                    return null;
+                }
+                const data = await res.json();
+                if (data.case) {
+                    this.caseDetail = data.case;
+                    this.caseAssigneeInput = data.case.assignee || '';
+                    // Reflect summary row changes into the list.
+                    const row = this.cases.find(c => c.case_id === data.case.case_id);
+                    if (row) {
+                        row.status = data.case.status;
+                        row.severity = data.case.severity;
+                        row.assignee = data.case.assignee || '';
+                        row.subject_count = (data.case.subjects || []).length;
+                        row.updated_at = data.case.updated_at;
+                    }
+                }
+                showToast(okMsg, 'success');
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+                return data;
+            } catch (e) {
+                showToast('Network error', 'error');
+                return null;
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async setCaseStatus(s) {
+            const id = this.caseDetail.case_id;
+            await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/state', { status: s }, 'Status updated');
+        },
+
+        async setCaseSeverity(sv) {
+            const id = this.caseDetail.case_id;
+            await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/state', { severity: sv }, 'Severity updated');
+        },
+
+        async setCaseAssignee() {
+            const id = this.caseDetail.case_id;
+            await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/state', { assignee: this.caseAssigneeInput.trim() }, 'Assignee updated');
+        },
+
+        async addCaseNote() {
+            const text = this.caseNoteInput.trim();
+            if (!text) return;
+            const id = this.caseDetail.case_id;
+            const ok = await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/note', { text: text }, 'Note added');
+            if (ok) this.caseNoteInput = '';
+        },
+
+        async unlinkSubject(subjectType, subjectKey) {
+            const id = this.caseDetail.case_id;
+            const p = new URLSearchParams();
+            p.set('subject_type', subjectType);
+            p.set('subject_key', subjectKey);
+            await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/subject?' + p.toString(), null, 'Subject unlinked', 'DELETE');
+            // If the unlinked subject is the current triage subject, refresh its cases.
+            if (this.subject && this.subject.type === subjectType && this.subject.key === subjectKey) {
+                await this.loadSubjectCases();
+            }
+        },
+
+        async loadSubjectCases() {
+            this.subjectCases = [];
+            if (!this.subject) return;
+            try {
+                const res = await fetch('/admin/investigation/cases/for-subject/' + encodeURIComponent(this.subject.type) + '/' + encodeURIComponent(this.subject.key));
+                if (res.ok) {
+                    const data = await res.json();
+                    this.subjectCases = data.cases || [];
+                }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        async addCurrentSubjectToCase() {
+            if (!this.subject || !this.addToCaseId) return;
+            this.saving = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(this.addToCaseId) + '/subject', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ subject_type: this.subject.type, subject_key: this.subject.key }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to add subject', 'error');
+                    return;
+                }
+                const data = await res.json();
+                showToast('Added to case', 'success');
+                this.addToCaseId = '';
+                await this.loadSubjectCases();
+                await this.loadCases();
+                // Keep an open case detail in sync if it is the one we just linked to.
+                if (this.caseDetail && data.case && this.caseDetail.case_id === data.case.case_id) {
+                    this.caseDetail = data.case;
+                }
+            } catch (e) {
+                showToast('Network error', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        caseStatusClass(s) {
+            if (s === 'resolved') return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+            if (s === 'closed') return 'bg-gray-500/15 text-gray-400 border border-gray-600/30';
+            if (s === 'contained') return 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30';
+            if (s === 'investigating') return 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30';
+            return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
+        },
+        caseSeverityClass(sv) {
+            if (sv === 'critical') return 'bg-red-500/15 text-red-300 border border-red-500/30';
+            if (sv === 'high') return 'bg-orange-500/15 text-orange-300 border border-orange-500/30';
+            if (sv === 'medium') return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
+            return 'bg-gray-500/15 text-gray-400 border border-gray-600/30';
+        },
+        subjectKindClass(t) {
+            if (t === 'incident') return 'bg-fuchsia-500/15 text-fuchsia-300';
+            if (t === 'session') return 'bg-fuchsia-400/10 text-fuchsia-200';
+            return 'bg-cyan-500/15 text-cyan-300';
         },
 
         // ─── Formatting helpers ──────────────────────────────────────────────
