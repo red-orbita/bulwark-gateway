@@ -35,12 +35,27 @@ from ..services.investigation_case_store import (
 )
 
 # Reuse the Investigation Center's tenant/authorisation helpers so cases enforce
-# exactly the same scoping rules as triage (admin→admin, no import cycle).
+# exactly the same scoping rules as triage (admin→admin, no import cycle). Imported
+# as a module (not a bare symbol) for ``get_security_events_store`` so a monkeypatch
+# on the investigation module is honoured here too — the events store is a shared
+# singleton, so both surfaces must resolve it through the same reference.
+from . import investigation as _investigation
 from .investigation import _authorize_subject, _can_write, _scoped_tenant
 
 router = APIRouter()
 
 _MAX_CASES = 500
+
+# Compliance axes rolled up in a case export, in the canonical order used by
+# ``src/telemetry/compliance.py``. Populated only from ``incident`` subjects (the
+# only subject type carrying explicit threat categories).
+_COMPLIANCE_AXES = (
+    "owasp_llm",
+    "mitre_atlas",
+    "mitre_attack",
+    "nist_ai_rmf",
+    "eu_ai_act",
+)
 
 # Sort keys the list endpoint accepts, mirroring the store's whitelist. Kept as an
 # explicit surface so an unknown key is rejected at the API boundary rather than
@@ -198,6 +213,83 @@ async def get_case(
     return {"case": await _get_case_scoped(user, case_id)}
 
 
+async def _resolve_case_compliance(case: dict) -> Optional[dict]:
+    """Derive an OWASP/MITRE/NIST/EU compliance roll-up from a case's incidents.
+
+    Only ``incident`` subjects carry explicit threat categories — the correlation
+    event's own ``category`` plus its ``metadata.input_categories`` /
+    ``output_categories``. Origins and sessions do not, so they contribute nothing
+    here rather than having a category fabricated for them. Each distinct category
+    is mapped through ``src/telemetry/compliance.py`` — the SAME single source of
+    truth that tags every exported SIEM event — so a case export and its underlying
+    events can never disagree on the framework references. Unknown / ad-hoc category
+    strings map to nothing (no fabricated tag). Returns ``None`` when the case links
+    no incident that resolves to any framework, so the export omits the block
+    entirely rather than emitting an empty section.
+    """
+    from src.telemetry.compliance import (
+        OWASP_LLM_VERSION,
+        compliance_for,
+        reference_catalog,
+    )
+
+    incident_ids = [
+        s.get("subject_key")
+        for s in (case.get("subjects") or [])
+        if s.get("subject_type") == "incident" and s.get("subject_key")
+    ]
+    if not incident_ids:
+        return None
+
+    store = _investigation.get_security_events_store()
+    categories: set[str] = set()
+    for incident_id in incident_ids:
+        for event in await store.find_by_incident(incident_id):
+            cat = event.get("category")
+            if cat:
+                categories.add(cat)
+            meta = event.get("metadata") or {}
+            for c in (meta.get("input_categories") or []):
+                if c:
+                    categories.add(c)
+            for c in (meta.get("output_categories") or []):
+                if c:
+                    categories.add(c)
+    if not categories:
+        return None
+
+    axes: dict[str, set[str]] = {axis: set() for axis in _COMPLIANCE_AXES}
+    contributing: set[str] = set()
+    for cat in categories:
+        mapping = compliance_for(cat)
+        if mapping is None or mapping.is_empty():
+            continue
+        contributing.add(cat)
+        for axis, codes in mapping.to_dict().items():
+            axes[axis].update(codes)
+    if not contributing:
+        return None
+
+    codes = {axis: sorted(vals) for axis in _COMPLIANCE_AXES if (vals := axes[axis])}
+    # Only OWASP/ATLAS/ATT&CK codes have a per-code catalog entry (label + URL); the
+    # NIST/EU axes are policy references rendered as plain codes.
+    catalog_all = reference_catalog()
+    badged = (
+        codes.get("owasp_llm", [])
+        + codes.get("mitre_atlas", [])
+        + codes.get("mitre_attack", [])
+    )
+    catalog = {
+        code: catalog_all[code].to_dict() for code in badged if code in catalog_all
+    }
+    return {
+        "owasp_version": OWASP_LLM_VERSION,
+        "categories": sorted(contributing),
+        "codes": codes,
+        "catalog": catalog,
+    }
+
+
 @router.get("/{case_id}/export")
 async def export_case(
     case_id: str,
@@ -215,6 +307,13 @@ async def export_case(
         raise HTTPException(status_code=400, detail=f"format must be one of {_EXPORT_FORMATS}")
     case = await _get_case_scoped(user, case_id)
     cid = case.get("case_id") or case_id
+
+    # Enrich the export with the OWASP/MITRE/NIST/EU mapping derived from the case's
+    # linked incidents (resolved here, off the request-free render path, so
+    # ``render_case_markdown`` stays pure). Omitted entirely when nothing maps.
+    compliance = await _resolve_case_compliance(case)
+    if compliance:
+        case["compliance"] = compliance
 
     await get_audit_logger().log(
         actor=user.sub,

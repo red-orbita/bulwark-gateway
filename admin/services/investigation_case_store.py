@@ -555,6 +555,60 @@ class CaseStore:
         return out
 
 
+# Compliance axes rendered in a case export, in a stable analyst-friendly order.
+# The first three are "badged" frameworks whose codes have a label + canonical URL
+# in the compliance reference catalog (rendered as Markdown links); NIST/EU are
+# policy references without a per-code catalog entry (rendered as a plain code list).
+_COMPLIANCE_BADGED_AXES = (
+    ("owasp_llm", "OWASP LLM Top 10"),
+    ("mitre_atlas", "MITRE ATLAS"),
+    ("mitre_attack", "MITRE ATT&CK"),
+)
+_COMPLIANCE_PLAIN_AXES = (
+    ("nist_ai_rmf", "NIST AI RMF"),
+    ("eu_ai_act", "EU AI Act"),
+)
+
+
+def _render_compliance_lines(compliance: dict) -> list[str]:
+    """Render the compliance roll-up section (pure; tolerant of partial input).
+
+    ``compliance`` is the block attached by the export route: ``codes`` (axis →
+    sorted code list), ``catalog`` (code → {label,url,framework} for the badged
+    axes), ``categories`` (the contributing threat categories) and ``owasp_version``.
+    """
+    codes = compliance.get("codes") or {}
+    catalog = compliance.get("catalog") or {}
+    categories = compliance.get("categories") or []
+    version = compliance.get("owasp_version") or ""
+
+    note = "Derived from the case's linked incident detections"
+    if version:
+        note += f" (OWASP LLM Top 10 {version})"
+    note += "."
+    lines: list[str] = ["## Compliance & MITRE Mapping", "", f"_{note}_", ""]
+    if categories:
+        lines += [f"- **Threat categories:** {', '.join(categories)}", ""]
+
+    for axis, title in _COMPLIANCE_BADGED_AXES:
+        axis_codes = codes.get(axis) or []
+        if not axis_codes:
+            continue
+        lines += [f"**{title}**", ""]
+        for code in axis_codes:
+            ref = catalog.get(code) or {}
+            label = ref.get("label") or code
+            url = ref.get("url")
+            lines.append(f"- [{label}]({url})" if url else f"- {label}")
+        lines.append("")
+
+    for axis, title in _COMPLIANCE_PLAIN_AXES:
+        axis_codes = codes.get(axis) or []
+        if axis_codes:
+            lines += [f"- **{title}:** {', '.join(axis_codes)}", ""]
+    return lines
+
+
 def render_case_markdown(case: dict) -> str:
     """Render a full case (metadata + subjects + note trail) as a Markdown report.
 
@@ -592,6 +646,11 @@ def render_case_markdown(case: dict) -> str:
     else:
         lines.append("_No subjects linked._")
     lines.append("")
+
+    # Compliance roll-up (only present on an export that resolved a mapping).
+    compliance = case.get("compliance")
+    if compliance:
+        lines += _render_compliance_lines(compliance)
 
     notes = case.get("notes") or []
     lines += [f"## Note Trail ({len(notes)})", ""]

@@ -600,6 +600,47 @@ class TestCaseMarkdownExport:
         assert "_No subjects linked._" in md
         assert "_No notes recorded._" in md
 
+    def test_render_omits_compliance_when_absent(self):
+        from admin.services.investigation_case_store import render_case_markdown
+
+        md = render_case_markdown({"case_id": "case_x", "title": "t"})
+        assert "## Compliance & MITRE Mapping" not in md
+
+    def test_render_compliance_section_links_badged_and_lists_plain(self):
+        from admin.services.investigation_case_store import render_case_markdown
+
+        case = {
+            "case_id": "case_c",
+            "title": "Campaign",
+            "compliance": {
+                "owasp_version": "2025",
+                "categories": ["exfiltration", "prompt_injection"],
+                "codes": {
+                    "owasp_llm": ["LLM01", "LLM02"],
+                    "mitre_attack": ["T1041", "T1059"],
+                    "nist_ai_rmf": ["MANAGE-4.1", "MEASURE-2.7"],
+                    "eu_ai_act": ["Article 15"],
+                },
+                "catalog": {
+                    "LLM01": {
+                        "label": "OWASP LLM01: Prompt Injection",
+                        "url": "https://genai.owasp.org/llmrisk/llm01-prompt-injection/",
+                        "framework": "owasp",
+                    },
+                },
+            },
+        }
+        md = render_case_markdown(case)
+        assert "## Compliance & MITRE Mapping" in md
+        assert "OWASP LLM Top 10 2025" in md
+        assert "**Threat categories:** exfiltration, prompt_injection" in md
+        # A catalogued code renders as a link; an uncatalogued one falls back to code.
+        assert "[OWASP LLM01: Prompt Injection](https://genai.owasp.org/" in md
+        assert "- LLM02" in md
+        # Plain (NIST/EU) axes render as an inline comma list, not links.
+        assert "- **NIST AI RMF:** MANAGE-4.1, MEASURE-2.7" in md
+        assert "- **EU AI Act:** Article 15" in md
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 3 — route: list params, stats, export
@@ -705,3 +746,92 @@ class TestCaseEndpointsPhase3:
                 made["case_id"], user=_admin(tenant="acme"), format="json"
             )
         assert ei.value.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 4C — export enrichment: OWASP/MITRE/NIST/EU compliance roll-up
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseComplianceExport:
+    async def _case_with_incident(self, cases, events, *, category, incident_id,
+                                  metadata=None, tenant="acme"):
+        await events.bulk_insert([
+            _evt("carrier-" + incident_id, incident_id=incident_id, tenant=tenant,
+                 category=category, metadata=metadata or {}),
+        ])
+        made = await cases.create_case(title="t", actor="a", tenant=tenant)
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="incident",
+            subject_key=incident_id, actor="a",
+        )
+        return made
+
+    async def test_json_export_carries_compliance_from_incident_category(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._case_with_incident(
+            cases, events, category="prompt_injection", incident_id="INC-PI",
+        )
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
+        parsed = json.loads(body)
+        comp = parsed["case"]["compliance"]
+        assert comp["owasp_version"] == "2025"
+        assert comp["categories"] == ["prompt_injection"]
+        # prompt_injection → LLM01 / AML.T0051 / T1059 (see src/telemetry/compliance).
+        assert comp["codes"]["owasp_llm"] == ["LLM01"]
+        assert comp["codes"]["mitre_atlas"] == ["AML.T0051"]
+        assert comp["codes"]["mitre_attack"] == ["T1059"]
+        # NIST/EU axes are present but carry no catalog entry.
+        assert "MEASURE-2.7" in comp["codes"]["nist_ai_rmf"]
+        assert comp["catalog"]["LLM01"]["framework"] == "owasp"
+        assert "LLM01" in comp["catalog"] and "MEASURE-2.7" not in comp["catalog"]
+
+    async def test_md_export_renders_compliance_section(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._case_with_incident(
+            cases, events, category="prompt_injection", incident_id="INC-PI2",
+        )
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="md")
+        body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
+        assert "## Compliance & MITRE Mapping" in body
+        assert "OWASP LLM01: Prompt Injection" in body
+        assert "ATLAS AML.T0051" in body
+
+    async def test_compliance_merges_metadata_categories(self, wired):
+        inv_cases, cases, events, _ = wired
+        # Carrier event category + metadata input/output categories all contribute.
+        made = await self._case_with_incident(
+            cases, events, category="prompt_injection", incident_id="INC-MIX",
+            metadata={
+                "input_categories": ["jailbreak"],
+                "output_categories": ["exfiltration"],
+            },
+        )
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        comp = json.loads(resp.body.decode())["case"]["compliance"]
+        assert comp["categories"] == ["exfiltration", "jailbreak", "prompt_injection"]
+        # Union across the three: LLM01 (PI+JB) and LLM02 (exfiltration).
+        assert set(comp["codes"]["owasp_llm"]) == {"LLM01", "LLM02"}
+
+    async def test_unmapped_category_yields_no_compliance(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._case_with_incident(
+            cases, events, category="totally_bogus_category", incident_id="INC-BOGUS",
+        )
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        parsed = json.loads(resp.body.decode())
+        assert "compliance" not in parsed["case"]
+        md = await inv_cases.export_case(made["case_id"], user=_admin(), format="md")
+        assert "## Compliance & MITRE Mapping" not in md.body.decode()
+
+    async def test_no_incident_subject_yields_no_compliance(self, wired):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        # A session subject carries no threat category → no compliance block.
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="session",
+            subject_key="s" * 16, actor="a",
+        )
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        assert "compliance" not in json.loads(resp.body.decode())["case"]
