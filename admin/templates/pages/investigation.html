@@ -532,6 +532,26 @@
                     <div x-show="selected && selected.input_hash" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Input Hash (SHA-256)</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="selected && selected.input_hash"></dd></div>
                 </dl>
 
+                <!-- Threat-intel references (Fase 4A): authoritative OWASP GenAI
+                     (2025) risk + MITRE ATLAS/ATT&CK mapping for this alert's
+                     category. Anchors open in a new tab; CSP restricts resource
+                     loads, not anchor navigation. -->
+                <div x-show="selected && categoryReferences(selected.category).length > 0" class="mt-4">
+                    <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">References</p>
+                    <p class="text-[11px] text-gray-500 mb-2">Standardised mapping to OWASP GenAI (2025) and MITRE for this threat category.</p>
+                    <div class="flex flex-wrap gap-2">
+                        <template x-for="ref in categoryReferences(selected && selected.category)" :key="ref.url">
+                            <a :href="ref.url" target="_blank" rel="noopener noreferrer"
+                               class="sg-badge text-[10px] inline-flex items-center gap-1 hover:opacity-80 transition-opacity"
+                               :style="refBadgeStyle(ref.framework)"
+                               :title="ref.label">
+                                <span x-text="ref.label"></span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/></svg>
+                            </a>
+                        </template>
+                    </div>
+                </div>
+
                 <div x-show="selected && selected.snippet" class="mt-4">
                     <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Redacted Snippet</p>
                     <p class="text-[11px] text-gray-500 mb-1">Secrets/PII removed, truncated. Raw input is never stored.</p>
@@ -559,6 +579,24 @@
                     <div class="flex flex-wrap gap-1.5">
                         <template x-for="c in (incident ? incident.output_categories : [])" :key="'out-' + c">
                             <span class="sg-badge text-[10px] bg-rose-400/15 text-rose-300 border border-rose-500/30" x-text="c"></span>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Threat-intel references (Fase 4A): OWASP GenAI (2025) + MITRE
+                     mapping for every category on both sides of the paired incident. -->
+                <div x-show="incident && categoriesReferences([].concat(incident.input_categories || [], incident.output_categories || [])).length > 0" class="mb-4">
+                    <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">References</p>
+                    <p class="text-[11px] text-gray-500 mb-2">Standardised mapping to OWASP GenAI (2025) and MITRE for the paired threat categories.</p>
+                    <div class="flex flex-wrap gap-2">
+                        <template x-for="ref in categoriesReferences([].concat((incident && incident.input_categories) || [], (incident && incident.output_categories) || []))" :key="ref.url">
+                            <a :href="ref.url" target="_blank" rel="noopener noreferrer"
+                               class="sg-badge text-[10px] inline-flex items-center gap-1 hover:opacity-80 transition-opacity"
+                               :style="refBadgeStyle(ref.framework)"
+                               :title="ref.label">
+                                <span x-text="ref.label"></span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/></svg>
+                            </a>
                         </template>
                     </div>
                 </div>
@@ -815,6 +853,15 @@ function investigationPage() {
             // so "mine" is anything assigned to this username.
             profile: { username: '' },
 
+            // Threat-intel references (Fase 4A). Populated at init() from
+            // GET /admin/investigation/compliance-mappings, whose single source of
+            // truth is src/telemetry/compliance.py — the SAME table that tags every
+            // exported SIEM event. Kept here (not hardcoded) so the badges can never
+            // drift from the export mapping.
+            refCatalog: {},      // code → { label, url, framework }
+            categoryRefs: {},    // ThreatCategory → ordered display codes
+            owaspVersion: '',
+
             // Bulk triage selection — a map of "type:key" → {subject_type, subject_key}
             // spanning both the alert queue and the at-risk session list.
             bulkSel: {},
@@ -857,6 +904,7 @@ function investigationPage() {
 
             async init() {
                 await this.loadProfile();
+                await this.loadComplianceMappings();
                 await this.reloadAll();
                 this.$watch('autoRefresh', (on) => this._syncAutoRefresh(on));
             },
@@ -878,6 +926,49 @@ function investigationPage() {
                         this.profile.username = (u && u.username) || '';
                     }
                 } catch (e) { /* non-fatal — "mine" simply stays empty */ }
+            },
+
+            // ─── Threat-intel references (Fase 4A) ───────────────────────────────
+            async loadComplianceMappings() {
+                try {
+                    const res = await fetch('/admin/investigation/compliance-mappings');
+                    if (!res.ok) return;  // badges simply stay hidden on failure
+                    const data = await res.json();
+                    this.refCatalog = data.catalog || {};
+                    this.categoryRefs = data.category_refs || {};
+                    this.owaspVersion = data.owasp_version || '';
+                } catch (e) { /* non-fatal: references are supplementary */ }
+            },
+
+            // Resolve a category to its ordered, deduped reference objects. Unknown
+            // categories (or none) yield an empty list so the section stays hidden.
+            categoryReferences(category) {
+                const ids = this.categoryRefs[category] || [];
+                return ids.map(id => this.refCatalog[id]).filter(Boolean);
+            },
+
+            // Resolve a list of categories to a flat, deduped list of references
+            // (used by the incident panel, which pairs input + output categories).
+            categoriesReferences(categories) {
+                if (!Array.isArray(categories)) return [];
+                const seen = new Set();
+                const out = [];
+                for (const cat of categories) {
+                    for (const ref of this.categoryReferences(cat)) {
+                        if (ref && ref.url && !seen.has(ref.url)) {
+                            seen.add(ref.url);
+                            out.push(ref);
+                        }
+                    }
+                }
+                return out;
+            },
+
+            // Framework-tinted badge: OWASP indigo, ATLAS cyan, ATT&CK rose.
+            refBadgeStyle(fw) {
+                if (fw === 'owasp') return 'background:rgba(129,140,248,0.14);color:#a5b4fc;border:1px solid rgba(129,140,248,0.30);';
+                if (fw === 'atlas') return 'background:rgba(34,211,238,0.12);color:#67e8f9;border:1px solid rgba(34,211,238,0.30);';
+                return 'background:rgba(251,113,133,0.12);color:#fda4af;border:1px solid rgba(244,63,94,0.30);';
             },
 
         async loadStatus() {

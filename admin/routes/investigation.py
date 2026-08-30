@@ -231,6 +231,41 @@ async def investigation_status(
     }
 
 
+@router.get("/compliance-mappings")
+async def investigation_compliance_mappings(
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """Serve the canonical ThreatCategory → framework reference table.
+
+    Identical payload to ``GET /admin/events/compliance-mappings`` but gated on
+    ``investigation:read`` so an analyst never needs the guardrails permission to
+    see the OWASP GenAI (2025) / MITRE ATLAS / ATT&CK badges rendered in the
+    Investigation Center. The single source of truth is
+    ``src/telemetry/compliance.py`` — the same table that tags every exported SIEM
+    event — so the badges here can never drift from the export mapping. Returns:
+
+      * ``owasp_version`` — the OWASP LLM Top 10 revision the codes refer to.
+      * ``catalog``       — code → {label, url, framework} for clickable badges.
+      * ``category_refs`` — threat category → ordered display codes (OWASP → ATLAS
+                            → ATT&CK); NIST/EU axes are export-only, not badged.
+    """
+    from src.telemetry.compliance import (
+        OWASP_LLM_VERSION,
+        all_mappings,
+        reference_catalog,
+    )
+
+    catalog = {code: ref.to_dict() for code, ref in reference_catalog().items()}
+    category_refs = {
+        category: mapping.display_codes() for category, mapping in all_mappings().items()
+    }
+    return {
+        "owasp_version": OWASP_LLM_VERSION,
+        "catalog": catalog,
+        "category_refs": category_refs,
+    }
+
+
 @router.get("/alerts")
 async def investigation_alerts(
     user: TokenPayload = Depends(require_permission("investigation:read")),

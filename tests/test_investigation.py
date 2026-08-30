@@ -353,6 +353,37 @@ class TestInvestigationEndpoints:
         viewer_out = await inv.investigation_status(user=_viewer())
         assert viewer_out["can_write"] is False
 
+    async def test_compliance_mappings_serves_the_ssot(self, wired):
+        """4A: the analyst-facing badge table reflects src/telemetry/compliance.py.
+
+        Same payload as the events endpoint but gated on investigation:read, so the
+        Investigation Center never needs guardrails:read to render OWASP/MITRE badges.
+        """
+        from src.telemetry.compliance import all_mappings, reference_catalog
+
+        inv, _, _, _ = wired
+        data = await inv.investigation_compliance_mappings(user=_viewer())
+
+        assert data["owasp_version"] == "2025"
+
+        catalog = data["catalog"]
+        assert catalog["LLM01"]["framework"] == "owasp"
+        assert catalog["LLM01"]["url"].startswith("https://")
+        assert catalog["LLM01"]["label"]
+
+        refs = data["category_refs"]
+        # Ordered OWASP → ATLAS → ATT&CK, straight from the SSOT.
+        assert refs["prompt_injection"] == ["LLM01", "AML.T0051", "T1059"]
+
+        # Faithful projection of the module — no separate hardcoded copy that could drift.
+        assert set(catalog) == set(reference_catalog())
+        assert set(refs) == set(all_mappings())
+
+        # Every code the UI is asked to render must have a catalog entry.
+        for category, codes in refs.items():
+            for code in codes:
+                assert code in catalog, f"{category}: {code} missing from served catalog"
+
     async def test_alerts_annotated_with_triage(self, wired):
         inv, events, triage, _ = wired
         await events.bulk_insert([_evt("a1", incident_id="INC-1")])
@@ -826,3 +857,4 @@ class TestBulkTriage:
         assert out["updated"] == 0
         assert out["failed"] == 1
         assert out["results"][0]["ok"] is False
+
