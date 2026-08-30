@@ -48,6 +48,27 @@ from .correlation import (
     _summarize_origin,
 )
 
+# Session-decomposition drill-down reuses the Session Tracker's own Redis
+# readers so the score/signal picture shown here is byte-identical to
+# /admin/sessions/active. Imported (not reimplemented) to keep one source of
+# truth; sessions.py has no dependency on this module, so no import cycle.
+from .sessions import (
+    _KEY_RE as _SESSION_DIGEST_RE,
+)
+from .sessions import (
+    _SIGNALS_5M_PREFIX,
+    _SIGNALS_30M_PREFIX,
+    _SIGNALS_SUFFIX,
+    _all_session_keys,
+    _summarize_session,
+)
+from .sessions import (
+    _defaults as _session_defaults,
+)
+from .sessions import (
+    _read_override as _session_read_override,
+)
+
 router = APIRouter()
 
 # Upper bound on how far back an alert-queue / timeline lookback may reach, and the
@@ -93,6 +114,19 @@ def _since_from_hours(hours: Optional[float]) -> Optional[float]:
     if hours == 0.0:
         return None
     return time.time() - hours * 3600.0
+
+
+def _session_verdict(score: float, warn: float, block: float) -> str:
+    """Classify a decomposition-session score against its window thresholds.
+
+    Mirrors the proxy tracker's own escalation ladder (BLOCK dominates WARN);
+    a non-positive threshold is treated as "not configured" and skipped.
+    """
+    if block > 0 and score >= block:
+        return "block"
+    if warn > 0 and score >= warn:
+        return "warn"
+    return "ok"
 
 
 class TriageStateRequest(BaseModel):
@@ -307,6 +341,109 @@ async def investigation_origin(
     }
 
 
+@router.get("/sessions")
+async def investigation_sessions(
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+    limit: int = Query(50, ge=1, le=_MAX_ALERTS),
+):
+    """At-risk decomposition sessions (highest accumulated score first).
+
+    A browsable pivot into the Session Decomposition Tracker's live accumulator,
+    annotated with any existing triage state. Session digests are irreversible
+    SHA-256 identifiers with no recoverable tenant, so this is not tenant-scoped;
+    it exposes only pseudonymous scores/signal ids, never message content.
+    Returns an empty list when Redis is unavailable.
+    """
+    r = _redis()
+    if r is None:
+        return {"redis_connected": False, "sessions": [], "count": 0}
+    try:
+        r.ping()
+    except Exception:
+        return {"redis_connected": False, "sessions": [], "count": 0}
+
+    effective = {**_session_defaults(), **_session_read_override(r)}
+    rows: list[dict] = []
+    for redis_key, window in _all_session_keys(r):
+        summary = _summarize_session(r, redis_key, window)
+        if not summary:
+            continue
+        warn_f = "warn_threshold_30m" if window == "30m" else "warn_threshold"
+        block_f = "block_threshold_30m" if window == "30m" else "block_threshold"
+        summary["verdict"] = _session_verdict(
+            summary["score"],
+            float(effective.get(warn_f, 0) or 0),
+            float(effective.get(block_f, 0) or 0),
+        )
+        rows.append(summary)
+        if len(rows) >= limit:
+            break
+
+    # Most suspicious sessions on top.
+    rows.sort(key=lambda s: s["score"], reverse=True)
+
+    # Batch-annotate with triage state (subject_key is the bare session digest).
+    subjects = [("session", s["session_key"]) for s in rows]
+    triage_map = await get_triage_store().get_map(subjects)
+    for s in rows:
+        rec = triage_map.get(("session", s["session_key"]))
+        s["triage_status"] = (rec or {}).get("status", "open")
+        s["assignee"] = (rec or {}).get("assignee", "")
+
+    return {"redis_connected": True, "sessions": rows, "count": len(rows)}
+
+
+@router.get("/session/{digest}")
+async def investigation_session(
+    digest: str,
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """Decomposition-session drill-down: accumulated signals per window + triage.
+
+    Shows the 5-minute and 30-minute signal accumulators (score, distinct signal
+    ids, TTL) the proxy tracker maintains, each classified against the live
+    thresholds. Digests are irreversible and carry no message content, so this is
+    available to any ``investigation:read`` operator.
+    """
+    digest = (digest or "").strip()
+    if not _SESSION_DIGEST_RE.match(digest):
+        raise HTTPException(status_code=400, detail="Invalid digest (expected 16 hex chars)")
+
+    effective = _session_defaults()
+    windows: list[dict] = []
+    r = _redis()
+    if r is not None:
+        try:
+            r.ping()
+            effective = {**_session_defaults(), **_session_read_override(r)}
+            for prefix, window, warn_f, block_f in (
+                (_SIGNALS_5M_PREFIX, "5m", "warn_threshold", "block_threshold"),
+                (_SIGNALS_30M_PREFIX, "30m", "warn_threshold_30m", "block_threshold_30m"),
+            ):
+                key = f"{prefix}{digest}{_SIGNALS_SUFFIX}"
+                summary = _summarize_session(r, key, window)
+                if not summary:
+                    continue
+                summary["verdict"] = _session_verdict(
+                    summary["score"],
+                    float(effective.get(warn_f, 0) or 0),
+                    float(effective.get(block_f, 0) or 0),
+                )
+                summary["warn_threshold"] = effective.get(warn_f)
+                summary["block_threshold"] = effective.get(block_f)
+                windows.append(summary)
+        except Exception:
+            windows = []
+
+    triage = await get_triage_store().get("session", digest)
+    return {
+        "digest": digest,
+        "windows": windows,
+        "effective": effective,
+        "triage": triage,
+    }
+
+
 @router.get("/triage")
 async def investigation_triage_list(
     user: TokenPayload = Depends(require_permission("investigation:read")),
@@ -407,7 +544,7 @@ async def _authorize_subject(
         events = await store.find_by_incident(subject_key)
         if events:
             owner_tenant = events[0].get("tenant")
-    else:  # origin
+    elif subject_type == "origin":
         # Origin subjects are "scope_type:digest"; request-keyed origins carry no
         # digest evidence, so only digest-shaped tokens are tenant-resolved.
         parts = subject_key.split(":", 1)
@@ -415,6 +552,9 @@ async def _authorize_subject(
             evidence = await store.find_by_scope_digest(subject_key, limit=1)
             if evidence:
                 owner_tenant = evidence[0].get("tenant")
+    # else: session — a pseudonymous decomposition digest with no reversible
+    # tenant identity. It leaks no cross-tenant content (scores/signal ids only),
+    # so it is left unattributed and stamped with the operator's own scope below.
 
     if user.tenant and owner_tenant is not None and owner_tenant != user.tenant:
         raise HTTPException(status_code=404, detail="Subject not found")

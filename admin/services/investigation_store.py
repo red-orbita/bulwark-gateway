@@ -6,9 +6,12 @@ on top: acknowledge / assign / resolve an alert and attach investigation notes.
 State is keyed by a stable *subject*:
 
 * ``incident`` — a confirmed input↔output exfiltration incident, keyed by its
-  ``incident_id`` (from correlation metadata), or
+  ``incident_id`` (from correlation metadata),
 * ``origin``  — an at-risk origin, keyed by its ``"scope_type:digest"`` token (the
-  same identifier the admin ``/correlation/origins`` view exposes).
+  same identifier the admin ``/correlation/origins`` view exposes), or
+* ``session`` — a multi-turn decomposition session flagged by the Session
+  Decomposition Tracker, keyed by its irreversible SHA-256 digest (the same
+  identifier the admin ``/sessions/active`` view exposes).
 
 Persisted in the ``investigation_triage`` table (migration v6) via the shared
 ``DatabaseEngine`` so it survives restarts and works on both SQLite and
@@ -32,8 +35,9 @@ from .database import get_database
 
 logger = logging.getLogger(__name__)
 
-# The two kinds of alert a triage record can hang off.
-SUBJECT_TYPES = ("incident", "origin")
+# The kinds of alert a triage record can hang off. ``session`` covers a
+# decomposition session digest, which carries no reversible tenant identity.
+SUBJECT_TYPES = ("incident", "origin", "session")
 
 # Allowed workflow states. ``open`` is the implicit initial state; analysts may
 # move freely between states (including reopening a resolved/dismissed alert),

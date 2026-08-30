@@ -18,6 +18,7 @@ Exercises the feature end-to-end against a real migrated SQLite database:
 
 from __future__ import annotations
 
+import fnmatch
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -347,7 +348,7 @@ class TestInvestigationEndpoints:
         out = await inv.investigation_status(user=_admin())
         assert out["can_write"] is True
         assert "open" in out["statuses"]
-        assert set(out["subject_types"]) == {"incident", "origin"}
+        assert set(out["subject_types"]) == {"incident", "origin", "session"}
 
         viewer_out = await inv.investigation_status(user=_viewer())
         assert viewer_out["can_write"] is False
@@ -615,3 +616,140 @@ class TestIncidentLinkage:
         )
         assert incident is not None
         assert incident.contributing_event_ids == [shared.event_id, out_evt.event_id]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Session-decomposition subject (Fase 1: first-class investigation subject)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _FakeRedis:
+    """Minimal in-memory Redis stub covering the session readers only.
+
+    Implements just the surface the Session Tracker helpers touch: ``ping``,
+    ``scan_iter`` (glob), ``zrange`` (withscores), ``ttl`` and ``hgetall``.
+    """
+
+    def __init__(self, zsets=None, hashes=None, ttls=None):
+        self._z = zsets or {}       # redis_key -> list[(member, score)]
+        self._h = hashes or {}      # redis_key -> dict
+        self._ttls = ttls or {}     # redis_key -> int
+
+    def ping(self):
+        return True
+
+    def scan_iter(self, match=None, count=100):
+        for k in list(self._z.keys()):
+            if match is None or fnmatch.fnmatch(k, match):
+                yield k
+
+    def zrange(self, key, start, end, withscores=False):
+        members = self._z.get(key, [])
+        return list(members) if withscores else [m for m, _ in members]
+
+    def ttl(self, key):
+        return self._ttls.get(key, -1)
+
+    def hgetall(self, key):
+        return dict(self._h.get(key, {}))
+
+
+class TestSessionSubject:
+    async def test_store_accepts_session_subject(self, triage_store):
+        rec = await triage_store.set_state(
+            subject_type="session", subject_key="a1b2c3d4e5f60718",
+            tenant="", actor="alice", status="in_progress",
+        )
+        assert rec["subject_type"] == "session"
+        assert rec["status"] == "in_progress"
+        assert rec["notes"][0]["kind"] == "action"
+
+    async def test_session_drilldown_summarises_windows(self, wired, monkeypatch):
+        inv, _, _, _ = wired
+        digest = "a1b2c3d4e5f60718"
+        key5 = f"bulwark:session:{digest}:signals"
+        fake = _FakeRedis(
+            zsets={key5: [("role_play:3.0", 1000.0), ("obfuscation:2.0", 1001.0)]},
+            ttls={key5: 250},
+        )
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        out = await inv.investigation_session(digest, user=_admin())
+        assert out["digest"] == digest
+        assert len(out["windows"]) == 1
+        w = out["windows"][0]
+        assert w["window"] == "5m"
+        assert w["score"] == pytest.approx(5.0)
+        # default 5m thresholds: warn 5.0 / block 8.0 → 5.0 crosses WARN only.
+        assert w["verdict"] == "warn"
+        assert "role_play" in w["distinct_signals"]
+        assert w["ttl_seconds"] == 250
+
+    async def test_session_drilldown_block_verdict(self, wired, monkeypatch):
+        inv, _, _, _ = wired
+        digest = "b" * 16
+        key5 = f"bulwark:session:{digest}:signals"
+        fake = _FakeRedis(zsets={key5: [("combo:9.0", 1000.0)]})
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        out = await inv.investigation_session(digest, user=_admin())
+        assert out["windows"][0]["verdict"] == "block"
+
+    async def test_session_drilldown_rejects_bad_digest(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_session("not-hex-digest!", user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_session_drilldown_no_redis_is_empty(self, wired):
+        inv, _, _, _ = wired  # the wired fixture pins _redis -> None
+        out = await inv.investigation_session("a" * 16, user=_admin())
+        assert out["windows"] == []
+        assert out["triage"] is None
+
+    async def test_session_drilldown_surfaces_triage(self, wired, monkeypatch):
+        inv, _, triage, _ = wired
+        digest = "c" * 16
+        await triage.set_state(
+            subject_type="session", subject_key=digest, tenant="",
+            actor="alice", status="acknowledged",
+        )
+        monkeypatch.setattr(inv, "_redis", lambda: _FakeRedis())
+        out = await inv.investigation_session(digest, user=_admin())
+        assert out["triage"]["status"] == "acknowledged"
+
+    async def test_sessions_list_sorted_and_annotated(self, wired, monkeypatch):
+        inv, _, triage, _ = wired
+        d1, d2 = "a" * 16, "b" * 16
+        fake = _FakeRedis(zsets={
+            f"bulwark:session:{d1}:signals": [("x:2.0", 1.0)],
+            f"bulwark:session:{d2}:signals": [("y:9.0", 2.0)],
+        })
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        await triage.set_state(
+            subject_type="session", subject_key=d2, tenant="",
+            actor="a", status="in_progress",
+        )
+        out = await inv.investigation_sessions(user=_admin(), limit=50)
+        assert out["redis_connected"] is True
+        # highest score first
+        assert [s["session_key"] for s in out["sessions"]] == [d2, d1]
+        assert out["sessions"][0]["verdict"] == "block"
+        assert out["sessions"][0]["triage_status"] == "in_progress"
+        assert out["sessions"][1]["triage_status"] == "open"
+
+    async def test_sessions_list_no_redis(self, wired):
+        inv, _, _, _ = wired
+        out = await inv.investigation_sessions(user=_admin(), limit=50)
+        assert out["redis_connected"] is False
+        assert out["sessions"] == []
+
+    async def test_session_triage_state_writes_and_audits(self, wired):
+        inv, _, _, audit = wired
+        body = inv.TriageStateRequest(
+            subject_type="session", subject_key="d" * 16, status="resolved",
+        )
+        out = await inv.investigation_triage_state(body, user=_admin())
+        assert out["triage"]["status"] == "resolved"
+        assert out["triage"]["subject_type"] == "session"
+        assert any(e["action"] == "investigation.triage_state" for e in audit.entries)
