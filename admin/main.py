@@ -45,6 +45,7 @@ from .routes import (
     guardrails,
     health,
     investigation,
+    investigation_cases,
     iocs,
     ml_scanners,
     notifications,
@@ -373,6 +374,11 @@ app.include_router(cache.router, prefix="/admin/cache", tags=["cache"])
 app.include_router(sessions.router, prefix="/admin/sessions", tags=["sessions"])
 app.include_router(correlation.router, prefix="/admin/correlation", tags=["correlation"])
 app.include_router(investigation.router, prefix="/admin/investigation", tags=["investigation"])
+app.include_router(
+    investigation_cases.router,
+    prefix="/admin/investigation/cases",
+    tags=["investigation"],
+)
 app.include_router(dashboards.router, prefix="/admin/dashboards", tags=["dashboards"])
 
 

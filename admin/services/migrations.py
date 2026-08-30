@@ -458,6 +458,87 @@ MIGRATIONS: list[Migration] = [
                 ON investigation_triage(updated_at DESC);
         """,
     ),
+
+    # Version 7: Investigation Cases. A case groups several triage subjects
+    # (incidents/origins/sessions) under one analyst-owned investigation with its
+    # own status/severity/assignee and an append-only, actor-stamped note trail —
+    # the same self-auditing pattern as investigation_triage (v6). Two tables:
+    #   1. `investigation_case`: the case record, keyed by an app-generated opaque
+    #      `case_id` (dialect-neutral — no reliance on backend lastrowid/RETURNING).
+    #   2. `investigation_case_subject`: the N:M link between a case and the
+    #      subjects it collects, UNIQUE per (case, subject) so a subject is linked
+    #      at most once, and indexed both ways (by case, and by subject so a
+    #      drill-down can show which case a subject belongs to).
+    Migration(
+        version=7,
+        description="Investigation Cases: case record + case↔subject link table",
+        sqlite_sql="""
+            CREATE TABLE IF NOT EXISTS investigation_case (
+                case_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                severity TEXT NOT NULL DEFAULT 'medium',
+                tenant TEXT,
+                assignee TEXT,
+                summary TEXT,
+                notes TEXT,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_case_status ON investigation_case(status);
+            CREATE INDEX IF NOT EXISTS idx_case_tenant ON investigation_case(tenant);
+            CREATE INDEX IF NOT EXISTS idx_case_updated
+                ON investigation_case(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS investigation_case_subject (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT NOT NULL,
+                subject_type TEXT NOT NULL,
+                subject_key TEXT NOT NULL,
+                added_by TEXT,
+                added_at TEXT NOT NULL,
+                UNIQUE(case_id, subject_type, subject_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_case_subject_case
+                ON investigation_case_subject(case_id);
+            CREATE INDEX IF NOT EXISTS idx_case_subject_subject
+                ON investigation_case_subject(subject_type, subject_key);
+        """,
+        postgresql_sql="""
+            CREATE TABLE IF NOT EXISTS investigation_case (
+                case_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                severity TEXT NOT NULL DEFAULT 'medium',
+                tenant TEXT,
+                assignee TEXT,
+                summary TEXT,
+                notes TEXT,
+                created_by TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_case_status ON investigation_case(status);
+            CREATE INDEX IF NOT EXISTS idx_case_tenant ON investigation_case(tenant);
+            CREATE INDEX IF NOT EXISTS idx_case_updated
+                ON investigation_case(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS investigation_case_subject (
+                id SERIAL PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                subject_type TEXT NOT NULL,
+                subject_key TEXT NOT NULL,
+                added_by TEXT,
+                added_at TIMESTAMPTZ NOT NULL,
+                UNIQUE(case_id, subject_type, subject_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_case_subject_case
+                ON investigation_case_subject(case_id);
+            CREATE INDEX IF NOT EXISTS idx_case_subject_subject
+                ON investigation_case_subject(subject_type, subject_key);
+        """,
+    ),
 ]
 
 
