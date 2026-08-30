@@ -1303,3 +1303,174 @@ class TestRelatedCasesEndpoint:
         with pytest.raises(HTTPException) as ei:
             await inv_cases.related_cases("case_nope", user=_admin())
         assert ei.value.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 5E — programme analytics: MTTR, opened-vs-resolved trends, top origins.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestResolutionHelpers:
+    def test_parse_iso_epoch_round_trips_and_tolerates_junk(self):
+        from admin.services.investigation_case_store import _parse_iso_epoch
+
+        assert _parse_iso_epoch("2026-01-01T00:00:00+00:00") is not None
+        assert _parse_iso_epoch("") is None
+        assert _parse_iso_epoch("not-a-date") is None
+        assert _parse_iso_epoch(None) is None
+
+    def test_resolution_epoch_uses_terminal_transition_note(self):
+        from admin.services.investigation_case_store import (
+            _parse_iso_epoch,
+            _resolution_epoch,
+        )
+
+        case = {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T09:00:00+00:00",
+            "status": "resolved",
+            "notes": [
+                {"ts": "2026-01-01T00:30:00+00:00", "kind": "action",
+                 "text": "status open → investigating"},
+                {"ts": "2026-01-01T01:00:00+00:00", "kind": "action",
+                 "text": "status investigating → resolved"},
+            ],
+        }
+        # The terminal transition note wins over the later (unrelated) updated_at.
+        assert _resolution_epoch(case) == _parse_iso_epoch("2026-01-01T01:00:00+00:00")
+
+    def test_resolution_epoch_prefers_latest_terminal_transition(self):
+        from admin.services.investigation_case_store import (
+            _parse_iso_epoch,
+            _resolution_epoch,
+        )
+
+        case = {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "status": "closed",
+            "notes": [
+                {"ts": "2026-01-01T01:00:00+00:00", "text": "status open → resolved"},
+                {"ts": "2026-01-01T02:00:00+00:00", "text": "status resolved → closed"},
+            ],
+        }
+        assert _resolution_epoch(case) == _parse_iso_epoch("2026-01-01T02:00:00+00:00")
+
+    def test_resolution_epoch_falls_back_to_updated_at(self):
+        from admin.services.investigation_case_store import (
+            _parse_iso_epoch,
+            _resolution_epoch,
+        )
+
+        case = {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T05:00:00+00:00",
+            "status": "resolved",
+            "notes": [],
+        }
+        assert _resolution_epoch(case) == _parse_iso_epoch("2026-01-01T05:00:00+00:00")
+
+    def test_resolution_epoch_none_when_nothing_parseable(self):
+        from admin.services.investigation_case_store import _resolution_epoch
+
+        assert _resolution_epoch({"status": "resolved", "notes": []}) is None
+
+
+class TestCaseAnalyticsStore:
+    async def test_analytics_extends_stats_rollup(self, case_store):
+        await case_store.create_case(title="a", actor="a", tenant="acme", severity="high")
+        await case_store.create_case(title="b", actor="a", tenant="acme", severity="low")
+        out = await case_store.analytics(tenant="acme")
+        # Inherits the stats surface …
+        assert out["total"] == 2
+        assert out["by_severity"]["high"] == 1
+        assert out["by_status"]["open"] == 2
+        # … and adds the 5E blocks.
+        assert set(out) >= {"mttr", "trends", "top_origins", "trend_days"}
+
+    async def test_analytics_mttr_counts_resolved_cases(self, case_store):
+        c = await case_store.create_case(title="r", actor="a", tenant="acme")
+        await case_store.set_state(case_id=c["case_id"], actor="a", status="resolved")
+        await case_store.create_case(title="open", actor="a", tenant="acme")
+        out = await case_store.analytics(tenant="acme")
+        # One terminal case → MTTR sample of one; created≈resolved so mean is ~0 but real.
+        assert out["mttr"]["count"] == 1
+        assert out["mttr"]["mean_seconds"] is not None
+        assert out["mttr"]["mean_seconds"] >= 0
+        assert out["mttr"]["median_seconds"] is not None
+
+    async def test_analytics_mttr_none_without_resolved(self, case_store):
+        await case_store.create_case(title="open", actor="a", tenant="acme")
+        out = await case_store.analytics(tenant="acme")
+        assert out["mttr"]["count"] == 0
+        assert out["mttr"]["mean_seconds"] is None
+        assert out["mttr"]["median_seconds"] is None
+
+    async def test_analytics_trends_span_window_and_count_today(self, case_store):
+        from datetime import datetime, timezone
+
+        await case_store.create_case(title="a", actor="a", tenant="acme")
+        c = await case_store.create_case(title="b", actor="a", tenant="acme")
+        await case_store.set_state(case_id=c["case_id"], actor="a", status="resolved")
+        out = await case_store.analytics(tenant="acme", trend_days=7)
+        assert out["trend_days"] == 7
+        assert len(out["trends"]) == 7
+        today = datetime.now(timezone.utc).date().isoformat()
+        row = [t for t in out["trends"] if t["date"] == today][0]
+        assert row["opened"] == 2  # both cases opened today
+        assert row["resolved"] == 1  # one resolved today
+        # Window is chronological, oldest→newest, ending today.
+        assert out["trends"][-1]["date"] == today
+        assert [t["date"] for t in out["trends"]] == sorted(t["date"] for t in out["trends"])
+
+    async def test_analytics_top_origins_ranked_by_case_count(self, case_store):
+        c1 = await case_store.create_case(title="one", actor="a", tenant="acme")
+        c2 = await case_store.create_case(title="two", actor="a", tenant="acme")
+        c3 = await case_store.create_case(title="three", actor="a", tenant="acme")
+        hot = "origin:" + "a" * 16
+        cold = "origin:" + "b" * 16
+        for cid in (c1["case_id"], c2["case_id"], c3["case_id"]):
+            await case_store.add_subject(
+                case_id=cid, subject_type="origin", subject_key=hot, actor="a"
+            )
+        await case_store.add_subject(
+            case_id=c1["case_id"], subject_type="origin", subject_key=cold, actor="a"
+        )
+        out = await case_store.analytics(tenant="acme")
+        keys = [o["subject_key"] for o in out["top_origins"]]
+        assert keys[:2] == [hot, cold]
+        assert out["top_origins"][0]["case_count"] == 3
+        assert out["top_origins"][1]["case_count"] == 1
+
+    async def test_analytics_is_tenant_isolated(self, case_store):
+        mine = await case_store.create_case(title="mine", actor="a", tenant="acme")
+        await case_store.add_subject(
+            case_id=mine["case_id"], subject_type="origin",
+            subject_key="origin:" + "c" * 16, actor="a",
+        )
+        theirs = await case_store.create_case(title="theirs", actor="a", tenant="evil")
+        await case_store.add_subject(
+            case_id=theirs["case_id"], subject_type="origin",
+            subject_key="origin:" + "d" * 16, actor="a",
+        )
+        out = await case_store.analytics(tenant="acme")
+        assert out["total"] == 1
+        assert [o["subject_key"] for o in out["top_origins"]] == ["origin:" + "c" * 16]
+
+
+class TestCaseAnalyticsEndpoint:
+    async def test_analytics_endpoint_returns_payload(self, wired):
+        inv_cases, cases, _, _ = wired
+        c = await cases.create_case(title="r", actor="a", tenant="acme")
+        await cases.set_state(case_id=c["case_id"], actor="a", status="resolved")
+        out = await inv_cases.case_analytics(user=_admin(tenant="acme"), trend_days=14, top_origins=10)
+        a = out["analytics"]
+        assert a["total"] == 1
+        assert a["mttr"]["count"] == 1
+        assert a["trend_days"] == 14 and len(a["trends"]) == 14
+
+    async def test_analytics_endpoint_tenant_scoped(self, wired):
+        inv_cases, cases, _, _ = wired
+        await cases.create_case(title="mine", actor="a", tenant="acme")
+        await cases.create_case(title="theirs", actor="a", tenant="evil")
+        out = await inv_cases.case_analytics(user=_admin(tenant="acme"), trend_days=14, top_origins=10)
+        assert out["analytics"]["total"] == 1

@@ -48,6 +48,15 @@ CASE_STATUSES = ("open", "investigating", "contained", "resolved", "closed")
 # it is the analyst's assessment of the grouped investigation as a whole.
 CASE_SEVERITIES = ("low", "medium", "high", "critical")
 
+# Terminal statuses — a case counted as resolved for MTTR / resolution trends.
+_TERMINAL_STATUSES = ("resolved", "closed")
+
+# Analytics (Fase 5E) bounds. The MTTR/trend scan reads case rows into memory, so
+# it is capped; the trend window and top-origins list are bounded defaults.
+_ANALYTICS_SCAN_CAP = 5000
+_ANALYTICS_TREND_DAYS = 14
+_ANALYTICS_TOP_ORIGINS = 10
+
 # Bounds so a single case can never grow without limit.
 _MAX_NOTES = 500
 _MAX_NOTE_LEN = 4000
@@ -82,6 +91,41 @@ _LIKE_ESCAPE = "\\"
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso_epoch(value: object) -> Optional[float]:
+    """Parse a stored ISO-8601 timestamp into a unix epoch (``None`` if unparseable).
+
+    Defensive so one malformed row never aborts an analytics roll-up.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolution_epoch(case: dict) -> Optional[float]:
+    """Best-effort epoch at which a case entered a terminal status.
+
+    Reads the case's own append-only note trail for the last state-change note that
+    transitioned *into* a terminal status (``set_state`` stamps these as
+    ``status X → resolved`` / ``→ closed`` with a UTC ts). Falls back to
+    ``updated_at`` when no such note is found (e.g. a legacy row), and ``None`` when
+    neither is parseable — so a case with no reliable resolution time is simply
+    excluded from MTTR rather than skewing it with a fabricated value.
+    """
+    resolved_at: Optional[float] = None
+    for note in case.get("notes") or []:
+        text = note.get("text") or ""
+        if any(f"→ {st}" in text for st in _TERMINAL_STATUSES):
+            epoch = _parse_iso_epoch(note.get("ts"))
+            if epoch is not None:
+                resolved_at = epoch  # keep the latest matching transition
+    if resolved_at is None:
+        resolved_at = _parse_iso_epoch(case.get("updated_at"))
+    return resolved_at
 
 
 def _escape_like(term: str) -> str:
@@ -317,6 +361,129 @@ class CaseStore:
                 )
             result["mine"] = {"total": mine_total, "open": mine_total - mine_closed}
         return result
+
+    async def analytics(
+        self,
+        *,
+        tenant: Optional[str] = None,
+        trend_days: int = _ANALYTICS_TREND_DAYS,
+        top_origins: int = _ANALYTICS_TOP_ORIGINS,
+    ) -> dict:
+        """Investigation programme analytics for the Fase 5E dashboard.
+
+        Builds on :meth:`stats` (status/severity breakdown + open roll-up) and adds:
+
+        * ``mttr`` — mean/median time-to-resolve (seconds) over terminal cases, from
+          each case's created_at to its terminal-transition timestamp
+          (:func:`_resolution_epoch`). ``None`` mean/median when nothing has resolved.
+        * ``trends`` — per-day opened vs resolved counts over the last ``trend_days``
+          (UTC), so a reviewer can see inflow vs throughput.
+        * ``top_origins`` — origins linked across the most cases (a recurring actor
+          spanning investigations).
+
+        Tenant-scoped throughout. The MTTR/trend scan is bounded by
+        ``_ANALYTICS_SCAN_CAP`` so it can never read an unbounded number of rows.
+        """
+        import statistics
+        from datetime import timedelta
+
+        base = await self.stats(tenant=tenant)
+
+        # ─── Scan terminal + recent cases for MTTR and trends ─────────────────
+        where, params = self._filter_clause(
+            status=None, severity=None, assignee=None, tenant=tenant, search=None,
+        )
+        rows = await self._db().fetch_all(
+            f"SELECT case_id, status, created_at, updated_at, notes "  # noqa: S608 — bound params only
+            f"FROM investigation_case{where} "
+            f"ORDER BY created_at DESC LIMIT ?",
+            [*params, _ANALYTICS_SCAN_CAP],
+        )
+
+        trend_days = max(1, min(int(trend_days), 365))
+        today = datetime.now(timezone.utc).date()
+        window_start = today - timedelta(days=trend_days - 1)
+        opened_by_day: dict[str, int] = {}
+        resolved_by_day: dict[str, int] = {}
+        resolution_secs: list[float] = []
+
+        for r in rows:
+            d = r.to_dict() if hasattr(r, "to_dict") else dict(r)
+            case = {
+                "status": d.get("status") or "open",
+                "created_at": d.get("created_at"),
+                "updated_at": d.get("updated_at"),
+                "notes": _load_notes(d.get("notes")),
+            }
+            created_epoch = _parse_iso_epoch(case["created_at"])
+            # Opened-per-day trend.
+            if created_epoch is not None:
+                cday = datetime.fromtimestamp(created_epoch, tz=timezone.utc).date()
+                if cday >= window_start:
+                    key = cday.isoformat()
+                    opened_by_day[key] = opened_by_day.get(key, 0) + 1
+            # Terminal cases feed MTTR + the resolved-per-day trend.
+            if case["status"] in _TERMINAL_STATUSES:
+                resolved_epoch = _resolution_epoch(case)
+                if resolved_epoch is not None:
+                    if created_epoch is not None and resolved_epoch >= created_epoch:
+                        resolution_secs.append(resolved_epoch - created_epoch)
+                    rday = datetime.fromtimestamp(resolved_epoch, tz=timezone.utc).date()
+                    if rday >= window_start:
+                        key = rday.isoformat()
+                        resolved_by_day[key] = resolved_by_day.get(key, 0) + 1
+
+        trends = []
+        for i in range(trend_days):
+            day = (window_start + timedelta(days=i)).isoformat()
+            trends.append({
+                "date": day,
+                "opened": opened_by_day.get(day, 0),
+                "resolved": resolved_by_day.get(day, 0),
+            })
+
+        mttr = {
+            "count": len(resolution_secs),
+            "mean_seconds": (
+                round(statistics.mean(resolution_secs), 1) if resolution_secs else None
+            ),
+            "median_seconds": (
+                round(statistics.median(resolution_secs), 1) if resolution_secs else None
+            ),
+        }
+
+        # ─── Top origins by distinct case count ───────────────────────────────
+        origin_conditions = ["s.subject_type = 'origin'"]
+        origin_params: list = []
+        if tenant:
+            origin_conditions.append("c.tenant = ?")
+            origin_params.append(tenant)
+        origin_where = " AND ".join(origin_conditions)
+        origin_rows = await self._db().fetch_all(
+            f"SELECT s.subject_key, COUNT(DISTINCT s.case_id) AS n "  # noqa: S608 — bound params only
+            f"FROM investigation_case_subject s "
+            f"JOIN investigation_case c ON c.case_id = s.case_id "
+            f"WHERE {origin_where} "
+            f"GROUP BY s.subject_key ORDER BY n DESC, s.subject_key ASC LIMIT ?",
+            [*origin_params, max(1, min(int(top_origins), 100))],
+        )
+        top = []
+        for r in origin_rows:
+            d = r.to_dict() if hasattr(r, "to_dict") else dict(r)
+            top.append({
+                "subject_key": d.get("subject_key") or "",
+                "case_count": int(d.get("n") or 0),
+            })
+
+        return {
+            **base,
+            "mttr": mttr,
+            "trends": trends,
+            "trend_days": trend_days,
+            "top_origins": top,
+            "scanned": len(rows),
+            "scan_capped": len(rows) >= _ANALYTICS_SCAN_CAP,
+        }
 
     async def _count_subjects(self, case_id: str) -> int:
         row = await self._db().fetch_one(

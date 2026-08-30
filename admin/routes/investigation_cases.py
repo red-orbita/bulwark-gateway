@@ -347,6 +347,25 @@ async def case_stats(
     return {"stats": stats}
 
 
+@router.get("/analytics")
+async def case_analytics(
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+    trend_days: int = Query(14, ge=1, le=365),
+    top_origins: int = Query(10, ge=1, le=100),
+):
+    """Investigation programme analytics (Fase 5E): MTTR, trends, top origins.
+
+    Extends the status/severity roll-up with mean/median time-to-resolve over
+    terminal cases, per-day opened-vs-resolved inflow/throughput over ``trend_days``,
+    and the origins recurring across the most cases. Tenant-scoped: a scoped operator
+    only ever aggregates their own tenant's cases.
+    """
+    tenant = user.tenant or None
+    analytics = await get_case_store().analytics(
+        tenant=tenant, trend_days=trend_days, top_origins=top_origins
+    )
+    return {"analytics": analytics}
+
 
 @router.post("")
 async def create_case(
