@@ -14,6 +14,7 @@ database (migration v7):
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -653,6 +654,29 @@ class TestCaseEndpointsPhase3:
         resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
         assert resp.headers["content-disposition"].endswith(f'{made["case_id"]}.json"')
         assert audit.entries[-1]["action"] == "investigation.case_export"
+        # The body must be valid JSON carrying the full case record.
+        body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
+        parsed = json.loads(body)
+        assert parsed["case"]["case_id"] == made["case_id"]
+
+    async def test_export_json_serializes_datetime(self, wired, monkeypatch):
+        """Postgres returns timestamp columns as datetime objects (sqlite returns
+        ISO strings). A raw JSONResponse would 500 on datetime, so the route must
+        run the payload through jsonable_encoder — assert a datetime survives."""
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        ts = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+        async def _fake_scoped(user, case_id):
+            case = dict(made)
+            case["updated_at"] = ts  # force a non-JSON-native value
+            return case
+
+        monkeypatch.setattr(inv_cases, "_get_case_scoped", _fake_scoped)
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
+        parsed = json.loads(body)  # must not raise
+        assert "2025-01-02T03:04:05" in parsed["case"]["updated_at"]
 
     async def test_export_markdown(self, wired):
         inv_cases, cases, _, _ = wired

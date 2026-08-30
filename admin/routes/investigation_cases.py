@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -231,7 +232,7 @@ async def export_case(
             headers={"Content-Disposition": f'attachment; filename="{cid}.md"'},
         )
     return JSONResponse(
-        content={"case": case},
+        content=jsonable_encoder({"case": case}),
         headers={"Content-Disposition": f'attachment; filename="{cid}.json"'},
     )
 
