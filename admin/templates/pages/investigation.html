@@ -490,6 +490,45 @@
                     </template>
                 </ol>
             </div>
+
+            <!-- Related cases (Fase 5D): cross-case correlation via shared subjects -->
+            <div class="sg-card">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="git-fork" class="w-4 h-4 text-indigo-300"></i>
+                        <h2 class="text-sm font-medium text-white">Related Cases</h2>
+                        <span class="text-gray-600 text-[11px]" x-text="'(' + caseRelated.length + ')'"></span>
+                    </div>
+                    <button @click="loadRelatedCases()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="caseRelatedLoading" aria-label="Refresh related cases">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="caseRelatedLoading ? 'animate-spin' : ''"></i>
+                    </button>
+                </div>
+
+                <p class="text-[11px] text-gray-500 mb-3">Other cases that share a subject with this one — the same incident, origin or session surfacing across investigations. A strong overlap can indicate one campaign split across cases.</p>
+
+                <div x-show="!caseRelatedLoading && caseRelated.length === 0" class="text-[11px] text-gray-500 py-2">No other case shares a subject with this one.</div>
+
+                <div x-show="caseRelated.length > 0" class="space-y-2">
+                    <template x-for="(rc, i) in caseRelated" :key="'rc-' + i">
+                        <div class="flex items-start justify-between gap-3 p-2 rounded border border-gray-800 bg-white/[0.02]">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="sg-badge text-[10px]" :class="caseStatusClass(rc.status)" x-text="rc.status || 'open'"></span>
+                                    <span class="sg-badge text-[10px]" :class="caseSeverityClass(rc.severity)" x-text="rc.severity || '—'"></span>
+                                    <span class="text-[11px] text-gray-200 font-medium break-words" x-text="rc.title || rc.case_id"></span>
+                                </div>
+                                <div class="mt-1 flex flex-wrap gap-1">
+                                    <template x-for="(ss, j) in (rc.shared_subjects || [])" :key="'ss-' + i + '-' + j">
+                                        <span class="text-[9px] px-1.5 py-0.5 rounded bg-gray-500/15 text-gray-300 border border-gray-600/40 font-mono break-all"
+                                              x-text="ss.subject_type + ':' + ss.subject_key"></span>
+                                    </template>
+                                </div>
+                            </div>
+                            <button @click="openCase(rc.case_id)" class="sg-btn sg-btn-ghost sg-btn-sm shrink-0">Open</button>
+                        </div>
+                    </template>
+                </div>
+            </div>
         </div>
 
         <!-- Case controls (1 col) -->
@@ -1038,6 +1077,8 @@ function investigationPage() {
             caseTimeline: [],
             caseTimelineLoading: false,
             caseTimelineTruncated: false,
+            caseRelated: [],
+            caseRelatedLoading: false,
             subjectCases: [],
             addToCaseId: '',
 
@@ -1808,6 +1849,7 @@ function investigationPage() {
                     this.caseAssigneeInput = (data.case && data.case.assignee) || '';
                     this.caseNoteInput = '';
                     this.loadCaseTimeline();
+                    this.loadRelatedCases();
                     this.$nextTick(() => window.lucide && window.lucide.createIcons());
                 } else if (res.status === 404) {
                     showToast('Case not found', 'error');
@@ -1824,6 +1866,7 @@ function investigationPage() {
             this.caseNoteInput = '';
             this.caseTimeline = [];
             this.caseTimelineTruncated = false;
+            this.caseRelated = [];
         },
 
         async loadCaseTimeline() {
@@ -1849,6 +1892,30 @@ function investigationPage() {
                 this.caseTimelineTruncated = false;
             } finally {
                 this.caseTimelineLoading = false;
+            }
+        },
+
+        // Cross-case correlation (Fase 5D): other cases sharing a subject with
+        // this one — the same indicator/actor across separate investigations.
+        async loadRelatedCases() {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            this.caseRelatedLoading = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/related');
+                if (!res.ok) {
+                    this.caseRelated = [];
+                    return;
+                }
+                const data = await res.json();
+                // Drop a stale response if the analyst already opened another case.
+                if (!this.caseDetail || this.caseDetail.case_id !== id) return;
+                this.caseRelated = Array.isArray(data.related) ? data.related : [];
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            } catch (e) {
+                this.caseRelated = [];
+            } finally {
+                this.caseRelatedLoading = false;
             }
         },
 

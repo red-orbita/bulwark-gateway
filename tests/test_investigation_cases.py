@@ -1172,3 +1172,134 @@ class TestCaseTimeline:
         with pytest.raises(HTTPException) as ei:
             await inv_cases.case_timeline("case_nope", user=_admin(), limit=500)
         assert ei.value.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 5D — cross-case correlation: cases sharing a subject are a campaign
+# signal (the same indicator/actor across separate investigations).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestFindRelatedCasesStore:
+    async def test_shared_subject_links_two_cases(self, case_store):
+        c1 = await case_store.create_case(title="one", actor="a", tenant="acme")
+        c2 = await case_store.create_case(title="two", actor="a", tenant="acme")
+        for cid in (c1["case_id"], c2["case_id"]):
+            await case_store.add_subject(
+                case_id=cid, subject_type="incident", subject_key="INC-9", actor="a"
+            )
+        related = await case_store.find_related_cases(c1["case_id"])
+        assert [r["case_id"] for r in related] == [c2["case_id"]]
+        r = related[0]
+        assert r["shared_count"] == 1
+        assert r["shared_subjects"] == [{"subject_type": "incident", "subject_key": "INC-9"}]
+        assert r["title"] == "two" and r["tenant"] == "acme"
+
+    async def test_ranked_by_overlap_strength(self, case_store):
+        target = await case_store.create_case(title="t", actor="a")
+        weak = await case_store.create_case(title="weak", actor="a")
+        strong = await case_store.create_case(title="strong", actor="a")
+        # Target links three subjects; strong shares two, weak shares one.
+        subs = [("incident", "INC-A"), ("incident", "INC-B"), ("origin", "origin:" + "a" * 16)]
+        for st, sk in subs:
+            await case_store.add_subject(
+                case_id=target["case_id"], subject_type=st, subject_key=sk, actor="a"
+            )
+        for st, sk in subs[:2]:
+            await case_store.add_subject(
+                case_id=strong["case_id"], subject_type=st, subject_key=sk, actor="a"
+            )
+        await case_store.add_subject(
+            case_id=weak["case_id"], subject_type=subs[0][0], subject_key=subs[0][1], actor="a"
+        )
+        related = await case_store.find_related_cases(target["case_id"])
+        assert [r["case_id"] for r in related] == [strong["case_id"], weak["case_id"]]
+        assert related[0]["shared_count"] == 2
+        assert related[1]["shared_count"] == 1
+
+    async def test_excludes_self_and_dedupes_subjects(self, case_store):
+        c1 = await case_store.create_case(title="one", actor="a")
+        c2 = await case_store.create_case(title="two", actor="a")
+        # Two distinct shared subjects between the same pair.
+        for st, sk in (("incident", "INC-1"), ("session", "s" * 16)):
+            for cid in (c1["case_id"], c2["case_id"]):
+                await case_store.add_subject(
+                    case_id=cid, subject_type=st, subject_key=sk, actor="a"
+                )
+        related = await case_store.find_related_cases(c1["case_id"])
+        # Self excluded; the single related case lists both shared subjects once each.
+        assert [r["case_id"] for r in related] == [c2["case_id"]]
+        assert related[0]["shared_count"] == 2
+
+    async def test_no_shared_subjects_is_empty(self, case_store):
+        c1 = await case_store.create_case(title="one", actor="a")
+        c2 = await case_store.create_case(title="two", actor="a")
+        await case_store.add_subject(
+            case_id=c1["case_id"], subject_type="incident", subject_key="INC-X", actor="a"
+        )
+        await case_store.add_subject(
+            case_id=c2["case_id"], subject_type="incident", subject_key="INC-Y", actor="a"
+        )
+        assert await case_store.find_related_cases(c1["case_id"]) == []
+
+    async def test_empty_case_id_is_empty(self, case_store):
+        assert await case_store.find_related_cases("") == []
+
+
+class TestRelatedCasesEndpoint:
+    async def _linked_pair(self, cases, *, subject="INC-9", tenant="acme"):
+        c1 = await cases.create_case(title="one", actor="a", tenant=tenant)
+        c2 = await cases.create_case(title="two", actor="a", tenant=tenant)
+        for cid in (c1["case_id"], c2["case_id"]):
+            await cases.add_subject(
+                case_id=cid, subject_type="incident", subject_key=subject, actor="a"
+            )
+        return c1, c2
+
+    async def test_related_returns_sharing_case(self, wired):
+        inv_cases, cases, _, _ = wired
+        c1, c2 = await self._linked_pair(cases)
+        out = await inv_cases.related_cases(c1["case_id"], user=_admin())
+        assert out["count"] == 1
+        assert out["related"][0]["case_id"] == c2["case_id"]
+        assert out["related"][0]["shared_subjects"][0]["subject_key"] == "INC-9"
+
+    async def test_related_tenant_scoped_hides_other_tenant(self, wired):
+        inv_cases, cases, _, _ = wired
+        # Same shared subject across tenants must not cross the tenant boundary.
+        mine = await cases.create_case(title="mine", actor="a", tenant="acme")
+        theirs = await cases.create_case(title="theirs", actor="a", tenant="evil")
+        for cid in (mine["case_id"], theirs["case_id"]):
+            await cases.add_subject(
+                case_id=cid, subject_type="incident", subject_key="INC-SHARED", actor="a"
+            )
+        out = await inv_cases.related_cases(mine["case_id"], user=_admin(tenant="acme"))
+        assert out["count"] == 0
+
+    async def test_related_global_admin_sees_cross_tenant(self, wired):
+        inv_cases, cases, _, _ = wired
+        a = await cases.create_case(title="a", actor="a", tenant="acme")
+        b = await cases.create_case(title="b", actor="a", tenant="evil")
+        for cid in (a["case_id"], b["case_id"]):
+            await cases.add_subject(
+                case_id=cid, subject_type="incident", subject_key="INC-G", actor="a"
+            )
+        out = await inv_cases.related_cases(a["case_id"], user=_admin())
+        assert {r["case_id"] for r in out["related"]} == {b["case_id"]}
+
+    async def test_related_cross_tenant_case_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.related_cases(made["case_id"], user=_admin(tenant="acme"))
+        assert ei.value.status_code == 404
+
+    async def test_related_not_found_is_404(self, wired):
+        inv_cases, _, _, _ = wired
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.related_cases("case_nope", user=_admin())
+        assert ei.value.status_code == 404

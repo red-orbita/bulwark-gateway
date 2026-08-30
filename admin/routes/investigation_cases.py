@@ -570,6 +570,33 @@ async def export_case(
     )
 
 
+@router.get("/{case_id}/related")
+async def related_cases(
+    case_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """Cross-case correlation (Fase 5D): other cases sharing a subject with this one.
+
+    A subject (incident / origin / session) linked to more than one case is a
+    campaign signal — the same indicator or actor surfacing across separate
+    investigations. Returns each related case with the concrete shared subjects and
+    a count, ranked by overlap strength then recency.
+
+    Tenant-scoped: the target case is gated by ``_get_case_scoped`` (404 on
+    cross-tenant, no leak), and a tenant-scoped operator only sees related cases in
+    their own tenant — a shared subject must never reveal another tenant's case.
+    """
+    case = await _get_case_scoped(user, case_id)
+    related = await get_case_store().find_related_cases(case.get("case_id") or case_id)
+    if user.tenant:
+        related = [c for c in related if (c.get("tenant") or "") == user.tenant]
+    return {
+        "case_id": case.get("case_id") or case_id,
+        "related": related,
+        "count": len(related),
+    }
+
+
 
 @router.post("/{case_id}/state")
 async def set_case_state(

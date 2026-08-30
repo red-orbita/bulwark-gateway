@@ -358,6 +358,69 @@ class CaseStore:
             })
         return out
 
+    async def find_related_cases(self, case_id: str) -> list[dict]:
+        """Return other cases that share at least one subject with ``case_id``.
+
+        A subject (incident / origin / session) linked to more than one case is a
+        cross-case correlation signal — the same actor, indicator or campaign
+        surfacing in separate investigations. Found via a single self-join on the
+        subject table (the target case's subjects → any other case carrying the same
+        subject), aggregated per related case with the concrete shared subjects and a
+        count. Ranked by shared-subject count (desc), then most-recently-updated. The
+        target case is excluded. Returns brief rows (id/title/status/severity/tenant)
+        so a scoped caller can tenant-filter without a second read.
+        """
+        if not case_id:
+            return []
+        rows = await self._db().fetch_all(
+            "SELECT c.case_id, c.title, c.status, c.severity, c.tenant, "
+            "c.updated_at, s2.subject_type, s2.subject_key "
+            "FROM investigation_case_subject s1 "
+            "JOIN investigation_case_subject s2 "
+            "  ON s2.subject_type = s1.subject_type "
+            "  AND s2.subject_key = s1.subject_key "
+            "JOIN investigation_case c ON c.case_id = s2.case_id "
+            "WHERE s1.case_id = ? AND s2.case_id != ? "
+            "ORDER BY c.updated_at DESC",
+            [case_id, case_id],
+        )
+        # Aggregate per related case, deduping shared subjects. Insertion order is
+        # the query's updated_at-desc order, preserved through the dict.
+        agg: dict[str, dict] = {}
+        for r in rows:
+            d = r.to_dict() if hasattr(r, "to_dict") else dict(r)
+            cid = d.get("case_id")
+            if not cid:
+                continue
+            entry = agg.get(cid)
+            if entry is None:
+                entry = {
+                    "case_id": cid,
+                    "title": d.get("title") or "",
+                    "status": d.get("status") or "open",
+                    "severity": d.get("severity") or "medium",
+                    "tenant": d.get("tenant") or "",
+                    "shared_subjects": [],
+                    "_seen": set(),
+                }
+                agg[cid] = entry
+            stype = d.get("subject_type") or ""
+            skey = d.get("subject_key") or ""
+            token = f"{stype}:{skey}"
+            if token not in entry["_seen"]:
+                entry["_seen"].add(token)
+                entry["shared_subjects"].append(
+                    {"subject_type": stype, "subject_key": skey}
+                )
+        related = []
+        for entry in agg.values():
+            entry.pop("_seen", None)
+            entry["shared_count"] = len(entry["shared_subjects"])
+            related.append(entry)
+        # Rank by strength of overlap first, then recency (stable within the tie).
+        related.sort(key=lambda e: e["shared_count"], reverse=True)
+        return related
+
     # ─── Writes ──────────────────────────────────────────────────────────────
 
     async def create_case(
