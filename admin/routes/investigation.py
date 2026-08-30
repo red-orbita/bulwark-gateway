@@ -146,6 +146,26 @@ class TriageNoteRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=4000)
 
 
+class BulkTriageSubject(BaseModel):
+    """One subject targeted by a bulk triage action."""
+
+    subject_type: str = Field(..., description="incident | origin | session")
+    subject_key: str = Field(..., min_length=1, max_length=256)
+
+
+class BulkTriageRequest(BaseModel):
+    """Apply one status/assignee change across several subjects in a single call.
+
+    A single request keeps the whole batch in one audit action and avoids the
+    partial-failure ambiguity of many client-side round-trips: each subject is
+    authorised and mutated independently and its individual outcome is reported.
+    """
+
+    subjects: list[BulkTriageSubject] = Field(..., min_length=1, max_length=100)
+    status: Optional[str] = Field(default=None, description=f"one of {STATUSES}")
+    assignee: Optional[str] = Field(default=None, max_length=128)
+
+
 def _alert_subject(evt: dict) -> tuple[str, str] | None:
     """Derive the triage subject (type, key) an alert row hangs off.
 
@@ -521,6 +541,66 @@ async def investigation_triage_note(
         details=f"note_len={len(body.text)}",
     )
     return {"message": "Note added", "triage": record}
+
+
+@router.post("/triage/bulk")
+async def investigation_triage_bulk(
+    body: BulkTriageRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Apply one status/assignee change to several subjects at once.
+
+    Each subject is authorised (tenant-scoped, 404 on cross-tenant with no leak)
+    and mutated independently: a subject that fails validation or scoping is
+    reported as ``ok=false`` with a reason and does not abort the rest of the
+    batch. The whole action is recorded as a single audit entry.
+    """
+    if body.status is None and body.assignee is None:
+        raise HTTPException(status_code=400, detail="Provide status and/or assignee.")
+    if body.status is not None and body.status not in STATUSES:
+        raise HTTPException(status_code=400, detail=f"invalid status: {body.status}")
+
+    store = get_triage_store()
+    results: list[dict] = []
+    updated = 0
+    for subj in body.subjects:
+        entry: dict = {"subject_type": subj.subject_type, "subject_key": subj.subject_key}
+        try:
+            tenant = await _authorize_subject(user, subj.subject_type, subj.subject_key)
+            await store.set_state(
+                subject_type=subj.subject_type,
+                subject_key=subj.subject_key,
+                tenant=tenant,
+                actor=user.sub,
+                status=body.status,
+                assignee=body.assignee,
+            )
+            entry["ok"] = True
+            updated += 1
+        except HTTPException as e:
+            entry["ok"] = False
+            entry["error"] = e.detail
+        except ValueError as e:
+            entry["ok"] = False
+            entry["error"] = str(e)
+        results.append(entry)
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.triage_bulk",
+        resource_type="investigation",
+        resource_id=f"bulk:{len(body.subjects)}",
+        details=(
+            f"status={body.status} assignee={body.assignee} "
+            f"updated={updated} failed={len(body.subjects) - updated}"
+        ),
+    )
+    return {
+        "message": f"Updated {updated} of {len(body.subjects)}",
+        "updated": updated,
+        "failed": len(body.subjects) - updated,
+        "results": results,
+    }
 
 
 async def _authorize_subject(

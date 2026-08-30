@@ -315,7 +315,10 @@ class TestCaseEndpoints:
         assert created["case"]["title"] == "Campaign X"
         assert audit.entries[-1]["action"] == "investigation.case_create"
 
-        out = await inv_cases.list_cases(user=_admin(), status=None, limit=100, offset=0)
+        out = await inv_cases.list_cases(
+            user=_admin(), status=None, severity=None, assignee=None, search=None,
+            sort="updated_at", order="desc", limit=100, offset=0,
+        )
         assert out["count"] == 1
         assert out["can_write"] is True
         assert "open" in out["statuses"]
@@ -323,7 +326,10 @@ class TestCaseEndpoints:
 
     async def test_list_can_write_false_for_viewer(self, wired):
         inv_cases, _, _, _ = wired
-        out = await inv_cases.list_cases(user=_viewer(), status=None, limit=100, offset=0)
+        out = await inv_cases.list_cases(
+            user=_viewer(), status=None, severity=None, assignee=None, search=None,
+            sort="updated_at", order="desc", limit=100, offset=0,
+        )
         assert out["can_write"] is False
 
     async def test_get_case_detail(self, wired):
@@ -456,3 +462,222 @@ class TestCaseEndpoints:
             "incident", "INC-9", user=_admin(tenant="acme")
         )
         assert [c["case_id"] for c in out["cases"]] == [mine["case_id"]]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 3 — search / filter / sort / paging / stats (store)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseListPhase3:
+    async def test_search_matches_title_and_summary_literally(self, case_store):
+        await case_store.create_case(title="Exfil campaign", actor="a", summary="via DNS")
+        await case_store.create_case(title="Benign review", actor="a", summary="nothing")
+        hits = await case_store.list_cases(search="exfil")
+        assert [c["title"] for c in hits] == ["Exfil campaign"]
+        # summary is searched too.
+        dns = await case_store.list_cases(search="dns")
+        assert [c["title"] for c in dns] == ["Exfil campaign"]
+
+    async def test_search_wildcards_are_escaped(self, case_store):
+        # An underscore is a LIKE wildcard; escaped, a literal "a_b" search must
+        # not match the title "axb" (it would if '_' matched any single char).
+        await case_store.create_case(title="axb", actor="a")
+        assert await case_store.list_cases(search="a_b") == []
+        # '%' never appears in a hex case_id or these titles, so a literal '%'
+        # search matches nothing rather than acting as match-all.
+        assert await case_store.list_cases(search="%") == []
+
+    async def test_filter_by_severity_and_assignee(self, case_store):
+        c1 = await case_store.create_case(title="hi", actor="a", severity="critical")
+        await case_store.create_case(title="lo", actor="a", severity="low")
+        await case_store.set_state(case_id=c1["case_id"], actor="a", assignee="carol")
+
+        crit = await case_store.list_cases(severity="critical")
+        assert [c["case_id"] for c in crit] == [c1["case_id"]]
+        mine = await case_store.list_cases(assignee="carol")
+        assert [c["case_id"] for c in mine] == [c1["case_id"]]
+
+    async def test_sort_by_severity_rank_then_direction(self, case_store):
+        low = await case_store.create_case(title="l", actor="a", severity="low")
+        crit = await case_store.create_case(title="c", actor="a", severity="critical")
+        med = await case_store.create_case(title="m", actor="a", severity="medium")
+        desc = await case_store.list_cases(sort="severity", descending=True)
+        assert [c["case_id"] for c in desc] == [crit["case_id"], med["case_id"], low["case_id"]]
+        asc = await case_store.list_cases(sort="severity", descending=False)
+        assert [c["case_id"] for c in asc] == [low["case_id"], med["case_id"], crit["case_id"]]
+
+    async def test_sort_by_title(self, case_store):
+        await case_store.create_case(title="zebra", actor="a")
+        await case_store.create_case(title="alpha", actor="a")
+        asc = await case_store.list_cases(sort="title", descending=False)
+        assert [c["title"] for c in asc] == ["alpha", "zebra"]
+
+    async def test_count_cases_mirrors_filters(self, case_store):
+        await case_store.create_case(title="a", actor="a", tenant="acme", severity="high")
+        await case_store.create_case(title="b", actor="a", tenant="acme", severity="low")
+        await case_store.create_case(title="c", actor="a", tenant="evil", severity="high")
+        assert await case_store.count_cases(tenant="acme") == 2
+        assert await case_store.count_cases(tenant="acme", severity="high") == 1
+        assert await case_store.count_cases(search="nomatch") == 0
+
+    async def test_paging_is_stable_with_offset(self, case_store):
+        ids = []
+        for i in range(5):
+            c = await case_store.create_case(title=f"case {i}", actor="a")
+            ids.append(c["case_id"])
+        page1 = await case_store.list_cases(sort="created_at", descending=False, limit=2, offset=0)
+        page2 = await case_store.list_cases(sort="created_at", descending=False, limit=2, offset=2)
+        assert [c["case_id"] for c in page1] == ids[:2]
+        assert [c["case_id"] for c in page2] == ids[2:4]
+
+    async def test_stats_rollup_and_my_work(self, case_store):
+        o1 = await case_store.create_case(title="o1", actor="a", tenant="acme", severity="high")
+        await case_store.create_case(title="o2", actor="a", tenant="acme", severity="low")
+        closed = await case_store.create_case(title="done", actor="a", tenant="acme")
+        await case_store.set_state(case_id=closed["case_id"], actor="a", status="closed")
+        await case_store.set_state(case_id=o1["case_id"], actor="a", assignee="carol")
+
+        stats = await case_store.stats(tenant="acme", assignee="carol")
+        assert stats["total"] == 3
+        assert stats["open"] == 2  # o1 + o2 open, "done" closed
+        assert stats["by_status"]["closed"] == 1
+        assert stats["by_severity"]["high"] == 1
+        assert stats["mine"]["total"] == 1
+        assert stats["mine"]["open"] == 1
+
+    async def test_stats_tenant_isolation(self, case_store):
+        await case_store.create_case(title="x", actor="a", tenant="acme")
+        await case_store.create_case(title="y", actor="a", tenant="evil")
+        stats = await case_store.stats(tenant="acme")
+        assert stats["total"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 3 — Markdown export rendering (pure)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseMarkdownExport:
+    def test_render_includes_metadata_subjects_and_notes(self):
+        from admin.services.investigation_case_store import render_case_markdown
+
+        case = {
+            "case_id": "case_abc",
+            "title": "Campaign",
+            "status": "investigating",
+            "severity": "high",
+            "assignee": "carol",
+            "tenant": "acme",
+            "created_by": "alice",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "summary": "several correlated hits",
+            "subjects": [
+                {"subject_type": "incident", "subject_key": "INC-1",
+                 "added_by": "alice", "added_at": "2026-01-01T01:00:00Z"},
+            ],
+            "notes": [
+                {"ts": "2026-01-01T00:00:00Z", "author": "alice",
+                 "kind": "action", "text": "case opened (high)"},
+            ],
+        }
+        md = render_case_markdown(case)
+        assert "# Investigation Case: Campaign" in md
+        assert "case_abc" in md
+        assert "several correlated hits" in md
+        assert "INC-1" in md
+        assert "case opened (high)" in md
+        assert "## Linked Subjects (1)" in md
+        assert "## Note Trail (1)" in md
+
+    def test_render_handles_empty_case(self):
+        from admin.services.investigation_case_store import render_case_markdown
+
+        md = render_case_markdown({"case_id": "case_x", "title": ""})
+        assert "(untitled case)" in md
+        assert "_No subjects linked._" in md
+        assert "_No notes recorded._" in md
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 3 — route: list params, stats, export
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseEndpointsPhase3:
+    async def test_list_reports_total_and_paging_metadata(self, wired):
+        inv_cases, cases, _, _ = wired
+        for i in range(3):
+            await cases.create_case(title=f"c{i}", actor="a")
+        out = await inv_cases.list_cases(
+            user=_admin(), status=None, severity=None, assignee=None, search=None,
+            sort="updated_at", order="desc", limit=2, offset=0,
+        )
+        assert out["total"] == 3
+        assert out["count"] == 2
+        assert out["limit"] == 2
+        assert out["order"] == "desc"
+        assert "updated_at" in out["sort_keys"]
+
+    async def test_list_unknown_sort_falls_back(self, wired):
+        inv_cases, cases, _, _ = wired
+        await cases.create_case(title="c", actor="a")
+        out = await inv_cases.list_cases(
+            user=_admin(), status=None, severity=None, assignee=None, search=None,
+            sort="; DROP TABLE", order="desc", limit=100, offset=0,
+        )
+        assert out["sort"] == "updated_at"
+
+    async def test_list_search_filters(self, wired):
+        inv_cases, cases, _, _ = wired
+        await cases.create_case(title="Exfil campaign", actor="a")
+        await cases.create_case(title="Benign", actor="a")
+        out = await inv_cases.list_cases(
+            user=_admin(), status=None, severity=None, assignee=None, search="exfil",
+            sort="updated_at", order="desc", limit=100, offset=0,
+        )
+        assert out["count"] == 1
+        assert out["cases"][0]["title"] == "Exfil campaign"
+
+    async def test_stats_endpoint(self, wired):
+        inv_cases, cases, _, _ = wired
+        await cases.create_case(title="a", actor="a", tenant="acme")
+        out = await inv_cases.case_stats(user=_admin(tenant="acme"), assignee=None)
+        assert out["stats"]["total"] == 1
+        assert "by_status" in out["stats"]
+
+    async def test_export_json(self, wired):
+        inv_cases, cases, _, audit = wired
+        made = await cases.create_case(title="t", actor="a")
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        assert resp.headers["content-disposition"].endswith(f'{made["case_id"]}.json"')
+        assert audit.entries[-1]["action"] == "investigation.case_export"
+
+    async def test_export_markdown(self, wired):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="Campaign", actor="a")
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="md")
+        assert resp.media_type.startswith("text/markdown")
+        body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
+        assert "# Investigation Case: Campaign" in body
+
+    async def test_export_invalid_format_is_400(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.export_case(made["case_id"], user=_admin(), format="pdf")
+        assert ei.value.status_code == 400
+
+    async def test_export_cross_tenant_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.export_case(
+                made["case_id"], user=_admin(tenant="acme"), format="json"
+            )
+        assert ei.value.status_code == 404

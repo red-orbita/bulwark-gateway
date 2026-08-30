@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from ..models.auth import TokenPayload
@@ -29,6 +30,7 @@ from ..services.investigation_case_store import (
     CASE_SEVERITIES,
     CASE_STATUSES,
     get_case_store,
+    render_case_markdown,
 )
 
 # Reuse the Investigation Center's tenant/authorisation helpers so cases enforce
@@ -38,6 +40,12 @@ from .investigation import _authorize_subject, _can_write, _scoped_tenant
 router = APIRouter()
 
 _MAX_CASES = 500
+
+# Sort keys the list endpoint accepts, mirroring the store's whitelist. Kept as an
+# explicit surface so an unknown key is rejected at the API boundary rather than
+# silently falling back inside the store.
+_SORT_KEYS = ("updated_at", "created_at", "title", "status", "severity")
+_EXPORT_FORMATS = ("json", "md")
 
 
 class CaseCreateRequest(BaseModel):
@@ -84,21 +92,59 @@ async def _get_case_scoped(user: TokenPayload, case_id: str) -> dict:
 async def list_cases(
     user: TokenPayload = Depends(require_permission("investigation:read")),
     status: Optional[str] = Query(None),
+    severity: Optional[str] = Query(None),
+    assignee: Optional[str] = Query(None, max_length=128),
+    search: Optional[str] = Query(None, max_length=128),
+    sort: str = Query("updated_at"),
+    order: str = Query("desc", description="asc | desc"),
     limit: int = Query(100, ge=1, le=_MAX_CASES),
     offset: int = Query(0, ge=0),
 ):
-    """List investigation cases (most-recently-updated first)."""
+    """List investigation cases with filtering, search, sorting and paging."""
     tenant = user.tenant or None
-    cases = await get_case_store().list_cases(
-        status=status, tenant=tenant, limit=limit, offset=offset
+    sort_key = sort if sort in _SORT_KEYS else "updated_at"
+    descending = order.lower() != "asc"
+    store = get_case_store()
+    cases = await store.list_cases(
+        status=status,
+        severity=severity,
+        assignee=assignee,
+        tenant=tenant,
+        search=search,
+        sort=sort_key,
+        descending=descending,
+        limit=limit,
+        offset=offset,
+    )
+    total = await store.count_cases(
+        status=status, severity=severity, assignee=assignee,
+        tenant=tenant, search=search,
     )
     return {
         "cases": cases,
         "count": len(cases),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort_key,
+        "order": "desc" if descending else "asc",
         "can_write": _can_write(user),
         "statuses": list(CASE_STATUSES),
         "severities": list(CASE_SEVERITIES),
+        "sort_keys": list(_SORT_KEYS),
     }
+
+
+@router.get("/stats")
+async def case_stats(
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+    assignee: Optional[str] = Query(None, max_length=128),
+):
+    """Aggregate case counts (by status/severity + optional "my work" workload)."""
+    tenant = user.tenant or None
+    stats = await get_case_store().stats(tenant=tenant, assignee=assignee or None)
+    return {"stats": stats}
+
 
 
 @router.post("")
@@ -149,6 +195,46 @@ async def get_case(
 ):
     """Full case detail: metadata, linked subjects, and note trail."""
     return {"case": await _get_case_scoped(user, case_id)}
+
+
+@router.get("/{case_id}/export")
+async def export_case(
+    case_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+    format: str = Query("json", description="json | md"),
+):
+    """Export a full case as a downloadable JSON or Markdown investigation record.
+
+    Tenant-scoped like every other case read; the export is audit-logged so a
+    record leaving the system leaves a trail. Content-Disposition marks it as an
+    attachment named after the case id.
+    """
+    fmt = format.lower()
+    if fmt not in _EXPORT_FORMATS:
+        raise HTTPException(status_code=400, detail=f"format must be one of {_EXPORT_FORMATS}")
+    case = await _get_case_scoped(user, case_id)
+    cid = case.get("case_id") or case_id
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.case_export",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"format={fmt}",
+    )
+
+    if fmt == "md":
+        body = render_case_markdown(case)
+        return PlainTextResponse(
+            content=body,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{cid}.md"'},
+        )
+    return JSONResponse(
+        content={"case": case},
+        headers={"Content-Disposition": f'attachment; filename="{cid}.json"'},
+    )
+
 
 
 @router.post("/{case_id}/state")

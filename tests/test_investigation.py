@@ -753,3 +753,76 @@ class TestSessionSubject:
         assert out["triage"]["status"] == "resolved"
         assert out["triage"]["subject_type"] == "session"
         assert any(e["action"] == "investigation.triage_state" for e in audit.entries)
+
+
+class TestBulkTriage:
+    async def test_bulk_updates_multiple_subjects(self, wired):
+        inv, _, triage, audit = wired
+        body = inv.BulkTriageRequest(
+            subjects=[
+                {"subject_type": "incident", "subject_key": "INC-1"},
+                {"subject_type": "incident", "subject_key": "INC-2"},
+            ],
+            status="in_progress",
+            assignee="carol",
+        )
+        out = await inv.investigation_triage_bulk(body, user=_admin())
+        assert out["updated"] == 2
+        assert out["failed"] == 0
+        assert all(r["ok"] for r in out["results"])
+        # both rows now carry the applied state.
+        rec = await triage.get("incident", "INC-1")
+        assert rec["status"] == "in_progress"
+        assert rec["assignee"] == "carol"
+        assert any(e["action"] == "investigation.triage_bulk" for e in audit.entries)
+
+    async def test_bulk_requires_a_field(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv.BulkTriageRequest(
+            subjects=[{"subject_type": "incident", "subject_key": "INC-1"}],
+        )
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_triage_bulk(body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_bulk_invalid_status_is_400(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv.BulkTriageRequest(
+            subjects=[{"subject_type": "incident", "subject_key": "INC-1"}],
+            status="bogus",
+        )
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_triage_bulk(body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_bulk_partial_failure_isolated(self, wired):
+        inv, _, _, _ = wired
+        body = inv.BulkTriageRequest(
+            subjects=[
+                {"subject_type": "incident", "subject_key": "INC-1"},
+                {"subject_type": "planet", "subject_key": "x"},
+            ],
+            status="acknowledged",
+        )
+        out = await inv.investigation_triage_bulk(body, user=_admin())
+        assert out["updated"] == 1
+        assert out["failed"] == 1
+        bad = [r for r in out["results"] if not r["ok"]]
+        assert bad and bad[0]["subject_type"] == "planet"
+
+    async def test_bulk_cross_tenant_subject_recorded_as_failed(self, wired):
+        inv, events, _, _ = wired
+        await events.bulk_insert([_evt("c", tenant="evil", incident_id="INC-E")])
+        body = inv.BulkTriageRequest(
+            subjects=[{"subject_type": "incident", "subject_key": "INC-E"}],
+            status="resolved",
+        )
+        # tenant-scoped operator: cross-tenant subject fails (404) but does not raise.
+        out = await inv.investigation_triage_bulk(body, user=_admin(tenant="acme"))
+        assert out["updated"] == 0
+        assert out["failed"] == 1
+        assert out["results"][0]["ok"] is False

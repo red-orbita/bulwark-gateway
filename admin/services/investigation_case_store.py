@@ -56,10 +56,40 @@ _MAX_SUMMARY_LEN = 4000
 _MAX_ASSIGNEE_LEN = 128
 _MAX_SUBJECT_KEY_LEN = 256
 _MAX_SUBJECTS_PER_CASE = 500
+_MAX_SEARCH_LEN = 128
+
+# Whitelisted sort columns for ``list_cases``. The API only ever passes a *key*
+# from this map into the query — never a raw client string — so the resulting
+# ``ORDER BY`` clause is injection-free. ``severity`` is ranked low→critical via a
+# dialect-neutral CASE expression so it sorts by real severity, not alphabetically.
+_SORT_COLUMNS: dict[str, str] = {
+    "updated_at": "updated_at",
+    "created_at": "created_at",
+    "title": "title",
+    "status": "status",
+    "severity": (
+        "CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 "
+        "WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END"
+    ),
+}
+_DEFAULT_SORT = "updated_at"
+
+# ``LIKE`` special characters we neutralise in a user search term so a caller
+# cannot turn a substring search into a wildcard/underscore match. Paired with an
+# explicit ``ESCAPE '\'`` clause (supported identically by SQLite and PostgreSQL).
+_LIKE_ESCAPE = "\\"
 
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _escape_like(term: str) -> str:
+    """Escape ``LIKE`` wildcards so a search term matches literally."""
+    out = term.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+    out = out.replace("%", _LIKE_ESCAPE + "%")
+    out = out.replace("_", _LIKE_ESCAPE + "_")
+    return out
 
 
 def _new_case_id() -> str:
@@ -154,33 +184,139 @@ class CaseStore:
         )
         return [_row_to_subject(r) for r in rows]
 
-    async def list_cases(
-        self,
+    @staticmethod
+    def _filter_clause(
         *,
-        status: Optional[str] = None,
-        tenant: Optional[str] = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[dict]:
-        """List cases (most-recently-updated first), each with a subject count."""
+        status: Optional[str],
+        severity: Optional[str],
+        assignee: Optional[str],
+        tenant: Optional[str],
+        search: Optional[str],
+    ) -> tuple[str, list]:
+        """Build a shared, fully-parameterised WHERE clause for the filter set.
+
+        Returns ``(where_sql, params)`` — used identically by ``list_cases``,
+        ``count_cases`` and ``stats`` so the three can never drift. Every value is
+        bound; the search term is ``LIKE``-escaped and matched literally.
+        """
         conditions: list[str] = []
         params: list = []
         if status:
             conditions.append("status = ?")
             params.append(status)
+        if severity:
+            conditions.append("severity = ?")
+            params.append(severity)
+        if assignee:
+            conditions.append("assignee = ?")
+            params.append(assignee[:_MAX_ASSIGNEE_LEN])
         if tenant:
             conditions.append("tenant = ?")
             params.append(tenant)
+        if search:
+            term = "%" + _escape_like(search.strip()[:_MAX_SEARCH_LEN]) + "%"
+            conditions.append(
+                "(title LIKE ? ESCAPE '\\' OR case_id LIKE ? ESCAPE '\\' "
+                "OR summary LIKE ? ESCAPE '\\')"
+            )
+            params.extend([term, term, term])
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        return where, params
+
+    async def list_cases(
+        self,
+        *,
+        status: Optional[str] = None,
+        severity: Optional[str] = None,
+        assignee: Optional[str] = None,
+        tenant: Optional[str] = None,
+        search: Optional[str] = None,
+        sort: str = _DEFAULT_SORT,
+        descending: bool = True,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List cases with a subject count, filtered/sorted per the arguments.
+
+        ``sort`` is validated against ``_SORT_COLUMNS`` (falling back to the default
+        ordering), so only a whitelisted column expression ever reaches the query.
+        """
+        where, params = self._filter_clause(
+            status=status, severity=severity, assignee=assignee,
+            tenant=tenant, search=search,
+        )
+        order_col = _SORT_COLUMNS.get(sort, _SORT_COLUMNS[_DEFAULT_SORT])
+        direction = "DESC" if descending else "ASC"
+        # Deterministic tiebreak so paging is stable when the sort key ties.
         sql = (
-            f"SELECT * FROM investigation_case{where} "  # noqa: S608 — bound params only
-            "ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+            f"SELECT * FROM investigation_case{where} "  # noqa: S608 — whitelisted column + bound params
+            f"ORDER BY {order_col} {direction}, case_id ASC LIMIT ? OFFSET ?"
         )
         rows = await self._db().fetch_all(sql, [*params, int(limit), int(offset)])
         cases = [_row_to_case(r) for r in rows]
         for c in cases:
             c["subject_count"] = await self._count_subjects(c["case_id"])
         return cases
+
+    async def count_cases(
+        self,
+        *,
+        status: Optional[str] = None,
+        severity: Optional[str] = None,
+        assignee: Optional[str] = None,
+        tenant: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        """Return the total number of cases matching a filter set (for paging)."""
+        where, params = self._filter_clause(
+            status=status, severity=severity, assignee=assignee,
+            tenant=tenant, search=search,
+        )
+        row = await self._db().fetch_one(
+            f"SELECT COUNT(*) AS n FROM investigation_case{where}",  # noqa: S608 — bound params only
+            params,
+        )
+        if not row:
+            return 0
+        d = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+        return int(d.get("n") or 0)
+
+    async def stats(
+        self,
+        *,
+        tenant: Optional[str] = None,
+        assignee: Optional[str] = None,
+    ) -> dict:
+        """Aggregate case counts for the Investigation Center KPI header.
+
+        Returns totals broken down by status and severity (tenant-scoped), plus an
+        ``open`` roll-up (anything not resolved/closed) and, when ``assignee`` is
+        given, that operator's own open workload for the "my work" cards.
+        """
+        by_status: dict[str, int] = {}
+        for st in CASE_STATUSES:
+            by_status[st] = await self.count_cases(status=st, tenant=tenant)
+        by_severity: dict[str, int] = {}
+        for sev in CASE_SEVERITIES:
+            by_severity[sev] = await self.count_cases(severity=sev, tenant=tenant)
+
+        total = await self.count_cases(tenant=tenant)
+        closed = by_status.get("resolved", 0) + by_status.get("closed", 0)
+        result: dict = {
+            "total": total,
+            "open": total - closed,
+            "by_status": by_status,
+            "by_severity": by_severity,
+        }
+        if assignee:
+            mine_total = await self.count_cases(tenant=tenant, assignee=assignee)
+            mine_closed = 0
+            for st in ("resolved", "closed"):
+                mine_closed += await self.count_cases(
+                    tenant=tenant, assignee=assignee, status=st
+                )
+            result["mine"] = {"total": mine_total, "open": mine_total - mine_closed}
+        return result
 
     async def _count_subjects(self, case_id: str) -> int:
         row = await self._db().fetch_one(
@@ -417,6 +553,59 @@ class CaseStore:
         if len(out) > _MAX_NOTES:
             out = out[-_MAX_NOTES:]
         return out
+
+
+def render_case_markdown(case: dict) -> str:
+    """Render a full case (metadata + subjects + note trail) as a Markdown report.
+
+    Pure and side-effect-free so it is unit-testable without a request. Used by the
+    case export endpoint to produce an analyst-portable investigation record. All
+    values originate from the durable store; no external content is interpolated.
+    """
+    title = (case.get("title") or "").strip() or "(untitled case)"
+    lines: list[str] = [
+        f"# Investigation Case: {title}",
+        "",
+        f"- **Case ID:** {case.get('case_id') or ''}",
+        f"- **Status:** {case.get('status') or 'open'}",
+        f"- **Severity:** {case.get('severity') or 'medium'}",
+        f"- **Assignee:** {case.get('assignee') or '—'}",
+        f"- **Tenant:** {case.get('tenant') or '(global)'}",
+        f"- **Opened by:** {case.get('created_by') or ''}",
+        f"- **Created:** {case.get('created_at') or ''}",
+        f"- **Updated:** {case.get('updated_at') or ''}",
+        "",
+    ]
+    summary = (case.get("summary") or "").strip()
+    if summary:
+        lines += ["## Summary", "", summary, ""]
+
+    subjects = case.get("subjects") or []
+    lines += [f"## Linked Subjects ({len(subjects)})", ""]
+    if subjects:
+        lines += ["| Type | Key | Added by | Added at |", "| --- | --- | --- | --- |"]
+        for s in subjects:
+            lines.append(
+                f"| {s.get('subject_type') or ''} | {s.get('subject_key') or ''} "
+                f"| {s.get('added_by') or ''} | {s.get('added_at') or ''} |"
+            )
+    else:
+        lines.append("_No subjects linked._")
+    lines.append("")
+
+    notes = case.get("notes") or []
+    lines += [f"## Note Trail ({len(notes)})", ""]
+    if notes:
+        for n in notes:
+            kind = n.get("kind") or "note"
+            lines.append(
+                f"- **[{n.get('ts') or ''}] {n.get('author') or 'system'}** "
+                f"_({kind})_: {n.get('text') or ''}"
+            )
+    else:
+        lines.append("_No notes recorded._")
+    lines.append("")
+    return "\n".join(lines)
 
 
 _store: Optional[CaseStore] = None
