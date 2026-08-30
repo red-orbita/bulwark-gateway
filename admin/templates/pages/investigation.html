@@ -794,6 +794,33 @@
                             </tbody>
                         </table>
                     </div>
+
+                    <!-- Response actions (Fase 5B): bounded, auditable remediation
+                         against THIS origin. Only visible to operators with write
+                         permission. raise/clear mutate the correlation risk state;
+                         notify dispatches an advisory alert to the channels. -->
+                    <div x-show="status.can_write && origin" class="mt-5 pt-4 border-t border-gray-700/50">
+                        <p class="text-gray-500 uppercase tracking-wider text-xs mb-2 flex items-center gap-1.5">
+                            <i data-lucide="shield-alert" class="w-3.5 h-3.5 text-amber-300"></i>Response Actions
+                        </p>
+                        <div class="flex flex-wrap items-center gap-2 mb-2">
+                            <input type="number" min="0" max="10" step="0.5" x-model="raiseAmount"
+                                   placeholder="+risk" class="sg-input sg-input-sm w-24"
+                                   aria-label="Additional risk to add to this origin" :disabled="respondBusy">
+                            <button @click="raiseOriginRisk()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                                    :disabled="respondBusy">Raise Risk</button>
+                            <button @click="clearOriginRisk()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                                    :disabled="respondBusy">Clear Risk</button>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <input type="text" x-model="notifyNote" maxlength="512"
+                                   placeholder="Advisory note to dispatch…" class="sg-input sg-input-sm flex-1 min-w-[12rem]"
+                                   aria-label="Advisory notification note" :disabled="respondBusy">
+                            <button @click="notifyOrigin()" class="sg-btn sg-btn-ghost sg-btn-sm"
+                                    :disabled="respondBusy || !notifyNote.trim()">Notify</button>
+                        </div>
+                        <p class="text-[10px] text-gray-600 mt-2">Raising bumps this origin to at least the block threshold; clearing resets its accrued risk. Both require Redis and are audit-logged.</p>
+                    </div>
                 </div>
             </div>
 
@@ -948,6 +975,11 @@ function investigationPage() {
             triage: null,
             assigneeInput: '',
             noteInput: '',
+
+            // Response actions (Fase 5B) — origin drill-down remediation panel.
+            respondBusy: false,
+            raiseAmount: '',
+            notifyNote: '',
 
             // Current operator (for the "my work" surface). assignee is free text,
             // so "mine" is anything assigned to this username.
@@ -1407,6 +1439,74 @@ function investigationPage() {
                 }
             } catch (e) {
                 showToast('Network error loading origin', 'error');
+            }
+        },
+
+        // ─── Response actions (Fase 5B) ──────────────────────────────────────
+        // Dedicated POST helper for /respond: unlike _post() these actions target
+        // an origin (or a channel), not a triage subject, so they carry no
+        // subjectKey guard and never touch triage state.
+        async _respond(payload, okMsg) {
+            this.respondBusy = true;
+            try {
+                const res = await fetch('/admin/investigation/respond', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Response action failed', 'error');
+                    return false;
+                }
+                const data = await res.json();
+                showToast(data.warning || okMsg, data.warning ? 'error' : 'success');
+                return true;
+            } catch (e) {
+                showToast('Network error running response action', 'error');
+                return false;
+            } finally {
+                this.respondBusy = false;
+            }
+        },
+
+        async raiseOriginRisk() {
+            if (!this.origin) return;
+            const payload = {
+                action: 'raise_risk',
+                scope_type: this.origin.scope_type,
+                digest: this.origin.digest,
+            };
+            const amt = parseFloat(this.raiseAmount);
+            if (!isNaN(amt)) payload.amount = amt;
+            if (await this._respond(payload, 'Origin risk raised')) {
+                this.raiseAmount = '';
+                await this.loadOrigin(this.origin.token);
+            }
+        },
+
+        async clearOriginRisk() {
+            if (!this.origin) return;
+            if (await this._respond({
+                action: 'clear_risk',
+                scope_type: this.origin.scope_type,
+                digest: this.origin.digest,
+            }, 'Origin risk cleared')) {
+                await this.loadOrigin(this.origin.token);
+            }
+        },
+
+        async notifyOrigin() {
+            if (!this.origin) return;
+            const note = this.notifyNote.trim();
+            if (!note) return;
+            if (await this._respond({
+                action: 'notify',
+                scope_type: this.origin.scope_type,
+                digest: this.origin.digest,
+                note: note,
+            }, 'Advisory notification dispatched')) {
+                this.notifyNote = '';
             }
         },
 

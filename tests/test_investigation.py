@@ -684,6 +684,29 @@ class _FakeRedis:
     def hgetall(self, key):
         return dict(self._h.get(key, {}))
 
+    def hset(self, key, mapping=None, **kwargs):
+        d = self._h.setdefault(key, {})
+        if mapping:
+            d.update(mapping)
+        if kwargs:
+            d.update(kwargs)
+        return len(mapping or kwargs or {})
+
+    def expire(self, key, ttl):
+        self._ttls[key] = ttl
+        return True
+
+    def delete(self, *keys):
+        n = 0
+        for k in keys:
+            if k in self._h:
+                del self._h[k]
+                n += 1
+            elif k in self._z:
+                del self._z[k]
+                n += 1
+        return n
+
 
 class TestSessionSubject:
     async def test_store_accepts_session_subject(self, triage_store):
@@ -946,3 +969,245 @@ class TestIOCCheck:
         out = await inv.investigation_ioc_check(req, user=_viewer())
         ips = [i for i in out["indicators"] if i["type"] == "ip"]
         assert len(ips) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Response / remediation actions (Fase 5B)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _FakeEngine:
+    """Notification-engine stub: records dispatched advisory alerts."""
+
+    def __init__(self, *, configured=True):
+        self.configured = configured
+        self.sent: list = []
+
+    async def send_alert(self, payload):
+        self.sent.append(payload)
+
+
+@pytest.fixture
+def case_wired(wired, engine, monkeypatch):
+    """Extend the wired route fixture with a real, migrated case store."""
+    from admin.services import investigation_case_store as case_mod
+    from admin.services.investigation_case_store import CaseStore
+
+    monkeypatch.setattr(case_mod, "get_database", lambda: engine)
+    store = CaseStore()
+    monkeypatch.setattr(case_mod, "get_case_store", lambda: store)
+    monkeypatch.setattr(case_mod, "_store", store, raising=False)
+    inv, events, triage, audit = wired
+    return inv, events, triage, audit, store
+
+
+class TestInvestigationRespond:
+    _DIGEST = "0123456789abcdef"
+
+    async def test_invalid_action_is_400(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv.RespondRequest(action="nuke")
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_viewer_cannot_respond(self, wired):
+        """RBAC: the handler is guarded by investigation:write."""
+        inv, _, _, _ = wired
+        assert inv._can_write(_viewer()) is False
+        assert inv._can_write(_admin()) is True
+
+    async def test_raise_risk_requires_scope_and_digest(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv.RespondRequest(action="raise_risk")
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_raise_risk_rejects_bad_digest(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv.RespondRequest(action="raise_risk", scope_type="subject", digest="xyz")
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_raise_risk_no_redis_is_503(self, wired):
+        inv, _, _, _ = wired  # wired pins _redis -> None
+        from fastapi import HTTPException
+
+        body = inv.RespondRequest(
+            action="raise_risk", scope_type="subject", digest=self._DIGEST
+        )
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin())
+        assert ei.value.status_code == 503
+
+    async def test_raise_risk_hardens_origin_to_block_threshold(self, wired, monkeypatch):
+        inv, _, _, audit = wired
+        fake = _FakeRedis()
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        # Correlation on so no "disabled" warning is surfaced.
+        from src.config import settings
+
+        monkeypatch.setattr(settings, "correlation_enabled", True, raising=False)
+
+        body = inv.RespondRequest(
+            action="raise_risk", scope_type="subject", digest=self._DIGEST
+        )
+        out = await inv.investigation_respond(body, user=_admin())
+        assert out["action"] == "raise_risk"
+        # Raised to exactly the effective block threshold (default 7.0), from 0.
+        assert out["previous_score"] == 0.0
+        assert out["new_score"] == pytest.approx(out["block_threshold"])
+        assert out["correlation_enabled"] is True
+        assert "warning" not in out
+        # The score is now persisted in the risk hash the proxy reads.
+        key = f"{inv._RISK_PREFIX}subject:{self._DIGEST}"
+        assert float(fake._h[key]["score"]) == pytest.approx(out["block_threshold"])
+        assert key in fake._ttls
+        assert any(
+            e["action"] == "investigation.respond_raise_risk" for e in audit.entries
+        )
+
+    async def test_raise_risk_amount_adds_headroom(self, wired, monkeypatch):
+        inv, _, _, _ = wired
+        fake = _FakeRedis()
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        body = inv.RespondRequest(
+            action="raise_risk", scope_type="tenant", digest=self._DIGEST, amount=2.0
+        )
+        out = await inv.investigation_respond(body, user=_admin())
+        # max(0, block_threshold) + 2.0, clamped to 10.
+        assert out["new_score"] == pytest.approx(min(10.0, out["block_threshold"] + 2.0))
+
+    async def test_raise_risk_warns_when_correlation_disabled(self, wired, monkeypatch):
+        inv, _, _, _ = wired
+        fake = _FakeRedis()
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        from src.config import settings
+
+        monkeypatch.setattr(settings, "correlation_enabled", False, raising=False)
+        body = inv.RespondRequest(
+            action="raise_risk", scope_type="subject", digest=self._DIGEST
+        )
+        out = await inv.investigation_respond(body, user=_admin())
+        assert out["correlation_enabled"] is False
+        assert "warning" in out
+
+    async def test_raise_risk_cross_tenant_is_404(self, wired, monkeypatch):
+        inv, events, _, _ = wired
+        fake = _FakeRedis()
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        from fastapi import HTTPException
+
+        # An origin stamped on another tenant's evidence.
+        token = f"subject:{self._DIGEST}"
+        await events.bulk_insert([_evt("e", tenant="evil", scope_digests=[token])])
+        body = inv.RespondRequest(
+            action="raise_risk", scope_type="subject", digest=self._DIGEST
+        )
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin(tenant="acme"))
+        assert ei.value.status_code == 404
+        # No write happened.
+        assert f"{inv._RISK_PREFIX}{token}" not in fake._h
+
+    async def test_clear_risk_deletes_origin(self, wired, monkeypatch):
+        inv, _, _, audit = wired
+        key = f"bulwark:risk:session:{self._DIGEST}"
+        fake = _FakeRedis(hashes={key: {"score": 8.0, "ts": 1000.0}})
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        body = inv.RespondRequest(
+            action="clear_risk", scope_type="session", digest=self._DIGEST
+        )
+        out = await inv.investigation_respond(body, user=_admin())
+        assert out["keys_deleted"] == 1
+        assert key not in fake._h
+        assert any(
+            e["action"] == "investigation.respond_clear_risk" for e in audit.entries
+        )
+
+    async def test_notify_requires_note(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv.RespondRequest(action="notify")
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_notify_dispatches_advisory_warn(self, wired, monkeypatch):
+        inv, _, _, audit = wired
+        engine = _FakeEngine(configured=True)
+        import src.telemetry.notifications as notif_mod
+
+        monkeypatch.setattr(notif_mod, "get_notification_engine", lambda: engine)
+        body = inv.RespondRequest(action="notify", note="please review this origin")
+        out = await inv.investigation_respond(body, user=_admin(tenant="acme"))
+        assert out["notified"] == 1
+        assert out["severity"] == "high"
+        sent = engine.sent[0]
+        assert sent.verdict == "warn"
+        assert sent.severity == "high"
+        assert sent.tenant_id == "acme"
+        assert sent.category == "investigation_response"
+        assert any(e["action"] == "investigation.respond_notify" for e in audit.entries)
+
+    async def test_notify_inert_without_channels(self, wired, monkeypatch):
+        inv, _, _, _ = wired
+        engine = _FakeEngine(configured=False)
+        import src.telemetry.notifications as notif_mod
+
+        monkeypatch.setattr(notif_mod, "get_notification_engine", lambda: engine)
+        body = inv.RespondRequest(action="notify", note="advisory")
+        out = await inv.investigation_respond(body, user=_admin())
+        assert out["notified"] == 0
+        assert engine.sent == []
+
+    async def test_notify_rejects_bad_severity(self, wired):
+        inv, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv.RespondRequest(action="notify", note="x", severity="apocalyptic")
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_respond_journals_action_note_onto_case(self, case_wired, monkeypatch):
+        inv, _, _, _, store = case_wired
+        fake = _FakeRedis()
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        case = await store.create_case(title="campaign", actor="alice")
+        cid = case["case_id"]
+        body = inv.RespondRequest(
+            action="raise_risk", scope_type="subject", digest=self._DIGEST, case_id=cid
+        )
+        out = await inv.investigation_respond(body, user=_admin())
+        assert out["case_id"] == cid
+        assert out["case_note_added"] is True
+        refreshed = await store.get(cid)
+        action_notes = [n for n in refreshed["notes"] if n["kind"] == "action"]
+        # The seed "case opened" note plus our response note.
+        assert any("raised origin" in n["text"] for n in action_notes)
+
+    async def test_respond_case_cross_tenant_is_404(self, case_wired, monkeypatch):
+        inv, _, _, _, store = case_wired
+        fake = _FakeRedis()
+        monkeypatch.setattr(inv, "_redis", lambda: fake)
+        case = await store.create_case(title="theirs", actor="a", tenant="evil")
+        body = inv.RespondRequest(
+            action="clear_risk", scope_type="subject", digest=self._DIGEST,
+            case_id=case["case_id"],
+        )
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
+            await inv.investigation_respond(body, user=_admin(tenant="acme"))
+        assert ei.value.status_code == 404
+

@@ -186,6 +186,30 @@ class TestCaseStore:
     async def test_add_note_absent_is_none(self, case_store):
         assert await case_store.add_note(case_id="case_nope", actor="a", text="hi") is None
 
+    async def test_add_action_note_records_kind_action(self, case_store):
+        case = await case_store.create_case(title="t", actor="a")
+        cid = case["case_id"]
+        updated = await case_store.add_action_note(
+            case_id=cid, actor="responder", text="raised origin risk"
+        )
+        action_notes = [n for n in updated["notes"] if n["kind"] == "action"]
+        # seed "case opened" action note + our response action note.
+        last = action_notes[-1]
+        assert last["text"] == "raised origin risk"
+        assert last["author"] == "responder"
+        assert last["kind"] == "action"
+
+    async def test_add_action_note_empty_rejected(self, case_store):
+        case = await case_store.create_case(title="t", actor="a")
+        with pytest.raises(ValueError):
+            await case_store.add_action_note(case_id=case["case_id"], actor="a", text="  ")
+
+    async def test_add_action_note_absent_is_none(self, case_store):
+        assert (
+            await case_store.add_action_note(case_id="case_nope", actor="a", text="hi")
+            is None
+        )
+
     async def test_add_subject_links_and_is_idempotent(self, case_store):
         case = await case_store.create_case(title="t", actor="a")
         cid = case["case_id"]

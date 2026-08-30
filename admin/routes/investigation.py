@@ -83,6 +83,24 @@ _MAX_TIMELINE = 500
 _MAX_IOC_CONTENT = 20_000
 _MAX_IOC_CANDIDATES = 200
 
+# Response / remediation actions (Fase 5B). An analyst can take a *bounded* set of
+# real, reversible response steps straight from an alert:
+#   * raise_risk — surgically harden ONE origin: bump its decayed risk score to (or
+#                  above) the effective block threshold so the origin's NEXT request
+#                  is escalated by the proxy. Blast radius is that origin only — it
+#                  never flips a global switch (see BULWARK_CORRELATION_BLOCKING).
+#   * clear_risk — the inverse: reset an origin's accrued risk (false-positive / after
+#                  remediation), identical to the correlation console's origin reset.
+#   * notify     — dispatch an advisory (verdict=warn) alert to the configured
+#                  notification channels; inert when none are configured.
+_RESPOND_ACTIONS = ("raise_risk", "clear_risk", "notify")
+
+# Advisory-notification severity floor. The notification engine's default channel
+# ``min_severity`` is "high"; a response notification is operator-initiated, so it
+# defaults to "high" to clear that floor unless the caller narrows it.
+_RESPOND_SEVERITIES = ("low", "medium", "high", "critical")
+_DEFAULT_RESPOND_SEVERITY = "high"
+
 
 def _scoped_tenant(user: TokenPayload, requested: Optional[str]) -> Optional[str]:
     """Resolve the effective tenant filter, enforcing tenant scoping.
@@ -108,6 +126,21 @@ def _can_write(user: TokenPayload) -> bool:
         from ..models.auth import ROLE_PERMISSIONS
 
         return "investigation:write" in ROLE_PERMISSIONS.get(user.role, set())
+    except Exception:
+        return False
+
+
+def _correlation_enabled() -> bool:
+    """True when the proxy's inline correlation enforcement is switched on.
+
+    A ``raise_risk`` write is harmless when correlation is off, but the proxy will
+    not act on the raised score — so the response surfaces this so an operator is
+    never misled that a disabled engine will enforce it.
+    """
+    try:
+        from src.config import settings
+
+        return bool(getattr(settings, "correlation_enabled", False))
     except Exception:
         return False
 
@@ -184,6 +217,42 @@ class IOCCheckRequest(BaseModel):
     """
 
     content: str = Field(..., min_length=1, max_length=_MAX_IOC_CONTENT)
+
+
+class RespondRequest(BaseModel):
+    """Take a bounded response/remediation action from the Investigation Center.
+
+    ``raise_risk`` / ``clear_risk`` target a single origin, identified by the same
+    irreversible ``scope_type:digest`` the correlation console uses (so the action
+    is byte-compatible with the proxy's own risk state); ``notify`` dispatches an
+    advisory alert and needs only a ``note`` describing it. When ``case_id`` is
+    supplied the action is journalled onto that case's append-only note trail so
+    the response is auditable alongside the investigation.
+    """
+
+    action: str = Field(..., description=f"one of {_RESPOND_ACTIONS}")
+    scope_type: Optional[str] = Field(
+        default=None, description="origin scope (required for raise_risk/clear_risk)"
+    )
+    digest: Optional[str] = Field(
+        default=None, description="16-hex origin digest (required for raise_risk/clear_risk)"
+    )
+    # raise_risk only: extra headroom added ABOVE the effective block threshold.
+    # Default 0 → the origin is raised to exactly the block threshold (or left as-is
+    # if it already exceeds it). Bounded to the 0..10 risk scale.
+    amount: Optional[float] = Field(default=None, ge=0, le=10)
+    # notify only: severity of the advisory alert (drives per-channel filtering).
+    severity: Optional[str] = Field(
+        default=None, description=f"notify severity, one of {_RESPOND_SEVERITIES}"
+    )
+    note: Optional[str] = Field(
+        default=None, max_length=_MAX_IOC_CONTENT,
+        description="analyst description; required for notify, optional otherwise",
+    )
+    case_id: Optional[str] = Field(
+        default=None, max_length=64,
+        description="attach an action note to this case (must be caller-visible)",
+    )
 
 
 def _extract_ioc_candidates(content: str) -> list[tuple[str, str]]:
@@ -525,6 +594,217 @@ async def investigation_origin(
         "event_count": len(timeline),
         "triage": triage,
     }
+
+
+async def _authorize_case(user: TokenPayload, case_id: str) -> dict:
+    """Load a case and enforce tenant scoping, or raise 404 (no existence leak).
+
+    Used by the response endpoint when an action is journalled onto a case: a
+    tenant-scoped operator may only attach to a case in their own tenant, and an
+    absent/cross-tenant case is indistinguishable (both 404).
+    """
+    from ..services.investigation_case_store import get_case_store
+
+    case = await get_case_store().get(case_id)
+    if case is None or not _tenant_allowed(user, case.get("tenant")):
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+
+def _raise_origin_risk(r, token: str, amount: float) -> dict:
+    """Surgically raise ONE origin's risk to (or above) the block threshold.
+
+    Reproduces the proxy risk-state arithmetic (decay-then-set) directly against
+    ``bulwark:risk:{scope}:{digest}`` — the admin only ever holds the irreversible
+    digest, never the raw scope id that :meth:`RiskStateStore.bump` would need — so
+    the write stays byte-compatible with what the proxy reads on the next request:
+    a HASH ``{score, ts}`` with the same TTL the store uses. The new score is
+    ``max(decayed_current, block_threshold) + amount`` clamped to the 0..10 scale,
+    guaranteeing the origin's next request is escalated without touching any other
+    origin or any global switch.
+    """
+    effective = {**_defaults(), **_read_override(r)}
+    block_threshold = float(effective.get("risk_block_threshold", 7.0))
+    decay_seconds = float(effective.get("risk_decay_seconds", 900.0))
+    now = time.time()
+
+    key = f"{_RISK_PREFIX}{token}"
+    summary = _summarize_origin(r, key, decay_seconds, now)
+    previous = float(summary["score"]) if summary else 0.0
+
+    new_score = min(10.0, max(previous, block_threshold) + max(0.0, amount))
+    # TTL mirrors RiskStateStore._bump_redis so a fully-decayed key still expires.
+    ttl = int(decay_seconds * 8) + 60
+    r.hset(key, mapping={"score": new_score, "ts": now})
+    r.expire(key, ttl)
+    return {
+        "previous_score": round(previous, 2),
+        "new_score": round(new_score, 2),
+        "block_threshold": block_threshold,
+    }
+
+
+async def _dispatch_advisory_notification(
+    *, tenant_id: str, severity: str, description: str, matched: list[str]
+) -> int:
+    """Fire an advisory (verdict=warn) alert to the configured channels.
+
+    Returns the number of alerts handed to the engine (0 when no channels are
+    configured — the engine is inert). Never raises: a notification failure must
+    not fail the response action, so it degrades to 0 dispatched.
+    """
+    try:
+        from src.telemetry.notifications import AlertPayload, get_notification_engine
+
+        engine = get_notification_engine()
+        if not engine.configured:
+            return 0
+        payload = AlertPayload(
+            verdict="warn",
+            severity=severity,
+            category="investigation_response",
+            description=description,
+            tenant_id=tenant_id or "unknown",
+            source="investigation_center",
+            matched_patterns=matched,
+        )
+        await engine.send_alert(payload)
+        return 1
+    except Exception:
+        return 0
+
+
+@router.post("/respond")
+async def investigation_respond(
+    body: RespondRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Take a bounded, auditable response action from the Investigation Center.
+
+    Three real, reversible effects (see :data:`_RESPOND_ACTIONS`):
+
+    * ``raise_risk`` / ``clear_risk`` mutate a single origin's accrued risk in the
+      correlation risk state (Redis) — hardening or resetting that origin only,
+      never a global switch. They require Redis (503 if unreachable), and honour
+      tenant scoping via the durable evidence the origin is stamped on (404 on a
+      cross-tenant / unknown origin, no existence leak).
+    * ``notify`` dispatches an advisory alert to the configured channels; it needs
+      no Redis and is inert (``notified=0``) when no channels are configured.
+
+    Every action is audit-logged, and — when ``case_id`` is supplied — journalled
+    onto that case's append-only note trail (``kind=action``) so the response is
+    auditable next to the investigation itself. When correlation enforcement is
+    disabled a ``raise_risk`` still writes the score but the response flags that the
+    proxy will not act on it, so the operator is never misled.
+    """
+    action = (body.action or "").strip()
+    if action not in _RESPOND_ACTIONS:
+        raise HTTPException(
+            status_code=400, detail=f"invalid action (expected one of {_RESPOND_ACTIONS})"
+        )
+
+    # Authorise the target case up front (before any effect) so a cross-tenant /
+    # unknown case rejects with no partial side effect performed.
+    if body.case_id:
+        await _authorize_case(user, body.case_id)
+
+    result: dict = {"action": action}
+    token: Optional[str] = None
+
+    # ─── origin-targeted actions: validate + tenant-scope the origin ──────────
+    if action in ("raise_risk", "clear_risk"):
+        if not body.scope_type or not body.digest:
+            raise HTTPException(
+                status_code=400, detail="scope_type and digest are required for this action"
+            )
+        if body.scope_type not in _VALID_SCOPES:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid scope_type (expected one of {_VALID_SCOPES})"
+            )
+        if not _DIGEST_RE.match(body.digest):
+            raise HTTPException(status_code=400, detail="Invalid digest (expected 16 hex chars)")
+        token = f"{body.scope_type}:{body.digest}"
+        # 404 (no leak) if this origin belongs to another tenant.
+        await _authorize_subject(user, "origin", token)
+
+        r = _redis()
+        if r is None:
+            raise HTTPException(
+                status_code=503, detail="Redis not reachable — origin risk actions require Redis"
+            )
+        try:
+            r.ping()
+        except Exception:
+            raise HTTPException(
+                status_code=503, detail="Redis not reachable — origin risk actions require Redis"
+            ) from None
+
+        if action == "raise_risk":
+            try:
+                effect = _raise_origin_risk(r, token, float(body.amount or 0.0))
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Redis write error: {e}") from None
+            result.update(effect)
+            result["correlation_enabled"] = _correlation_enabled()
+            if not result["correlation_enabled"]:
+                result["warning"] = (
+                    "Correlation enforcement is disabled — the risk score was raised "
+                    "but the proxy will not act on it until BULWARK_CORRELATION_ENABLED is set."
+                )
+            note_text = (
+                f"response: raised origin {token} risk "
+                f"{effect['previous_score']} → {effect['new_score']} "
+                f"(block threshold {effect['block_threshold']})"
+            )
+        else:  # clear_risk
+            try:
+                deleted = r.delete(f"{_RISK_PREFIX}{token}")
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Redis delete error: {e}") from None
+            result["keys_deleted"] = int(deleted or 0)
+            note_text = f"response: cleared origin {token} risk"
+
+    # ─── advisory notification ────────────────────────────────────────────────
+    else:  # notify
+        description = (body.note or "").strip()
+        if not description:
+            raise HTTPException(status_code=400, detail="note is required for a notify action")
+        severity = body.severity or _DEFAULT_RESPOND_SEVERITY
+        if severity not in _RESPOND_SEVERITIES:
+            raise HTTPException(
+                status_code=400, detail=f"invalid severity (expected one of {_RESPOND_SEVERITIES})"
+            )
+        matched = [token] if token else []
+        notified = await _dispatch_advisory_notification(
+            tenant_id=user.tenant or "unknown",
+            severity=severity,
+            description=description,
+            matched=matched,
+        )
+        result["notified"] = notified
+        result["severity"] = severity
+        note_text = f"response: dispatched advisory notification (severity={severity})"
+
+    # ─── optional case journalling (append-only action note) ──────────────────
+    if body.case_id:
+        from ..services.investigation_case_store import get_case_store
+
+        detail = (body.note or "").strip()
+        text = f"{note_text} — {detail}" if detail and action != "notify" else note_text
+        updated = await get_case_store().add_action_note(
+            case_id=body.case_id, actor=user.sub, text=text
+        )
+        result["case_id"] = body.case_id
+        result["case_note_added"] = updated is not None
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action=f"investigation.respond_{action}",
+        resource_type="investigation",
+        resource_id=token or (body.case_id or action),
+        details=note_text,
+    )
+    return {"message": "Response action applied", **result}
 
 
 @router.get("/sessions")

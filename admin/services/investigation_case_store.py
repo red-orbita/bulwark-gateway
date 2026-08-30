@@ -466,6 +466,33 @@ class CaseStore:
         )
         return await self.get(case_id)
 
+    async def add_action_note(
+        self, *, case_id: str, actor: str, text: str
+    ) -> Optional[dict]:
+        """Append an append-only *action* note (``kind='action'``).
+
+        Distinct from :meth:`add_note` (a free-text analyst ``note``): an action
+        note records a machine-initiated response step (e.g. an origin-risk raise
+        or a dispatched notification from the response endpoint) so the case's note
+        trail doubles as an incident-response audit log. Returns ``None`` if the
+        case is absent; raises ``ValueError`` on empty text.
+        """
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("note text is required")
+        case = await self._get_row(case_id)
+        if case is None:
+            return None
+        notes = self._append_note(
+            case.get("notes") or [], author=actor, text=text, kind="action"
+        )
+        now = _iso_now()
+        await self._db().execute(
+            "UPDATE investigation_case SET notes = ?, updated_at = ? WHERE case_id = ?",
+            [json.dumps(notes), now, case_id],
+        )
+        return await self.get(case_id)
+
     async def add_subject(
         self, *, case_id: str, subject_type: str, subject_key: str, actor: str
     ) -> Optional[dict]:
