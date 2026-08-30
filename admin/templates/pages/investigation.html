@@ -2,7 +2,7 @@
 {% block title %}Investigation Center — Bulwark Gateway Admin{% endblock %}
 {% block breadcrumb %}Investigation Center{% endblock %}
 {% block content %}
-<div x-data="investigationPage()" class="space-y-6">
+<div x-data="investigationPage()" @keydown.window="handleShortcut($event)" class="space-y-6">
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -17,6 +17,14 @@
             <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
                 <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                 Refresh
+            </button>
+            <button @click="autoRefresh = !autoRefresh"
+                    class="sg-btn sg-btn-sm transition-colors"
+                    :class="autoRefresh ? 'sg-btn-primary' : 'sg-btn-ghost'"
+                    :aria-pressed="autoRefresh"
+                    :title="autoRefresh ? 'Auto-refresh on (every ' + autoRefreshSecs + 's)' : 'Auto-refresh off'">
+                <i data-lucide="timer" class="w-4 h-4"></i>
+                <span x-text="autoRefresh ? 'Auto' : 'Manual'"></span>
             </button>
         </div>
     </div>
@@ -86,6 +94,28 @@
             <h2 class="text-sm font-medium text-white">Alert Queue</h2>
         </div>
 
+        <!-- Bulk triage action bar (spans alerts + sessions selection) -->
+        <div x-show="selectedCount() > 0" x-cloak class="rounded border border-cyan-500/30 bg-cyan-500/[0.06] p-3 mb-4">
+            <div class="flex flex-wrap items-end gap-2">
+                <div class="flex items-center gap-2 mr-auto">
+                    <i data-lucide="check-square" class="w-4 h-4 text-cyan-300"></i>
+                    <span class="text-xs text-cyan-100"><span class="font-semibold" x-text="selectedCount()"></span> selected</span>
+                </div>
+                <div>
+                    <label for="bulk-status" class="sr-only">Bulk status</label>
+                    <select id="bulk-status" x-model="bulkStatus" class="sg-input sg-input-sm" aria-label="Bulk triage status">
+                        <option value="">Set status…</option>
+                        <template x-for="ts in (status.statuses || [])" :key="'bts-' + ts">
+                            <option :value="ts" x-text="ts"></option>
+                        </template>
+                    </select>
+                </div>
+                <input type="text" x-model="bulkAssignee" maxlength="128" placeholder="Assignee (optional)" class="sg-input sg-input-sm w-40" aria-label="Bulk triage assignee">
+                <button @click="applyBulkTriage()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="saving || (!bulkStatus && !bulkAssignee.trim())">Apply to selected</button>
+                <button @click="clearBulk()" class="sg-btn sg-btn-ghost sg-btn-sm">Clear</button>
+            </div>
+        </div>
+
         <div x-show="loading" class="text-sm text-gray-500 py-8 text-center">Loading alerts…</div>
 
         <div x-show="!loading && alerts.length === 0" x-cloak class="sg-empty">
@@ -97,6 +127,7 @@
             <table class="sg-table sg-table-compact">
                 <thead>
                     <tr>
+                        <th class="w-8"><span class="sr-only">Select</span></th>
                         <th>Time</th>
                         <th>Verdict</th>
                         <th>Kind</th>
@@ -109,6 +140,12 @@
                 <tbody>
                     <template x-for="(a, idx) in alerts" :key="a.request_id + ':' + idx">
                         <tr :class="isSelected(a) ? 'bg-cyan-500/[0.06]' : ''">
+                            <td>
+                                <input type="checkbox" x-show="alertSubject(a)"
+                                       :checked="alertSubject(a) && isBulkSelected(alertSubject(a).type, alertSubject(a).key)"
+                                       @change="toggleBulkAlert(a)"
+                                       class="sg-checkbox" :aria-label="'Select alert ' + (a.category || '')">
+                            </td>
                             <td class="whitespace-nowrap text-xs text-gray-400" x-text="fmtTime(a.ts)"></td>
                             <td>
                                 <span class="sg-badge text-[10px]" :class="verdictClass(a.verdict)" x-text="(a.verdict || '—').toUpperCase()"></span>
@@ -159,6 +196,7 @@
             <table class="sg-table sg-table-compact">
                 <thead>
                     <tr>
+                        <th class="w-8"><span class="sr-only">Select</span></th>
                         <th>Session</th>
                         <th>Window</th>
                         <th>Score</th>
@@ -171,6 +209,12 @@
                 <tbody>
                     <template x-for="(s, idx) in sessions" :key="s.session_key + ':' + s.window + ':' + idx">
                         <tr :class="isSessionSelected(s) ? 'bg-fuchsia-500/[0.06]' : ''">
+                            <td>
+                                <input type="checkbox"
+                                       :checked="isBulkSelected('session', s.session_key)"
+                                       @change="toggleBulk('session', s.session_key)"
+                                       class="sg-checkbox" :aria-label="'Select session ' + s.session_key">
+                            </td>
                             <td class="font-mono text-xs text-gray-300" x-text="s.session_key"></td>
                             <td class="text-xs text-gray-400" x-text="s.window"></td>
                             <td class="font-mono text-xs text-gray-300" x-text="Number(s.score).toFixed(2)"></td>
@@ -198,12 +242,6 @@
                 <h2 class="text-sm font-medium text-white">Cases</h2>
             </div>
             <div class="flex items-center gap-2">
-                <select x-model="caseFilters.status" @change="loadCases()" class="sg-input sg-input-sm" aria-label="Filter cases by status">
-                    <option value="">All statuses</option>
-                    <template x-for="s in caseStatuses" :key="'cf-' + s">
-                        <option :value="s" x-text="s"></option>
-                    </template>
-                </select>
                 <button @click="showCaseCreate = !showCaseCreate" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!caseCanWrite" x-show="caseCanWrite">
                     <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                     New Case
@@ -214,6 +252,48 @@
             </div>
         </div>
         <p class="text-[11px] text-gray-500 mb-3">Group several related subjects — confirmed incidents, at-risk origins and decomposition sessions — under one analyst-owned investigation with its own status, severity, assignee and shared, append-only note trail. A working campaign usually spans many correlated detections; a case pins them together.</p>
+
+        <!-- Stats chips -->
+        <div x-show="caseStats" x-cloak class="flex flex-wrap gap-2 mb-3">
+            <button @click="clearCaseFilters()"
+                    class="text-[11px] px-2.5 py-1 rounded border border-gray-700 bg-white/[0.02] text-gray-300 hover:border-gray-500 transition-colors">
+                Total <span class="font-semibold text-white" x-text="caseStats ? caseStats.total : 0"></span>
+            </button>
+            <button @click="caseFilters.status = 'open'; caseFilters.mine = false; applyCaseFilters()"
+                    class="text-[11px] px-2.5 py-1 rounded border border-amber-500/30 bg-amber-400/[0.06] text-amber-200 hover:border-amber-400/50 transition-colors">
+                Open <span class="font-semibold" x-text="caseStats ? caseStats.open : 0"></span>
+            </button>
+            <button x-show="profile.username" @click="toggleMineCases()"
+                    class="text-[11px] px-2.5 py-1 rounded border transition-colors"
+                    :class="caseFilters.mine ? 'border-indigo-400/50 bg-indigo-500/20 text-indigo-200' : 'border-gray-700 bg-white/[0.02] text-gray-300 hover:border-gray-500'">
+                Mine <span class="font-semibold" x-text="(caseStats && caseStats.mine) ? caseStats.mine.open : 0"></span>
+            </button>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex flex-wrap items-end gap-2 mb-4">
+            <div class="flex-1 min-w-[12rem]">
+                <label for="case-search" class="sr-only">Search cases</label>
+                <input id="case-search" type="search" x-model="caseFilters.search" @keydown.enter="applyCaseFilters()"
+                       maxlength="128" placeholder="Search title, id or summary…  ( / )" class="sg-input sg-input-sm w-full">
+            </div>
+            <select x-model="caseFilters.status" @change="applyCaseFilters()" class="sg-input sg-input-sm" aria-label="Filter cases by status">
+                <option value="">All statuses</option>
+                <template x-for="s in caseStatuses" :key="'cf-' + s">
+                    <option :value="s" x-text="s"></option>
+                </template>
+            </select>
+            <select x-model="caseFilters.severity" @change="applyCaseFilters()" class="sg-input sg-input-sm" aria-label="Filter cases by severity">
+                <option value="">All severities</option>
+                <template x-for="sv in caseSeverities" :key="'cfv-' + sv">
+                    <option :value="sv" x-text="sv"></option>
+                </template>
+            </select>
+            <input type="text" x-model="caseFilters.assignee" @keydown.enter="applyCaseFilters()" :disabled="caseFilters.mine"
+                   maxlength="128" placeholder="Assignee" class="sg-input sg-input-sm w-36" aria-label="Filter cases by assignee">
+            <button @click="applyCaseFilters()" class="sg-btn sg-btn-ghost sg-btn-sm">Apply</button>
+            <button @click="clearCaseFilters()" class="sg-btn sg-btn-ghost sg-btn-sm">Clear</button>
+        </div>
 
         <!-- Create form -->
         <div x-show="showCaseCreate" x-cloak class="rounded border border-gray-800 bg-gray-950/50 p-3 mb-4">
@@ -252,12 +332,32 @@
             <table class="sg-table sg-table-compact">
                 <thead>
                     <tr>
-                        <th>Title</th>
-                        <th>Status</th>
-                        <th>Severity</th>
+                        <th>
+                            <button @click="sortCasesBy('title')" class="inline-flex items-center gap-1 hover:text-white transition-colors">Title
+                                <i data-lucide="chevron-up" class="w-3 h-3" x-show="caseSort.key === 'title' && caseSort.order === 'asc'"></i>
+                                <i data-lucide="chevron-down" class="w-3 h-3" x-show="caseSort.key === 'title' && caseSort.order === 'desc'"></i>
+                            </button>
+                        </th>
+                        <th>
+                            <button @click="sortCasesBy('status')" class="inline-flex items-center gap-1 hover:text-white transition-colors">Status
+                                <i data-lucide="chevron-up" class="w-3 h-3" x-show="caseSort.key === 'status' && caseSort.order === 'asc'"></i>
+                                <i data-lucide="chevron-down" class="w-3 h-3" x-show="caseSort.key === 'status' && caseSort.order === 'desc'"></i>
+                            </button>
+                        </th>
+                        <th>
+                            <button @click="sortCasesBy('severity')" class="inline-flex items-center gap-1 hover:text-white transition-colors">Severity
+                                <i data-lucide="chevron-up" class="w-3 h-3" x-show="caseSort.key === 'severity' && caseSort.order === 'asc'"></i>
+                                <i data-lucide="chevron-down" class="w-3 h-3" x-show="caseSort.key === 'severity' && caseSort.order === 'desc'"></i>
+                            </button>
+                        </th>
                         <th>Subjects</th>
                         <th>Assignee</th>
-                        <th>Updated</th>
+                        <th>
+                            <button @click="sortCasesBy('updated_at')" class="inline-flex items-center gap-1 hover:text-white transition-colors">Updated
+                                <i data-lucide="chevron-up" class="w-3 h-3" x-show="caseSort.key === 'updated_at' && caseSort.order === 'asc'"></i>
+                                <i data-lucide="chevron-down" class="w-3 h-3" x-show="caseSort.key === 'updated_at' && caseSort.order === 'desc'"></i>
+                            </button>
+                        </th>
                         <th class="text-right">Action</th>
                     </tr>
                 </thead>
@@ -278,6 +378,21 @@
                 </tbody>
             </table>
         </div>
+
+        <!-- Pagination -->
+        <div x-show="!casesLoading && casePaging.total > 0" class="flex items-center justify-between gap-2 mt-3">
+            <p class="text-[11px] text-gray-500" x-text="casePageInfo()"></p>
+            <div class="flex items-center gap-2">
+                <button @click="casePrevPage()" :disabled="!caseHasPrev()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i>
+                    Prev
+                </button>
+                <button @click="caseNextPage()" :disabled="!caseHasNext()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    Next
+                    <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Case detail -->
@@ -291,10 +406,18 @@
                         <h2 class="text-sm font-medium text-white" x-text="(caseDetail && caseDetail.title) || 'Case'"></h2>
                         <span class="text-[10px] text-gray-500 font-mono break-all" x-text="caseDetail && caseDetail.case_id"></span>
                     </div>
-                    <button @click="closeCase()" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+                    <div class="flex items-center gap-2">
+                        <button @click="exportCase('md')" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Export case as Markdown">
+                            <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
+                            .md
+                        </button>
+                        <button @click="exportCase('json')" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Export case as JSON">
+                            <i data-lucide="braces" class="w-3.5 h-3.5"></i>
+                            .json
+                        </button>
+                        <button @click="closeCase()" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+                    </div>
                 </div>
-
-                <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs mb-4">
                     <div><dt class="text-gray-500 uppercase tracking-wider">Status</dt><dd class="mt-0.5"><span class="sg-badge text-[10px]" :class="caseStatusClass(caseDetail && caseDetail.status)" x-text="(caseDetail && caseDetail.status) || 'open'"></span></dd></div>
                     <div><dt class="text-gray-500 uppercase tracking-wider">Severity</dt><dd class="mt-0.5"><span class="sg-badge text-[10px]" :class="caseSeverityClass(caseDetail && caseDetail.severity)" x-text="(caseDetail && caseDetail.severity) || '—'"></span></dd></div>
                     <div><dt class="text-gray-500 uppercase tracking-wider">Tenant</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(caseDetail && caseDetail.tenant) || '—'"></dd></div>
@@ -688,6 +811,21 @@ function investigationPage() {
             assigneeInput: '',
             noteInput: '',
 
+            // Current operator (for the "my work" surface). assignee is free text,
+            // so "mine" is anything assigned to this username.
+            profile: { username: '' },
+
+            // Bulk triage selection — a map of "type:key" → {subject_type, subject_key}
+            // spanning both the alert queue and the at-risk session list.
+            bulkSel: {},
+            bulkStatus: '',
+            bulkAssignee: '',
+
+            // Auto-refresh (opt-in; off by default so the page adds no polling cost).
+            autoRefresh: false,
+            autoRefreshSecs: 20,
+            _autoTimer: null,
+
             // Session decomposition (at-risk sessions surface + drill-down).
             sessions: [],
             sessionsLoading: true,
@@ -705,7 +843,10 @@ function investigationPage() {
             caseCanWrite: false,
             caseStatuses: ['open', 'investigating', 'contained', 'resolved', 'closed'],
             caseSeverities: ['low', 'medium', 'high', 'critical'],
-            caseFilters: { status: '' },
+            caseFilters: { status: '', severity: '', assignee: '', search: '', mine: false },
+            caseSort: { key: 'updated_at', order: 'desc' },
+            casePaging: { total: 0, limit: 20, offset: 0 },
+            caseStats: null,
             showCaseCreate: false,
             caseCreate: { title: '', severity: 'medium', summary: '' },
             caseDetail: null,
@@ -715,7 +856,9 @@ function investigationPage() {
             addToCaseId: '',
 
             async init() {
+                await this.loadProfile();
                 await this.reloadAll();
+                this.$watch('autoRefresh', (on) => this._syncAutoRefresh(on));
             },
 
             async reloadAll() {
@@ -723,7 +866,18 @@ function investigationPage() {
                 await this.loadAlerts();
                 await this.loadSessions();
                 await this.loadCases();
+                await this.loadCaseStats();
                 this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            },
+
+            async loadProfile() {
+                try {
+                    const res = await fetch('/admin/profile');
+                    if (res.ok) {
+                        const u = await res.json();
+                        this.profile.username = (u && u.username) || '';
+                    }
+                } catch (e) { /* non-fatal — "mine" simply stays empty */ }
             },
 
         async loadStatus() {
@@ -760,6 +914,124 @@ function investigationPage() {
                 this.$nextTick(() => window.lucide && window.lucide.createIcons());
             }
         },
+
+        // ─── Bulk triage ─────────────────────────────────────────────────────
+            // Selection spans the alert queue (subject_type/subject_key on each
+            // row) and the at-risk session list ('session'/session_key). Rows
+            // without a triage subject (no incident/origin/session) are not
+            // selectable — the map key is "type:key".
+            bulkKey(type, key) { return type + ':' + key; },
+
+            alertSubject(a) {
+                if (a && a.subject_type && a.subject_key) {
+                    return { type: a.subject_type, key: a.subject_key };
+                }
+                return null;
+            },
+
+            isBulkSelected(type, key) {
+                if (!type || !key) return false;
+                return !!this.bulkSel[this.bulkKey(type, key)];
+            },
+
+            toggleBulk(type, key) {
+                if (!type || !key) return;
+                const k = this.bulkKey(type, key);
+                if (this.bulkSel[k]) {
+                    delete this.bulkSel[k];
+                } else {
+                    this.bulkSel[k] = { subject_type: type, subject_key: key };
+                }
+            },
+
+            toggleBulkAlert(a) {
+                const s = this.alertSubject(a);
+                if (s) this.toggleBulk(s.type, s.key);
+            },
+
+            selectedCount() { return Object.keys(this.bulkSel).length; },
+
+            clearBulk() { this.bulkSel = {}; },
+
+            async applyBulkTriage() {
+                const subjects = Object.values(this.bulkSel);
+                if (subjects.length === 0) return;
+                const status = this.bulkStatus || null;
+                const assignee = this.bulkAssignee.trim();
+                if (!status && !assignee) {
+                    showToast('Choose a status or assignee to apply', 'error');
+                    return;
+                }
+                this.saving = true;
+                try {
+                    const payload = { subjects: subjects };
+                    if (status) payload.status = status;
+                    if (assignee) payload.assignee = assignee;
+                    const res = await fetch('/admin/investigation/triage/bulk', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        showToast(err.detail || 'Bulk triage failed', 'error');
+                        return;
+                    }
+                    const data = await res.json();
+                    const failed = data.failed || 0;
+                    if (failed > 0) {
+                        showToast((data.updated || 0) + ' updated, ' + failed + ' failed', 'error');
+                    } else {
+                        showToast((data.updated || 0) + ' subject(s) updated', 'success');
+                    }
+                    this.clearBulk();
+                    this.bulkStatus = '';
+                    this.bulkAssignee = '';
+                    await this.loadAlerts();
+                    await this.loadSessions();
+                } catch (e) {
+                    showToast('Network error during bulk triage', 'error');
+                } finally {
+                    this.saving = false;
+                }
+            },
+
+        // ─── Auto-refresh + keyboard shortcuts ───────────────────────────────
+            _syncAutoRefresh(on) {
+                if (this._autoTimer) {
+                    clearInterval(this._autoTimer);
+                    this._autoTimer = null;
+                }
+                if (on) {
+                    const ms = Math.max(5, this.autoRefreshSecs) * 1000;
+                    this._autoTimer = setInterval(() => {
+                        // Skip while a mutation is in flight to avoid clobbering.
+                        if (!this.saving) this.reloadAll();
+                    }, ms);
+                }
+            },
+
+            handleShortcut(e) {
+                // Ignore when typing into a field or using modifier combos.
+                const tag = (e.target && e.target.tagName) || '';
+                const editable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+                    || (e.target && e.target.isContentEditable);
+                if (e.key === 'Escape') {
+                    if (this.selected || this.session) { this.closeDetail(); return; }
+                    if (this.caseDetail) { this.closeCase(); return; }
+                    if (this.selectedCount() > 0) { this.clearBulk(); return; }
+                    return;
+                }
+                if (editable || e.ctrlKey || e.metaKey || e.altKey) return;
+                if (e.key === 'r') {
+                    e.preventDefault();
+                    this.reloadAll();
+                } else if (e.key === '/') {
+                    e.preventDefault();
+                    const box = document.getElementById('case-search');
+                    if (box) box.focus();
+                }
+            },
 
         // ─── Selection / drill-down ──────────────────────────────────────────
             isSelected(a) {
@@ -1043,12 +1315,24 @@ function investigationPage() {
             try {
                 const p = new URLSearchParams();
                 if (this.caseFilters.status) p.set('status', this.caseFilters.status);
-                p.set('limit', '100');
+                if (this.caseFilters.severity) p.set('severity', this.caseFilters.severity);
+                const assignee = this.caseFilters.mine ? this.profile.username : this.caseFilters.assignee.trim();
+                if (assignee) p.set('assignee', assignee);
+                if (this.caseFilters.search.trim()) p.set('search', this.caseFilters.search.trim());
+                p.set('sort', this.caseSort.key);
+                p.set('order', this.caseSort.order);
+                p.set('limit', String(this.casePaging.limit));
+                p.set('offset', String(this.casePaging.offset));
                 const res = await fetch('/admin/investigation/cases?' + p.toString());
                 if (res.ok) {
                     const data = await res.json();
                     this.cases = data.cases || [];
                     this.caseCanWrite = !!data.can_write;
+                    this.casePaging.total = Number.isFinite(data.total) ? data.total : this.cases.length;
+                    if (Number.isFinite(data.limit)) this.casePaging.limit = data.limit;
+                    if (Number.isFinite(data.offset)) this.casePaging.offset = data.offset;
+                    if (data.sort) this.caseSort.key = data.sort;
+                    if (data.order) this.caseSort.order = data.order;
                     if (Array.isArray(data.statuses) && data.statuses.length) this.caseStatuses = data.statuses;
                     if (Array.isArray(data.severities) && data.severities.length) this.caseSeverities = data.severities;
                 } else {
@@ -1060,6 +1344,81 @@ function investigationPage() {
                 this.casesLoading = false;
                 this.$nextTick(() => window.lucide && window.lucide.createIcons());
             }
+        },
+
+        async loadCaseStats() {
+            try {
+                const p = new URLSearchParams();
+                if (this.profile.username) p.set('assignee', this.profile.username);
+                const res = await fetch('/admin/investigation/cases/stats?' + p.toString());
+                if (res.ok) {
+                    const data = await res.json();
+                    this.caseStats = (data && data.stats) || null;
+                }
+            } catch (e) { /* non-fatal — stats chips simply stay hidden */ }
+        },
+
+        // Column-header sort: toggle direction when re-clicking the active key,
+        // otherwise switch key and default to descending. Resets to first page.
+        sortCasesBy(key) {
+            if (this.caseSort.key === key) {
+                this.caseSort.order = this.caseSort.order === 'desc' ? 'asc' : 'desc';
+            } else {
+                this.caseSort.key = key;
+                this.caseSort.order = 'desc';
+            }
+            this.casePaging.offset = 0;
+            this.loadCases();
+        },
+
+        applyCaseFilters() {
+            this.casePaging.offset = 0;
+            this.loadCases();
+            this.loadCaseStats();
+        },
+
+        toggleMineCases() {
+            this.caseFilters.mine = !this.caseFilters.mine;
+            this.applyCaseFilters();
+        },
+
+        clearCaseFilters() {
+            this.caseFilters = { status: '', severity: '', assignee: '', search: '', mine: false };
+            this.caseSort = { key: 'updated_at', order: 'desc' };
+            this.casePaging.offset = 0;
+            this.loadCases();
+            this.loadCaseStats();
+        },
+
+        casePageInfo() {
+            const total = this.casePaging.total || 0;
+            if (total === 0) return '0 of 0';
+            const from = this.casePaging.offset + 1;
+            const to = Math.min(this.casePaging.offset + this.casePaging.limit, total);
+            return from + '–' + to + ' of ' + total;
+        },
+
+        caseHasPrev() { return this.casePaging.offset > 0; },
+        caseHasNext() { return (this.casePaging.offset + this.casePaging.limit) < (this.casePaging.total || 0); },
+
+        casePrevPage() {
+            if (!this.caseHasPrev()) return;
+            this.casePaging.offset = Math.max(0, this.casePaging.offset - this.casePaging.limit);
+            this.loadCases();
+        },
+
+        caseNextPage() {
+            if (!this.caseHasNext()) return;
+            this.casePaging.offset = this.casePaging.offset + this.casePaging.limit;
+            this.loadCases();
+        },
+
+        exportCase(fmt) {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            const url = '/admin/investigation/cases/' + encodeURIComponent(id) + '/export?format=' + encodeURIComponent(fmt);
+            // Navigate to the download; the server sets Content-Disposition attachment.
+            window.open(url, '_blank', 'noopener');
         },
 
         async createCase() {
