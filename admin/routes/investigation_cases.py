@@ -184,6 +184,71 @@ def _assemble_timeline(
     return entries, truncated
 
 
+async def _reconstruct_case_timeline(
+    case: dict, user: TokenPayload, *, limit: int
+) -> tuple[list[dict], bool, dict]:
+    """Gather + scope + assemble a case's unified chronological timeline.
+
+    Shared by the ``/{case_id}/timeline`` endpoint and the enriched case export so
+    both surfaces reconstruct identically. Gathers the durable evidence behind every
+    linked subject (an incident's correlation event(s) plus their
+    ``metadata.contributing_event_ids`` detections, and an origin's stamped event
+    ledger), applies the operator's tenant scope, and merges it with the case's own
+    note trail — including the append-only ``kind=action`` response/remediation
+    notes (Fase 5B). The raw gather is bounded by ``_TIMELINE_COLLECT_CAP`` and the
+    returned stream by ``limit``. Returns ``(entries, truncated, subject_counts)``.
+    """
+    store = _investigation.get_security_events_store()
+
+    collected: list[dict] = []
+    incident_count = 0
+    origin_count = 0
+
+    for subject in (case.get("subjects") or []):
+        if len(collected) >= _TIMELINE_COLLECT_CAP:
+            break
+        stype = subject.get("subject_type")
+        skey = (subject.get("subject_key") or "").strip()
+        if not skey:
+            continue
+
+        if stype == "incident":
+            incident_count += 1
+            contributing_ids: list[str] = []
+            for ev in await store.find_by_incident(skey):
+                ev["_via"] = f"incident:{skey}"
+                collected.append(ev)
+                meta = ev.get("metadata") or {}
+                for cid in (meta.get("contributing_event_ids") or []):
+                    if cid:
+                        contributing_ids.append(cid)
+            if contributing_ids and len(collected) < _TIMELINE_COLLECT_CAP:
+                for ev in await store.find_by_event_ids(contributing_ids):
+                    ev["_via"] = f"incident:{skey}"
+                    collected.append(ev)
+        elif stype == "origin":
+            # Origin subjects are "scope_type:digest" tokens; a request-keyed
+            # origin (no digest) carries no stamped evidence, so only whole-token
+            # subjects resolve to events (find_by_scope_digest is LIKE-safe). The
+            # token already carries its "origin:"-style prefix, so it is used as
+            # the provenance marker verbatim.
+            if len(skey.split(":", 1)) == 2:
+                origin_count += 1
+                for ev in await store.find_by_scope_digest(skey, limit=_MAX_TIMELINE):
+                    ev["_via"] = skey
+                    collected.append(ev)
+        # session: pseudonymous decomposition digest with no durable events.
+
+    # Tenant scoping: a scoped operator only sees their own tenant's events.
+    if user.tenant:
+        collected = [e for e in collected if (e.get("tenant") or "") == user.tenant]
+
+    entries, truncated = _assemble_timeline(
+        collected, case.get("notes") or [], limit=limit
+    )
+    return entries, truncated, {"incident": incident_count, "origin": origin_count}
+
+
 class CaseCreateRequest(BaseModel):
     """Open a new investigation case."""
 
@@ -356,53 +421,9 @@ async def case_timeline(
     list.
     """
     case = await _get_case_scoped(user, case_id)
-    store = _investigation.get_security_events_store()
 
-    collected: list[dict] = []
-    incident_count = 0
-    origin_count = 0
-
-    for subject in (case.get("subjects") or []):
-        if len(collected) >= _TIMELINE_COLLECT_CAP:
-            break
-        stype = subject.get("subject_type")
-        skey = (subject.get("subject_key") or "").strip()
-        if not skey:
-            continue
-
-        if stype == "incident":
-            incident_count += 1
-            contributing_ids: list[str] = []
-            for ev in await store.find_by_incident(skey):
-                ev["_via"] = f"incident:{skey}"
-                collected.append(ev)
-                meta = ev.get("metadata") or {}
-                for cid in (meta.get("contributing_event_ids") or []):
-                    if cid:
-                        contributing_ids.append(cid)
-            if contributing_ids and len(collected) < _TIMELINE_COLLECT_CAP:
-                for ev in await store.find_by_event_ids(contributing_ids):
-                    ev["_via"] = f"incident:{skey}"
-                    collected.append(ev)
-        elif stype == "origin":
-            # Origin subjects are "scope_type:digest" tokens; a request-keyed
-            # origin (no digest) carries no stamped evidence, so only whole-token
-            # subjects resolve to events (find_by_scope_digest is LIKE-safe). The
-            # token already carries its "origin:"-style prefix, so it is used as
-            # the provenance marker verbatim.
-            if len(skey.split(":", 1)) == 2:
-                origin_count += 1
-                for ev in await store.find_by_scope_digest(skey, limit=_MAX_TIMELINE):
-                    ev["_via"] = skey
-                    collected.append(ev)
-        # session: pseudonymous decomposition digest with no durable events.
-
-    # Tenant scoping: a scoped operator only sees their own tenant's events.
-    if user.tenant:
-        collected = [e for e in collected if (e.get("tenant") or "") == user.tenant]
-
-    entries, truncated = _assemble_timeline(
-        collected, case.get("notes") or [], limit=limit
+    entries, truncated, subject_counts = await _reconstruct_case_timeline(
+        case, user, limit=limit
     )
     return {
         "case_id": case.get("case_id") or case_id,
@@ -410,7 +431,7 @@ async def case_timeline(
         "count": len(entries),
         "truncated": truncated,
         "limit": limit,
-        "subject_counts": {"incident": incident_count, "origin": origin_count},
+        "subject_counts": subject_counts,
     }
 
 
@@ -515,6 +536,18 @@ async def export_case(
     compliance = await _resolve_case_compliance(case)
     if compliance:
         case["compliance"] = compliance
+
+    # Enrich the export with the reconstructed chronological timeline (Fase 5C):
+    # the durable evidence behind every linked subject merged with the case's own
+    # note trail — including the Fase 5B response/remediation action notes — so the
+    # portable record carries the full story, not just static metadata. Tenant
+    # scoping and bounds are those of the timeline endpoint (same helper).
+    timeline, timeline_truncated, timeline_counts = await _reconstruct_case_timeline(
+        case, user, limit=_MAX_TIMELINE_ENTRIES
+    )
+    case["timeline"] = timeline
+    case["timeline_truncated"] = timeline_truncated
+    case["timeline_subject_counts"] = timeline_counts
 
     await get_audit_logger().log(
         actor=user.sub,

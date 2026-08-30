@@ -665,6 +665,51 @@ class TestCaseMarkdownExport:
         assert "- **NIST AI RMF:** MANAGE-4.1, MEASURE-2.7" in md
         assert "- **EU AI Act:** Article 15" in md
 
+    def test_render_omits_timeline_when_absent(self):
+        from admin.services.investigation_case_store import render_case_markdown
+
+        md = render_case_markdown({"case_id": "case_x", "title": "t"})
+        assert "## Timeline" not in md
+
+    def test_render_timeline_section_events_and_notes(self):
+        from admin.services.investigation_case_store import render_case_markdown
+
+        case = {
+            "case_id": "case_tl",
+            "title": "Reconstruction",
+            "timeline": [
+                {
+                    "type": "event", "ts": "2026-01-01T00:00:00+00:00",
+                    "verdict": "block", "category": "exfiltration", "severity": "high",
+                    "description": "data egress", "via": "incident:INC-1",
+                },
+                {
+                    "type": "note", "ts": "2026-01-01T00:05:00+00:00",
+                    "note_kind": "action", "author": "carol",
+                    "text": "response: raised origin risk",
+                },
+            ],
+            "timeline_truncated": False,
+        }
+        md = render_case_markdown(case)
+        assert "## Timeline (2)" in md
+        # Event entry: descriptor + provenance + description.
+        assert "**[2026-01-01T00:00:00+00:00] event** (BLOCK/exfiltration/high)" in md
+        assert "data egress" in md
+        assert "via `incident:INC-1`" in md
+        # Note/action entry keeps its kind + author + text.
+        assert "**[2026-01-01T00:05:00+00:00] carol** _(action)_: response: raised origin risk" in md
+
+    def test_render_timeline_flags_truncation_and_empty(self):
+        from admin.services.investigation_case_store import render_case_markdown
+
+        md = render_case_markdown(
+            {"case_id": "c", "title": "t", "timeline": [], "timeline_truncated": True}
+        )
+        assert "## Timeline (0)" in md
+        assert "_Timeline truncated" in md
+        assert "_No reconstructed timeline entries._" in md
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 3 — route: list params, stats, export
@@ -859,6 +904,79 @@ class TestCaseComplianceExport:
         )
         resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
         assert "compliance" not in json.loads(resp.body.decode())["case"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 5C — enriched export: the portable record carries the reconstructed
+# timeline (durable evidence + the note/action trail), not just metadata.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseExportTimeline:
+    async def _incident_case(self, cases, events, *, incident_id="INC-X", tenant="acme"):
+        await events.bulk_insert([
+            _evt("carrier-" + incident_id, incident_id=incident_id, tenant=tenant,
+                 ts=1_000_000_000.0, category="exfiltration"),
+        ])
+        made = await cases.create_case(title="t", actor="a", tenant=tenant)
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="incident",
+            subject_key=incident_id, actor="a",
+        )
+        return made
+
+    async def test_json_export_embeds_reconstructed_timeline(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._incident_case(cases, events, incident_id="INC-JE")
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        case = json.loads(resp.body.decode())["case"]
+        assert "timeline" in case and isinstance(case["timeline"], list)
+        assert case["timeline_truncated"] is False
+        assert case["timeline_subject_counts"] == {"incident": 1, "origin": 0}
+        types = {e["type"] for e in case["timeline"]}
+        assert types == {"event", "note"}
+        # The durable carrier event surfaced with its provenance marker.
+        ev = [e for e in case["timeline"] if e["type"] == "event"][0]
+        assert ev["category"] == "exfiltration"
+        assert ev["via"] == "incident:INC-JE"
+
+    async def test_json_export_timeline_carries_action_notes(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._incident_case(cases, events, incident_id="INC-ACT")
+        await cases.add_action_note(
+            case_id=made["case_id"], actor="carol",
+            text="response: raised origin risk",
+        )
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
+        case = json.loads(resp.body.decode())["case"]
+        actions = [
+            e for e in case["timeline"]
+            if e["type"] == "note" and e.get("note_kind") == "action"
+            and "raised origin risk" in (e.get("text") or "")
+        ]
+        assert actions, "5B action note must flow into the exported timeline"
+
+    async def test_md_export_renders_timeline_section(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._incident_case(cases, events, incident_id="INC-MD")
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="md")
+        body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
+        assert "## Timeline (" in body
+        assert "via `incident:INC-MD`" in body
+
+    async def test_export_timeline_is_tenant_scoped(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._incident_case(cases, events, incident_id="INC-TS", tenant="acme")
+        # An event from another tenant stamped on the same incident must not leak.
+        await events.bulk_insert([
+            _evt("evil-ev", incident_id="INC-TS", tenant="evil", ts=1_000_000_500.0),
+        ])
+        resp = await inv_cases.export_case(
+            made["case_id"], user=_admin(tenant="acme"), format="json"
+        )
+        case = json.loads(resp.body.decode())["case"]
+        ids = {e.get("event_id") for e in case["timeline"] if e["type"] == "event"}
+        assert "evil-ev" not in ids
 
 
 # ═══════════════════════════════════════════════════════════════════════

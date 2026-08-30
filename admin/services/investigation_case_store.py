@@ -691,7 +691,54 @@ def render_case_markdown(case: dict) -> str:
     else:
         lines.append("_No notes recorded._")
     lines.append("")
+
+    # Reconstructed chronological timeline (Fase 5C). Present only on an export
+    # that attached it (the route resolves the durable evidence off this pure
+    # render path); omitted entirely otherwise so a plain case render is unchanged.
+    if "timeline" in case:
+        lines += _render_timeline_lines(
+            case.get("timeline") or [], bool(case.get("timeline_truncated"))
+        )
     return "\n".join(lines)
+
+
+def _render_timeline_lines(timeline: list[dict], truncated: bool) -> list[str]:
+    """Render the reconstructed timeline as a Markdown section (pure).
+
+    Each entry is either a durable security ``event`` (verdict/category/severity +
+    provenance) or a case ``note`` (opens, state changes, subject links, analyst
+    notes, and the Fase 5B ``action`` response/remediation trail). Kept side-effect
+    free and defensive so a malformed entry renders blank rather than raising.
+    """
+    lines = [f"## Timeline ({len(timeline)})", ""]
+    if truncated:
+        lines += [
+            "_Timeline truncated to the most recent entries; the full stream is "
+            "available via the case timeline endpoint._",
+            "",
+        ]
+    if not timeline:
+        lines += ["_No reconstructed timeline entries._", ""]
+        return lines
+    for entry in timeline:
+        ts = entry.get("ts") or ""
+        if entry.get("type") == "event":
+            verdict = (entry.get("verdict") or "").upper()
+            category = entry.get("category") or ""
+            severity = entry.get("severity") or ""
+            via = entry.get("via") or ""
+            descriptor = "/".join(p for p in (verdict, category, severity) if p) or "event"
+            suffix = f" — via `{via}`" if via else ""
+            desc = (entry.get("description") or "").strip()
+            desc_part = f": {desc}" if desc else ""
+            lines.append(f"- **[{ts}] event** ({descriptor}){desc_part}{suffix}")
+        else:
+            kind = entry.get("note_kind") or "note"
+            author = entry.get("author") or "system"
+            text = entry.get("text") or ""
+            lines.append(f"- **[{ts}] {author}** _({kind})_: {text}")
+    lines.append("")
+    return lines
 
 
 _store: Optional[CaseStore] = None
