@@ -40,11 +40,18 @@ from ..services.investigation_case_store import (
 # on the investigation module is honoured here too — the events store is a shared
 # singleton, so both surfaces must resolve it through the same reference.
 from . import investigation as _investigation
-from .investigation import _authorize_subject, _can_write, _scoped_tenant
+from .investigation import _MAX_TIMELINE, _authorize_subject, _can_write, _scoped_tenant
 
 router = APIRouter()
 
 _MAX_CASES = 500
+
+# Timeline (Fase 5A) bounds. ``_MAX_TIMELINE_ENTRIES`` caps the merged, deduped
+# stream returned to the client; ``_TIMELINE_COLLECT_CAP`` guards the raw
+# gather step so a case linking many high-volume origins can never build an
+# unbounded intermediate list before the cap is applied.
+_MAX_TIMELINE_ENTRIES = 1000
+_TIMELINE_COLLECT_CAP = 5000
 
 # Compliance axes rolled up in a case export, in the canonical order used by
 # ``src/telemetry/compliance.py``. Populated only from ``incident`` subjects (the
@@ -62,6 +69,119 @@ _COMPLIANCE_AXES = (
 # silently falling back inside the store.
 _SORT_KEYS = ("updated_at", "created_at", "title", "status", "severity")
 _EXPORT_FORMATS = ("json", "md")
+
+
+# ─── Timeline reconstruction (Fase 5A) ───────────────────────────────────────
+# Pure helpers that normalise the two evidence sources of a case — durable
+# security events (unix-epoch ``ts``) and the case's own append-only note trail
+# (ISO-8601 ``ts``) — into one comparably-timestamped stream. Kept side-effect
+# free so they are unit-testable without a request or a database.
+
+
+def _iso_from_epoch(ts: object) -> str:
+    """Render a unix-epoch timestamp (as stored on events) as a UTC ISO string.
+
+    Returns ``""`` for anything unparseable rather than raising, so one bad row
+    never aborts the timeline.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()  # type: ignore[arg-type]
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _parse_iso_ts(value: object) -> float:
+    """Parse an ISO-8601 timestamp (as stored on case notes) into a unix epoch.
+
+    Tolerant: returns ``0.0`` for anything unparseable so a malformed note ts
+    sorts to the start of the timeline rather than raising.
+    """
+    if not value:
+        return 0.0
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _event_epoch(event: dict) -> float:
+    """Read an event's unix-epoch ``ts`` defensively (0.0 when absent/bad)."""
+    ts = event.get("ts")
+    try:
+        return float(ts) if ts is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _event_timeline_entry(event: dict) -> dict:
+    """Normalise a durable security event into a timeline entry (pure).
+
+    Provenance (``via``) records which linked subject surfaced the event, read
+    from the ``_via`` key the endpoint stamps while gathering (an internal marker,
+    not part of the stored event shape).
+    """
+    epoch = _event_epoch(event)
+    return {
+        "type": "event",
+        "epoch": epoch,
+        "ts": _iso_from_epoch(epoch) if epoch else "",
+        "event_id": event.get("event_id") or "",
+        "verdict": event.get("verdict") or "",
+        "category": event.get("category") or "",
+        "severity": event.get("severity") or "",
+        "source": event.get("source") or "",
+        "description": event.get("description") or "",
+        "request_id": event.get("request_id") or "",
+        "incident_id": event.get("incident_id") or "",
+        "via": event.get("_via") or "",
+    }
+
+
+def _note_timeline_entry(note: dict) -> dict:
+    """Normalise a case note into a timeline entry (pure)."""
+    ts = note.get("ts") or ""
+    return {
+        "type": "note",
+        "epoch": _parse_iso_ts(ts),
+        "ts": ts,
+        "note_kind": note.get("kind") or "note",
+        "author": note.get("author") or "system",
+        "text": note.get("text") or "",
+    }
+
+
+def _assemble_timeline(
+    events: list[dict], notes: list[dict], *, limit: int
+) -> tuple[list[dict], bool]:
+    """Merge event + note entries into one chronological stream (pure).
+
+    Events are deduped by ``event_id`` — the same detection can surface via more
+    than one linked subject (e.g. an incident and the origin that drove it), and
+    the first occurrence wins. The merged stream is sorted oldest→newest; when it
+    exceeds ``limit`` the most recent ``limit`` entries are kept (a reconstruction
+    reads forward from the most relevant recent window) and ``truncated`` is
+    returned ``True``.
+    """
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for event in events:
+        eid = event.get("event_id") or ""
+        if eid:
+            if eid in seen:
+                continue
+            seen.add(eid)
+        entries.append(_event_timeline_entry(event))
+    for note in notes:
+        entries.append(_note_timeline_entry(note))
+    entries.sort(key=lambda e: e["epoch"])
+    truncated = len(entries) > limit
+    if truncated:
+        entries = entries[-limit:]
+    return entries, truncated
 
 
 class CaseCreateRequest(BaseModel):
@@ -211,6 +331,87 @@ async def get_case(
 ):
     """Full case detail: metadata, linked subjects, and note trail."""
     return {"case": await _get_case_scoped(user, case_id)}
+
+
+@router.get("/{case_id}/timeline")
+async def case_timeline(
+    case_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+    limit: int = Query(500, ge=1, le=_MAX_TIMELINE_ENTRIES),
+):
+    """Reconstruct a case's unified chronological timeline.
+
+    Gathers the durable evidence behind every linked subject — an incident's
+    correlation event(s) plus the input/output detections that contributed to it
+    (``metadata.contributing_event_ids``), and an origin's stamped event ledger —
+    merges it with the case's own note trail (opens, state changes, subject links,
+    analyst notes), and returns one time-ordered stream. Session subjects carry no
+    durable events (pseudonymous scores only) so they contribute nothing here.
+
+    Tenant-scoped like every other case read: the case itself is gated by
+    ``_get_case_scoped`` (404 on cross-tenant, no leak), and a tenant-scoped
+    operator only sees events stamped with their own tenant. The raw gather is
+    bounded by ``_TIMELINE_COLLECT_CAP`` and the returned stream by ``limit`` so a
+    case linking many high-volume subjects can never build or emit an unbounded
+    list.
+    """
+    case = await _get_case_scoped(user, case_id)
+    store = _investigation.get_security_events_store()
+
+    collected: list[dict] = []
+    incident_count = 0
+    origin_count = 0
+
+    for subject in (case.get("subjects") or []):
+        if len(collected) >= _TIMELINE_COLLECT_CAP:
+            break
+        stype = subject.get("subject_type")
+        skey = (subject.get("subject_key") or "").strip()
+        if not skey:
+            continue
+
+        if stype == "incident":
+            incident_count += 1
+            contributing_ids: list[str] = []
+            for ev in await store.find_by_incident(skey):
+                ev["_via"] = f"incident:{skey}"
+                collected.append(ev)
+                meta = ev.get("metadata") or {}
+                for cid in (meta.get("contributing_event_ids") or []):
+                    if cid:
+                        contributing_ids.append(cid)
+            if contributing_ids and len(collected) < _TIMELINE_COLLECT_CAP:
+                for ev in await store.find_by_event_ids(contributing_ids):
+                    ev["_via"] = f"incident:{skey}"
+                    collected.append(ev)
+        elif stype == "origin":
+            # Origin subjects are "scope_type:digest" tokens; a request-keyed
+            # origin (no digest) carries no stamped evidence, so only whole-token
+            # subjects resolve to events (find_by_scope_digest is LIKE-safe). The
+            # token already carries its "origin:"-style prefix, so it is used as
+            # the provenance marker verbatim.
+            if len(skey.split(":", 1)) == 2:
+                origin_count += 1
+                for ev in await store.find_by_scope_digest(skey, limit=_MAX_TIMELINE):
+                    ev["_via"] = skey
+                    collected.append(ev)
+        # session: pseudonymous decomposition digest with no durable events.
+
+    # Tenant scoping: a scoped operator only sees their own tenant's events.
+    if user.tenant:
+        collected = [e for e in collected if (e.get("tenant") or "") == user.tenant]
+
+    entries, truncated = _assemble_timeline(
+        collected, case.get("notes") or [], limit=limit
+    )
+    return {
+        "case_id": case.get("case_id") or case_id,
+        "timeline": entries,
+        "count": len(entries),
+        "truncated": truncated,
+        "limit": limit,
+        "subject_counts": {"incident": incident_count, "origin": origin_count},
+    }
 
 
 async def _resolve_case_compliance(case: dict) -> Optional[dict]:

@@ -442,6 +442,54 @@
                     </template>
                 </div>
             </div>
+
+            <!-- Timeline reconstruction -->
+            <div class="sg-card">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="history" class="w-4 h-4 text-indigo-300"></i>
+                        <h2 class="text-sm font-medium text-white">Timeline</h2>
+                        <span class="text-gray-600 text-[11px]" x-text="'(' + caseTimeline.length + ')'"></span>
+                    </div>
+                    <button @click="loadCaseTimeline()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="caseTimelineLoading" aria-label="Refresh timeline">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="caseTimelineLoading ? 'animate-spin' : ''"></i>
+                    </button>
+                </div>
+
+                <p class="text-[11px] text-gray-500 mb-3">The case's evidence and note trail merged into one chronological stream (newest first). Incident and origin subjects contribute their durable events; sessions carry none.</p>
+
+                <div x-show="caseTimelineTruncated" class="text-[10px] text-amber-300/80 mb-2 flex items-center gap-1.5">
+                    <i data-lucide="scissors" class="w-3 h-3"></i>
+                    Showing the most recent window — older entries were truncated.
+                </div>
+
+                <div x-show="!caseTimelineLoading && caseTimeline.length === 0" class="text-[11px] text-gray-500 py-2">No timeline entries yet.</div>
+
+                <ol x-show="caseTimeline.length > 0" class="relative border-l border-gray-800 ml-1.5 space-y-3">
+                    <template x-for="(t, i) in caseTimeline" :key="'tl-' + i">
+                        <li class="ml-4">
+                            <span class="absolute -left-1.5 w-3 h-3 rounded-full border border-gray-700"
+                                  :class="t.type === 'note' ? 'bg-indigo-500/60' : 'bg-gray-600'"></span>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-[10px] text-gray-600 font-mono whitespace-nowrap" x-text="fmtTime(t.ts)"></span>
+                                <template x-if="t.type === 'event'">
+                                    <span class="sg-badge text-[9px]" :class="verdictClass(t.verdict)" x-text="(t.verdict || '—').toUpperCase()"></span>
+                                </template>
+                                <template x-if="t.type === 'event'">
+                                    <span class="text-[10px] text-gray-400" x-text="t.category || '—'"></span>
+                                </template>
+                                <template x-if="t.type === 'note'">
+                                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-200 border border-indigo-400/30" x-text="t.note_kind || 'note'"></span>
+                                </template>
+                                <span class="text-[10px] text-gray-600 ml-auto font-mono break-all" x-show="t.via" x-text="t.via"></span>
+                            </div>
+                            <p class="text-[11px] text-gray-300 mt-1 break-words"
+                               x-text="t.type === 'note' ? t.text : (t.description || t.source || '')"></p>
+                            <p class="text-[10px] text-gray-600 mt-0.5" x-show="t.type === 'note' && t.author" x-text="t.author"></p>
+                        </li>
+                    </template>
+                </ol>
+            </div>
         </div>
 
         <!-- Case controls (1 col) -->
@@ -955,6 +1003,9 @@ function investigationPage() {
             caseDetail: null,
             caseAssigneeInput: '',
             caseNoteInput: '',
+            caseTimeline: [],
+            caseTimelineLoading: false,
+            caseTimelineTruncated: false,
             subjectCases: [],
             addToCaseId: '',
 
@@ -1656,6 +1707,7 @@ function investigationPage() {
                     this.caseDetail = data.case;
                     this.caseAssigneeInput = (data.case && data.case.assignee) || '';
                     this.caseNoteInput = '';
+                    this.loadCaseTimeline();
                     this.$nextTick(() => window.lucide && window.lucide.createIcons());
                 } else if (res.status === 404) {
                     showToast('Case not found', 'error');
@@ -1670,6 +1722,34 @@ function investigationPage() {
         closeCase() {
             this.caseDetail = null;
             this.caseNoteInput = '';
+            this.caseTimeline = [];
+            this.caseTimelineTruncated = false;
+        },
+
+        async loadCaseTimeline() {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            this.caseTimelineLoading = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/timeline');
+                if (!res.ok) {
+                    this.caseTimeline = [];
+                    this.caseTimelineTruncated = false;
+                    return;
+                }
+                const data = await res.json();
+                // Guard against a stale response landing after the analyst moved on.
+                if (!this.caseDetail || this.caseDetail.case_id !== id) return;
+                // Newest first for reading; the API returns oldest→newest.
+                this.caseTimeline = Array.isArray(data.timeline) ? data.timeline.slice().reverse() : [];
+                this.caseTimelineTruncated = !!data.truncated;
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            } catch (e) {
+                this.caseTimeline = [];
+                this.caseTimelineTruncated = false;
+            } finally {
+                this.caseTimelineLoading = false;
+            }
         },
 
         caseNotes() {
@@ -1699,6 +1779,8 @@ function investigationPage() {
                 if (data.case) {
                     this.caseDetail = data.case;
                     this.caseAssigneeInput = data.case.assignee || '';
+                    // Subjects/notes/state changes all reshape the timeline.
+                    this.loadCaseTimeline();
                     // Reflect summary row changes into the list.
                     const row = this.cases.find(c => c.case_id === data.case.case_id);
                     if (row) {

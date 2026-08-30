@@ -835,3 +835,198 @@ class TestCaseComplianceExport:
         )
         resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="json")
         assert "compliance" not in json.loads(resp.body.decode())["case"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 5A — timeline reconstruction: unify a case's dispersed evidence
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestTimelineHelpers:
+    """The pure merge/normalise helpers — no request, no database."""
+
+    def test_iso_from_epoch_and_parse_roundtrip(self):
+        from admin.routes.investigation_cases import _iso_from_epoch, _parse_iso_ts
+
+        iso = _iso_from_epoch(1_700_000_000.0)
+        assert iso.startswith("2023-")
+        assert abs(_parse_iso_ts(iso) - 1_700_000_000.0) < 1.0
+
+    def test_bad_timestamps_do_not_raise(self):
+        from admin.routes.investigation_cases import _iso_from_epoch, _parse_iso_ts
+
+        assert _iso_from_epoch("not-a-number") == ""
+        assert _iso_from_epoch(None) == ""
+        assert _parse_iso_ts("garbage") == 0.0
+        assert _parse_iso_ts(None) == 0.0
+
+    def test_assemble_sorts_ascending_and_merges(self):
+        from admin.routes.investigation_cases import _assemble_timeline
+
+        events = [_evt("e-late", ts=2000.0), _evt("e-early", ts=1000.0)]
+        notes = [{"ts": _iso_from_epoch_str(1500.0), "author": "a",
+                  "kind": "note", "text": "mid"}]
+        entries, truncated = _assemble_timeline(events, notes, limit=100)
+        assert truncated is False
+        assert [e["epoch"] for e in entries] == [1000.0, 1500.0, 2000.0]
+        assert [e["type"] for e in entries] == ["event", "note", "event"]
+
+    def test_assemble_dedupes_events_by_id(self):
+        from admin.routes.investigation_cases import _assemble_timeline
+
+        # Same detection surfaced via two subjects → one entry (first wins).
+        dup = [_evt("shared", ts=100.0), _evt("shared", ts=100.0)]
+        entries, _ = _assemble_timeline(dup, [], limit=100)
+        assert len([e for e in entries if e["event_id"] == "shared"]) == 1
+
+    def test_assemble_truncates_to_most_recent(self):
+        from admin.routes.investigation_cases import _assemble_timeline
+
+        events = [_evt(f"e{i}", ts=float(i)) for i in range(5)]
+        entries, truncated = _assemble_timeline(events, [], limit=2)
+        assert truncated is True
+        # keeps the two most recent (highest epoch), still ascending.
+        assert [e["event_id"] for e in entries] == ["e3", "e4"]
+
+
+def _iso_from_epoch_str(ts: float) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+class TestCaseTimeline:
+    async def _linked_incident_case(
+        self, cases, events, *, incident_id="INC-T", tenant="acme",
+        ts=1_000_000_000.0, metadata=None,
+    ):
+        await events.bulk_insert([
+            _evt("carrier-" + incident_id, incident_id=incident_id, tenant=tenant,
+                 ts=ts, metadata=metadata or {}),
+        ])
+        made = await cases.create_case(title="t", actor="a", tenant=tenant)
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="incident",
+            subject_key=incident_id, actor="a",
+        )
+        return made
+
+    async def test_timeline_merges_incident_events_and_notes(self, wired):
+        inv_cases, cases, events, _ = wired
+        made = await self._linked_incident_case(cases, events)
+        out = await inv_cases.case_timeline(made["case_id"], user=_admin(), limit=500)
+
+        assert {e["type"] for e in out["timeline"]} == {"event", "note"}
+        # 2001-era event precedes the freshly-stamped opening/link notes.
+        assert out["timeline"][0]["type"] == "event"
+        assert out["timeline"][0]["category"] == "exfiltration"
+        assert out["timeline"][0]["via"] == "incident:INC-T"
+        assert out["subject_counts"] == {"incident": 1, "origin": 0}
+        assert out["truncated"] is False
+        epochs = [e["epoch"] for e in out["timeline"]]
+        assert epochs == sorted(epochs)
+
+    async def test_timeline_includes_contributing_detections(self, wired):
+        inv_cases, cases, events, _ = wired
+        await events.bulk_insert([
+            _evt("in-1", tenant="acme", ts=1_000_000_100.0,
+                 source="input_guardrail", category="prompt_injection"),
+            _evt("out-1", tenant="acme", ts=1_000_000_200.0,
+                 source="output_filter", category="exfiltration"),
+        ])
+        made = await self._linked_incident_case(
+            cases, events, incident_id="INC-C", ts=1_000_000_300.0,
+            metadata={"contributing_event_ids": ["in-1", "out-1"]},
+        )
+        out = await inv_cases.case_timeline(made["case_id"], user=_admin(), limit=500)
+        ids = {e["event_id"] for e in out["timeline"] if e["type"] == "event"}
+        assert {"in-1", "out-1", "carrier-INC-C"} <= ids
+
+    async def test_timeline_origin_ledger(self, wired):
+        inv_cases, cases, events, _ = wired
+        token = "origin:aabbccddeeff0011"
+        await events.bulk_insert([
+            _evt("o-1", tenant="acme", ts=1_000_000_000.0, scope_digests=[token]),
+        ])
+        made = await cases.create_case(title="t", actor="a", tenant="acme")
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="origin",
+            subject_key=token, actor="a",
+        )
+        out = await inv_cases.case_timeline(made["case_id"], user=_admin(), limit=500)
+        surfaced = [e for e in out["timeline"] if e.get("event_id") == "o-1"]
+        assert surfaced and surfaced[0]["via"] == token
+        assert out["subject_counts"]["origin"] == 1
+
+    async def test_timeline_session_subject_has_no_events(self, wired):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a", tenant="acme")
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="session",
+            subject_key="s" * 16, actor="a",
+        )
+        out = await inv_cases.case_timeline(made["case_id"], user=_admin(), limit=500)
+        # Only the case's own notes — a session carries no durable events.
+        assert all(e["type"] == "note" for e in out["timeline"])
+        assert out["subject_counts"] == {"incident": 0, "origin": 0}
+
+    async def test_timeline_tenant_scoping_filters_events(self, wired):
+        inv_cases, cases, events, _ = wired
+        # Two tenants' events share one origin token; the acme case links it.
+        token = "origin:1122334455667788"
+        await events.bulk_insert([
+            _evt("acme-ev", tenant="acme", ts=1_000_000_000.0, scope_digests=[token]),
+            _evt("evil-ev", tenant="evil", ts=1_000_000_001.0, scope_digests=[token]),
+        ])
+        made = await cases.create_case(title="t", actor="a", tenant="acme")
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="origin",
+            subject_key=token, actor="a",
+        )
+        # A tenant-scoped acme operator sees only the acme event.
+        scoped = await inv_cases.case_timeline(
+            made["case_id"], user=_admin(tenant="acme"), limit=500
+        )
+        scoped_ids = {e["event_id"] for e in scoped["timeline"] if e["type"] == "event"}
+        assert scoped_ids == {"acme-ev"}
+        # A global operator (no tenant) sees both.
+        globl = await inv_cases.case_timeline(made["case_id"], user=_admin(), limit=500)
+        global_ids = {e["event_id"] for e in globl["timeline"] if e["type"] == "event"}
+        assert global_ids == {"acme-ev", "evil-ev"}
+
+    async def test_timeline_cross_tenant_case_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.case_timeline(made["case_id"], user=_admin(tenant="acme"))
+        assert ei.value.status_code == 404
+
+    async def test_timeline_respects_limit_and_flags_truncation(self, wired):
+        inv_cases, cases, events, _ = wired
+        rows = [
+            _evt(f"e{i}", incident_id="INC-LIM", tenant="acme", ts=1_000_000_000.0 + i)
+            for i in range(4)
+        ]
+        await events.bulk_insert(rows)
+        made = await cases.create_case(title="t", actor="a", tenant="acme")
+        await cases.add_subject(
+            case_id=made["case_id"], subject_type="incident",
+            subject_key="INC-LIM", actor="a",
+        )
+        out = await inv_cases.case_timeline(made["case_id"], user=_admin(), limit=1)
+        assert out["truncated"] is True
+        assert out["count"] == 1
+        assert out["limit"] == 1
+        # The single kept entry is the most recent of the whole merged stream
+        # (the link/open notes are stamped "now", newer than the 2001 events).
+        assert out["timeline"][0]["type"] == "note"
+
+    async def test_timeline_not_found_is_404(self, wired):
+        inv_cases, _, _, _ = wired
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.case_timeline("case_nope", user=_admin(), limit=500)
+        assert ei.value.status_code == 404
