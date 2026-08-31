@@ -215,3 +215,29 @@ def test_ui_config_sections_are_real():
         + f". Valid sections: {sorted(SECTIONS)}"
     )
 
+
+def test_templates_have_no_invalid_alpine_index_magic():
+    """Alpine v3 exposes no ``$index`` magic — it throws ``ReferenceError`` at
+    runtime.
+
+    The loop index inside ``x-for`` is only available via an explicit second
+    binding (``x-for="(v, i) in items"``). A stray ``$index`` (e.g. in a
+    ``:key="$index"``) is not a template error at render time, so it slips
+    through server-side tests and only surfaces as an *uncaught* console
+    ``ReferenceError`` on every reactive tick in the browser — which corrupts
+    Alpine's scheduler flush and mis-paints unrelated widgets. Guard the whole
+    template tree so this class of bug cannot regress.
+    """
+    templates_root = Path(__file__).resolve().parent.parent / "admin" / "templates"
+    offenders: list[str] = []
+    for f in sorted(glob.glob(str(templates_root / "**" / "*.html"), recursive=True)):
+        text = Path(f).read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if "$index" in line:
+                offenders.append(f"{Path(f).name}:{lineno}: {line.strip()}")
+
+    assert not offenders, (
+        "Invalid Alpine `$index` magic found (use an explicit `x-for=\"(v, i) in "
+        "...\"` index binding instead):\n" + "\n".join(offenders)
+    )
+

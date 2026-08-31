@@ -68,7 +68,7 @@
                 <span class="text-xs text-gray-600">ms</span>
             </div>
             <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-latency">
-                <template x-for="v in sparklines.latency" :key="$index">
+                <template x-for="(v, i) in sparklines.latency" :key="i">
                     <div class="flex-1 rounded-sm sg-meter-fill" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(16,185,129,0.5), rgba(16,185,129,0.15));`"></div>
                 </template>
             </div>
@@ -91,7 +91,7 @@
                 <span class="text-xs text-gray-600">rps</span>
             </div>
             <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-rps">
-                <template x-for="v in sparklines.rps" :key="$index">
+                <template x-for="(v, i) in sparklines.rps" :key="i">
                     <div class="flex-1 rounded-sm sg-meter-fill" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(59,130,246,0.5), rgba(59,130,246,0.15));`"></div>
                 </template>
             </div>
@@ -113,7 +113,7 @@
                 <span class="text-xs text-gray-600">threats</span>
             </div>
             <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-blocked">
-                <template x-for="v in sparklines.blocked" :key="$index">
+                <template x-for="(v, i) in sparklines.blocked" :key="i">
                     <div class="flex-1 rounded-sm sg-meter-fill" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(239,68,68,0.5), rgba(239,68,68,0.15));`"></div>
                 </template>
             </div>
@@ -135,7 +135,7 @@
                 <span class="text-xs text-gray-600">%</span>
             </div>
             <div class="mt-3 h-8 flex items-end gap-px" id="sparkline-detection">
-                <template x-for="v in sparklines.detection" :key="$index">
+                <template x-for="(v, i) in sparklines.detection" :key="i">
                     <div class="flex-1 rounded-sm sg-meter-fill" :style="`height: ${Math.max(4, v)}%; background: linear-gradient(180deg, rgba(245,158,11,0.5), rgba(245,158,11,0.15));`"></div>
                 </template>
             </div>
