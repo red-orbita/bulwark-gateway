@@ -1681,6 +1681,49 @@ function investigationPage() {
                 }
             },
 
+        async loadTriageQueue() {
+            this.triageQueueLoading = true;
+            try {
+                const p = new URLSearchParams();
+                if (this.triageQueueFilters.status) p.set('status', this.triageQueueFilters.status);
+                if (this.triageQueueFilters.subject_type) p.set('subject_type', this.triageQueueFilters.subject_type);
+                p.set('limit', '100');
+                const res = await fetch('/admin/investigation/triage?' + p.toString());
+                if (res.ok) {
+                    const data = await res.json();
+                    this.triageQueue = data.records || [];
+                } else {
+                    showToast('Failed to load triage workqueue', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading workqueue', 'error');
+            } finally {
+                this.triageQueueLoading = false;
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            }
+        },
+
+        // Open a persisted triage subject in the detail panel. The originating
+        // alert/session may have aged out of the live queue, so we drive the
+        // panel from the triage record itself (status/assignee/note trail) —
+        // no alert or session evidence is loaded. Setting `subject` opens the
+        // detail modal via its `selected || session || subject` guard.
+        async openTriageRecord(r) {
+            this.selected = null;
+            this.incident = null;
+            this.origin = null;
+            this.session = null;
+            this.sessionSummary = null;
+            this.subject = { type: r.subject_type, key: r.subject_key };
+            this.triage = r;
+            this.assigneeInput = r.assignee || '';
+            this.noteInput = '';
+            this.addToCaseId = '';
+            this._resetIocCheck();
+            await this.loadSubjectCases();
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
         async loadIncident(incidentId) {
             try {
                 const res = await fetch('/admin/investigation/incident/' + encodeURIComponent(incidentId));
