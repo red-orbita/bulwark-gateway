@@ -706,7 +706,15 @@
                 <!-- Assignee -->
                 <label for="case-assignee" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Assignee</label>
                 <div class="flex gap-2 mb-4">
-                    <input id="case-assignee" type="text" x-model="caseAssigneeInput" maxlength="128" placeholder="unassigned" class="sg-input flex-1" :disabled="!caseCanWrite">
+                    <select id="case-assignee" x-model="caseAssigneeInput" class="sg-input flex-1" :disabled="!caseCanWrite" aria-label="Case assignee">
+                        <option value="">Unassigned</option>
+                        <template x-for="u in assignableUsers" :key="u.username">
+                            <option :value="u.username" x-text="u.username + ' (' + u.role + ')'"></option>
+                        </template>
+                        <template x-if="caseAssigneeInput && !assignableUsers.some(u => u.username === caseAssigneeInput)">
+                            <option :value="caseAssigneeInput" x-text="caseAssigneeInput + ' (unavailable)'"></option>
+                        </template>
+                    </select>
                     <button @click="setCaseAssignee()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!caseCanWrite || saving">Set</button>
                 </div>
 
@@ -1117,8 +1125,15 @@
                     <!-- Assignee -->
                     <label for="inv-assignee" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Assignee</label>
                     <div class="flex gap-2 mb-4">
-                        <input id="inv-assignee" type="text" x-model="assigneeInput" maxlength="128" placeholder="unassigned"
-                               class="sg-input flex-1" :disabled="!status.can_write">
+                        <select id="inv-assignee" x-model="assigneeInput" class="sg-input flex-1" :disabled="!status.can_write" aria-label="Triage assignee">
+                            <option value="">Unassigned</option>
+                            <template x-for="u in assignableUsers" :key="u.username">
+                                <option :value="u.username" x-text="u.username + ' (' + u.role + ')'"></option>
+                            </template>
+                            <template x-if="assigneeInput && !assignableUsers.some(u => u.username === assigneeInput)">
+                                <option :value="assigneeInput" x-text="assigneeInput + ' (unavailable)'"></option>
+                            </template>
+                        </select>
                         <button @click="setAssignee()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!status.can_write || saving">Set</button>
                     </div>
 
@@ -1179,6 +1194,15 @@ function investigationPage() {
             // Current operator (for the "my work" surface). assignee is free text,
             // so "mine" is anything assigned to this username.
             profile: { username: '' },
+
+            // Assignable users — the actionable operators (roles with
+            // investigation:write, tenant-scoped) a triage subject / case may be
+            // assigned to. Populated once at init() from
+            // GET /admin/investigation/assignable-users so the Assignee selects are
+            // a closed list of real users rather than free text. A stored assignee
+            // that is no longer in this list is still shown (marked "unavailable")
+            // so an existing assignment is never silently dropped.
+            assignableUsers: [],
 
             // Threat-intel references (Fase 4A). Populated at init() from
             // GET /admin/investigation/compliance-mappings, whose single source of
@@ -1252,6 +1276,7 @@ function investigationPage() {
 
             async init() {
                 await this.loadProfile();
+                await this.loadAssignableUsers();
                 await this.loadComplianceMappings();
                 await this.reloadAll();
                 this.$watch('autoRefresh', (on) => this._syncAutoRefresh(on));
@@ -1275,6 +1300,20 @@ function investigationPage() {
                         this.profile.username = (u && u.username) || '';
                     }
                 } catch (e) { /* non-fatal — "mine" simply stays empty */ }
+            },
+
+            // Load the closed list of assignable operators once. Not part of
+            // reloadAll(): the user roster changes rarely and independently of the
+            // alert queue, so re-fetching it on every refresh would add needless
+            // load. On failure the selects degrade to "Unassigned" + any existing
+            // stored assignee (rendered "unavailable"), never losing an assignment.
+            async loadAssignableUsers() {
+                try {
+                    const res = await fetch('/admin/investigation/assignable-users');
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    this.assignableUsers = (data && data.users) || [];
+                } catch (e) { /* non-fatal: selects fall back gracefully */ }
             },
 
             // ─── Threat-intel references (Fase 4A) ───────────────────────────────

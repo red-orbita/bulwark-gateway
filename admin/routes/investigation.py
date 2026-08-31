@@ -402,6 +402,59 @@ async def investigation_compliance_mappings(
     }
 
 
+@router.get("/assignable-users")
+async def investigation_assignable_users(
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """List the users a triage subject / case may be assigned to.
+
+    An analyst assigns work from the Investigation Center, but ``GET /admin/users``
+    is ADMIN-only — so this dedicated, ``investigation:read``-gated projection lets
+    any investigator (including a ``security`` operator who is not an admin) see who
+    is actually *actionable*. Only active users whose role carries
+    ``investigation:write`` (admin + security) are returned: auditor/viewer are
+    read-only, so assigning a case to them would be a dead letter. Tenant scoping
+    mirrors the rest of the Center — a tenant-scoped operator sees only same-tenant
+    users plus global (unscoped) users; a global operator sees everyone. The
+    response is a minimal projection (username + role + scope) — never password
+    hashes, MFA secrets or contact PII.
+    """
+    from ..models.auth import ROLE_PERMISSIONS
+    from ..services.user_store import get_user_store
+
+    writable_roles = {
+        role.value
+        for role, perms in ROLE_PERMISSIONS.items()
+        if "investigation:write" in perms
+    }
+
+    try:
+        rows = get_user_store().list_users()
+    except Exception:
+        rows = []
+
+    out: list[dict] = []
+    for row in rows:
+        # SQLite persists `active` as 0/1; a missing column defaults to active.
+        if not row.get("active", True):
+            continue
+        role = str(row.get("role") or "")
+        if role not in writable_roles:
+            continue
+        scope = (row.get("tenant_scope") or "") or None
+        # A tenant-scoped operator only sees same-tenant + global (unscoped) users.
+        if user.tenant and scope is not None and scope != user.tenant:
+            continue
+        out.append({
+            "username": row.get("username") or "",
+            "role": role,
+            "tenant_scope": scope,
+        })
+
+    out.sort(key=lambda u: u["username"].lower())
+    return {"users": out, "count": len(out)}
+
+
 @router.get("/alerts")
 async def investigation_alerts(
     user: TokenPayload = Depends(require_permission("investigation:read")),

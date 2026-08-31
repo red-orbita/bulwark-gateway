@@ -342,6 +342,75 @@ async def wired(engine, monkeypatch):
     return inv, events, triage, audit
 
 
+class TestAssignableUsers:
+    """GET /assignable-users — the closed roster the Assignee selects bind to."""
+
+    @pytest.fixture
+    def _users(self, monkeypatch):
+        # A mixed roster: writable (admin/security) vs read-only (auditor/viewer),
+        # global vs tenant-scoped, active vs disabled.
+        rows = [
+            {"username": "Admin1", "role": "admin", "tenant_scope": None, "active": 1},
+            {"username": "sec_global", "role": "security", "tenant_scope": None, "active": 1},
+            {"username": "sec_acme", "role": "security", "tenant_scope": "acme", "active": 1},
+            {"username": "sec_globex", "role": "security", "tenant_scope": "globex", "active": 1},
+            {"username": "auditor1", "role": "auditor", "tenant_scope": None, "active": 1},
+            {"username": "viewer1", "role": "viewer", "tenant_scope": None, "active": 1},
+            {"username": "disabled_sec", "role": "security", "tenant_scope": None, "active": 0},
+        ]
+
+        class _FakeStore:
+            def list_users(self):
+                return [dict(r) for r in rows]
+
+        from admin.services import user_store as us_mod
+
+        monkeypatch.setattr(us_mod, "get_user_store", lambda: _FakeStore())
+        return rows
+
+    async def test_only_active_writable_roles_returned(self, wired, _users):
+        inv, *_ = wired
+        out = await inv.investigation_assignable_users(user=_admin())
+        names = {u["username"] for u in out["users"]}
+        # admin + security only; auditor/viewer excluded; disabled excluded.
+        assert names == {"Admin1", "sec_global", "sec_acme", "sec_globex"}
+        assert out["count"] == 4
+        # Sorted case-insensitively so the select is stable.
+        assert [u["username"] for u in out["users"]] == sorted(names, key=str.lower)
+        # Minimal projection — no password hash / PII leaks into the roster.
+        for u in out["users"]:
+            assert set(u.keys()) == {"username", "role", "tenant_scope"}
+
+    async def test_tenant_scoped_operator_sees_same_tenant_plus_global(self, wired, _users):
+        inv, *_ = wired
+        out = await inv.investigation_assignable_users(
+            user=_token(UserRole.SECURITY, "acme")
+        )
+        names = {u["username"] for u in out["users"]}
+        # Global (unscoped) users + acme-scoped user; NOT the globex-scoped user.
+        assert names == {"Admin1", "sec_global", "sec_acme"}
+
+    async def test_read_only_operator_may_load_the_roster(self, wired, _users):
+        # investigation:read is enough to populate the select — a viewer can see
+        # who is assignable even though they cannot perform the assignment.
+        inv, *_ = wired
+        out = await inv.investigation_assignable_users(user=_viewer())
+        assert out["count"] == 4
+
+    async def test_degrades_to_empty_on_store_failure(self, wired, monkeypatch):
+        inv, *_ = wired
+
+        class _Boom:
+            def list_users(self):
+                raise RuntimeError("db down")
+
+        from admin.services import user_store as us_mod
+
+        monkeypatch.setattr(us_mod, "get_user_store", lambda: _Boom())
+        out = await inv.investigation_assignable_users(user=_admin())
+        assert out == {"users": [], "count": 0}
+
+
 class TestInvestigationEndpoints:
     async def test_status_reports_can_write(self, wired):
         inv, _, _, _ = wired
