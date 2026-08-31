@@ -8,6 +8,7 @@ Provides visibility into the async enrichment pipeline:
 - Recent entries browsing
 """
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -33,25 +34,61 @@ _REPLAY_DB_PATH = Path(
 # Thread-safe read-only connection
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
+# (st_dev, st_ino) of the file backing ``_conn`` — used to detect a wholesale
+# file swap and transparently reconnect. See _get_conn().
+_conn_key: Optional[tuple[int, int]] = None
 
 
 def _get_conn() -> Optional[sqlite3.Connection]:
-    """Get or create a read-only DB connection."""
-    global _conn
-    if _conn is not None:
-        return _conn
+    """Get or create a read-only DB connection.
 
-    if not _REPLAY_DB_PATH.exists():
+    The proxy owns the replay DB and may replace the file wholesale (backup /
+    restore from snapshot, PVC remount, log-style rotation). A cached SQLite
+    handle keeps reading the *old* inode in that case and silently serves stale
+    data — e.g. the admin dashboard freezing on a past entry count while the
+    live DB keeps growing. Track the file's ``(st_dev, st_ino)`` identity and
+    transparently reconnect whenever the underlying file is swapped so reads
+    always reflect the current DB.
+
+    Callers hold ``_lock`` (see ``_query`` / ``_query_one``), so mutating the
+    module-level connection state here is safe.
+    """
+    global _conn, _conn_key
+
+    try:
+        st = _REPLAY_DB_PATH.stat()
+    except OSError:
+        # File not present (yet) — drop any stale handle and report unavailable.
+        _close_conn()
         return None
 
+    key = (st.st_dev, st.st_ino)
+    if _conn is not None and _conn_key == key:
+        return _conn
+
+    # First open, or the file was replaced (inode changed) — (re)connect.
+    _close_conn()
     try:
         # Open in read-only mode (WAL allows concurrent reads)
         uri = f"file:{_REPLAY_DB_PATH}?mode=ro"
-        _conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        _conn = conn
+        _conn_key = key
         return _conn
     except Exception:
+        _close_conn()
         return None
+
+
+def _close_conn() -> None:
+    """Close and clear the cached read-only connection (caller holds ``_lock``)."""
+    global _conn, _conn_key
+    if _conn is not None:
+        with contextlib.suppress(Exception):
+            _conn.close()
+    _conn = None
+    _conn_key = None
 
 
 def _query(sql: str, params: tuple = ()) -> list[dict]:

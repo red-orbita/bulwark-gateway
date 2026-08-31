@@ -191,7 +191,11 @@ data:
     rename-command SLAVEOF ""
     rename-command REPLICAOF ""
     rename-command MODULE ""
-    rename-command SCRIPT ""
-    rename-command EVAL ""
-    rename-command EVALSHA ""
+    # NOTE: SCRIPT/EVAL/EVALSHA are intentionally left ENABLED. The correlation
+    # risk-state store (src/correlation/risk_state.py) registers a Lua bump
+    # script and drives it via EVALSHA for atomic, replica-safe decayed-risk
+    # accrual. Renaming them away silently degrades correlation to a per-worker
+    # in-memory fallback (enforcement still fires, but accrued origin risk is
+    # invisible to the admin /admin/correlation views). The genuinely
+    # destructive admin/keyspace commands above stay blocked.
 {{- end }}
