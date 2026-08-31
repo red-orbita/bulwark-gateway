@@ -537,13 +537,16 @@
         </div>
     </div>
 
-    <!-- Case detail (full-screen modal) -->
-    <div x-show="caseDetail" x-cloak class="fixed inset-0 z-[60]"
+    <!-- Case detail (full-screen modal) — teleported to <body> so its fixed overlay
+         anchors to the viewport, never to #main-content's animated stacking context
+         (matches the rbac/guardrails/policies modal pattern). -->
+    <template x-teleport="body">
+    <div x-show="caseDetail" x-cloak class="fixed inset-0 z-50"
          x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" x-transition:leave="sg-trans" x-transition:leave-end="opacity-0">
         <div class="fixed inset-0 bg-black/70 backdrop-blur-sm"></div>
         <div class="fixed inset-0 overflow-y-auto" @click.self="closeCase()">
-            <div class="min-h-full flex items-start justify-center p-4 sm:p-6 lg:p-8" @click.self="closeCase()">
-                <div class="relative w-full max-w-6xl"
+            <div class="flex items-center justify-center p-4 sm:p-6 lg:p-8" style="min-height:100%" @click.self="closeCase()">
+                <div class="relative w-full overflow-y-auto" style="max-width:72rem;max-height:90vh"
                      x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
                      x-transition:leave="sg-trans" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95">
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -755,14 +758,18 @@
             </div>
         </div>
     </div>
+    </template>
 
-    <!-- Detail drawer (full-screen modal) -->
-    <div x-show="selected || session || subject" x-cloak class="fixed inset-0 z-[60]"
+    <!-- Detail drawer (full-screen modal) — teleported to <body> (same rationale as
+         the case modal) so the fixed overlay is viewport-anchored, not clipped by
+         #main-content's animated stacking context. -->
+    <template x-teleport="body">
+    <div x-show="selected || session || subject" x-cloak class="fixed inset-0 z-50"
          x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" x-transition:leave="sg-trans" x-transition:leave-end="opacity-0">
         <div class="fixed inset-0 bg-black/70 backdrop-blur-sm"></div>
         <div class="fixed inset-0 overflow-y-auto" @click.self="closeDetail()">
-            <div class="min-h-full flex items-start justify-center p-4 sm:p-6 lg:p-8" @click.self="closeDetail()">
-                <div class="relative w-full max-w-6xl"
+            <div class="flex items-center justify-center p-4 sm:p-6 lg:p-8" style="min-height:100%" @click.self="closeDetail()">
+                <div class="relative w-full overflow-y-auto" style="max-width:72rem;max-height:90vh"
                      x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
                      x-transition:leave="sg-trans" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95">
                     <div id="investigation-detail" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -770,9 +777,12 @@
         <div class="lg:col-span-2 space-y-6">
             <!-- Subject summary (workqueue drill-in with no alert/session detail loaded) -->
             <div x-show="subject && !selected && !session" x-cloak class="sg-card">
-                <div class="flex items-center gap-2 mb-3">
-                    <i data-lucide="crosshair" class="w-4 h-4 text-cyan-300"></i>
-                    <h2 class="text-sm font-medium text-white">Triage Subject</h2>
+                <div class="flex items-start justify-between gap-3 mb-3">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="crosshair" class="w-4 h-4 text-cyan-300"></i>
+                        <h2 class="text-sm font-medium text-white">Triage Subject</h2>
+                    </div>
+                    <button @click="closeDetail()" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
                 </div>
                 <p class="text-[11px] text-gray-500 mb-3">Opened from the triage workqueue. Its status, assignee and note trail are in the panel alongside; the originating alert has aged out of the live queue.</p>
                 <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
@@ -1188,6 +1198,7 @@
             </div>
         </div>
     </div>
+    </template>
 </div>
 
 <script nonce="{{ csp_nonce() }}">
