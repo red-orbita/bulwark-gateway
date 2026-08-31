@@ -241,3 +241,51 @@ def test_templates_have_no_invalid_alpine_index_magic():
         "...\"` index binding instead):\n" + "\n".join(offenders)
     )
 
+
+def test_classlist_toggle_force_arg_is_boolean():
+    """``classList.toggle(token, force)`` must be passed a *real* boolean.
+
+    Per WebIDL, the ``force`` parameter is an *optional boolean*; passing an
+    ``undefined`` value is indistinguishable from omitting it, so the browser
+    performs an argument-less *flip* instead of a force-set. The sidebar's
+    ``setActiveNav()`` computes ``isActive`` from a ``A || B || (alias && C)``
+    chain — when ``alias`` is ``undefined`` the whole expression is ``undefined``
+    (not ``false``), so ``toggle('active', undefined)`` flipped every alias-less
+    nav item *on* at init, lighting up ~25 of 28 links. Guard the whole template
+    tree: any ``classList.toggle(..., X)`` force argument must be a coerced
+    boolean (``Boolean(...)``, ``!!x``, ``===``/``!==``, or a literal
+    ``true``/``false``), never a bare identifier that can hold ``undefined``.
+    """
+    templates_root = Path(__file__).resolve().parent.parent / "admin" / "templates"
+    # Capture the force argument of `.classList.toggle('token', <force>)`.
+    toggle_re = re.compile(
+        r"classList\.toggle\(\s*['\"][^'\"]+['\"]\s*,\s*([^)]+?)\s*\)"
+    )
+    # An inline force expression is boolean-safe if it is already boolean-typed.
+    inline_safe_re = re.compile(r"^(?:!!|Boolean\()|[=!]==|[<>]|^(?:true|false)\b")
+    bare_ident_re = re.compile(r"^[A-Za-z_$][\w$]*$")
+    offenders: list[str] = []
+    for f in sorted(glob.glob(str(templates_root / "**" / "*.html"), recursive=True)):
+        text = Path(f).read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            for m in toggle_re.finditer(line):
+                force = m.group(1).strip()
+                if inline_safe_re.search(force):
+                    continue
+                # A bare identifier is safe only if its declaration coerces to
+                # boolean (`const x = Boolean(...)` / `= !!(...)`), otherwise it
+                # may hold `undefined` and trigger the flip-instead-of-set bug.
+                if bare_ident_re.match(force):
+                    decl_re = re.compile(
+                        r"\b(?:const|let|var)\s+" + re.escape(force) + r"\s*=\s*(Boolean\(|!!)"
+                    )
+                    if decl_re.search(text):
+                        continue
+                offenders.append(f"{Path(f).name}:{lineno}: force=`{force}` :: {line.strip()}")
+
+    assert not offenders, (
+        "classList.toggle() force argument may be `undefined` (browser will flip "
+        "instead of force-set — coerce with Boolean(...)/!! or use a comparison):\n"
+        + "\n".join(offenders)
+    )
+

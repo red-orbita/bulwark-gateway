@@ -638,10 +638,16 @@
                     document.querySelectorAll('.nav-item').forEach(item => {
                         const page = item.dataset.page;
                         const alias = item.dataset.alias;
-                        const isActive = (path === '/' && page === 'dashboard') ||
-                                        (path === '/' + page) ||
-                                        (path.startsWith('/' + page + '/')) ||
-                                        (alias && (path === '/' + alias || path.startsWith('/' + alias + '/')));
+                        // Coerce to a real boolean: when `alias` is undefined the
+                        // `alias && …` term is `undefined`, and classList.toggle(token,
+                        // undefined) is treated as an argument-less flip (WebIDL drops
+                        // undefined optionals) — which turns every alias-less item ON.
+                        const isActive = Boolean(
+                            (path === '/' && page === 'dashboard') ||
+                            (path === '/' + page) ||
+                            (path.startsWith('/' + page + '/')) ||
+                            (alias && (path === '/' + alias || path.startsWith('/' + alias + '/')))
+                        );
                         item.classList.toggle('active', isActive);
                         // Keep the group containing the active page expanded so it stays visible.
                         if (isActive && item.dataset.section) this.navSections[item.dataset.section] = true;
