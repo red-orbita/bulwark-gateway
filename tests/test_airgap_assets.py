@@ -149,7 +149,7 @@ def test_stylesheet_sri_matches_file_contents(asset):
 
     base = (_TEMPLATES / "base.html").read_text(encoding="utf-8")
     m = re.search(
-        rf"""href=['"]/static/css/{re.escape(asset)}['"][^>]*integrity=['"](sha384-[^'"]+)['"]""",
+        rf"""/static/css/{re.escape(asset)}['"][^>]*integrity=['"](sha384-[^'"]+)['"]""",
         base,
     )
     assert m, f"base.html does not load {asset} with an integrity attribute"
@@ -294,3 +294,71 @@ def test_enrichment_filter_buttons_are_well_formed():
         )
     assert "hover:text-white'\">" in text, "expected well-formed single closing quote"
     assert "hover:text-white'\"\">" not in text, "stray doubled closing quote present"
+
+
+# ── Static-asset cache-busting ───────────────────────────────────────────────
+#
+# The vendored CSS/JS are served under stable URLs, so a browser can hold a
+# stale copy across an image rebuild (the URL never changes even when the bytes
+# do). main._asset_url() appends a content-hash ?v= marker so any byte change
+# forces a fresh fetch. These tests lock that wiring so a future edit can't
+# silently drop it and reintroduce the stale-cache class of bug.
+
+
+def test_asset_url_appends_content_hash_version():
+    """asset_url() must return the same path plus a stable ?v=<hash> marker for
+    a real static file, so browsers cache-key on content."""
+    from admin.main import _asset_url
+
+    out = _asset_url("/static/css/tailwind.min.css")
+    m = re.match(r"^/static/css/tailwind\.min\.css\?v=([0-9a-f]{12})$", out)
+    assert m, f"expected a ?v=<12 hex> cache-buster, got: {out!r}"
+    # Deterministic: same content → same version on repeat calls.
+    assert _asset_url("/static/css/tailwind.min.css") == out
+
+
+def test_asset_url_version_tracks_content():
+    """Two assets with different bytes must get different version markers, and
+    the marker must equal the leading 12 hex of the file's SHA-256."""
+    import hashlib
+
+    from admin.main import _asset_url
+
+    css = _asset_url("/static/css/tailwind.min.css")
+    js = _asset_url("/static/js/vendor/lucide.min.js")
+    assert css.split("v=")[1] != js.split("v=")[1], "distinct files share a version"
+
+    expected = hashlib.sha256(
+        (_STATIC / "css" / "tailwind.min.css").read_bytes()
+    ).hexdigest()[:12]
+    assert css.endswith(f"?v={expected}"), "version is not the file's SHA-256 prefix"
+
+
+def test_asset_url_is_safe_on_missing_or_escaping_paths():
+    """A lookup failure or path-traversal attempt must degrade to the original
+    path — never raise, never read outside the static root."""
+    from admin.main import _asset_url
+
+    # Non-static path is passed through untouched.
+    assert _asset_url("https://example.com/x.js") == "https://example.com/x.js"
+    # Missing file → unchanged (no crash).
+    assert _asset_url("/static/does/not/exist.css") == "/static/does/not/exist.css"
+    # Traversal outside the static root → unchanged.
+    assert (
+        _asset_url("/static/../../../etc/passwd")
+        == "/static/../../../etc/passwd"
+    )
+
+
+def test_rendered_pages_carry_cache_busted_asset_urls():
+    """End-to-end: the login and dashboard HTML must ship the tailwind stylesheet
+    with a ?v= cache-buster, and no bare (unversioned) /static asset link may
+    survive in the rendered <head>."""
+    with _boot_admin_app() as client:
+        login = client.get("/login").text
+    assert re.search(
+        r"/static/css/tailwind\.min\.css\?v=[0-9a-f]{12}", login
+    ), "login page did not cache-bust the tailwind stylesheet"
+    # No unversioned asset src/href should remain in the rendered page.
+    bare = re.findall(r"""(?:src|href)=["']/static/[^"'?]+["']""", login)
+    assert bare == [], f"rendered login page has unversioned static assets: {bare}"

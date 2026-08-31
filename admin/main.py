@@ -16,6 +16,7 @@ Features:
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import logging
 import os
 import secrets
@@ -336,13 +337,50 @@ async def csrf_protection(request: Request, call_next):
 
 # Static files + templates
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+_STATIC_DIR = os.path.join(BASE_DIR, "static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 # H-1: expose the per-request CSP nonce to every template. Inline <script>
 # blocks emit nonce="{{ csp_nonce() }}" so they authenticate against the
 # script-src nonce set by the security-headers middleware.
 templates.env.globals["csp_nonce"] = lambda: _csp_nonce_var.get("")
+
+# Cache-busting for static assets. The vendored CSS/JS are served without a
+# per-deploy version marker, so a browser can hold a stale copy across an image
+# rebuild (the file URL never changes). asset_url() appends a content-hash
+# ?v= marker so any byte change forces a fresh fetch, while unchanged files keep
+# a stable URL (and stay cacheable). SRI integrity is unaffected — it validates
+# content, not the URL. The hash is memoised by (path, mtime) so each file is
+# read at most once per change; on any lookup error the path is returned
+# unchanged so a missing file can never break rendering.
+_asset_version_cache: dict[str, tuple[float, str]] = {}
+
+
+def _asset_url(path: str) -> str:
+    if not path.startswith("/static/"):
+        return path
+    rel = path[len("/static/"):]
+    try:
+        full = os.path.normpath(os.path.join(_STATIC_DIR, rel))
+        # Path-traversal guard: never hash a file outside the static root.
+        if full != _STATIC_DIR and not full.startswith(_STATIC_DIR + os.sep):
+            return path
+        mtime = os.path.getmtime(full)
+        cached = _asset_version_cache.get(path)
+        if cached is not None and cached[0] == mtime:
+            version = cached[1]
+        else:
+            with open(full, "rb") as fh:
+                version = hashlib.sha256(fh.read()).hexdigest()[:12]
+            _asset_version_cache[path] = (mtime, version)
+    except OSError:
+        return path
+    sep = "&" if "?" in path else "?"
+    return f"{path}{sep}v={version}"
+
+
+templates.env.globals["asset_url"] = _asset_url
 
 # Include routers
 app.include_router(auth.router, prefix="/admin/auth", tags=["auth"])
