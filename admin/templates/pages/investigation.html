@@ -537,8 +537,16 @@
         </div>
     </div>
 
-    <!-- Case detail -->
-    <div x-show="caseDetail" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Case detail (full-screen modal) -->
+    <div x-show="caseDetail" x-cloak class="fixed inset-0 z-[60]"
+         x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" x-transition:leave="sg-trans" x-transition:leave-end="opacity-0">
+        <div class="fixed inset-0 bg-black/70 backdrop-blur-sm"></div>
+        <div class="fixed inset-0 overflow-y-auto" @click.self="closeCase()">
+            <div class="min-h-full flex items-start justify-center p-4 sm:p-6 lg:p-8" @click.self="closeCase()">
+                <div class="relative w-full max-w-6xl"
+                     x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
+                     x-transition:leave="sg-trans" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Subjects + metadata (2 cols) -->
         <div class="lg:col-span-2 space-y-6">
             <div class="sg-card border-indigo-500/30 bg-indigo-500/[0.04]">
@@ -742,10 +750,22 @@
                 </div>
             </div>
         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <!-- Detail drawer -->
-    <div id="investigation-detail" x-show="selected || session || subject" x-cloak class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Detail drawer (full-screen modal) -->
+    <div x-show="selected || session || subject" x-cloak class="fixed inset-0 z-[60]"
+         x-transition:enter="sg-trans" x-transition:enter-start="opacity-0" x-transition:leave="sg-trans" x-transition:leave-end="opacity-0">
+        <div class="fixed inset-0 bg-black/70 backdrop-blur-sm"></div>
+        <div class="fixed inset-0 overflow-y-auto" @click.self="closeDetail()">
+            <div class="min-h-full flex items-start justify-center p-4 sm:p-6 lg:p-8" @click.self="closeDetail()">
+                <div class="relative w-full max-w-6xl"
+                     x-transition:enter="sg-trans" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
+                     x-transition:leave="sg-trans" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95">
+                    <div id="investigation-detail" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Evidence (2 cols) -->
         <div class="lg:col-span-2 space-y-6">
             <!-- Subject summary (workqueue drill-in with no alert/session detail loaded) -->
@@ -1160,6 +1180,10 @@
                             </div>
                         </template>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
                 </div>
             </div>
         </div>
@@ -2107,6 +2131,7 @@ function investigationPage() {
         },
 
         async openCase(caseId) {
+            this.closeDetail();
             try {
                 const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(caseId));
                 if (res.ok) {
