@@ -9,6 +9,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import threading
 from collections import defaultdict
@@ -130,6 +131,75 @@ def _generate_id(ioc_type: str, value: str) -> str:
     """Deterministic ID from type+value."""
     digest = hashlib.sha256(f"{ioc_type}:{value}".encode()).hexdigest()[:12]
     return f"ioc-{digest}"
+
+
+# STIX-2 indicator pattern parsing (OpenCTI stores indicators as STIX patterns).
+# Matches comparison expressions like:
+#   [domain-name:value = 'evil.example']
+#   [ipv4-addr:value = '203.0.113.5']
+#   [url:value = 'http://evil.example/x']
+#   [file:hashes.'SHA-256' = 'ab12...']
+# A single pattern may AND/OR several of these; we extract every atom.
+_STIX_INDICATOR_RE = re.compile(
+    r"(?P<obj>domain-name|ipv4-addr|ipv6-addr|url|file)"
+    r"(?::value|:hashes\.'?(?P<hashalg>[A-Za-z0-9\-]+)'?)"
+    r"\s*=\s*'(?P<value>[^']+)'",
+    re.IGNORECASE,
+)
+
+
+def _parse_stix_indicator_pattern(pattern: str) -> list[tuple[IOCType, str]]:
+    """Extract (IOCType, value) atoms from a STIX-2 indicator pattern.
+
+    Only observable object types Bulwark can enforce on are returned
+    (domain, ipv4/ipv6, url, file hashes). Unknown object types and
+    non-hash file properties are skipped rather than guessed.
+    """
+    results: list[tuple[IOCType, str]] = []
+    for m in _STIX_INDICATOR_RE.finditer(pattern):
+        obj = m.group("obj").lower()
+        value = m.group("value").strip()
+        if not value:
+            continue
+        if obj == "domain-name":
+            results.append((IOCType.DOMAIN, value))
+        elif obj in ("ipv4-addr", "ipv6-addr"):
+            results.append((IOCType.IP, value))
+        elif obj == "url":
+            results.append((IOCType.URL, value))
+        elif obj == "file":
+            alg = (m.group("hashalg") or "").upper().replace("-", "")
+            if alg == "SHA256":
+                results.append((IOCType.HASH_SHA256, value))
+            elif alg == "MD5":
+                results.append((IOCType.HASH_MD5, value))
+            # other hash algorithms (SHA-1, SHA-512, …) are not enforced
+    return results
+
+
+def _severity_from_score(score: int) -> IOCSeverity:
+    """Map a 0-100 CTI score to an IOC severity band."""
+    if score >= 80:
+        return IOCSeverity.CRITICAL
+    if score >= 50:
+        return IOCSeverity.HIGH
+    return IOCSeverity.MEDIUM
+
+
+def _opencti_labels(node: dict) -> list[str]:
+    """Extract up to 3 OpenCTI label strings from an indicator node as tags."""
+    raw = node.get("objectLabel") or []
+    labels: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            val = item.get("value")
+        else:
+            val = item
+        if isinstance(val, str) and val.strip():
+            labels.append(val.strip()[:30])
+        if len(labels) >= 3:
+            break
+    return labels
 
 
 class IOCStore:
@@ -756,6 +826,12 @@ class IOCStore:
         if not api_key or not feed.url:
             raise RuntimeError("MISP URL and API key required")
 
+        # SECURITY: validate the admin-configured URL against the SSRF blocklist
+        # (parity with custom/opencti feeds — MISP URL is operator-supplied).
+        ssrf_error = _validate_url_no_ssrf(feed.url)
+        if ssrf_error:
+            raise RuntimeError(f"Feed URL blocked (SSRF protection): {ssrf_error}")
+
         url = feed.url.rstrip("/") + "/attributes/restSearch"
         resp = httpx.post(
             url,
@@ -788,47 +864,92 @@ class IOCStore:
         return count
 
     def _fetch_opencti(self, feed: FeedConfig) -> int:
-        """Fetch from OpenCTI via GraphQL."""
+        """Fetch high-confidence indicators from OpenCTI via GraphQL (pull-only).
+
+        Queries the ``indicators`` collection (curated STIX indicators — richer
+        than raw observables), parses each STIX-2 pattern into atomic IOCs,
+        drops revoked entries and anything below the feed's confidence floor,
+        and carries OpenCTI labels through as tags.
+        """
         import httpx
 
         api_key = self._get_feed_api_key(feed)
         if not api_key or not feed.url:
             raise RuntimeError("OpenCTI URL and API key required")
 
+        # SECURITY: validate the admin-configured URL against the SSRF blocklist
+        # (parity with custom feeds — OpenCTI URL is operator-supplied).
+        ssrf_error = _validate_url_no_ssrf(feed.url)
+        if ssrf_error:
+            raise RuntimeError(f"Feed URL blocked (SSRF protection): {ssrf_error}")
+
         url = feed.url.rstrip("/") + "/graphql"
         query = """
-        query {
-            stixCyberObservables(first: 100, orderBy: created_at, orderMode: desc) {
-                edges { node { observable_value entity_type } }
+        query BulwarkIndicators($first: Int!) {
+            indicators(first: $first, orderBy: created_at, orderMode: desc) {
+                edges {
+                    node {
+                        pattern
+                        pattern_type
+                        revoked
+                        confidence
+                        x_opencti_score
+                        objectLabel { value }
+                    }
+                }
             }
         }
         """
         resp = httpx.post(
-            url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"query": query}, timeout=60,
+            url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"query": query, "variables": {"first": 100}},
+            timeout=60,
         )
         if resp.status_code != 200:
             raise RuntimeError(f"OpenCTI returned {resp.status_code}")
 
         data = resp.json()
+        if data.get("errors"):
+            first_err = data["errors"][0].get("message", "unknown error")
+            raise RuntimeError(f"OpenCTI GraphQL error: {first_err}")
+
+        min_score = int(round(feed.min_confidence * 100))
+        edges = data.get("data", {}).get("indicators", {}).get("edges", [])
+        seen = {e.value for e in self._entries.values()}
         count = 0
-        type_map = {"IPv4-Addr": IOCType.IP, "Domain-Name": IOCType.DOMAIN,
-                    "Url": IOCType.URL, "StixFile": IOCType.HASH_SHA256}
-        edges = data.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
         for edge in edges:
-            node = edge.get("node", {})
-            ioc_type = type_map.get(node.get("entity_type"))
-            if not ioc_type:
+            node = edge.get("node") or {}
+            # Only STIX patterns are parseable here (skip yara/sigma/snort rules).
+            if (node.get("pattern_type") or "stix").lower() != "stix":
                 continue
-            value = node.get("observable_value", "")
-            if not value or any(e.value == value for e in self._entries.values()):
+            if node.get("revoked"):
                 continue
-            ioc = IOCCreate(
-                type=ioc_type, value=value, severity=IOCSeverity.HIGH,
-                confidence=feed.min_confidence, tags=["opencti"],
-            )
-            self.create(ioc, source="opencti")
-            count += 1
+            score = node.get("x_opencti_score")
+            if score is None:
+                score = node.get("confidence") or 0
+            try:
+                score = int(score)
+            except (TypeError, ValueError):
+                score = 0
+            if score < min_score:
+                continue
+            pattern = node.get("pattern") or ""
+            if not pattern:
+                continue
+            labels = _opencti_labels(node)
+            severity = _severity_from_score(score)
+            confidence = max(0.0, min(1.0, score / 100.0))
+            for ioc_type, value in _parse_stix_indicator_pattern(pattern):
+                if value in seen:
+                    continue
+                seen.add(value)
+                ioc = IOCCreate(
+                    type=ioc_type, value=value, severity=severity,
+                    confidence=confidence, tags=["opencti"] + labels,
+                )
+                self.create(ioc, source="opencti")
+                count += 1
         return count
 
     def _fetch_virustotal(self, feed: FeedConfig) -> int:

@@ -228,6 +228,14 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
   `admin/services/ioc_store.py` → live proxy blocking. Also **first fix the
   doc↔code discrepancy**: either implement or correct the MISP/OpenCTI references in
   `ioc_feeds.py` docstrings + `AGENTS.md`.
+  - **DONE (pull + doc↔code fix)**: `IOCStore._fetch_opencti` now queries the
+    `indicators` collection, parses STIX-2 patterns
+    (`_parse_stix_indicator_pattern`), drops revoked + sub-confidence indicators,
+    carries labels through as tags, and validates the URL against the SSRF
+    blocklist (parity added to `_fetch_misp` too). Scheduled via the existing
+    `feed_scheduler` → `trigger_feed_update` path. README + `config/feeds/README.md`
+    now declare OpenCTI honestly. Tests: `tests/test_opencti_feed.py` (13).
+    Remaining for later: push (SCO/indicator/sighting + TLP) and lookup-on-IOC-check.
 - **Push**: observables → SCOs, `is_ioc` → `indicator` + `sighting` (with TLP
   marking-definitions), case → `grouping`/`report`. TLP/PAP gate enforced here.
 - **Lookup**: on IOC-check, also query OpenCTI for context (score, labels, related

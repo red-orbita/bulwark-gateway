@@ -75,7 +75,7 @@ If any layer detects a threat, the request is **blocked immediately** (fail-clos
 - **Multi-tenant, multi-agent** — Route requests to different backends per tenant/agent
 - **Zero-LLM hot path** — Only regex + Pydantic + cache; p95 < 40ms overhead
 - **400+ detection patterns** — Prompt injection, jailbreak, encoding evasion, multilingual (ES/ZH/AR)
-- **4 threat intel feeds** — URLhaus, ThreatFox, AlienVault OTX, AbuseIPDB (+ MISP, OpenCTI, VirusTotal, Shodan)
+- **4 threat intel feeds** — URLhaus, ThreatFox, AlienVault OTX, AbuseIPDB (+ OpenCTI CTI connector, pull-only)
 - **Streaming tool call buffering** — Tool calls validated BEFORE yielding to client
 - **Self-protection** — Blocks agents from modifying gateway config
 - **Hot-reloadable** — Policies, IOCs, and agent registry reload without restart

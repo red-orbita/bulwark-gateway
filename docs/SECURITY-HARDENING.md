@@ -338,7 +338,7 @@ Stated plainly so operators do not over-rely on any single layer.
 | Task | Frequency | Procedure |
 |------|-----------|-----------|
 | Rotate JWT secrets | Monthly | See [Operations](OPERATIONS.md#jwt-secret-rotation) |
-| Update IOC database | Daily (automated via feeds) | `config/feeds/` YAML configs |
+| Update IOC database | Daily (automated via feeds) | Admin portal → IOCs → Feeds |
 | Review audit logs | Weekly | Admin portal → Audit Log |
 | Dependency updates | Monthly | `pip-audit`, hash-pinned lockfiles |
 | Refresh distroless base image | On fixed-CVE digest publish | Re-pin the SHA256 digest in `Dockerfile` / `docker/Dockerfile.admin` |
