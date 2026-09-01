@@ -17,6 +17,7 @@ existence leak).
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,6 +28,7 @@ from pydantic import BaseModel, Field
 from ..models.auth import TokenPayload
 from ..services.audit_logger import get_audit_logger
 from ..services.auth_service import require_permission
+from ..services.integrations.event_webhook import get_event_webhook_emitter
 from ..services.investigation_case_store import (
     CASE_SEVERITIES,
     CASE_STATUSES,
@@ -59,6 +61,35 @@ from . import investigation as _investigation
 from .investigation import _MAX_TIMELINE, _authorize_subject, _can_write, _scoped_tenant
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
+
+
+# Severity ordering for detecting an *escalation* (only a raise fires the webhook).
+_SEVERITY_RANK = {sev: rank for rank, sev in enumerate(CASE_SEVERITIES)}
+
+async def _emit_case_event(event_type: str, case: dict, extra: Optional[dict] = None) -> None:
+    """Fire a lifecycle event to configured webhooks (best-effort, fail-open).
+
+    Emission never blocks or breaks case management: the emitter returns instantly
+    when nothing subscribes to the event and swallows every delivery error. A
+    programming error here must not take down the route, so the whole call is
+    defensively guarded.
+    """
+    try:
+        data = {
+            "case_id": case.get("case_id"),
+            "title": case.get("title"),
+            "severity": case.get("severity"),
+            "status": case.get("status"),
+        }
+        if extra:
+            data.update(extra)
+        await get_event_webhook_emitter().emit(
+            event_type, tenant=case.get("tenant") or None, data=data
+        )
+    except Exception:  # noqa: BLE001 — fail-open: a webhook must never break a case op
+        logger.warning("case_event_emit_failed", exc_info=True)
 
 _MAX_CASES = 500
 
@@ -528,6 +559,7 @@ async def create_case(
             + (f" template={body.template_id}" if template else "")
         ),
     )
+    await _emit_case_event("case.opened", case)
     return {"message": "Case created", "case": case}
 
 
@@ -790,7 +822,9 @@ async def set_case_state(
     """Set a case's status, severity and/or assignee."""
     if body.status is None and body.severity is None and body.assignee is None:
         raise HTTPException(status_code=400, detail="Provide status, severity and/or assignee.")
-    await _get_case_scoped(user, case_id)  # tenant gate
+    prior = await _get_case_scoped(user, case_id)  # tenant gate
+    prior_severity = prior.get("severity") or ""
+    prior_status = prior.get("status") or ""
 
     try:
         case = await get_case_store().set_state(
@@ -812,6 +846,20 @@ async def set_case_state(
         resource_id=case_id,
         details=f"status={body.status} severity={body.severity} assignee={body.assignee}",
     )
+
+    # Lifecycle webhooks: only a genuine severity *escalation* or a transition
+    # *into* resolved fires (no event on a no-op or a de-escalation).
+    new_severity = case.get("severity") or ""
+    if _SEVERITY_RANK.get(new_severity, -1) > _SEVERITY_RANK.get(prior_severity, -1):
+        await _emit_case_event(
+            "case.severity_raised",
+            case,
+            {"from_severity": prior_severity, "to_severity": new_severity},
+        )
+    new_status = case.get("status") or ""
+    if new_status == "resolved" and prior_status != "resolved":
+        await _emit_case_event("case.resolved", case, {"from_status": prior_status})
+
     return {"message": "Case updated", "case": case}
 
 

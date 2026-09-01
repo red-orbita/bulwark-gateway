@@ -12,10 +12,14 @@ migrated SQLite state and a mocked REST transport (``pytest-httpx``):
   retry/circuit-breaker fail path (:class:`ConnectorError`).
 * the ``/admin/integrations/*`` route handlers — status/CRUD, push (create then
   idempotent update), RBAC (viewer is read-only) and tenant scoping.
+* :class:`EventWebhookEmitter` + the ``/admin/integrations/webhooks/*`` routes —
+  the SOAR-trigger seed (Phase 1.3): subscription persistence/filtering, best-effort
+  fail-open fan-out, and the case-lifecycle emission (escalation-only ``severity_raised``).
 """
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -485,3 +489,294 @@ async def test_route_push_tenant_scoping_no_leak(wired_routes, monkeypatch):
             case["case_id"], data={"integration_id": integration_id}, user=other
         )
     assert exc.value.status_code == 404  # cross-tenant: no existence leak
+
+
+# ─── Event webhooks (SOAR trigger seed, Phase 1.3) ───────────────────────────
+
+
+@pytest.fixture
+def webhook_env(tmp_path, monkeypatch):
+    """Isolate the emitter: a throwaway config file + a fresh singleton."""
+    from admin.services.integrations import event_webhook as mod
+
+    monkeypatch.setattr(mod, "_CONFIG_FILE", tmp_path / "integration_webhooks.json")
+    monkeypatch.setattr(mod, "_emitter", None, raising=False)
+    return mod
+
+
+def _sub(**overrides):
+    from admin.services.integrations.event_webhook import WebhookSubscription
+
+    base = dict(
+        id="w1", name="SOAR", url="http://soar.test/hook",
+        events=[], enabled=True, verify_tls=True,
+    )
+    base.update(overrides)
+    return WebhookSubscription(**base)
+
+
+# ─── WebhookSubscription / emitter unit ──────────────────────────────────────
+
+
+def test_webhook_subscription_filtering_and_roundtrip():
+    from admin.services.integrations.event_webhook import WebhookSubscription
+
+    named = _sub(events=["case.opened"])
+    assert named.wants("case.opened") is True
+    assert named.wants("case.resolved") is False
+    # empty events ⇒ every event
+    assert _sub(events=[]).wants("case.resolved") is True
+    # disabled ⇒ nothing, regardless of filter
+    assert _sub(enabled=False).wants("case.opened") is False
+    # dict round-trip is loss-free
+    assert WebhookSubscription.from_dict(named.to_dict()) == named
+
+
+def test_emitter_add_persists_and_reloads(webhook_env):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub())
+    assert len(emitter.subscriptions) == 1
+
+    # A brand-new emitter over the same file must see the persisted subscription.
+    fresh = webhook_env.EventWebhookEmitter()
+    assert len(fresh.subscriptions) == 1
+    assert fresh.get("w1").name == "SOAR"
+
+
+def test_emitter_rejects_duplicate_id(webhook_env):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub())
+    with pytest.raises(ValueError):
+        emitter.add(_sub())
+
+
+def test_emitter_update_toggle_remove(webhook_env):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub())
+
+    updated = emitter.update("w1", {"name": "Renamed", "id": "hacked"})
+    assert updated.name == "Renamed"
+    assert updated.id == "w1"  # id is immutable
+
+    assert emitter.toggle("w1") is False
+    assert emitter.toggle("w1") is True
+    assert emitter.remove("w1") is True
+    assert emitter.get("w1") is None
+
+    # Misses return falsy sentinels, never raise.
+    assert emitter.update("missing", {}) is None
+    assert emitter.toggle("missing") is None
+    assert emitter.remove("missing") is False
+
+
+def test_emitter_malformed_config_degrades_to_empty(webhook_env):
+    webhook_env._CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    webhook_env._CONFIG_FILE.write_text("{ not valid json")
+    emitter = webhook_env.EventWebhookEmitter()
+    assert emitter.subscriptions == []
+
+
+# ─── emit() fan-out ──────────────────────────────────────────────────────────
+
+
+async def test_emit_fans_out_to_matching_only(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(id="all", url="http://soar.test/all", events=[]))
+    emitter.add(_sub(id="resolved", url="http://soar.test/resolved", events=["case.resolved"]))
+    emitter.add(_sub(id="off", url="http://soar.test/off", events=[], enabled=False))
+
+    # Only the wildcard subscriber should be hit for case.opened.
+    httpx_mock.add_response(url="http://soar.test/all", status_code=200)
+    results = await emitter.emit("case.opened", tenant="acme", data={"case_id": "c1"})
+
+    assert [r.subscription_id for r in results] == ["all"]
+    assert all(r.ok for r in results)
+    assert {str(req.url) for req in httpx_mock.get_requests()} == {"http://soar.test/all"}
+
+    # Stable envelope shape is what a SOAR runner subscribes to.
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    assert body["event"] == "case.opened"
+    assert body["tenant"] == "acme"
+    assert body["data"]["case_id"] == "c1"
+    assert body["event_id"].startswith("evt_")
+    assert body["timestamp"]
+
+
+async def test_emit_without_targets_makes_no_request(webhook_env):
+    emitter = webhook_env.get_event_webhook_emitter()
+    # No subscriptions at all ⇒ instant empty return, zero HTTP.
+    assert await emitter.emit("case.opened") == []
+
+
+async def test_emit_is_fail_open_on_transport_error(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(url="http://soar.test/hook"))
+    httpx_mock.add_exception(httpx.ConnectError("endpoint down"))
+
+    # A dead endpoint is reported, never raised — case management must not break.
+    results = await emitter.emit("case.opened")
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "ConnectError" in results[0].detail
+
+
+async def test_emitter_test_ping(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(url="http://soar.test/hook"))
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=204)
+
+    result = await emitter.test("w1")
+    assert result.ok is True
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    assert body["event"] == "test.ping"
+
+    # Unknown subscription is a graceful miss, not an HTTP call.
+    missing = await emitter.test("nope")
+    assert missing.ok is False
+    assert "unknown" in missing.detail
+
+
+# ─── webhook routes ──────────────────────────────────────────────────────────
+
+
+async def test_wh_route_create_validation_and_listing(webhook_env):
+    from fastapi import HTTPException
+
+    from admin.routes import integration_webhooks as wr
+
+    with pytest.raises(HTTPException) as e1:
+        await wr.create_webhook(data={"url": "http://x"}, user=_admin())
+    assert e1.value.status_code == 400
+    with pytest.raises(HTTPException) as e2:
+        await wr.create_webhook(data={"name": "x"}, user=_admin())
+    assert e2.value.status_code == 400
+
+    out = await wr.create_webhook(
+        data={"name": "SOAR", "url": "http://soar.test/hook", "events": ["case.opened"]},
+        user=_admin(),
+    )
+    assert out["webhook"]["name"] == "SOAR"
+    assert out["webhook"]["id"]  # server-assigned
+
+    listing = await wr.list_webhooks(user=_admin())
+    assert len(listing["webhooks"]) == 1
+    assert "case.opened" in listing["event_types"]
+
+    events = await wr.list_event_types(user=_admin())
+    assert set(events["event_types"]) == {
+        "case.opened", "case.severity_raised", "case.resolved"
+    }
+
+
+async def test_wh_route_missing_subscription_is_404(webhook_env):
+    from fastapi import HTTPException
+
+    from admin.routes import integration_webhooks as wr
+
+    with pytest.raises(HTTPException) as e_upd:
+        await wr.update_webhook("missing", data={"name": "z"}, user=_admin())
+    assert e_upd.value.status_code == 404
+    with pytest.raises(HTTPException) as e_del:
+        await wr.delete_webhook("missing", user=_admin())
+    assert e_del.value.status_code == 404
+    with pytest.raises(HTTPException) as e_tog:
+        await wr.toggle_webhook("missing", user=_admin())
+    assert e_tog.value.status_code == 404
+    with pytest.raises(HTTPException) as e_test:
+        await wr.test_webhook("missing", user=_admin())
+    assert e_test.value.status_code == 404
+
+
+async def test_wh_route_update_toggle_test_reload_delete(webhook_env, httpx_mock):
+    from admin.routes import integration_webhooks as wr
+
+    created = await wr.create_webhook(
+        data={"name": "SOAR", "url": "http://soar.test/hook"}, user=_admin()
+    )
+    wid = created["webhook"]["id"]
+
+    upd = await wr.update_webhook(wid, data={"name": "Renamed", "id": "hacked"}, user=_admin())
+    assert upd["webhook"]["name"] == "Renamed"
+    assert upd["webhook"]["id"] == wid  # id immutable
+
+    assert (await wr.toggle_webhook(wid, user=_admin()))["enabled"] is False
+
+    # test() ignores the enabled filter — a disabled sub can still be probed.
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+    assert (await wr.test_webhook(wid, user=_admin()))["ok"] is True
+
+    assert "reloaded" in (await wr.reload_webhooks(user=_admin()))["message"].lower()
+    assert "deleted" in (await wr.delete_webhook(wid, user=_admin()))["message"].lower()
+
+
+async def test_wh_route_rbac_viewer_is_read_only():
+    from fastapi import HTTPException
+
+    from admin.services.auth_service import require_permission
+
+    # Webhook writes reuse the integrations:write gate; a viewer is rejected at
+    # the dependency layer before any handler runs.
+    dep = require_permission("integrations:write")
+    with pytest.raises(HTTPException) as exc:
+        await dep(user=_viewer())
+    assert exc.value.status_code == 403
+
+
+# ─── case-lifecycle emission ─────────────────────────────────────────────────
+
+
+async def test_case_state_escalation_fires_webhook(engine, webhook_env, httpx_mock, monkeypatch):
+    from admin.routes import investigation_cases as ic
+    from admin.services import investigation_case_store as case_mod
+    from admin.services.investigation_case_store import CaseStore
+
+    monkeypatch.setattr(case_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(case_mod, "_store", None, raising=False)
+
+    webhook_env.get_event_webhook_emitter().add(_sub(url="http://soar.test/hook", events=[]))
+
+    case = await CaseStore().create_case(
+        title="Exfil", actor="admin", severity="medium", tenant="acme"
+    )
+    case_id = case["case_id"]
+
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+    resp = await ic.set_case_state(
+        case_id,
+        ic.CaseStateRequest(severity="critical"),
+        user=_mk_token("admin", UserRole.ADMIN, tenant="acme"),
+    )
+    assert resp["case"]["severity"] == "critical"
+
+    reqs = httpx_mock.get_requests()
+    assert len(reqs) == 1
+    payload = json.loads(reqs[0].content)
+    assert payload["event"] == "case.severity_raised"
+    assert payload["tenant"] == "acme"
+    assert payload["data"]["from_severity"] == "medium"
+    assert payload["data"]["to_severity"] == "critical"
+
+
+async def test_case_state_deescalation_does_not_fire(engine, webhook_env, httpx_mock, monkeypatch):
+    from admin.routes import investigation_cases as ic
+    from admin.services import investigation_case_store as case_mod
+    from admin.services.investigation_case_store import CaseStore
+
+    monkeypatch.setattr(case_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(case_mod, "_store", None, raising=False)
+
+    # A live subscriber exists — proving it's the escalation logic, not the absence
+    # of a target, that suppresses the event.
+    webhook_env.get_event_webhook_emitter().add(_sub(url="http://soar.test/hook", events=[]))
+
+    case = await CaseStore().create_case(
+        title="Noise", actor="admin", severity="high", tenant="acme"
+    )
+    resp = await ic.set_case_state(
+        case["case_id"],
+        ic.CaseStateRequest(severity="low"),
+        user=_mk_token("admin", UserRole.ADMIN, tenant="acme"),
+    )
+    assert resp["case"]["severity"] == "low"
+    # A lowered severity is not a lifecycle event: no delivery attempted.
+    assert httpx_mock.get_requests() == []

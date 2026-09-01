@@ -45,6 +45,7 @@ from .routes import (
     gdpr,
     guardrails,
     health,
+    integration_webhooks,
     integrations,
     investigation,
     investigation_cases,
@@ -419,6 +420,14 @@ app.include_router(
     tags=["investigation"],
 )
 app.include_router(dashboards.router, prefix="/admin/dashboards", tags=["dashboards"])
+# Register the webhook subrouter BEFORE the integrations router so a bare
+# ``GET /admin/integrations/webhooks`` is not captured by the single-segment
+# ``GET /admin/integrations/{integration_id}`` lookup.
+app.include_router(
+    integration_webhooks.router,
+    prefix="/admin/integrations/webhooks",
+    tags=["integrations"],
+)
 app.include_router(integrations.router, prefix="/admin/integrations", tags=["integrations"])
 
 

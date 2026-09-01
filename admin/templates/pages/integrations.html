@@ -93,6 +93,57 @@
         </div>
     </div>
 
+    <!-- Event webhooks -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="webhook" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Event Webhooks</h2>
+                <span class="text-xs text-gray-500" x-text="'(' + webhooks.length + ')'"></span>
+            </div>
+            <button @click="openWebhookCreate()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!canWrite">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                Add Webhook
+            </button>
+        </div>
+        <p class="text-xs text-gray-500 mb-4 max-w-3xl">Fire a structured JSON event to an external SOAR runner (Shuffle, n8n) on case lifecycle changes. Delivery is <em>best-effort</em> and fail-open — a slow or dead endpoint never delays or breaks case management.</p>
+        <div x-show="webhooks.length === 0" x-cloak class="text-sm text-gray-500 py-6 text-center">
+            No webhooks configured. Add one to trigger automation on case events.
+        </div>
+        <div x-show="webhooks.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Endpoint</th>
+                        <th>Events</th>
+                        <th>Status</th>
+                        <th class="text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="wh in webhooks" :key="wh.id">
+                        <tr>
+                            <td class="text-gray-200" x-text="wh.name"></td>
+                            <td class="font-mono text-xs text-gray-400 truncate max-w-[16rem]" x-text="wh.url"></td>
+                            <td class="text-[11px] text-gray-400" x-text="(wh.events && wh.events.length) ? wh.events.join(', ') : 'all events'"></td>
+                            <td>
+                                <span class="text-[11px] font-medium" :class="wh.enabled ? 'text-cyan-300' : 'text-gray-500'"
+                                      x-text="wh.enabled ? 'enabled' : 'disabled'"></span>
+                            </td>
+                            <td class="text-right whitespace-nowrap">
+                                <button @click="testWebhook(wh.id)" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!canWrite" title="Send a test.ping event">Test</button>
+                                <button @click="toggleWebhook(wh.id)" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!canWrite" x-text="wh.enabled ? 'Disable' : 'Enable'"></button>
+                                <button @click="openWebhookEdit(wh)" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!canWrite">Edit</button>
+                                <button @click="deleteWebhook(wh)" class="sg-btn sg-btn-ghost sg-btn-sm" style="color:#fca5a5;" :disabled="!canWrite">Delete</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <!-- Create/Edit modal -->
     <div x-show="modal.open" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0,0,0,0.6);">
         <div class="sg-card w-full max-w-lg" @click.outside="modal.open = false">
@@ -158,6 +209,57 @@
             </div>
         </div>
     </div>
+
+    <!-- Webhook create/edit modal -->
+    <div x-show="whModal.open" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0,0,0,0.6);">
+        <div class="sg-card w-full max-w-lg" @click.outside="whModal.open = false">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-medium text-white" x-text="whModal.editing ? 'Edit Webhook' : 'Add Webhook'"></h3>
+                <button @click="whModal.open = false" class="text-gray-400 hover:text-gray-200 sg-interactive" aria-label="Close">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5" for="wh-name">Name</label>
+                    <input id="wh-name" type="text" x-model="whModal.form.name" class="sg-input w-full" placeholder="Shuffle intake">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5" for="wh-url">Endpoint URL</label>
+                    <input id="wh-url" type="text" x-model="whModal.form.url" class="sg-input w-full" placeholder="https://soar.example.com/webhook/abc">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5">Events <span class="text-gray-600">(none selected ⇒ all)</span></label>
+                    <div class="space-y-1.5">
+                        <template x-for="ev in eventTypes" :key="ev">
+                            <label class="flex items-center gap-2 text-xs text-gray-300">
+                                <input type="checkbox" :value="ev" x-model="whModal.form.events" class="sg-checkbox">
+                                <span class="font-mono" x-text="ev"></span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-2.5">
+                    <div>
+                        <p class="text-sm text-gray-200">Verify TLS certificate</p>
+                        <p class="text-[11px] text-gray-500">Disable only for a lab endpoint with a self-signed cert.</p>
+                    </div>
+                    <button type="button" @click="whModal.form.verify_tls = !whModal.form.verify_tls"
+                            class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0"
+                            :class="whModal.form.verify_tls ? 'bg-cyan-500/70' : 'bg-gray-600'">
+                        <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform"
+                              :class="whModal.form.verify_tls ? 'translate-x-5' : 'translate-x-1'"></span>
+                    </button>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 pt-5">
+                <button @click="whModal.open = false" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                <button @click="saveWebhook()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="whModal.saving">
+                    <span x-text="whModal.saving ? 'Saving…' : (whModal.editing ? 'Save' : 'Create')"></span>
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script nonce="{{ csp_nonce() }}">
@@ -168,6 +270,9 @@ function integrationsPage() {
         integrations: [],
         health: {},
         modal: { open: false, editing: false, saving: false, form: {} },
+        webhooks: [],
+        eventTypes: [],
+        whModal: { open: false, editing: false, saving: false, form: {} },
 
         get enabledCount() { return this.integrations.filter(i => i.enabled).length; },
 
@@ -175,6 +280,7 @@ function integrationsPage() {
 
         async reloadAll() {
             await this.loadStatus();
+            await this.loadWebhooks();
             this.$nextTick(() => window.lucide && window.lucide.createIcons());
         },
 
@@ -305,6 +411,10 @@ function integrationsPage() {
             } catch (e) {
                 showToast('Network error', 'error');
             }
+        },
+    };
+}
+
         },
     };
 }

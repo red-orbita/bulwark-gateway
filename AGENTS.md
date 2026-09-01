@@ -879,6 +879,21 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/integrations/reload` | Session | Reload connector registry from disk — `integrations:write` |
 | POST | `/admin/integrations/push/case/{case_id}` | Session | Idempotent push of a case to TheHive/IRIS (create-or-update via link store; fail-open) — `integrations:write` |
 | GET | `/admin/integrations/push/case/{case_id}/links` | Session | List remote links (remote_id/url/last_synced_at) for a case — `integrations:read` |
+| GET | `/admin/integrations/webhooks` | Session | List event-webhook subscriptions (SOAR trigger seed) + available event types — `integrations:read` |
+| GET | `/admin/integrations/webhooks/events` | Session | List lifecycle event types a subscription can filter on — `integrations:read` |
+| POST | `/admin/integrations/webhooks` | Session | Create an event-webhook subscription (name/url/events) — `integrations:write` |
+| PUT | `/admin/integrations/webhooks/{id}` | Session | Update a subscription — `integrations:write` |
+| DELETE | `/admin/integrations/webhooks/{id}` | Session | Delete a subscription — `integrations:write` |
+| POST | `/admin/integrations/webhooks/{id}/toggle` | Session | Enable/disable a subscription — `integrations:write` |
+| POST | `/admin/integrations/webhooks/{id}/test` | Session | Send a synthetic `test.ping` (ignores filters/enabled) — `integrations:write` |
+| POST | `/admin/integrations/webhooks/reload` | Session | Reload subscriptions from disk — `integrations:write` |
+
+Event webhooks fire a stable JSON envelope (`event`/`event_id`/`timestamp`/`tenant`/`data`) to
+admin-configured HTTP endpoints on case **lifecycle** transitions — `case.opened`,
+`case.severity_raised` (escalation only), `case.resolved` (transition into resolved only). Fan-out is
+best-effort and **fail-open**: an empty subscription list costs nothing, deliveries run concurrently
+under a short timeout, and a slow/dead endpoint never delays or breaks case management. HMAC signing
+and the inbound action API are deferred to Phase 3.
 
 ### Authentication
 

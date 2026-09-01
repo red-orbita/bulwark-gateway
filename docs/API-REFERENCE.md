@@ -1178,6 +1178,48 @@ both; auditor/viewer are read-only). All mutations are recorded in the admin aud
           "last_synced_at": "2026-09-01T12:00:00Z", "etag": ""}}
 ```
 
+#### Event Webhooks (SOAR trigger seed)
+
+Outbound **event webhooks** are the trigger surface a SOAR runner (Shuffle / n8n) subscribes to. A
+subscription (`name`, `url`, optional `events` filter, `enabled`, `verify_tls`) is persisted to
+`data/integration_webhooks.json` (override with `BULWARK_INTEGRATION_WEBHOOKS_FILE`) and reuses the
+`integrations:read` / `integrations:write` permission namespace.
+
+On a case **lifecycle** transition the emitter POSTs a stable JSON envelope to every matching
+subscription: `case.opened`, `case.severity_raised` (only a genuine severity *escalation*), and
+`case.resolved` (only a transition *into* resolved). A subscription with an empty `events` list
+receives every event.
+
+Fan-out is best-effort and **fail-open**: an empty subscription list costs nothing, deliveries run
+concurrently under a short timeout, and a slow/dead endpoint never delays or breaks case management.
+HMAC signing and the inbound action API are deferred to Phase 3. All endpoints below are prefixed
+`/admin/integrations/webhooks`.
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `` | `integrations:read` | List subscriptions + available event types |
+| GET | `/events` | `integrations:read` | List lifecycle event types a subscription can filter on |
+| POST | `` | `integrations:write` | Create a subscription (`name` + `url` required) |
+| PUT | `/{id}` | `integrations:write` | Update a subscription |
+| DELETE | `/{id}` | `integrations:write` | Delete a subscription |
+| POST | `/{id}/toggle` | `integrations:write` | Enable / disable a subscription |
+| POST | `/{id}/test` | `integrations:write` | Send a synthetic `test.ping` (ignores filters / enabled) |
+| POST | `/reload` | `integrations:write` | Reload subscriptions from disk |
+
+```json
+// POST /admin/integrations/webhooks
+{"name": "SOAR trigger", "url": "https://soar.example/hooks/bulwark",
+ "events": ["case.opened", "case.severity_raised"], "verify_tls": true}
+
+// Delivered envelope (POST to the subscription url)
+{"event": "case.severity_raised",
+ "event_id": "evt_9f3c1a20b7d84e56",
+ "timestamp": "2026-09-01T12:00:00Z",
+ "tenant": "acme",
+ "data": {"case_id": "case_...", "title": "Exfil", "severity": "critical",
+          "status": "open", "from_severity": "medium", "to_severity": "critical"}}
+```
+
 ---
 
 ## Error Format
