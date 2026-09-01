@@ -1,0 +1,23 @@
+id: data-exfiltration
+name: Data Exfiltration Response
+description: >-
+  Suspected exfiltration of secrets, PII or proprietary data through an agent.
+  Use when EXFILTRATION, CREDENTIAL_ACCESS or PII_LEAK detections fire on the
+  output path.
+severity: critical
+summary: >-
+  Investigating suspected data exfiltration. Establish what was disclosed,
+  collect the indicators (destination URLs/IPs, leaked artefacts), and drive the
+  containment + notification checklist.
+tags:
+  - exfiltration
+  - data-loss
+  - owasp-llm02
+tasks:
+  - title: Confirm what data was disclosed and its sensitivity
+  - title: Collect exfiltration destinations (URL / IP / domain) as observables
+  - title: Promote confirmed malicious destinations to the IOC database
+  - title: Identify the origin/session and raise its risk
+  - title: Determine blast radius (other tenants/agents affected?)
+  - title: Notify the data owner and record the disclosure
+  - title: Rotate any exposed credentials

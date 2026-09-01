@@ -160,6 +160,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "sessions:read", "sessions:write",
         "correlation:read", "correlation:write",
         "investigation:read", "investigation:write",
+        "integrations:read", "integrations:write",
     },
     UserRole.SECURITY: {
         "policies:read", "policies:write", "policies:apply",
@@ -180,6 +181,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "sessions:read", "sessions:write",
         "correlation:read", "correlation:write",
         "investigation:read", "investigation:write",
+        "integrations:read", "integrations:write",
     },
     UserRole.AUDITOR: {
         "policies:read",

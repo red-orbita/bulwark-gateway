@@ -67,6 +67,13 @@ _MAX_SUBJECT_KEY_LEN = 256
 _MAX_SUBJECTS_PER_CASE = 500
 _MAX_SEARCH_LEN = 128
 
+# Case tag (TTP / label badge) bounds. Tags are a small free-form set an analyst
+# attaches to a case (e.g. a MITRE technique id or a campaign label); they are
+# deduped, normalised (trimmed, lower-cased) and capped so the list can never
+# grow without limit.
+_MAX_TAGS = 50
+_MAX_TAG_LEN = 64
+
 # Whitelisted sort columns for ``list_cases``. The API only ever passes a *key*
 # from this map into the query — never a raw client string — so the resulting
 # ``ORDER BY`` clause is injection-free. ``severity`` is ranked low→critical via a
@@ -154,6 +161,34 @@ def _load_notes(raw) -> list[dict]:
         return []
 
 
+def _load_tags(raw) -> list[str]:
+    """Parse the stored tags JSON into a list of strings (never raises)."""
+    if not raw:
+        return []
+    parsed = raw if isinstance(raw, list) else None
+    if parsed is None:
+        try:
+            decoded = json.loads(raw)
+            parsed = decoded if isinstance(decoded, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return [str(t) for t in parsed if isinstance(t, (str, int, float)) and str(t)]
+
+
+def _normalise_tags(tags: list[str]) -> list[str]:
+    """Trim, lower-case, dedupe (order-preserving) and cap a tag list."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in tags or []:
+        norm = str(tag).strip().lower()[:_MAX_TAG_LEN]
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+        if len(out) >= _MAX_TAGS:
+            break
+    return out
+
+
 def _row_to_case(row) -> dict:
     """Convert a DB row into the case dict the API returns (without subjects)."""
     d = row.to_dict() if hasattr(row, "to_dict") else dict(row)
@@ -166,6 +201,7 @@ def _row_to_case(row) -> dict:
         "assignee": d.get("assignee") or "",
         "summary": d.get("summary") or "",
         "notes": _load_notes(d.get("notes")),
+        "tags": _load_tags(d.get("tags")),
         "created_by": d.get("created_by") or "",
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
@@ -723,6 +759,44 @@ class CaseStore:
         )
         return await self.get(case_id)
 
+    async def add_timeline_entry(
+        self, *, case_id: str, actor: str, text: str, event_ts: Optional[str] = None
+    ) -> Optional[dict]:
+        """Append a manual timeline entry (``kind='timeline'``). ``None`` if absent.
+
+        A timeline entry is an analyst-recorded event on the case's reconstructed
+        chronology — "attacker rotated origin", "tenant notified out-of-band" — that
+        has no durable security event behind it. It is stored on the same
+        append-only note trail as every other note (so it inherits the audit trail
+        and bounds), tagged ``kind='timeline'`` and carrying an optional
+        ``event_ts`` (when the event actually occurred, distinct from when it was
+        recorded) so the timeline reconstruction can order it by real event time.
+        Raises ``ValueError`` on empty text.
+        """
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("timeline entry text is required")
+        case = await self._get_row(case_id)
+        if case is None:
+            return None
+        entry = {
+            "ts": _iso_now(),
+            "author": (actor or "system")[:_MAX_ASSIGNEE_LEN],
+            "kind": "timeline",
+            "text": text[:_MAX_NOTE_LEN],
+        }
+        if event_ts:
+            entry["event_ts"] = event_ts
+        notes = [*(case.get("notes") or []), entry]
+        if len(notes) > _MAX_NOTES:
+            notes = notes[-_MAX_NOTES:]
+        now = _iso_now()
+        await self._db().execute(
+            "UPDATE investigation_case SET notes = ?, updated_at = ? WHERE case_id = ?",
+            [json.dumps(notes), now, case_id],
+        )
+        return await self.get(case_id)
+
     async def add_subject(
         self, *, case_id: str, subject_type: str, subject_key: str, actor: str
     ) -> Optional[dict]:
@@ -795,6 +869,35 @@ class CaseStore:
                 "WHERE case_id = ?",
                 [json.dumps(notes), now, case_id],
             )
+        return await self.get(case_id)
+
+    async def set_tags(
+        self, *, case_id: str, actor: str, tags: list[str]
+    ) -> Optional[dict]:
+        """Replace a case's tag list (TTP / label badges). ``None`` if absent.
+
+        Tags are normalised (trimmed, lower-cased, deduped, capped) before storage.
+        The change is recorded as an append-only action note so the case's audit
+        trail reflects tag edits like any other state change.
+        """
+        case = await self._get_row(case_id)
+        if case is None:
+            return None
+        new_tags = _normalise_tags(tags)
+        old_tags = case.get("tags") or []
+        now = _iso_now()
+        notes = case.get("notes") or []
+        if new_tags != old_tags:
+            notes = self._append_note(
+                notes, author=actor,
+                text=f"tags [{', '.join(old_tags) or '—'}] → [{', '.join(new_tags) or '—'}]",
+                kind="action",
+            )
+        await self._db().execute(
+            "UPDATE investigation_case SET tags = ?, notes = ?, updated_at = ? "
+            "WHERE case_id = ?",
+            [json.dumps(new_tags), json.dumps(notes), now, case_id],
+        )
         return await self.get(case_id)
 
     @staticmethod
@@ -887,6 +990,9 @@ def render_case_markdown(case: dict) -> str:
         f"- **Updated:** {case.get('updated_at') or ''}",
         "",
     ]
+    tags = case.get("tags") or []
+    if tags:
+        lines[-1:] = [f"- **Tags:** {', '.join(tags)}", ""]
     summary = (case.get("summary") or "").strip()
     if summary:
         lines += ["## Summary", "", summary, ""]

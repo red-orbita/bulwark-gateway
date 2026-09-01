@@ -225,6 +225,10 @@
                     <i data-lucide="search-check" class="nav-icon" aria-hidden="true"></i>
                     <span x-show="sidebarOpen" class="nav-label">Investigation Center</span>
                 </a>
+                <a href="/integrations" class="nav-item" data-page="integrations" data-section="investigate" aria-label="Integrations">
+                    <i data-lucide="cable" class="nav-icon" aria-hidden="true"></i>
+                    <span x-show="sidebarOpen" class="nav-label">Integrations</span>
+                </a>
                 <a href="/correlation" class="nav-item" data-page="correlation" data-alias="sessions" data-section="investigate" aria-label="Correlation and Sessions">
                     <i data-lucide="git-merge" class="nav-icon" aria-hidden="true"></i>
                     <span x-show="sidebarOpen" class="nav-label">Correlation &amp; Sessions</span>
@@ -710,25 +714,26 @@
                     { id: 10, label: 'Enrichment', href: '/enrichment', icon: 'layers', section: 'Detect & Protect' },
                     { id: 11, label: 'Investigation Center', href: '/investigation', icon: 'search-check', section: 'Investigate' },
                     { id: 12, label: 'Correlation Engine', href: '/correlation', icon: 'git-merge', section: 'Investigate' },
-                    { id: 13, label: 'Session Tracker', href: '/sessions', icon: 'list-tree', section: 'Investigate' },
-                    { id: 14, label: 'Red Teaming', href: '/evaluation', icon: 'swords', section: 'Investigate' },
-                    { id: 15, label: 'Discovery', href: '/discovery', icon: 'radar', section: 'Investigate' },
-                    { id: 16, label: 'Tenants', href: '/tenants', icon: 'building-2', section: 'Govern' },
-                    { id: 17, label: 'Tenant Analytics', href: '/tenant-analytics', icon: 'bar-chart-3', section: 'Govern' },
-                    { id: 18, label: 'Agents', href: '/agents', icon: 'bot', section: 'Govern' },
-                    { id: 19, label: 'Policies', href: '/policies', icon: 'file-lock', section: 'Govern' },
-                    { id: 20, label: 'Users & Roles', href: '/rbac', icon: 'users', section: 'Govern' },
-                    { id: 21, label: 'GDPR / Privacy', href: '/gdpr', icon: 'scale', section: 'Govern' },
-                    { id: 22, label: 'Audit Log', href: '/audit', icon: 'scroll-text', section: 'Govern' },
-                    { id: 23, label: 'Rate Limits', href: '/rate-limits', icon: 'gauge', section: 'Traffic & Cost' },
-                    { id: 24, label: 'Quotas', href: '/quotas', icon: 'sliders-horizontal', section: 'Traffic & Cost' },
-                    { id: 25, label: 'Cost & Usage', href: '/cost', icon: 'coins', section: 'Traffic & Cost' },
-                    { id: 26, label: 'Virtual Keys', href: '/virtual-keys', icon: 'key-round', section: 'Traffic & Cost' },
-                    { id: 27, label: 'Response Cache', href: '/cache', icon: 'database-zap', section: 'Traffic & Cost' },
-                    { id: 28, label: 'SIEM Export', href: '/siem', icon: 'radio-tower', section: 'Platform' },
-                    { id: 29, label: 'Notifications', href: '/notifications', icon: 'bell-ring', section: 'Platform' },
-                    { id: 30, label: 'Plugins', href: '/plugins', icon: 'puzzle', section: 'Platform' },
-                    { id: 31, label: 'Settings', href: '/settings', icon: 'settings', section: 'Platform' },
+                    { id: 13, label: 'Integrations', href: '/integrations', icon: 'cable', section: 'Investigate' },
+                    { id: 14, label: 'Session Tracker', href: '/sessions', icon: 'list-tree', section: 'Investigate' },
+                    { id: 15, label: 'Red Teaming', href: '/evaluation', icon: 'swords', section: 'Investigate' },
+                    { id: 16, label: 'Discovery', href: '/discovery', icon: 'radar', section: 'Investigate' },
+                    { id: 17, label: 'Tenants', href: '/tenants', icon: 'building-2', section: 'Govern' },
+                    { id: 18, label: 'Tenant Analytics', href: '/tenant-analytics', icon: 'bar-chart-3', section: 'Govern' },
+                    { id: 19, label: 'Agents', href: '/agents', icon: 'bot', section: 'Govern' },
+                    { id: 20, label: 'Policies', href: '/policies', icon: 'file-lock', section: 'Govern' },
+                    { id: 21, label: 'Users & Roles', href: '/rbac', icon: 'users', section: 'Govern' },
+                    { id: 22, label: 'GDPR / Privacy', href: '/gdpr', icon: 'scale', section: 'Govern' },
+                    { id: 23, label: 'Audit Log', href: '/audit', icon: 'scroll-text', section: 'Govern' },
+                    { id: 24, label: 'Rate Limits', href: '/rate-limits', icon: 'gauge', section: 'Traffic & Cost' },
+                    { id: 25, label: 'Quotas', href: '/quotas', icon: 'sliders-horizontal', section: 'Traffic & Cost' },
+                    { id: 26, label: 'Cost & Usage', href: '/cost', icon: 'coins', section: 'Traffic & Cost' },
+                    { id: 27, label: 'Virtual Keys', href: '/virtual-keys', icon: 'key-round', section: 'Traffic & Cost' },
+                    { id: 28, label: 'Response Cache', href: '/cache', icon: 'database-zap', section: 'Traffic & Cost' },
+                    { id: 29, label: 'SIEM Export', href: '/siem', icon: 'radio-tower', section: 'Platform' },
+                    { id: 30, label: 'Notifications', href: '/notifications', icon: 'bell-ring', section: 'Platform' },
+                    { id: 31, label: 'Plugins', href: '/plugins', icon: 'puzzle', section: 'Platform' },
+                    { id: 32, label: 'Settings', href: '/settings', icon: 'settings', section: 'Platform' },
                 ],
                 get filtered() {
                     if (!this.query) return this.items;

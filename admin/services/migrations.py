@@ -539,6 +539,157 @@ MIGRATIONS: list[Migration] = [
                 ON investigation_case_subject(subject_type, subject_key);
         """,
     ),
+
+    # Version 8: Investigation Center — Phase 0. Promotes observables and tasks to
+    # first-class, case-scoped records and adds a free-form tag list to cases.
+    #   1. `investigation_observable`: an atomic indicator collected under a case
+    #      (ip/domain/url/hash/email/filename/user/other), with a normalized value,
+    #      an `is_ioc` flag (INTEGER 0/1 — kept as INTEGER in BOTH backends to avoid
+    #      BOOLEAN coercion across dialects), TLP/PAP handling markers, a JSON tag
+    #      list, a provenance `source`, and a JSON `enrichment` blob reserved for
+    #      Phase 2. UNIQUE(case_id, type, value) dedupes an indicator per case.
+    #   2. `investigation_task`: an analyst checklist item under a case with a
+    #      status lifecycle (todo/in_progress/done/cancelled), an optional assignee,
+    #      an `order_index` (INTEGER, max+1 on insert) for manual ordering, an
+    #      optional due timestamp, and an append-only JSON note trail.
+    #   3. `investigation_case.tags`: a JSON tag list on the case record itself
+    #      (TTP/label badges), added non-destructively with a NULL default.
+    Migration(
+        version=8,
+        description="Investigation Center Phase 0: observables + tasks tables + case tags",
+        sqlite_sql="""
+            CREATE TABLE IF NOT EXISTS investigation_observable (
+                observable_id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                value TEXT NOT NULL,
+                is_ioc INTEGER NOT NULL DEFAULT 0,
+                tlp TEXT NOT NULL DEFAULT 'amber',
+                pap TEXT NOT NULL DEFAULT 'amber',
+                tags TEXT,
+                source TEXT NOT NULL DEFAULT 'manual',
+                enrichment TEXT,
+                added_by TEXT,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                UNIQUE(case_id, type, value)
+            );
+            CREATE INDEX IF NOT EXISTS idx_observable_case
+                ON investigation_observable(case_id);
+            CREATE INDEX IF NOT EXISTS idx_observable_type
+                ON investigation_observable(type, value);
+
+            CREATE TABLE IF NOT EXISTS investigation_task (
+                task_id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                assignee TEXT,
+                order_index INTEGER NOT NULL DEFAULT 0,
+                due_at TEXT,
+                notes TEXT,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_case
+                ON investigation_task(case_id);
+            CREATE INDEX IF NOT EXISTS idx_task_status
+                ON investigation_task(status);
+
+            ALTER TABLE investigation_case ADD COLUMN tags TEXT;
+        """,
+        postgresql_sql="""
+            CREATE TABLE IF NOT EXISTS investigation_observable (
+                observable_id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                value TEXT NOT NULL,
+                is_ioc INTEGER NOT NULL DEFAULT 0,
+                tlp TEXT NOT NULL DEFAULT 'amber',
+                pap TEXT NOT NULL DEFAULT 'amber',
+                tags TEXT,
+                source TEXT NOT NULL DEFAULT 'manual',
+                enrichment TEXT,
+                added_by TEXT,
+                first_seen TIMESTAMPTZ NOT NULL,
+                last_seen TIMESTAMPTZ NOT NULL,
+                UNIQUE(case_id, type, value)
+            );
+            CREATE INDEX IF NOT EXISTS idx_observable_case
+                ON investigation_observable(case_id);
+            CREATE INDEX IF NOT EXISTS idx_observable_type
+                ON investigation_observable(type, value);
+
+            CREATE TABLE IF NOT EXISTS investigation_task (
+                task_id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                assignee TEXT,
+                order_index INTEGER NOT NULL DEFAULT 0,
+                due_at TIMESTAMPTZ,
+                notes TEXT,
+                created_by TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_case
+                ON investigation_task(case_id);
+            CREATE INDEX IF NOT EXISTS idx_task_status
+                ON investigation_task(status);
+
+            ALTER TABLE investigation_case ADD COLUMN IF NOT EXISTS tags TEXT;
+        """,
+    ),
+    # Version 9: Integrations subsystem (Phase 1) — remote-object link table.
+    #
+    # ``integration_link`` is the idempotency map that lets an outbound connector
+    # (TheHive / DFIR-IRIS / …) know whether a local object has already been pushed
+    # to a remote platform, so a re-push *updates* the remote record instead of
+    # creating a duplicate. Keyed by the composite (connector, local_type, local_id)
+    # — e.g. ("thehive", "case", "case_ab12…") — mapping to the ``remote_id`` the
+    # platform assigned, plus provenance (``last_synced_at``) and an optional
+    # ``etag`` for conditional updates. The composite PRIMARY KEY doubles as the
+    # uniqueness guarantee (identical syntax on both backends; no surrogate id, so
+    # no AUTOINCREMENT/SERIAL divergence). Only ``last_synced_at`` differs by
+    # dialect (TEXT ISO string on SQLite, TIMESTAMPTZ on PostgreSQL).
+    Migration(
+        version=9,
+        description="Integrations Phase 1: integration_link table (connector↔local↔remote id map)",
+        sqlite_sql="""
+            CREATE TABLE IF NOT EXISTS integration_link (
+                connector TEXT NOT NULL,
+                local_type TEXT NOT NULL,
+                local_id TEXT NOT NULL,
+                remote_id TEXT,
+                remote_url TEXT,
+                last_synced_at TEXT,
+                etag TEXT,
+                PRIMARY KEY (connector, local_type, local_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_integration_link_remote
+                ON integration_link(connector, remote_id);
+            CREATE INDEX IF NOT EXISTS idx_integration_link_local
+                ON integration_link(local_type, local_id);
+        """,
+        postgresql_sql="""
+            CREATE TABLE IF NOT EXISTS integration_link (
+                connector TEXT NOT NULL,
+                local_type TEXT NOT NULL,
+                local_id TEXT NOT NULL,
+                remote_id TEXT,
+                remote_url TEXT,
+                last_synced_at TIMESTAMPTZ,
+                etag TEXT,
+                PRIMARY KEY (connector, local_type, local_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_integration_link_remote
+                ON integration_link(connector, remote_id);
+            CREATE INDEX IF NOT EXISTS idx_integration_link_local
+                ON integration_link(local_type, local_id);
+        """,
+    ),
 ]
 
 

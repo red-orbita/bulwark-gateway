@@ -452,6 +452,15 @@
                         </template>
                     </select>
                 </div>
+                <div x-show="caseTemplates.length > 0">
+                    <label for="case-template" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Template <span class="text-gray-600 normal-case">(optional)</span></label>
+                    <select id="case-template" x-model="caseCreate.template_id" class="sg-input w-full">
+                        <option value="">— none —</option>
+                        <template x-for="t in caseTemplates" :key="'ct-' + t.id">
+                            <option :value="t.id" x-text="t.name || t.id"></option>
+                        </template>
+                    </select>
+                </div>
                 <div class="sm:col-span-2">
                     <label for="case-summary" class="text-[11px] text-gray-500 uppercase tracking-wide block mb-1.5">Summary <span class="text-gray-600 normal-case">(optional)</span></label>
                     <textarea id="case-summary" x-model="caseCreate.summary" rows="2" maxlength="4000" placeholder="What ties these subjects together?" class="sg-input w-full"></textarea>
@@ -559,7 +568,7 @@
                         <h2 class="text-sm font-medium text-white" x-text="(caseDetail && caseDetail.title) || 'Case'"></h2>
                         <span class="text-[10px] text-gray-500 font-mono break-all" x-text="caseDetail && caseDetail.case_id"></span>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap justify-end">
                         <button @click="exportCase('md')" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Export case as Markdown">
                             <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
                             .md
@@ -568,6 +577,36 @@
                             <i data-lucide="braces" class="w-3.5 h-3.5"></i>
                             .json
                         </button>
+                        <button @click="exportCase('stix')" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Export case as STIX 2.1 bundle" title="STIX 2.1 bundle">
+                            <i data-lucide="share-2" class="w-3.5 h-3.5"></i>
+                            STIX
+                        </button>
+                        <button @click="exportCase('thehive')" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Export case for TheHive" title="TheHive case bundle">
+                            <i data-lucide="hexagon" class="w-3.5 h-3.5"></i>
+                            TheHive
+                        </button>
+                        <button @click="exportCase('iris')" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Export case for DFIR-IRIS" title="DFIR-IRIS case bundle">
+                            <i data-lucide="scan-eye" class="w-3.5 h-3.5"></i>
+                            IRIS
+                        </button>
+                        <div class="relative" @click.outside="pushMenuOpen = false">
+                            <button @click="togglePushMenu()" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Push case to an integration" title="Push to a case-management platform">
+                                <i data-lucide="cable" class="w-3.5 h-3.5"></i>
+                                Push
+                                <i data-lucide="chevron-down" class="w-3 h-3"></i>
+                            </button>
+                            <div x-show="pushMenuOpen" x-cloak class="absolute right-0 mt-1 w-56 z-10 rounded-md shadow-lg py-1"
+                                 style="background:#0f172a; border:1px solid rgba(255,255,255,0.08);">
+                                <p x-show="pushTargets.length === 0" class="px-3 py-2 text-[11px] text-gray-500">No enabled integrations. Configure one under <span class="text-gray-300">Integrations</span>.</p>
+                                <template x-for="t in pushTargets" :key="t.id">
+                                    <button @click="pushCaseTo(t.id)" :disabled="pushing"
+                                            class="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-white/5 sg-interactive flex items-center justify-between">
+                                        <span x-text="t.name"></span>
+                                        <span class="text-[10px] text-gray-500" x-text="t.type === 'thehive' ? 'TheHive' : 'IRIS'"></span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
                         <button @click="closeCase()" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
                     </div>
                 </div>
@@ -577,6 +616,26 @@
                     <div><dt class="text-gray-500 uppercase tracking-wider">Opened by</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(caseDetail && caseDetail.created_by) || '—'"></dd></div>
                     <div class="sm:col-span-2" x-show="caseDetail && caseDetail.summary"><dt class="text-gray-500 uppercase tracking-wider">Summary</dt><dd class="text-gray-300 mt-0.5 whitespace-pre-wrap break-words" x-text="caseDetail && caseDetail.summary"></dd></div>
                 </dl>
+
+                <!-- Tags / TTP labels (Fase 0) -->
+                <p class="text-gray-500 uppercase tracking-wider text-xs mb-2">Tags
+                    <span class="text-gray-600" x-text="'(' + caseTags().length + ')'"></span>
+                </p>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    <template x-for="(tag, i) in caseTags()" :key="'ctag-' + i">
+                        <span class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-gray-500/15 text-gray-300 border border-gray-600/30">
+                            <span class="break-all" x-text="tag"></span>
+                            <button @click="removeCaseTag(tag)" :disabled="!caseCanWrite || saving" class="hover:text-white" aria-label="Remove tag">
+                                <i data-lucide="x" class="w-3 h-3"></i>
+                            </button>
+                        </span>
+                    </template>
+                    <span x-show="caseTags().length === 0" class="text-[11px] text-gray-500">No tags. Add ATT&CK/TTP labels to group related activity.</span>
+                </div>
+                <div class="flex gap-2 mb-4" x-show="caseCanWrite">
+                    <input type="text" x-model="caseTagInput" maxlength="80" placeholder="e.g. T1059, prompt-injection" class="sg-input flex-1" @keydown.enter.prevent="addCaseTag()" aria-label="New tag">
+                    <button @click="addCaseTag()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!caseCanWrite || saving || !caseTagInput.trim()">Add</button>
+                </div>
 
                 <p class="text-gray-500 uppercase tracking-wider text-xs mb-2">Linked Subjects
                     <span class="text-gray-600" x-text="'(' + (caseDetail ? caseDetail.subjects.length : 0) + ')'"></span>
@@ -611,6 +670,15 @@
 
                 <p class="text-[11px] text-gray-500 mb-3">The case's evidence and note trail merged into one chronological stream (newest first). Incident and origin subjects contribute their durable events; sessions carry none.</p>
 
+                <!-- Manual timeline entry (Fase 0) -->
+                <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5 mb-3" x-show="caseCanWrite">
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input type="text" x-model="caseManualEntry.text" maxlength="2000" placeholder="Add analyst observation to the timeline…" class="sg-input flex-1" @keydown.enter.prevent="addManualTimelineEntry()" aria-label="Manual timeline entry text">
+                        <input type="datetime-local" x-model="caseManualEntry.event_ts" class="sg-input sm:w-48" aria-label="Event time (optional)" title="Event time (optional — defaults to now)">
+                        <button @click="addManualTimelineEntry()" class="sg-btn sg-btn-ghost sg-btn-sm shrink-0" :disabled="!caseCanWrite || saving || !caseManualEntry.text.trim()">Add</button>
+                    </div>
+                </div>
+
                 <div x-show="caseTimelineTruncated" class="text-[10px] text-amber-300/80 mb-2 flex items-center gap-1.5">
                     <i data-lucide="scissors" class="w-3 h-3"></i>
                     Showing the most recent window — older entries were truncated.
@@ -642,6 +710,124 @@
                         </li>
                     </template>
                 </ol>
+            </div>
+
+            <!-- Observables (Fase 0): first-class IOC/atomic indicators for the case -->
+            <div class="sg-card">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="fingerprint" class="w-4 h-4 text-indigo-300"></i>
+                        <h2 class="text-sm font-medium text-white">Observables</h2>
+                        <span class="text-gray-600 text-[11px]" x-text="'(' + caseObservables.length + ')'"></span>
+                    </div>
+                    <button @click="loadCaseObservables()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="caseObservablesLoading" aria-label="Refresh observables">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="caseObservablesLoading ? 'animate-spin' : ''"></i>
+                    </button>
+                </div>
+
+                <p class="text-[11px] text-gray-500 mb-3">Atomic indicators tied to this case — IPs, domains, URLs, hashes and more. Promote an observable to a live IOC to have the proxy block it across every tenant.</p>
+
+                <!-- Add observable -->
+                <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5 mb-3" x-show="caseCanWrite">
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <select x-model="caseObsNew.type" class="sg-input sm:w-32" aria-label="Observable type">
+                            <template x-for="ot in caseObservableTypes" :key="'ot-' + ot">
+                                <option :value="ot" x-text="ot"></option>
+                            </template>
+                        </select>
+                        <input type="text" x-model="caseObsNew.value" maxlength="1024" placeholder="Value (e.g. 8.8.8.8, evil.example.com)" class="sg-input flex-1" @keydown.enter.prevent="addObservable()" aria-label="Observable value">
+                        <select x-model="caseObsNew.tlp" class="sg-input sm:w-32" aria-label="TLP level">
+                            <template x-for="tl in caseTlpLevels" :key="'tl-' + tl">
+                                <option :value="tl" x-text="'TLP:' + tl"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div class="flex items-center justify-between mt-2">
+                        <label class="inline-flex items-center gap-1.5 text-[11px] text-gray-400">
+                            <input type="checkbox" x-model="caseObsNew.is_ioc" class="rounded border-gray-700 bg-gray-900">
+                            Mark as IOC
+                        </label>
+                        <button @click="addObservable()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!caseCanWrite || saving || !caseObsNew.value.trim()">Add Observable</button>
+                    </div>
+                </div>
+
+                <div x-show="!caseObservablesLoading && caseObservables.length === 0" class="text-[11px] text-gray-500 py-2">No observables recorded yet.</div>
+
+                <div x-show="caseObservables.length > 0" class="space-y-2">
+                    <template x-for="(o, i) in caseObservables" :key="'obs-' + (o.observable_id || i)">
+                        <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5 flex items-center gap-2 flex-wrap">
+                            <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-500/15 text-gray-300 border border-gray-600/30" x-text="o.type"></span>
+                            <span class="text-[11px] font-mono text-gray-300 break-all" x-text="o.value"></span>
+                            <span class="text-[9px] px-1.5 py-0.5 rounded" :class="tlpBadgeClass(o.tlp)" x-text="'TLP:' + (o.tlp || 'amber')"></span>
+                            <span x-show="o.is_ioc" class="text-[9px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30 inline-flex items-center gap-1">
+                                <i data-lucide="shield-alert" class="w-3 h-3"></i>IOC
+                            </span>
+                            <div class="ml-auto flex items-center gap-1">
+                                <button x-show="!o.is_ioc" @click="promoteObservable(o.observable_id)" :disabled="!caseCanWrite || saving" class="sg-btn sg-btn-ghost sg-btn-sm" title="Promote to live IOC" aria-label="Promote to IOC">
+                                    <i data-lucide="shield-plus" class="w-3.5 h-3.5"></i>
+                                </button>
+                                <button @click="removeObservable(o.observable_id)" :disabled="!caseCanWrite || saving" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Remove observable">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Tasks (Fase 0): investigation checklist / response playbook -->
+            <div class="sg-card">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="list-checks" class="w-4 h-4 text-indigo-300"></i>
+                        <h2 class="text-sm font-medium text-white">Tasks</h2>
+                        <span class="text-gray-600 text-[11px]" x-text="'(' + caseTaskProgress.done + '/' + caseTaskProgress.total + ')'"></span>
+                    </div>
+                    <button @click="loadCaseTasks()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="caseTasksLoading" aria-label="Refresh tasks">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="caseTasksLoading ? 'animate-spin' : ''"></i>
+                    </button>
+                </div>
+
+                <!-- Progress bar -->
+                <div x-show="caseTaskProgress.total > 0" class="mb-3">
+                    <div class="h-2 w-full rounded bg-gray-800 overflow-hidden">
+                        <div class="h-full bg-green-500/60" :style="'width:' + taskDonePct() + '%'"></div>
+                    </div>
+                    <p class="text-[10px] text-gray-500 mt-1" x-text="taskDonePct() + '% complete'"></p>
+                </div>
+
+                <!-- Add task -->
+                <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5 mb-3" x-show="caseCanWrite">
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input type="text" x-model="caseTaskNew.title" maxlength="200" placeholder="Task title (e.g. Isolate affected agent)" class="sg-input flex-1" @keydown.enter.prevent="addTask()" aria-label="Task title">
+                        <input type="text" x-model="caseTaskNew.assignee" maxlength="120" placeholder="Assignee (optional)" class="sg-input sm:w-48" aria-label="Task assignee">
+                        <button @click="addTask()" class="sg-btn sg-btn-ghost sg-btn-sm shrink-0" :disabled="!caseCanWrite || saving || !caseTaskNew.title.trim()">Add</button>
+                    </div>
+                </div>
+
+                <div x-show="!caseTasksLoading && caseTasks.length === 0" class="text-[11px] text-gray-500 py-2">No tasks yet.</div>
+
+                <div x-show="caseTasks.length > 0" class="space-y-2">
+                    <template x-for="(tk, i) in caseTasks" :key="'task-' + (tk.task_id || i)">
+                        <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-[9px] px-1.5 py-0.5 rounded" :class="taskStatusClass(tk.status)" x-text="(tk.status || 'todo').replace('_', ' ')"></span>
+                                <span class="text-[11px] break-words" :class="tk.status === 'done' || tk.status === 'cancelled' ? 'text-gray-500' : 'text-gray-200'" :style="(tk.status === 'done' || tk.status === 'cancelled') ? 'text-decoration:line-through' : ''" x-text="tk.title"></span>
+                                <span x-show="tk.assignee" class="text-[10px] text-gray-500 font-mono" x-text="'@' + tk.assignee"></span>
+                                <div class="ml-auto flex items-center gap-1">
+                                    <select @change="setTaskStatus(tk.task_id, $event.target.value)" :disabled="!caseCanWrite || saving" class="sg-input sg-input-sm text-[10px]" aria-label="Task status">
+                                        <template x-for="st in caseTaskStatuses" :key="'ts-' + (tk.task_id || i) + '-' + st">
+                                            <option :value="st" :selected="tk.status === st" x-text="st.replace('_', ' ')"></option>
+                                        </template>
+                                    </select>
+                                    <button @click="removeTask(tk.task_id)" :disabled="!caseCanWrite || saving" class="sg-btn sg-btn-ghost sg-btn-sm" aria-label="Remove task">
+                                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
             </div>
 
             <!-- Related cases (Fase 5D): cross-case correlation via shared subjects -->
@@ -1297,13 +1483,29 @@ function investigationPage() {
             caseAnalyticsLoading: false,
             showCaseAnalytics: false,
             showCaseCreate: false,
-            caseCreate: { title: '', severity: 'medium', summary: '' },
+            caseCreate: { title: '', severity: 'medium', summary: '', template_id: '' },
+            caseTemplates: [],
             caseDetail: null,
             caseAssigneeInput: '',
+            pushMenuOpen: false,
+            pushTargets: [],
+            pushing: false,
             caseNoteInput: '',
             caseTimeline: [],
             caseTimelineLoading: false,
             caseTimelineTruncated: false,
+            caseManualEntry: { text: '', event_ts: '' },
+            caseObservables: [],
+            caseObservablesLoading: false,
+            caseObservableTypes: ['ip', 'domain', 'url', 'hash', 'email', 'filename', 'user', 'other'],
+            caseTlpLevels: ['red', 'amber', 'green', 'white'],
+            caseObsNew: { type: 'ip', value: '', is_ioc: false, tlp: 'amber' },
+            caseTasks: [],
+            caseTasksLoading: false,
+            caseTaskProgress: { total: 0, done: 0, open: 0 },
+            caseTaskStatuses: ['todo', 'in_progress', 'done', 'cancelled'],
+            caseTaskNew: { title: '', assignee: '' },
+            caseTagInput: '',
             caseRelated: [],
             caseRelatedLoading: false,
             subjectCases: [],
@@ -1313,6 +1515,7 @@ function investigationPage() {
                 await this.loadProfile();
                 await this.loadAssignableUsers();
                 await this.loadComplianceMappings();
+                await this.loadCaseTemplates();
                 await this.reloadAll();
                 this.$watch('autoRefresh', (on) => this._syncAutoRefresh(on));
             },
@@ -2152,6 +2355,48 @@ function investigationPage() {
             window.open(url, '_blank', 'noopener');
         },
 
+        async togglePushMenu() {
+            this.pushMenuOpen = !this.pushMenuOpen;
+            if (this.pushMenuOpen) {
+                await this.loadPushTargets();
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            }
+        },
+
+        async loadPushTargets() {
+            try {
+                const res = await fetch('/admin/integrations/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.pushTargets = (data.integrations || []).filter(i => i.enabled);
+                }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        async pushCaseTo(integrationId) {
+            if (!this.caseDetail || this.pushing) return;
+            this.pushing = true;
+            const id = this.caseDetail.case_id;
+            try {
+                const res = await fetch('/admin/integrations/push/case/' + encodeURIComponent(id), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ integration_id: integrationId }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    showToast(data.detail || 'Push failed', 'error');
+                    return;
+                }
+                showToast((data.created ? 'Case pushed' : 'Case updated') + ' → ' + (data.remote_id || 'remote'), 'success');
+                this.pushMenuOpen = false;
+            } catch (e) {
+                showToast('Network error during push', 'error');
+            } finally {
+                this.pushing = false;
+            }
+        },
+
         async createCase() {
             const title = this.caseCreate.title.trim();
             if (!title) return;
@@ -2164,6 +2409,7 @@ function investigationPage() {
                         title: title,
                         severity: this.caseCreate.severity,
                         summary: this.caseCreate.summary.trim() || null,
+                        template_id: this.caseCreate.template_id || null,
                     }),
                 });
                 if (!res.ok) {
@@ -2174,7 +2420,7 @@ function investigationPage() {
                 const data = await res.json();
                 showToast('Case created', 'success');
                 this.showCaseCreate = false;
-                this.caseCreate = { title: '', severity: 'medium', summary: '' };
+                this.caseCreate = { title: '', severity: 'medium', summary: '', template_id: '' };
                 await this.loadCases();
                 if (data.case && data.case.case_id) await this.openCase(data.case.case_id);
             } catch (e) {
@@ -2195,6 +2441,8 @@ function investigationPage() {
                     this.caseNoteInput = '';
                     this.loadCaseTimeline();
                     this.loadRelatedCases();
+                    this.loadCaseObservables();
+                    this.loadCaseTasks();
                     this.$nextTick(() => window.lucide && window.lucide.createIcons());
                 } else if (res.status === 404) {
                     showToast('Case not found', 'error');
@@ -2211,6 +2459,13 @@ function investigationPage() {
             this.caseNoteInput = '';
             this.caseTimeline = [];
             this.caseTimelineTruncated = false;
+            this.caseManualEntry = { text: '', event_ts: '' };
+            this.caseObservables = [];
+            this.caseObsNew = { type: 'ip', value: '', is_ioc: false, tlp: 'amber' };
+            this.caseTasks = [];
+            this.caseTaskProgress = { total: 0, done: 0, open: 0 };
+            this.caseTaskNew = { title: '', assignee: '' };
+            this.caseTagInput = '';
             this.caseRelated = [];
         },
 
@@ -2262,6 +2517,230 @@ function investigationPage() {
             } finally {
                 this.caseRelatedLoading = false;
             }
+        },
+
+        // ─── Case templates (Fase 0) ──────────────────────────────────────
+        async loadCaseTemplates() {
+            try {
+                const res = await fetch('/admin/investigation/cases/templates');
+                if (!res.ok) { this.caseTemplates = []; return; }
+                const data = await res.json();
+                this.caseTemplates = Array.isArray(data.templates) ? data.templates : [];
+            } catch (e) {
+                this.caseTemplates = [];
+            }
+        },
+
+        // ─── Observables (Fase 0) ─────────────────────────────────────────
+        async loadCaseObservables() {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            this.caseObservablesLoading = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/observables');
+                if (!res.ok) { this.caseObservables = []; return; }
+                const data = await res.json();
+                if (!this.caseDetail || this.caseDetail.case_id !== id) return;
+                this.caseObservables = Array.isArray(data.observables) ? data.observables : [];
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            } catch (e) {
+                this.caseObservables = [];
+            } finally {
+                this.caseObservablesLoading = false;
+            }
+        },
+
+        async addObservable() {
+            if (!this.caseDetail) return;
+            const value = (this.caseObsNew.value || '').trim();
+            if (!value) return;
+            const id = this.caseDetail.case_id;
+            this.saving = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/observables', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        type: this.caseObsNew.type,
+                        value: value,
+                        is_ioc: !!this.caseObsNew.is_ioc,
+                        tlp: this.caseObsNew.tlp,
+                    }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to add observable', 'error');
+                    return;
+                }
+                showToast('Observable added', 'success');
+                this.caseObsNew = { type: 'ip', value: '', is_ioc: false, tlp: 'amber' };
+                await this.loadCaseObservables();
+            } catch (e) {
+                showToast('Network error adding observable', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async removeObservable(observableId) {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/observables/' + encodeURIComponent(observableId), { method: 'DELETE' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to remove observable', 'error');
+                return;
+            }
+            showToast('Observable removed', 'success');
+            await this.loadCaseObservables();
+        },
+
+        async promoteObservable(observableId) {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/observables/' + encodeURIComponent(observableId) + '/promote-ioc', { method: 'POST' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                showToast(err.detail || 'Cannot promote to IOC', 'error');
+                return;
+            }
+            showToast('Promoted to IOC', 'success');
+            await this.loadCaseObservables();
+        },
+
+        // ─── Tasks (Fase 0) ───────────────────────────────────────────────
+        async loadCaseTasks() {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            this.caseTasksLoading = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/tasks');
+                if (!res.ok) { this.caseTasks = []; return; }
+                const data = await res.json();
+                if (!this.caseDetail || this.caseDetail.case_id !== id) return;
+                this.caseTasks = Array.isArray(data.tasks) ? data.tasks : [];
+                this.caseTaskProgress = data.progress || { total: 0, done: 0, open: 0 };
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            } catch (e) {
+                this.caseTasks = [];
+            } finally {
+                this.caseTasksLoading = false;
+            }
+        },
+
+        async addTask() {
+            if (!this.caseDetail) return;
+            const title = (this.caseTaskNew.title || '').trim();
+            if (!title) return;
+            const id = this.caseDetail.case_id;
+            this.saving = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/tasks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        assignee: (this.caseTaskNew.assignee || '').trim() || null,
+                    }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Failed to add task', 'error');
+                    return;
+                }
+                showToast('Task added', 'success');
+                this.caseTaskNew = { title: '', assignee: '' };
+                await this.loadCaseTasks();
+            } catch (e) {
+                showToast('Network error adding task', 'error');
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        async setTaskStatus(taskId, status) {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/tasks/' + encodeURIComponent(taskId) + '/state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: status }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to update task', 'error');
+                return;
+            }
+            await this.loadCaseTasks();
+        },
+
+        async removeTask(taskId) {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/tasks/' + encodeURIComponent(taskId), { method: 'DELETE' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                showToast(err.detail || 'Failed to remove task', 'error');
+                return;
+            }
+            showToast('Task removed', 'success');
+            await this.loadCaseTasks();
+        },
+
+        taskDonePct() {
+            const t = this.caseTaskProgress || { total: 0, done: 0 };
+            if (!t.total) return 0;
+            return Math.round((t.done / t.total) * 100);
+        },
+
+        // ─── Tags / TTP badges (Fase 0) ───────────────────────────────────
+        caseTags() {
+            return (this.caseDetail && Array.isArray(this.caseDetail.tags)) ? this.caseDetail.tags : [];
+        },
+
+        async addCaseTag() {
+            if (!this.caseDetail) return;
+            const tag = (this.caseTagInput || '').trim();
+            if (!tag) return;
+            const id = this.caseDetail.case_id;
+            const next = this.caseTags().slice();
+            if (next.map(t => t.toLowerCase()).indexOf(tag.toLowerCase()) === -1) next.push(tag);
+            const data = await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/tags', { tags: next }, 'Tags updated');
+            if (data) this.caseTagInput = '';
+        },
+
+        async removeCaseTag(tag) {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            const next = this.caseTags().filter(t => t !== tag);
+            await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/tags', { tags: next }, 'Tags updated');
+        },
+
+        // ─── Manual timeline entry (Fase 0) ───────────────────────────────
+        async addManualTimelineEntry() {
+            if (!this.caseDetail) return;
+            const text = (this.caseManualEntry.text || '').trim();
+            if (!text) return;
+            const id = this.caseDetail.case_id;
+            const payload = { text: text };
+            const ets = (this.caseManualEntry.event_ts || '').trim();
+            if (ets) payload.event_ts = ets;
+            const data = await this._caseMutate('/admin/investigation/cases/' + encodeURIComponent(id) + '/timeline', payload, 'Timeline entry added');
+            if (data) this.caseManualEntry = { text: '', event_ts: '' };
+        },
+
+        tlpBadgeClass(tlp) {
+            if (tlp === 'red') return 'bg-red-500/15 text-red-300 border border-red-500/30';
+            if (tlp === 'amber') return 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
+            if (tlp === 'green') return 'bg-green-500/10 text-green-300 border border-green-500/30';
+            return 'bg-gray-500/15 text-gray-300 border border-gray-600/30';
+        },
+
+        taskStatusClass(status) {
+            if (status === 'done') return 'bg-green-500/10 text-green-300 border border-green-500/30';
+            if (status === 'in_progress') return 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
+            if (status === 'cancelled') return 'bg-gray-500/15 text-gray-400 border border-gray-600/30';
+            return 'bg-gray-700/30 text-gray-300 border border-gray-600/30';
         },
 
         caseNotes() {

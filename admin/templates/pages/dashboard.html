@@ -665,15 +665,15 @@
                         <!-- table -->
                         <template x-if="panel.source !== 'unavailable' && panel.type === 'table'">
                             <div class="overflow-x-auto max-h-72 overflow-y-auto">
-                                <table class="w-full text-[11px]">
-                                    <thead><tr class="text-gray-500 uppercase tracking-wider">
-                                        <template x-for="col in panel.columns" :key="col"><th class="text-left font-medium py-1.5 px-2" x-text="col"></th></template>
+                                <table class="sg-table sg-table-compact">
+                                    <thead><tr>
+                                        <template x-for="col in panel.columns" :key="col"><th x-text="col"></th></template>
                                     </tr></thead>
                                     <tbody>
                                         <template x-for="(row, ri) in panel.rows" :key="ri">
-                                            <tr class="border-t border-white/5">
+                                            <tr>
                                                 <template x-for="col in panel.columns" :key="col">
-                                                    <td class="py-1.5 px-2 font-mono text-gray-300" x-text="fmtCell(row[col])"></td>
+                                                    <td class="font-mono" x-text="fmtCell(row[col])"></td>
                                                 </template>
                                             </tr>
                                         </template>

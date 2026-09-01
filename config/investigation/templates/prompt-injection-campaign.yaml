@@ -1,0 +1,22 @@
+id: prompt-injection-campaign
+name: Prompt-Injection Campaign
+description: >-
+  Coordinated prompt-injection / jailbreak activity across one or more origins.
+  Use when correlated PROMPT_INJECTION or JAILBREAK incidents cluster around a
+  tenant, agent or origin.
+severity: high
+summary: >-
+  Investigating a suspected prompt-injection campaign. Group the correlated
+  incidents and at-risk origins, capture the payloads as observables, and work
+  the containment checklist.
+tags:
+  - prompt-injection
+  - campaign
+  - owasp-llm01
+tasks:
+  - title: Group all correlated incidents and at-risk origins onto this case
+  - title: Capture the injection payload(s) as observables
+  - title: Identify the earliest sighting and reconstruct the timeline
+  - title: Assess whether any output was exfiltrated or a tool was abused
+  - title: Decide containment (raise origin risk / block / notify tenant)
+  - title: Document root cause and detection-gap follow-ups

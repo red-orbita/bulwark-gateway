@@ -908,7 +908,7 @@ def test_served_css_mirrors_touch_target_rules(served_css):
     assert _min_height_px(served_css, "sg-btn-xs") is not None, (
         "served tailwind.min.css is missing .sg-btn-xs — rebuild the CSS"
     )
-    assert re.search(r"\.sg-icon-btn::after\{[^}]*inset:-\d+px", served_css), (
+    assert re.search(r"\.sg-icon-btn::?after\{[^}]*inset:-\d+px", served_css), (
         "served tailwind.min.css is missing the .sg-icon-btn overlay — rebuild"
     )
 

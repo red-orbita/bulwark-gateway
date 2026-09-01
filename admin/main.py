@@ -45,6 +45,7 @@ from .routes import (
     gdpr,
     guardrails,
     health,
+    integrations,
     investigation,
     investigation_cases,
     iocs,
@@ -241,7 +242,7 @@ async def auth_guard_pages(request: Request, call_next):
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
                  "/rate-limits", "/enrichment", "/events", "/tenant-analytics",
                  "/gdpr", "/virtual-keys", "/quotas", "/cost", "/cache",
-                 "/sessions", "/correlation", "/investigation")
+                 "/sessions", "/correlation", "/investigation", "/integrations")
     )
 
     if is_page_route:
@@ -418,6 +419,7 @@ app.include_router(
     tags=["investigation"],
 )
 app.include_router(dashboards.router, prefix="/admin/dashboards", tags=["dashboards"])
+app.include_router(integrations.router, prefix="/admin/integrations", tags=["integrations"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -623,3 +625,9 @@ async def correlation_page(request: Request):
 async def investigation_page(request: Request):
     """Investigation Center — SOC triage workspace for correlated alerts."""
     return templates.TemplateResponse(request, "pages/investigation.html")
+
+
+@app.get("/integrations", response_class=HTMLResponse)
+async def integrations_page(request: Request):
+    """Integrations — outbound case-management connectors (TheHive / DFIR-IRIS)."""
+    return templates.TemplateResponse(request, "pages/integrations.html")

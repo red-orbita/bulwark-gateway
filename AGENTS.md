@@ -844,6 +844,41 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | DELETE | `/admin/correlation/config` | Session | Clear all runtime overrides (revert to env defaults) — `correlation:write` |
 | DELETE | `/admin/correlation/origin/{scope_type}/{digest}` | Session | Clear one origin's accrued risk — `correlation:write` |
 | POST | `/admin/correlation/reset` | Session | Clear all accrued origin risk — `correlation:write` |
+| GET | `/admin/investigation/cases` | Session | List investigation cases (filter/search/sort/page) — `investigation:read` |
+| GET | `/admin/investigation/cases/stats` | Session | Case counts by status/severity (+ optional "my work") — `investigation:read` |
+| GET | `/admin/investigation/cases/analytics` | Session | MTTR, opened-vs-resolved trend, top recurring origins — `investigation:read` |
+| GET | `/admin/investigation/cases/templates` | Session | List case templates (blueprints) — `investigation:read` |
+| POST | `/admin/investigation/cases` | Session | Create a case (optional `template_id` seeds severity/summary/tags/tasks) — `investigation:write` |
+| GET | `/admin/investigation/cases/{id}` | Session | Full case detail (metadata, subjects, notes) — `investigation:read` |
+| GET | `/admin/investigation/cases/{id}/timeline` | Session | Reconstructed chronological timeline — `investigation:read` |
+| GET | `/admin/investigation/cases/{id}/export` | Session | Download case: `format`=`json`\|`md`\|`stix`\|`thehive`\|`iris` — `investigation:read` |
+| GET | `/admin/investigation/cases/{id}/related` | Session | Cross-case correlation (shared subjects) — `investigation:read` |
+| POST | `/admin/investigation/cases/{id}/state` | Session | Set status/severity/assignee — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/note` | Session | Append a note — `investigation:write` |
+| POST/DELETE | `/admin/investigation/cases/{id}/subject` | Session | Link/unlink a triage subject — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/tags` | Session | Replace case tag (TTP/label) list — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/timeline` | Session | Add a manual timeline entry — `investigation:write` |
+| GET | `/admin/investigation/cases/{id}/observables` | Session | List observables (atomic indicators) — `investigation:read` |
+| POST | `/admin/investigation/cases/{id}/observables` | Session | Add an observable (idempotent per type+value) — `investigation:write` |
+| DELETE | `/admin/investigation/cases/{id}/observables/{obs}` | Session | Remove an observable — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/observables/{obs}/promote-ioc` | Session | Promote ip/domain/url/hash to the IOC database — `investigation:write` |
+| GET | `/admin/investigation/cases/{id}/tasks` | Session | List checklist tasks + progress roll-up — `investigation:read` |
+| POST | `/admin/investigation/cases/{id}/tasks` | Session | Add a checklist task — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/tasks/{task}/state` | Session | Set task status/assignee/due — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/tasks/{task}/note` | Session | Append a note to a task — `investigation:write` |
+| DELETE | `/admin/investigation/cases/{id}/tasks/{task}` | Session | Delete a task — `investigation:write` |
+| GET | `/admin/integrations` | Session | List outbound connectors (secrets masked) — `integrations:read` |
+| GET | `/admin/integrations/status` | Session | Registry status + `can_write` flag — `integrations:read` |
+| GET | `/admin/integrations/{id}` | Session | Get one connector config (secret masked) — `integrations:read` |
+| POST | `/admin/integrations` | Session | Create connector (`thehive`\|`dfir_iris`) — `integrations:write` |
+| PUT | `/admin/integrations/{id}` | Session | Update connector config — `integrations:write` |
+| DELETE | `/admin/integrations/{id}` | Session | Delete connector — `integrations:write` |
+| POST | `/admin/integrations/{id}/toggle` | Session | Enable/disable connector — `integrations:write` |
+| POST | `/admin/integrations/{id}/test` | Session | Live `test_connection` probe — `integrations:write` |
+| GET | `/admin/integrations/{id}/health` | Session | Cached health (TTL 30s) — `integrations:read` |
+| POST | `/admin/integrations/reload` | Session | Reload connector registry from disk — `integrations:write` |
+| POST | `/admin/integrations/push/case/{case_id}` | Session | Idempotent push of a case to TheHive/IRIS (create-or-update via link store; fail-open) — `integrations:write` |
+| GET | `/admin/integrations/push/case/{case_id}/links` | Session | List remote links (remote_id/url/last_synced_at) for a case — `integrations:read` |
 
 ### Authentication
 
@@ -853,6 +888,8 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 - **Admin session**: HTTP-only cookie set by `/admin/auth/login`
 - **Admin roles**: admin, security, auditor, viewer (RBAC enforced)
 - **Correlation RBAC**: `correlation:read` (status/origins/config view) and `correlation:write` (tuning/reset) — dedicated permission namespace, not reused from `sessions:*`
+- **Investigation RBAC**: `investigation:read` (case/observable/task/timeline view + export) and `investigation:write` (create/mutate/promote-ioc) — admin + security hold both; auditor/viewer are read-only. All cases are tenant-scoped (cross-tenant id ⇒ 404, no existence leak)
+- **Integrations RBAC**: `integrations:read` (list/status/health/links view) and `integrations:write` (create/update/delete/toggle/test/reload/push) — admin + security hold both; auditor/viewer are read-only. Connector secrets are masked on read; push is idempotent (link store) and fail-open (never mutates the local case)
 
 ---
 

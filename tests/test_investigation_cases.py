@@ -49,6 +49,24 @@ async def case_store(engine, monkeypatch):
     return CaseStore()
 
 
+@pytest.fixture
+async def observable_store(engine, monkeypatch):
+    from admin.services import investigation_observable_store as store_mod
+    from admin.services.investigation_observable_store import ObservableStore
+
+    monkeypatch.setattr(store_mod, "get_database", lambda: engine)
+    return ObservableStore()
+
+
+@pytest.fixture
+async def task_store(engine, monkeypatch):
+    from admin.services import investigation_task_store as store_mod
+    from admin.services.investigation_task_store import TaskStore
+
+    monkeypatch.setattr(store_mod, "get_database", lambda: engine)
+    return TaskStore()
+
+
 def _evt(event_id: str, *, ts: float | None = None, tenant="acme", verdict="block",
          category="exfiltration", severity="high", source="correlation_engine",
          incident_id="", scope_digests=None, metadata=None, **extra) -> dict:
@@ -305,16 +323,28 @@ async def wired(engine, monkeypatch):
     import admin.routes.investigation as inv
     import admin.routes.investigation_cases as inv_cases
     from admin.services import investigation_case_store as cstore_mod
+    from admin.services import investigation_observable_store as ostore_mod
+    from admin.services import investigation_task_store as tstore_mod
     from admin.services import security_events_store as estore_mod
     from admin.services.investigation_case_store import CaseStore
+    from admin.services.investigation_observable_store import ObservableStore
+    from admin.services.investigation_task_store import TaskStore
     from admin.services.security_events_store import SecurityEventsStore
 
     monkeypatch.setattr(cstore_mod, "get_database", lambda: engine)
     monkeypatch.setattr(estore_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(ostore_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(tstore_mod, "get_database", lambda: engine)
 
     cases = CaseStore()
     events = SecurityEventsStore()
     monkeypatch.setattr(inv_cases, "get_case_store", lambda: cases)
+    # First-class observable/task stores back the interop exports (Fase 0); wire
+    # them against the same migrated DB so a case's evidence is exportable.
+    observables = ObservableStore()
+    tasks = TaskStore()
+    monkeypatch.setattr(inv_cases, "get_observable_store", lambda: observables)
+    monkeypatch.setattr(inv_cases, "get_task_store", lambda: tasks)
     # _authorize_subject (shared from investigation) resolves subjects via the
     # events store; wire it so incident-subject linking validates against the DB.
     monkeypatch.setattr(inv, "get_security_events_store", lambda: events)
@@ -813,6 +843,117 @@ class TestCaseEndpointsPhase3:
         with pytest.raises(HTTPException) as ei:
             await inv_cases.export_case(
                 made["case_id"], user=_admin(tenant="acme"), format="json"
+            )
+        assert ei.value.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — interop exports: STIX 2.1 / TheHive / DFIR-IRIS
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseInteropExport:
+    """The ``stix`` / ``thehive`` / ``iris`` export shapes carry a case's
+    first-class observables and tasks out to an external platform. Exercised
+    through the route so the store wiring, filename and audit trail are covered.
+    """
+
+    async def _case_with_evidence(self, engine, cases):
+        from admin.services.investigation_observable_store import ObservableStore
+        from admin.services.investigation_task_store import TaskStore
+
+        made = await cases.create_case(title="Exfil campaign", actor="a",
+                                       severity="high", summary="correlated hits")
+        cid = made["case_id"]
+        obs = ObservableStore()
+        await obs.add(case_id=cid, observable_type="ip", value="203.0.113.9",
+                      actor="a", is_ioc=True, tlp="red")
+        await obs.add(case_id=cid, observable_type="domain", value="evil.example",
+                      actor="a", is_ioc=True)
+        await obs.add(case_id=cid, observable_type="user", value="mallory", actor="a")
+        tasks = TaskStore()
+        await tasks.add(case_id=cid, title="Contain host", actor="a")
+        return made
+
+    def _parse(self, resp):
+        body = resp.body.decode() if isinstance(resp.body, bytes) else resp.body
+        return json.loads(body)
+
+    async def test_stix_export(self, wired, engine):
+        inv_cases, cases, _, audit = wired
+        made = await self._case_with_evidence(engine, cases)
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="stix")
+        assert resp.headers["content-disposition"].endswith(
+            f'{made["case_id"]}.stix.json"'
+        )
+        assert audit.entries[-1]["details"] == "format=stix"
+        bundle = self._parse(resp)
+        assert bundle["type"] == "bundle"
+        types = [o["type"] for o in bundle["objects"]]
+        # identity + SCOs (ipv4/domain-name/user-account) + 2 indicators + report.
+        assert "identity" in types
+        assert "report" in types
+        assert "ipv4-addr" in types
+        assert "domain-name" in types
+        assert types.count("indicator") == 2  # only the two flagged IOCs
+        report = next(o for o in bundle["objects"] if o["type"] == "report")
+        assert report["name"] == "Exfil campaign"
+
+    async def test_stix_export_is_deterministic(self, wired, engine):
+        inv_cases, cases, _, _ = wired
+        made = await self._case_with_evidence(engine, cases)
+        first = self._parse(
+            await inv_cases.export_case(made["case_id"], user=_admin(), format="stix")
+        )
+        second = self._parse(
+            await inv_cases.export_case(made["case_id"], user=_admin(), format="stix")
+        )
+        assert first["id"] == second["id"]
+        assert [o["id"] for o in first["objects"]] == [
+            o["id"] for o in second["objects"]
+        ]
+
+    async def test_thehive_export(self, wired, engine):
+        inv_cases, cases, _, _ = wired
+        made = await self._case_with_evidence(engine, cases)
+        resp = await inv_cases.export_case(
+            made["case_id"], user=_admin(), format="thehive"
+        )
+        assert resp.headers["content-disposition"].endswith(
+            f'{made["case_id"]}.thehive.json"'
+        )
+        hive = self._parse(resp)
+        assert hive["title"] == "Exfil campaign"
+        assert hive["severity"] == 3  # high → 3
+        assert len(hive["artifacts"]) == 3
+        assert len(hive["tasks"]) == 1
+        ip_artifact = next(a for a in hive["artifacts"] if a["dataType"] == "ip")
+        assert ip_artifact["ioc"] is True
+        assert ip_artifact["tlp"] == 3  # red → 3
+
+    async def test_iris_export(self, wired, engine):
+        inv_cases, cases, _, _ = wired
+        made = await self._case_with_evidence(engine, cases)
+        resp = await inv_cases.export_case(made["case_id"], user=_admin(), format="iris")
+        assert resp.headers["content-disposition"].endswith(
+            f'{made["case_id"]}.iris.json"'
+        )
+        iris = self._parse(resp)
+        assert iris["case_name"] == "Exfil campaign"
+        assert iris["case_severity"] == 3
+        assert len(iris["iocs"]) == 3
+        assert len(iris["tasks"]) == 1
+        ip_ioc = next(i for i in iris["iocs"] if i["ioc_type"] == "ip-any")
+        assert ip_ioc["ioc_value"] == "203.0.113.9"
+
+    async def test_interop_export_cross_tenant_is_404(self, wired, engine):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.export_case(
+                made["case_id"], user=_admin(tenant="acme"), format="stix"
             )
         assert ei.value.status_code == 404
 
@@ -1474,3 +1615,525 @@ class TestCaseAnalyticsEndpoint:
         await cases.create_case(title="theirs", actor="a", tenant="evil")
         out = await inv_cases.case_analytics(user=_admin(tenant="acme"), trend_days=14, top_origins=10)
         assert out["analytics"]["total"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — ObservableStore CRUD
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestObservableStore:
+    async def test_add_and_list(self, observable_store):
+        made = await observable_store.add(
+            case_id="case_1", observable_type="ip", value="203.0.113.5", actor="a",
+        )
+        assert made["observable_id"].startswith("obs_")
+        assert made["type"] == "ip"
+        assert made["value"] == "203.0.113.5"
+        assert made["is_ioc"] is False
+        assert made["tlp"] == "amber" and made["pap"] == "amber"
+        rows = await observable_store.list_for_case("case_1")
+        assert len(rows) == 1 and rows[0]["value"] == "203.0.113.5"
+
+    async def test_add_normalises_value(self, observable_store):
+        made = await observable_store.add(
+            case_id="c", observable_type="domain", value="  EVIL.Example  ", actor="a",
+        )
+        # network/host/hash/email indicators are lower-cased + stripped.
+        assert made["value"] == "evil.example"
+
+    async def test_add_preserves_case_for_filename(self, observable_store):
+        made = await observable_store.add(
+            case_id="c", observable_type="filename", value="Payload.EXE", actor="a",
+        )
+        assert made["value"] == "Payload.EXE"
+
+    async def test_add_is_idempotent_per_case_type_value(self, observable_store):
+        first = await observable_store.add(
+            case_id="c", observable_type="ip", value="203.0.113.5", actor="a",
+        )
+        second = await observable_store.add(
+            case_id="c", observable_type="ip", value="203.0.113.5", actor="a",
+            is_ioc=True, tlp="red",
+        )
+        # Same indicator: refreshed in place, not duplicated.
+        assert second["observable_id"] == first["observable_id"]
+        assert second["is_ioc"] is True and second["tlp"] == "red"
+        rows = await observable_store.list_for_case("c")
+        assert len(rows) == 1
+
+    async def test_same_value_different_case_is_distinct(self, observable_store):
+        await observable_store.add(
+            case_id="c1", observable_type="ip", value="203.0.113.5", actor="a",
+        )
+        await observable_store.add(
+            case_id="c2", observable_type="ip", value="203.0.113.5", actor="a",
+        )
+        assert len(await observable_store.list_for_case("c1")) == 1
+        assert len(await observable_store.list_for_case("c2")) == 1
+
+    async def test_add_rejects_invalid_type(self, observable_store):
+        with pytest.raises(ValueError):
+            await observable_store.add(
+                case_id="c", observable_type="bogus", value="x", actor="a",
+            )
+
+    async def test_add_rejects_invalid_tlp(self, observable_store):
+        with pytest.raises(ValueError):
+            await observable_store.add(
+                case_id="c", observable_type="ip", value="1.1.1.1", actor="a",
+                tlp="purple",
+            )
+
+    async def test_add_rejects_empty_value(self, observable_store):
+        with pytest.raises(ValueError):
+            await observable_store.add(
+                case_id="c", observable_type="ip", value="   ", actor="a",
+            )
+
+    async def test_tags_normalised_and_deduped(self, observable_store):
+        made = await observable_store.add(
+            case_id="c", observable_type="domain", value="evil.example", actor="a",
+            tags=["APT", "apt", "  C2  ", ""],
+        )
+        assert made["tags"] == ["apt", "c2"]
+
+    async def test_get_is_case_scoped(self, observable_store):
+        made = await observable_store.add(
+            case_id="c1", observable_type="ip", value="1.1.1.1", actor="a",
+        )
+        assert await observable_store.get("c1", made["observable_id"]) is not None
+        # A right id under the wrong case must not resolve (no cross-case leak).
+        assert await observable_store.get("c2", made["observable_id"]) is None
+
+    async def test_remove(self, observable_store):
+        made = await observable_store.add(
+            case_id="c", observable_type="ip", value="1.1.1.1", actor="a",
+        )
+        assert await observable_store.remove(
+            case_id="c", observable_id=made["observable_id"]
+        ) is True
+        assert await observable_store.list_for_case("c") == []
+        # Removing a second time is a no-op returning False.
+        assert await observable_store.remove(
+            case_id="c", observable_id=made["observable_id"]
+        ) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — TaskStore CRUD
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestTaskStore:
+    async def test_add_and_list(self, task_store):
+        made = await task_store.add(case_id="c", title="Contain host", actor="a")
+        assert made["task_id"].startswith("task_")
+        assert made["status"] == "todo"
+        assert made["order_index"] == 0
+        rows = await task_store.list_for_case("c")
+        assert len(rows) == 1 and rows[0]["title"] == "Contain host"
+
+    async def test_order_index_increments(self, task_store):
+        await task_store.add(case_id="c", title="one", actor="a")
+        await task_store.add(case_id="c", title="two", actor="a")
+        rows = await task_store.list_for_case("c")
+        assert [t["order_index"] for t in rows] == [0, 1]
+        assert [t["title"] for t in rows] == ["one", "two"]
+
+    async def test_add_requires_title(self, task_store):
+        with pytest.raises(ValueError):
+            await task_store.add(case_id="c", title="   ", actor="a")
+
+    async def test_set_state_transitions_and_journals(self, task_store):
+        made = await task_store.add(case_id="c", title="t", actor="a")
+        updated = await task_store.set_state(
+            case_id="c", task_id=made["task_id"], actor="bob", status="in_progress",
+        )
+        assert updated["status"] == "in_progress"
+        # The transition is journalled as an actor-stamped action note.
+        assert any(
+            n["kind"] == "action" and "status" in n["text"] for n in updated["notes"]
+        )
+
+    async def test_set_state_rejects_invalid_status(self, task_store):
+        made = await task_store.add(case_id="c", title="t", actor="a")
+        with pytest.raises(ValueError):
+            await task_store.set_state(
+                case_id="c", task_id=made["task_id"], actor="a", status="bogus",
+            )
+
+    async def test_set_state_missing_task_returns_none(self, task_store):
+        assert await task_store.set_state(
+            case_id="c", task_id="task_nope", actor="a", status="done",
+        ) is None
+
+    async def test_add_note(self, task_store):
+        made = await task_store.add(case_id="c", title="t", actor="a")
+        updated = await task_store.add_note(
+            case_id="c", task_id=made["task_id"], actor="a", text="looked into it",
+        )
+        assert any(
+            n["kind"] == "note" and n["text"] == "looked into it"
+            for n in updated["notes"]
+        )
+
+    async def test_add_note_requires_text(self, task_store):
+        made = await task_store.add(case_id="c", title="t", actor="a")
+        with pytest.raises(ValueError):
+            await task_store.add_note(
+                case_id="c", task_id=made["task_id"], actor="a", text="   ",
+            )
+
+    async def test_remove(self, task_store):
+        made = await task_store.add(case_id="c", title="t", actor="a")
+        assert await task_store.remove(case_id="c", task_id=made["task_id"]) is True
+        assert await task_store.list_for_case("c") == []
+        assert await task_store.remove(case_id="c", task_id=made["task_id"]) is False
+
+    async def test_progress_rollup(self, task_store):
+        await task_store.add(case_id="c", title="a", actor="x")
+        b = await task_store.add(case_id="c", title="b", actor="x")
+        d = await task_store.add(case_id="c", title="d", actor="x")
+        await task_store.set_state(case_id="c", task_id=b["task_id"], actor="x", status="done")
+        await task_store.set_state(case_id="c", task_id=d["task_id"], actor="x", status="cancelled")
+        prog = await task_store.progress("c")
+        # done + cancelled both count as closed.
+        assert prog == {"total": 3, "done": 2, "open": 1}
+
+    async def test_get_is_case_scoped(self, task_store):
+        made = await task_store.add(case_id="c1", title="t", actor="a")
+        assert await task_store.get("c1", made["task_id"]) is not None
+        assert await task_store.get("c2", made["task_id"]) is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — observable endpoints
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestObservableEndpoints:
+    async def test_add_list_remove(self, wired):
+        inv_cases, cases, _, audit = wired
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        body = inv_cases.ObservableAddRequest(
+            type="ip", value="203.0.113.7", is_ioc=True, tlp="red",
+        )
+        added = await inv_cases.add_case_observable(cid, body=body, user=_admin())
+        assert added["observable"]["value"] == "203.0.113.7"
+        assert audit.entries[-1]["action"] == "investigation.observable_add"
+
+        listed = await inv_cases.list_case_observables(cid, user=_admin())
+        assert listed["count"] == 1
+        assert listed["can_write"] is True
+        assert "ip" in listed["types"] and "red" in listed["tlp_levels"]
+
+        obs_id = added["observable"]["observable_id"]
+        out = await inv_cases.remove_case_observable(cid, obs_id, user=_admin())
+        assert out["message"] == "Observable removed"
+        assert (await inv_cases.list_case_observables(cid, user=_admin()))["count"] == 0
+
+    async def test_list_can_write_false_for_viewer(self, wired):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        out = await inv_cases.list_case_observables(made["case_id"], user=_viewer())
+        assert out["can_write"] is False
+
+    async def test_add_invalid_type_is_400(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        body = inv_cases.ObservableAddRequest(type="bogus", value="x")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.add_case_observable(made["case_id"], body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_add_cross_tenant_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        body = inv_cases.ObservableAddRequest(type="ip", value="1.1.1.1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.add_case_observable(
+                made["case_id"], body=body, user=_admin(tenant="acme")
+            )
+        assert ei.value.status_code == 404
+
+    async def test_remove_missing_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.remove_case_observable(
+                made["case_id"], "obs_nope", user=_admin()
+            )
+        assert ei.value.status_code == 404
+
+    async def test_promote_ioc(self, wired, tmp_path, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from admin.services import ioc_store as ioc_mod
+        from admin.services.ioc_store import IOCStore
+
+        store = IOCStore(
+            ioc_path=tmp_path / "iocs.json", feed_state_path=tmp_path / "feed.json"
+        )
+        monkeypatch.setattr(ioc_mod, "get_ioc_store", lambda: store)
+
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        body = inv_cases.ObservableAddRequest(type="domain", value="evil.example")
+        added = await inv_cases.add_case_observable(cid, body=body, user=_admin())
+        obs_id = added["observable"]["observable_id"]
+
+        out = await inv_cases.promote_observable_to_ioc(cid, obs_id, user=_admin())
+        assert out["ioc_type"] == "domain"
+        assert out["ioc_id"]
+        # The observable is flagged is_ioc after promotion.
+        listed = await inv_cases.list_case_observables(cid, user=_admin())
+        assert listed["observables"][0]["is_ioc"] is True
+
+    async def test_promote_unpromotable_type_is_400(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        body = inv_cases.ObservableAddRequest(type="user", value="mallory")
+        added = await inv_cases.add_case_observable(cid, body=body, user=_admin())
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.promote_observable_to_ioc(
+                cid, added["observable"]["observable_id"], user=_admin()
+            )
+        assert ei.value.status_code == 400
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — task endpoints
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestTaskEndpoints:
+    async def test_add_list_progress(self, wired):
+        inv_cases, cases, _, audit = wired
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        body = inv_cases.TaskAddRequest(title="Contain host")
+        added = await inv_cases.add_case_task(cid, body=body, user=_admin())
+        assert added["task"]["title"] == "Contain host"
+        assert audit.entries[-1]["action"] == "investigation.task_add"
+
+        out = await inv_cases.list_case_tasks(cid, user=_admin())
+        assert out["count"] == 1
+        assert out["progress"] == {"total": 1, "done": 0, "open": 1}
+        assert out["can_write"] is True
+
+    async def test_state_transition(self, wired):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        added = await inv_cases.add_case_task(
+            cid, body=inv_cases.TaskAddRequest(title="t"), user=_admin()
+        )
+        tid = added["task"]["task_id"]
+        body = inv_cases.TaskStateRequest(status="done")
+        out = await inv_cases.set_case_task_state(cid, tid, body=body, user=_admin())
+        assert out["task"]["status"] == "done"
+        prog = (await inv_cases.list_case_tasks(cid, user=_admin()))["progress"]
+        assert prog["done"] == 1
+
+    async def test_state_empty_body_is_400(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        added = await inv_cases.add_case_task(
+            cid, body=inv_cases.TaskAddRequest(title="t"), user=_admin()
+        )
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.set_case_task_state(
+                cid, added["task"]["task_id"], body=inv_cases.TaskStateRequest(),
+                user=_admin(),
+            )
+        assert ei.value.status_code == 400
+
+    async def test_state_missing_task_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.set_case_task_state(
+                made["case_id"], "task_nope",
+                body=inv_cases.TaskStateRequest(status="done"), user=_admin(),
+            )
+        assert ei.value.status_code == 404
+
+    async def test_note_and_remove(self, wired):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        added = await inv_cases.add_case_task(
+            cid, body=inv_cases.TaskAddRequest(title="t"), user=_admin()
+        )
+        tid = added["task"]["task_id"]
+        noted = await inv_cases.add_case_task_note(
+            cid, tid, body=inv_cases.TaskNoteRequest(text="hello"), user=_admin()
+        )
+        assert any(n["text"] == "hello" for n in noted["task"]["notes"])
+        out = await inv_cases.remove_case_task(cid, tid, user=_admin())
+        assert out["message"] == "Task removed"
+
+    async def test_add_cross_tenant_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.add_case_task(
+                made["case_id"], body=inv_cases.TaskAddRequest(title="x"),
+                user=_admin(tenant="acme"),
+            )
+        assert ei.value.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — case tags + manual timeline endpoints
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseTagsAndTimelineEndpoints:
+    async def test_set_tags(self, wired):
+        inv_cases, cases, _, audit = wired
+        made = await cases.create_case(title="t", actor="a")
+        body = inv_cases.CaseTagsRequest(tags=["APT29", "apt29", " C2 "])
+        out = await inv_cases.set_case_tags(made["case_id"], body=body, user=_admin())
+        # normalised + deduped by the store.
+        assert out["case"]["tags"] == ["apt29", "c2"]
+        assert audit.entries[-1]["action"] == "investigation.case_tags"
+
+    async def test_set_tags_cross_tenant_is_404(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.set_case_tags(
+                made["case_id"], body=inv_cases.CaseTagsRequest(tags=["x"]),
+                user=_admin(tenant="acme"),
+            )
+        assert ei.value.status_code == 404
+
+    async def test_add_manual_timeline_entry(self, wired):
+        inv_cases, cases, _, audit = wired
+        made = await cases.create_case(title="t", actor="a")
+        body = inv_cases.CaseTimelineEntryRequest(
+            text="attacker pivoted", event_ts="2025-01-02T03:04:05+00:00",
+        )
+        out = await inv_cases.add_case_timeline_entry(
+            made["case_id"], body=body, user=_admin()
+        )
+        assert any(
+            n.get("kind") == "timeline" and n.get("text") == "attacker pivoted"
+            for n in out["case"]["notes"]
+        )
+        assert audit.entries[-1]["action"] == "investigation.case_timeline_entry"
+
+    async def test_timeline_entry_bad_event_ts_is_400(self, wired):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        body = inv_cases.CaseTimelineEntryRequest(text="x", event_ts="not-a-date")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.add_case_timeline_entry(
+                made["case_id"], body=body, user=_admin()
+            )
+        assert ei.value.status_code == 400
+
+    async def test_manual_entry_surfaces_in_reconstructed_timeline(self, wired):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        await inv_cases.add_case_timeline_entry(
+            cid,
+            body=inv_cases.CaseTimelineEntryRequest(
+                text="observed beacon", event_ts="2025-06-01T00:00:00+00:00"
+            ),
+            user=_admin(),
+        )
+        tl = await inv_cases.case_timeline(cid, user=_admin(), limit=500)
+        assert any(
+            e["type"] == "note" and e.get("note_kind") == "timeline"
+            and e["text"] == "observed beacon"
+            for e in tl["timeline"]
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — case templates
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCaseTemplates:
+    @pytest.fixture
+    def templates_dir(self, tmp_path, monkeypatch):
+        from admin.services import investigation_templates as tmpl_mod
+
+        d = tmp_path / "templates"
+        d.mkdir()
+        (d / "exfil.yaml").write_text(
+            "id: exfil\n"
+            "name: Data Exfiltration\n"
+            "description: standard exfil response\n"
+            "severity: high\n"
+            "summary: suspected data exfiltration\n"
+            "tags: [exfiltration, dlp]\n"
+            "tasks:\n"
+            "  - title: Identify scope\n"
+            "  - title: Contain\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(tmpl_mod, "TEMPLATES_DIR", d)
+        monkeypatch.setattr(tmpl_mod, "_cache", {})
+        return d
+
+    async def test_list_templates_endpoint(self, wired, templates_dir):
+        inv_cases, _, _, _ = wired
+        out = await inv_cases.list_case_templates(user=_admin())
+        ids = [t["id"] for t in out["templates"]]
+        assert "exfil" in ids
+
+    async def test_create_with_template_seeds_defaults(self, wired, templates_dir):
+        inv_cases, _, _, _ = wired
+        body = inv_cases.CaseCreateRequest(title="IR-1", template_id="exfil")
+        out = await inv_cases.create_case(body=body, user=_admin())
+        case = out["case"]
+        # severity + summary + tags seeded from the template.
+        assert case["severity"] == "high"
+        assert case["summary"] == "suspected data exfiltration"
+        assert case["tags"] == ["exfiltration", "dlp"]
+        # tasks seeded onto the case's task list.
+        tasks = await inv_cases.list_case_tasks(case["case_id"], user=_admin())
+        assert [t["title"] for t in tasks["tasks"]] == ["Identify scope", "Contain"]
+
+    async def test_create_explicit_severity_overrides_template(self, wired, templates_dir):
+        inv_cases, _, _, _ = wired
+        body = inv_cases.CaseCreateRequest(
+            title="IR-2", template_id="exfil", severity="critical",
+        )
+        out = await inv_cases.create_case(body=body, user=_admin())
+        assert out["case"]["severity"] == "critical"
+
+    async def test_create_unknown_template_is_400(self, wired, templates_dir):
+        inv_cases, _, _, _ = wired
+        from fastapi import HTTPException
+
+        body = inv_cases.CaseCreateRequest(title="IR-3", template_id="nope")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.create_case(body=body, user=_admin())
+        assert ei.value.status_code == 400

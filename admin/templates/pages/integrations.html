@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Integrations — Bulwark Gateway Admin{% endblock %}
+{% block breadcrumb %}Integrations{% endblock %}
+{% block content %}
+<div x-data="integrationsPage()" class="space-y-6">
+    <!-- Module header -->
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl font-semibold text-white">Integrations</h1>
+            <p class="text-sm text-gray-400 mt-0.5 max-w-3xl">Outbound case-management connectors. Push an investigation case to an external SOC platform (TheHive, DFIR-IRIS). Pushes are <em>fail-open</em> — a remote error is retried and audited but never blocks the local case. Re-pushing the same case updates the existing remote record instead of creating a duplicate. Secrets are write-only and masked in every response.</p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+            <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                Refresh
+            </button>
+            <button @click="openCreate()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="!canWrite">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                Add Integration
+            </button>
+        </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Configured</p>
+            <p class="text-sm font-semibold text-white mt-1" x-text="integrations.length"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Enabled</p>
+            <p class="text-sm font-semibold text-cyan-300 mt-1" x-text="enabledCount"></p>
+        </div>
+        <div class="sg-card py-3">
+            <p class="text-[11px] text-gray-500 uppercase tracking-wide">Supported</p>
+            <p class="text-sm font-semibold text-gray-300 mt-1" x-text="supportedTypes.join(', ')"></p>
+        </div>
+    </div>
+
+    <!-- Integrations table -->
+    <div class="sg-card">
+        <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="cable" class="w-4 h-4 text-cyan-400"></i>
+            <h2 class="text-sm font-medium text-white">Connectors</h2>
+            <span class="text-xs text-gray-500" x-text="'(' + integrations.length + ')'"></span>
+        </div>
+        <div x-show="integrations.length === 0" x-cloak class="text-sm text-gray-500 py-6 text-center">
+            No integrations configured. Add one to start pushing cases.
+        </div>
+        <div x-show="integrations.length > 0" class="sg-table-scroll">
+            <table class="sg-table sg-table-compact">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Endpoint</th>
+                        <th>Health</th>
+                        <th>Status</th>
+                        <th class="text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="it in integrations" :key="it.id">
+                        <tr>
+                            <td class="text-gray-200" x-text="it.name"></td>
+                            <td>
+                                <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300" x-text="typeLabel(it.type)"></span>
+                            </td>
+                            <td class="font-mono text-xs text-gray-400 truncate max-w-[16rem]" x-text="it.base_url"></td>
+                            <td>
+                                <template x-if="health[it.id]">
+                                    <span class="text-[11px] font-medium" :class="health[it.id].ok ? 'text-emerald-300' : 'text-red-300'"
+                                          :title="health[it.id].detail" x-text="health[it.id].ok ? 'reachable' : 'unreachable'"></span>
+                                </template>
+                                <template x-if="!health[it.id]">
+                                    <span class="text-[11px] text-gray-500">—</span>
+                                </template>
+                            </td>
+                            <td>
+                                <span class="text-[11px] font-medium" :class="it.enabled ? 'text-cyan-300' : 'text-gray-500'"
+                                      x-text="it.enabled ? 'enabled' : 'disabled'"></span>
+                            </td>
+                            <td class="text-right whitespace-nowrap">
+                                <button @click="testOne(it.id)" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!canWrite" title="Probe reachability">Test</button>
+                                <button @click="toggleOne(it.id)" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!canWrite" x-text="it.enabled ? 'Disable' : 'Enable'"></button>
+                                <button @click="openEdit(it)" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="!canWrite">Edit</button>
+                                <button @click="deleteOne(it)" class="sg-btn sg-btn-ghost sg-btn-sm" style="color:#fca5a5;" :disabled="!canWrite">Delete</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Create/Edit modal -->
+    <div x-show="modal.open" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0,0,0,0.6);">
+        <div class="sg-card w-full max-w-lg" @click.outside="modal.open = false">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-medium text-white" x-text="modal.editing ? 'Edit Integration' : 'Add Integration'"></h3>
+                <button @click="modal.open = false" class="text-gray-400 hover:text-gray-200 sg-interactive" aria-label="Close">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5" for="int-name">Name</label>
+                    <input id="int-name" type="text" x-model="modal.form.name" class="sg-input w-full" placeholder="Production TheHive">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5" for="int-type">Type</label>
+                    <select id="int-type" x-model="modal.form.type" class="sg-input w-full" :disabled="modal.editing">
+                        <option value="thehive">TheHive 5</option>
+                        <option value="dfir_iris">DFIR-IRIS</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5" for="int-url">Base URL</label>
+                    <input id="int-url" type="text" x-model="modal.form.base_url" class="sg-input w-full" placeholder="https://thehive.example.com">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400 block mb-1.5" for="int-key">API Key <span class="text-gray-600" x-show="modal.editing">(leave blank to keep)</span></label>
+                    <input id="int-key" type="password" x-model="modal.form.api_key" class="sg-input w-full" placeholder="••••••••" autocomplete="new-password">
+                    <p class="text-[10px] text-gray-600 mt-1">May also be injected via <span class="font-mono">BULWARK_INTEGRATION_&lt;ID&gt;_API_KEY</span> (or its <span class="font-mono">_FILE</span> Docker-secret variant).</p>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div x-show="modal.form.type === 'thehive'">
+                        <label class="text-xs text-gray-400 block mb-1.5" for="int-org">Organisation</label>
+                        <input id="int-org" type="text" x-model="modal.form.organisation" class="sg-input w-full" placeholder="(optional)">
+                    </div>
+                    <div x-show="modal.form.type === 'dfir_iris'">
+                        <label class="text-xs text-gray-400 block mb-1.5" for="int-cust">Customer ID</label>
+                        <input id="int-cust" type="number" min="1" x-model.number="modal.form.customer_id" class="sg-input w-full">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400 block mb-1.5" for="int-timeout">Timeout (s)</label>
+                        <input id="int-timeout" type="number" min="1" step="1" x-model.number="modal.form.timeout" class="sg-input w-full">
+                    </div>
+                </div>
+                <div class="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-2.5">
+                    <div>
+                        <p class="text-sm text-gray-200">Verify TLS certificate</p>
+                        <p class="text-[11px] text-gray-500">Disable only for a lab platform with a self-signed cert.</p>
+                    </div>
+                    <button type="button" @click="modal.form.verify_tls = !modal.form.verify_tls"
+                            class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0"
+                            :class="modal.form.verify_tls ? 'bg-cyan-500/70' : 'bg-gray-600'">
+                        <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform"
+                              :class="modal.form.verify_tls ? 'translate-x-5' : 'translate-x-1'"></span>
+                    </button>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 pt-5">
+                <button @click="modal.open = false" class="sg-btn sg-btn-ghost sg-btn-sm">Cancel</button>
+                <button @click="save()" class="sg-btn sg-btn-primary sg-btn-sm" :disabled="modal.saving">
+                    <span x-text="modal.saving ? 'Saving…' : (modal.editing ? 'Save' : 'Create')"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+function integrationsPage() {
+    return {
+        canWrite: false,
+        supportedTypes: [],
+        integrations: [],
+        health: {},
+        modal: { open: false, editing: false, saving: false, form: {} },
+
+        get enabledCount() { return this.integrations.filter(i => i.enabled).length; },
+
+        async init() { await this.reloadAll(); },
+
+        async reloadAll() {
+            await this.loadStatus();
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/integrations/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.supportedTypes = data.supported_types || [];
+                    this.integrations = data.integrations || [];
+                    this.canWrite = !!data.can_write;
+                    // Passive health refresh (cached server-side).
+                    for (const it of this.integrations) { this.loadHealth(it.id); }
+                } else {
+                    showToast('Failed to load integrations', 'error');
+                }
+            } catch (e) {
+                showToast('Network error loading integrations', 'error');
+            }
+        },
+
+        async loadHealth(id) {
+            try {
+                const res = await fetch('/admin/integrations/' + encodeURIComponent(id) + '/health');
+                if (res.ok) { this.health[id] = await res.json(); }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        typeLabel(t) { return t === 'thehive' ? 'TheHive' : (t === 'dfir_iris' ? 'DFIR-IRIS' : t); },
+
+        openCreate() {
+            this.modal = {
+                open: true, editing: false, saving: false,
+                form: { name: '', type: 'thehive', base_url: '', api_key: '', organisation: '', customer_id: 1, timeout: 15, verify_tls: true },
+            };
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        openEdit(it) {
+            this.modal = {
+                open: true, editing: true, saving: false,
+                form: {
+                    id: it.id, name: it.name, type: it.type, base_url: it.base_url,
+                    api_key: '', organisation: it.organisation || '',
+                    customer_id: it.customer_id || 1, timeout: it.timeout || 15,
+                    verify_tls: it.verify_tls !== false,
+                },
+            };
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        async save() {
+            const f = this.modal.form;
+            if (!f.name || !f.base_url) { showToast('Name and Base URL are required', 'error'); return; }
+            this.modal.saving = true;
+            try {
+                let res;
+                if (this.modal.editing) {
+                    const body = { name: f.name, base_url: f.base_url, organisation: f.organisation, customer_id: f.customer_id, timeout: f.timeout, verify_tls: f.verify_tls };
+                    // Only send api_key if the operator typed a new one.
+                    if (f.api_key) body.api_key = f.api_key;
+                    res = await fetch('/admin/integrations/' + encodeURIComponent(f.id), {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+                    });
+                } else {
+                    res = await fetch('/admin/integrations', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(f),
+                    });
+                }
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Save failed', 'error');
+                    return;
+                }
+                showToast(this.modal.editing ? 'Integration updated' : 'Integration created', 'success');
+                this.modal.open = false;
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error during save', 'error');
+            } finally {
+                this.modal.saving = false;
+            }
+        },
+
+        async testOne(id) {
+            showToast('Testing connection…', 'info');
+            try {
+                const res = await fetch('/admin/integrations/' + encodeURIComponent(id) + '/test', { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.ok) {
+                    this.health[id] = data;
+                    showToast('Reachable: ' + (data.detail || 'ok'), 'success');
+                } else {
+                    this.health[id] = data.ok !== undefined ? data : this.health[id];
+                    showToast('Unreachable: ' + (data.detail || 'failed'), 'error');
+                }
+            } catch (e) {
+                showToast('Network error during test', 'error');
+            }
+        },
+
+        async toggleOne(id) {
+            try {
+                const res = await fetch('/admin/integrations/' + encodeURIComponent(id) + '/toggle', { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Toggle failed', 'error');
+                    return;
+                }
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+
+        async deleteOne(it) {
+            const ok = await showConfirm('Delete Integration', 'Delete integration "' + it.name + '"? Existing case links are removed. This does not delete anything on the remote platform.', 'Delete');
+            if (!ok) return;
+            try {
+                const res = await fetch('/admin/integrations/' + encodeURIComponent(it.id), { method: 'DELETE' });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Delete failed', 'error');
+                    return;
+                }
+                showToast('Integration deleted', 'success');
+                await this.reloadAll();
+            } catch (e) {
+                showToast('Network error', 'error');
+            }
+        },
+    };
+}
+</script>
+{% endblock %}

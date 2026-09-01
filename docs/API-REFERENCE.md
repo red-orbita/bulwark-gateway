@@ -1005,6 +1005,181 @@ All mutations are recorded in the admin audit log (`correlation.config_update`,
 
 ---
 
+### Investigation Center (Cases)
+
+The Investigation Center turns triage signals (incidents, origins, sessions) into durable,
+analyst-owned **cases**. A case carries metadata (status, severity, assignee, tags), linked
+subjects, an append-only note trail, a reconstructed chronological timeline, first-class
+**observables** (atomic indicators), and a **task** checklist. Cases can be seeded from a
+**template** and exported to native (`json`/`md`) or interop (`stix`/`thehive`/`iris`) shapes.
+
+Everything is **tenant-scoped**: a scoped operator only ever sees and mutates cases in their own
+tenant — a cross-tenant id returns `404` (no existence leak). Reads require `investigation:read`;
+mutations require `investigation:write` (admin + security roles hold both; auditor/viewer are
+read-only). All mutations are recorded in the admin audit log (`investigation.*`).
+
+All endpoints below are prefixed `/admin/investigation/cases`.
+
+**Enum vocabularies** (returned in list responses so a UI never hardcodes them):
+- Case status: `open`, `investigating`, `contained`, `resolved`, `closed`
+- Case / observable severity: `low`, `medium`, `high`, `critical`
+- Observable type: `ip`, `domain`, `url`, `hash`, `email`, `filename`, `user`, `other`
+- TLP / PAP level: `red`, `amber`, `green`, `white` (default `amber`)
+- Observable source: `manual`, `ioc-check`, `cortex`, `opencti`
+- Task status: `todo`, `in_progress`, `done`, `cancelled`
+- Subject type: `incident`, `origin`, `session`
+- Export format: `json`, `md`, `stix`, `thehive`, `iris`
+
+#### Cases
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `` | `investigation:read` | List cases. Query: `status`, `severity`, `assignee`, `search`, `sort` (`updated_at`\|`created_at`\|`title`\|`status`\|`severity`), `order` (`asc`\|`desc`), `limit` (1–500), `offset` |
+| GET | `/stats` | `investigation:read` | Case counts by status/severity (+ optional `assignee` "my work" roll-up) |
+| GET | `/analytics` | `investigation:read` | MTTR, opened-vs-resolved trend, top recurring origins. Query: `trend_days` (1–365), `top_origins` (1–100) |
+| GET | `/templates` | `investigation:read` | List case templates (blueprints) |
+| POST | `` | `investigation:write` | Create a case (see body below) |
+| GET | `/for-subject/{subject_type}/{subject_key}` | `investigation:read` | Cases linked to a given subject |
+| GET | `/{case_id}` | `investigation:read` | Full case detail (metadata, subjects, notes) |
+| GET | `/{case_id}/timeline` | `investigation:read` | Reconstructed chronological timeline. Query: `limit` (1–1000, default 500) |
+| GET | `/{case_id}/export` | `investigation:read` | Download the case. Query: `format` (`json`\|`md`\|`stix`\|`thehive`\|`iris`) |
+| GET | `/{case_id}/related` | `investigation:read` | Other cases sharing a subject (campaign signal) |
+| POST | `/{case_id}/state` | `investigation:write` | Set `status` / `severity` / `assignee` |
+| POST | `/{case_id}/note` | `investigation:write` | Append a free-text note |
+| POST | `/{case_id}/subject` | `investigation:write` | Link a subject (`subject_type`, `subject_key`) |
+| DELETE | `/{case_id}/subject` | `investigation:write` | Unlink a subject. Query: `subject_type`, `subject_key` |
+| POST | `/{case_id}/tags` | `investigation:write` | Replace the case tag (TTP/label) list |
+| POST | `/{case_id}/timeline` | `investigation:write` | Add a manual timeline entry |
+
+```json
+// POST /admin/investigation/cases
+// Request — template_id seeds severity/summary/tags/tasks the request omits
+{"title": "Suspected prompt-injection campaign", "severity": "high",
+ "summary": "Repeated override attempts from one origin", "template_id": "prompt-injection-campaign"}
+
+// Response
+{"message": "Case created", "case": {"case_id": "case_...", "title": "...", "severity": "high",
+  "status": "open", "tags": ["ttp:prompt-injection"], "subjects": [], "notes": [ ... ]}}
+```
+
+#### Observables
+
+First-class atomic indicators attached to a case (idempotent per `type`+`value`). Network/host/hash
+indicators can be **promoted** into the shared IOC database.
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/{case_id}/observables` | `investigation:read` | List observables (most-recently-seen first) + enum vocabularies |
+| POST | `/{case_id}/observables` | `investigation:write` | Add an observable (see body below) |
+| DELETE | `/{case_id}/observables/{observable_id}` | `investigation:write` | Remove an observable |
+| POST | `/{case_id}/observables/{observable_id}/promote-ioc` | `investigation:write` | Promote `ip`/`domain`/`url`/`hash` into the IOC database |
+
+```json
+// POST /admin/investigation/cases/{case_id}/observables
+{"type": "ip", "value": "203.0.113.7", "is_ioc": false,
+ "tlp": "amber", "pap": "amber", "tags": ["c2"], "source": "manual"}
+
+// Response
+{"message": "Observable added",
+ "observable": {"observable_id": "obs_...", "type": "ip", "value": "203.0.113.7", "is_ioc": false}}
+```
+
+> Promotion only accepts `ip`/`domain`/`url`/`hash`; a hash must be 32 (MD5) or 64 (SHA-256) hex chars.
+> `email`/`filename`/`user`/`other` have no IOC-database representation and are rejected `400`. On
+> success the observable is marked `is_ioc` and the created IOC is tagged `investigation`.
+
+#### Tasks
+
+An ordered checklist per case, with a progress roll-up.
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/{case_id}/tasks` | `investigation:read` | List tasks (manual order) + `progress` roll-up |
+| POST | `/{case_id}/tasks` | `investigation:write` | Add a task (`title`, optional `assignee`, `due_at`) |
+| POST | `/{case_id}/tasks/{task_id}/state` | `investigation:write` | Set `status` / `assignee` / `due_at` |
+| POST | `/{case_id}/tasks/{task_id}/note` | `investigation:write` | Append a note to a task |
+| DELETE | `/{case_id}/tasks/{task_id}` | `investigation:write` | Delete a task |
+
+```json
+// POST /admin/investigation/cases/{case_id}/tasks
+{"title": "Block C2 IP at the edge", "assignee": "alice", "due_at": "2026-09-05"}
+
+// Response
+{"message": "Task added",
+ "task": {"task_id": "task_...", "title": "Block C2 IP at the edge", "status": "todo"}}
+```
+
+#### Export
+
+`GET /{case_id}/export?format=…` returns the case as a downloadable attachment
+(`Content-Disposition: attachment`). Native shapes (`json`, `md`) additionally carry the compliance
+roll-up and reconstructed timeline; interop shapes carry the case's observables and tasks:
+
+| Format | Media type | Filename | Shape |
+|--------|-----------|----------|-------|
+| `json` | `application/json` | `{case_id}.json` | Native `{ "case": { … } }` (compliance + timeline) |
+| `md` | `text/markdown` | `{case_id}.md` | Human-readable Markdown record |
+| `stix` | `application/json` | `{case_id}.stix.json` | STIX 2.1 bundle |
+| `thehive` | `application/json` | `{case_id}.thehive.json` | TheHive case |
+| `iris` | `application/json` | `{case_id}.iris.json` | DFIR-IRIS case |
+
+---
+
+### Integrations (Outbound Case Connectors)
+
+Outbound **connectors** push investigation cases into an external case-management / SOAR platform.
+Two connector types ship: **TheHive 5** (`thehive`) and **DFIR-IRIS** (`dfir_iris`). Each connector
+is a flat config record (`name`, `type`, `base_url`, optional `api_key`, `verify_tls`, `enabled`)
+persisted to `data/integrations.json` (override with `BULWARK_INTEGRATIONS_FILE`).
+
+**Secrets**: an inline `api_key` is optional — an environment / Docker-secret value
+(`BULWARK_INTEGRATION_<ID>_API_KEY`, `_FILE` supported) takes precedence and is never returned by
+the API. Secrets are **masked** on every read (`••••…`).
+
+**Push is idempotent and fail-open.** The first push to a connector creates the remote case and
+records a row in the `integration_link` store (keyed by connector + local case); subsequent pushes
+**update** the existing remote case instead of creating a duplicate. A connector/transport failure
+returns `502` (audited) and **never mutates the local case**. Transient HTTP failures are retried
+with a circuit breaker (shared `CircuitBreaker`, 3 attempts).
+
+Reads require `integrations:read`; mutations require `integrations:write` (admin + security hold
+both; auditor/viewer are read-only). All mutations are recorded in the admin audit log
+(`integrations.*`). All endpoints below are prefixed `/admin/integrations`.
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/status` | `integrations:read` | Registry status + `can_write` flag for the caller |
+| GET | `` | `integrations:read` | List connectors (secrets masked) |
+| GET | `/{id}` | `integrations:read` | Get one connector config (secret masked) |
+| POST | `` | `integrations:write` | Create a connector (`type` = `thehive`\|`dfir_iris`) |
+| PUT | `/{id}` | `integrations:write` | Update a connector config |
+| DELETE | `/{id}` | `integrations:write` | Delete a connector |
+| POST | `/{id}/toggle` | `integrations:write` | Enable / disable a connector |
+| POST | `/{id}/test` | `integrations:write` | Live `test_connection` probe against the platform |
+| GET | `/{id}/health` | `integrations:read` | Cached connector health (TTL 30s) |
+| POST | `/reload` | `integrations:write` | Reload the connector registry from disk |
+| POST | `/push/case/{case_id}` | `integrations:write` | Idempotent push of a case (create-or-update; fail-open) |
+| GET | `/push/case/{case_id}/links` | `integrations:read` | List remote links (`remote_id` / `remote_url` / `last_synced_at`) for a case |
+
+```json
+// POST /admin/integrations
+{"name": "SOC TheHive", "type": "thehive",
+ "base_url": "https://thehive.soc.example", "api_key": "•optional•", "verify_tls": true}
+
+// POST /admin/integrations/push/case/{case_id}
+{"integration_id": "int_a1b2c3"}
+
+// Response (create)
+{"ok": true, "created": true,
+ "remote_id": "~40988", "remote_url": "https://thehive.soc.example/cases/~40988",
+ "detail": "Case created",
+ "link": {"connector": "thehive", "local_type": "case", "local_id": "case_...",
+          "remote_id": "~40988", "remote_url": "https://thehive.soc.example/cases/~40988",
+          "last_synced_at": "2026-09-01T12:00:00Z", "etag": ""}}
+```
+
+---
+
 ## Error Format
 
 All error responses follow this format:

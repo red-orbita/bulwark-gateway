@@ -33,6 +33,22 @@ from ..services.investigation_case_store import (
     get_case_store,
     render_case_markdown,
 )
+from ..services.investigation_export import (
+    build_iris_case,
+    build_stix_bundle,
+    build_thehive_case,
+)
+from ..services.investigation_observable_store import (
+    OBSERVABLE_SOURCES,
+    OBSERVABLE_TYPES,
+    PAP_LEVELS,
+    TLP_LEVELS,
+    get_observable_store,
+)
+from ..services.investigation_task_store import (
+    TASK_STATUSES,
+    get_task_store,
+)
 
 # Reuse the Investigation Center's tenant/authorisation helpers so cases enforce
 # exactly the same scoping rules as triage (admin→admin, no import cycle). Imported
@@ -68,7 +84,7 @@ _COMPLIANCE_AXES = (
 # explicit surface so an unknown key is rejected at the API boundary rather than
 # silently falling back inside the store.
 _SORT_KEYS = ("updated_at", "created_at", "title", "status", "severity")
-_EXPORT_FORMATS = ("json", "md")
+_EXPORT_FORMATS = ("json", "md", "stix", "thehive", "iris")
 
 
 # ─── Timeline reconstruction (Fase 5A) ───────────────────────────────────────
@@ -142,8 +158,14 @@ def _event_timeline_entry(event: dict) -> dict:
 
 
 def _note_timeline_entry(note: dict) -> dict:
-    """Normalise a case note into a timeline entry (pure)."""
-    ts = note.get("ts") or ""
+    """Normalise a case note into a timeline entry (pure).
+
+    A manual timeline note (``kind='timeline'``) may carry an ``event_ts`` — when
+    the event actually occurred, distinct from when the note was recorded — which
+    is used for chronological ordering in preference to the record timestamp.
+    """
+    event_ts = note.get("event_ts")
+    ts = event_ts or note.get("ts") or ""
     return {
         "type": "note",
         "epoch": _parse_iso_ts(ts),
@@ -253,9 +275,17 @@ class CaseCreateRequest(BaseModel):
     """Open a new investigation case."""
 
     title: str = Field(..., min_length=1, max_length=200)
-    severity: str = Field(default="medium", description=f"one of {CASE_SEVERITIES}")
+    severity: Optional[str] = Field(
+        default=None,
+        description=f"one of {CASE_SEVERITIES}; defaults to the template's or 'medium'",
+    )
     summary: Optional[str] = Field(default=None, max_length=4000)
     tenant: Optional[str] = Field(default=None, max_length=128)
+    template_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="apply a case template (seeds severity/summary/tags/tasks)",
+    )
 
 
 class CaseStateRequest(BaseModel):
@@ -277,6 +307,56 @@ class CaseSubjectRequest(BaseModel):
 
     subject_type: str = Field(..., description="incident | origin | session")
     subject_key: str = Field(..., min_length=1, max_length=256)
+
+
+class CaseTagsRequest(BaseModel):
+    """Replace a case's tag (TTP / label badge) list."""
+
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+
+class CaseTimelineEntryRequest(BaseModel):
+    """Add a manual entry to a case's reconstructed timeline."""
+
+    text: str = Field(..., min_length=1, max_length=4000)
+    event_ts: Optional[str] = Field(
+        default=None,
+        description="ISO-8601 timestamp of when the event occurred (defaults to now)",
+    )
+
+
+class ObservableAddRequest(BaseModel):
+    """Add an observable (atomic indicator) to a case."""
+
+    type: str = Field(..., description=f"one of {OBSERVABLE_TYPES}")
+    value: str = Field(..., min_length=1, max_length=2048)
+    is_ioc: bool = Field(default=False)
+    tlp: str = Field(default="amber", description=f"one of {TLP_LEVELS}")
+    pap: str = Field(default="amber", description=f"one of {PAP_LEVELS}")
+    tags: list[str] = Field(default_factory=list, max_length=50)
+    source: str = Field(default="manual", description=f"one of {OBSERVABLE_SOURCES}")
+
+
+class TaskAddRequest(BaseModel):
+    """Add a checklist task to a case."""
+
+    title: str = Field(..., min_length=1, max_length=200)
+    assignee: Optional[str] = Field(default=None, max_length=128)
+    due_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class TaskStateRequest(BaseModel):
+    """Set a task's status, assignee and/or due date."""
+
+    status: Optional[str] = Field(default=None, description=f"one of {TASK_STATUSES}")
+    assignee: Optional[str] = Field(default=None, max_length=128)
+    due_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class TaskNoteRequest(BaseModel):
+    """Append a note to a task."""
+
+    text: str = Field(..., min_length=1, max_length=2000)
 
 
 async def _get_case_scoped(user: TokenPayload, case_id: str) -> dict:
@@ -367,30 +447,86 @@ async def case_analytics(
     return {"analytics": analytics}
 
 
+@router.get("/templates")
+async def list_case_templates(
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """List the available case templates (investigation blueprints)."""
+    from ..services.investigation_templates import list_templates
+
+    return {"templates": list_templates()}
+
+
 @router.post("")
 async def create_case(
     body: CaseCreateRequest,
     user: TokenPayload = Depends(require_permission("investigation:write")),
 ):
-    """Open a new case, owned by the operator's tenant scope."""
+    """Open a new case, owned by the operator's tenant scope.
+
+    When ``template_id`` is supplied, the named template supplies defaults the
+    request did not: the severity (unless explicitly set), the summary (unless
+    provided), the case tags, and an ordered checklist of tasks. An unknown
+    template id is rejected 400.
+    """
+    from ..services.investigation_templates import get_template
+
     tenant = _scoped_tenant(user, body.tenant)
+
+    template = None
+    if body.template_id:
+        template = get_template(body.template_id)
+        if template is None:
+            raise HTTPException(
+                status_code=400, detail=f"unknown template: {body.template_id}"
+            )
+
+    severity = body.severity or (template["severity"] if template else None) or "medium"
+    summary = body.summary or (template["summary"] if template else None)
+
     try:
         case = await get_case_store().create_case(
             title=body.title,
             actor=user.sub,
-            severity=body.severity,
+            severity=severity,
             tenant=tenant,
-            summary=body.summary,
+            summary=summary,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+
+    case_id = case["case_id"]
+
+    # Seed the template's tags + task checklist (best-effort; a bad template value
+    # is skipped by the store's own validation rather than failing the create).
+    if template:
+        if template.get("tags"):
+            updated = await get_case_store().set_tags(
+                case_id=case_id, actor=user.sub, tags=template["tags"]
+            )
+            if updated is not None:
+                case = updated
+        for task in template.get("tasks") or []:
+            try:
+                await get_task_store().add(
+                    case_id=case_id,
+                    title=task.get("title") or "",
+                    actor=user.sub,
+                    assignee=task.get("assignee") or None,
+                )
+            except ValueError:
+                continue
+        case["subjects"] = case.get("subjects") or []
 
     await get_audit_logger().log(
         actor=user.sub,
         action="investigation.case_create",
         resource_type="investigation_case",
         resource_id=case["case_id"],
-        details=f"title={case['title']} severity={case['severity']}",
+        details=(
+            f"title={case['title']} severity={case['severity']}"
+            + (f" template={body.template_id}" if template else "")
+        ),
     )
     return {"message": "Case created", "case": case}
 
@@ -535,9 +671,16 @@ async def _resolve_case_compliance(case: dict) -> Optional[dict]:
 async def export_case(
     case_id: str,
     user: TokenPayload = Depends(require_permission("investigation:read")),
-    format: str = Query("json", description="json | md"),
+    format: str = Query("json", description="json | md | stix | thehive | iris"),
 ):
-    """Export a full case as a downloadable JSON or Markdown investigation record.
+    """Export a full case as a downloadable investigation record.
+
+    Five shapes are offered: the native ``json`` / ``md`` record, plus three
+    interop exports (Fase 0) for handing an investigation to an external
+    platform — ``stix`` (STIX 2.1 bundle), ``thehive`` (TheHive case), and
+    ``iris`` (DFIR-IRIS case). The interop shapes carry the case's first-class
+    observables and tasks; the native shapes additionally carry the compliance
+    roll-up and reconstructed timeline.
 
     Tenant-scoped like every other case read; the export is audit-logged so a
     record leaving the system leaves a trail. Content-Disposition marks it as an
@@ -548,6 +691,34 @@ async def export_case(
         raise HTTPException(status_code=400, detail=f"format must be one of {_EXPORT_FORMATS}")
     case = await _get_case_scoped(user, case_id)
     cid = case.get("case_id") or case_id
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.case_export",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"format={fmt}",
+    )
+
+    if fmt in ("stix", "thehive", "iris"):
+        # Interop exports (Fase 0) hand the investigation to an external platform.
+        # They carry the case's first-class observables and tasks (which live in
+        # dedicated stores, not on the case row) but not the native compliance
+        # roll-up / reconstructed timeline — so skip that enrichment work here.
+        observables = await get_observable_store().list_for_case(cid)
+        tasks = await get_task_store().list_for_case(cid)
+        if fmt == "stix":
+            payload = build_stix_bundle(case, observables, tasks)
+        elif fmt == "thehive":
+            payload = build_thehive_case(case, observables, tasks)
+        else:
+            payload = build_iris_case(case, observables, tasks)
+        return JSONResponse(
+            content=jsonable_encoder(payload),
+            headers={
+                "Content-Disposition": f'attachment; filename="{cid}.{fmt}.json"'
+            },
+        )
 
     # Enrich the export with the OWASP/MITRE/NIST/EU mapping derived from the case's
     # linked incidents (resolved here, off the request-free render path, so
@@ -568,14 +739,6 @@ async def export_case(
     case["timeline_truncated"] = timeline_truncated
     case["timeline_subject_counts"] = timeline_counts
 
-    await get_audit_logger().log(
-        actor=user.sub,
-        action="investigation.case_export",
-        resource_type="investigation_case",
-        resource_id=case_id,
-        details=f"format={fmt}",
-    )
-
     if fmt == "md":
         body = render_case_markdown(case)
         return PlainTextResponse(
@@ -583,6 +746,7 @@ async def export_case(
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{cid}.md"'},
         )
+
     return JSONResponse(
         content=jsonable_encoder({"case": case}),
         headers={"Content-Disposition": f'attachment; filename="{cid}.json"'},
@@ -739,3 +903,410 @@ async def remove_case_subject(
         details=f"unlinked {subject_type}:{subject_key}",
     )
     return {"message": "Subject unlinked", "case": case}
+
+
+# ─── Case tags (Phase 0) ──────────────────────────────────────────────────────
+
+
+@router.post("/{case_id}/tags")
+async def set_case_tags(
+    case_id: str,
+    body: CaseTagsRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Replace a case's tag (TTP / label badge) list.
+
+    Tags are normalised (trimmed, lower-cased, deduped, capped) by the store and
+    the change is recorded on the case's append-only note trail.
+    """
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    case = await get_case_store().set_tags(
+        case_id=case_id, actor=user.sub, tags=body.tags
+    )
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.case_tags",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"tags={case.get('tags')}",
+    )
+    return {"message": "Tags updated", "case": case}
+
+
+# ─── Manual timeline entry (Phase 0) ──────────────────────────────────────────
+
+
+def _validate_event_ts(event_ts: Optional[str]) -> Optional[str]:
+    """Validate an optional ISO-8601 event timestamp (400 on a bad value)."""
+    if event_ts is None:
+        return None
+    candidate = event_ts.strip()
+    if not candidate:
+        return None
+    from datetime import datetime
+
+    try:
+        datetime.fromisoformat(candidate)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400, detail="event_ts must be an ISO-8601 timestamp"
+        ) from None
+    return candidate
+
+
+@router.post("/{case_id}/timeline")
+async def add_case_timeline_entry(
+    case_id: str,
+    body: CaseTimelineEntryRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Add a manual entry to a case's reconstructed timeline.
+
+    A manual entry records an event with no durable detection behind it (an
+    out-of-band action, an observed attacker move) so the reconstructed timeline
+    can carry the full story. Stored on the case's append-only note trail as a
+    ``kind='timeline'`` note, ordered by its optional ``event_ts``.
+    """
+    await _get_case_scoped(user, case_id)  # tenant gate
+    event_ts = _validate_event_ts(body.event_ts)
+
+    try:
+        case = await get_case_store().add_timeline_entry(
+            case_id=case_id, actor=user.sub, text=body.text, event_ts=event_ts
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.case_timeline_entry",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"event_ts={event_ts or 'now'}",
+    )
+    return {"message": "Timeline entry added", "case": case}
+
+
+# ─── Observables (Phase 0) ────────────────────────────────────────────────────
+
+# Map an observable type onto the IOC database's own type enum for promotion.
+# Only network/host/hash indicators promote; email/filename/user/other have no
+# IOC-database representation and are rejected at the boundary.
+_OBSERVABLE_TO_IOC_TYPE = {
+    "ip": "ip",
+    "domain": "domain",
+    "url": "url",
+}
+
+
+@router.get("/{case_id}/observables")
+async def list_case_observables(
+    case_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """List a case's observables (atomic indicators), most-recently-seen first."""
+    await _get_case_scoped(user, case_id)  # tenant gate
+    observables = await get_observable_store().list_for_case(case_id)
+    return {
+        "case_id": case_id,
+        "observables": observables,
+        "count": len(observables),
+        "can_write": _can_write(user),
+        "types": list(OBSERVABLE_TYPES),
+        "tlp_levels": list(TLP_LEVELS),
+        "pap_levels": list(PAP_LEVELS),
+        "sources": list(OBSERVABLE_SOURCES),
+    }
+
+
+@router.post("/{case_id}/observables")
+async def add_case_observable(
+    case_id: str,
+    body: ObservableAddRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Add an observable to a case (idempotent per type+value)."""
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    try:
+        observable = await get_observable_store().add(
+            case_id=case_id,
+            observable_type=body.type,
+            value=body.value,
+            actor=user.sub,
+            is_ioc=body.is_ioc,
+            tlp=body.tlp,
+            pap=body.pap,
+            tags=body.tags,
+            source=body.source,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.observable_add",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"{body.type}={observable.get('value')} is_ioc={body.is_ioc}",
+    )
+    return {"message": "Observable added", "observable": observable}
+
+
+@router.delete("/{case_id}/observables/{observable_id}")
+async def remove_case_observable(
+    case_id: str,
+    observable_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Remove an observable from a case."""
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    removed = await get_observable_store().remove(
+        case_id=case_id, observable_id=observable_id
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.observable_remove",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"observable_id={observable_id}",
+    )
+    return {"message": "Observable removed"}
+
+
+@router.post("/{case_id}/observables/{observable_id}/promote-ioc")
+async def promote_observable_to_ioc(
+    case_id: str,
+    observable_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Promote a case observable into the shared IOC database.
+
+    Only network/host/hash indicators promote (ip/domain/url/hash); email,
+    filename, user and other observables have no IOC-database representation and
+    are rejected 400. Hashes are classed as MD5 (32 hex) or SHA-256 (64 hex) by
+    length; any other length is rejected. The observable is marked ``is_ioc`` on
+    success so the UI can reflect that it is now a tracked indicator.
+    """
+    from ..models.iocs import IOCCreate, IOCType
+    from ..services.ioc_store import get_ioc_store
+
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    observable = await get_observable_store().get(case_id, observable_id)
+    if observable is None:
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    otype = observable.get("type")
+    value = observable.get("value") or ""
+    if otype == "hash":
+        length = len(value)
+        if length == 64:
+            ioc_type = IOCType.HASH_SHA256
+        elif length == 32:
+            ioc_type = IOCType.HASH_MD5
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="hash must be 32 (MD5) or 64 (SHA-256) hex characters to promote",
+            )
+    elif otype in _OBSERVABLE_TO_IOC_TYPE:
+        ioc_type = IOCType(_OBSERVABLE_TO_IOC_TYPE[otype])
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"observable type '{otype}' cannot be promoted to an IOC",
+        )
+
+    tags = list(observable.get("tags") or [])
+    if "investigation" not in tags:
+        tags.append("investigation")
+    # IOCStore is a synchronous in-memory/JSON store (no await).
+    entry = get_ioc_store().create(
+        IOCCreate(
+            type=ioc_type,
+            value=value,
+            notes=f"Promoted from investigation case {case_id}",
+            tags=tags,
+        ),
+        source="investigation",
+    )
+
+    # Reflect the promotion back onto the observable (idempotent add refreshes it).
+    await get_observable_store().add(
+        case_id=case_id,
+        observable_type=otype,
+        value=value,
+        actor=user.sub,
+        is_ioc=True,
+        tlp=observable.get("tlp") or "amber",
+        pap=observable.get("pap") or "amber",
+        tags=observable.get("tags") or [],
+        source=observable.get("source") or "manual",
+    )
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.observable_promote",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"{otype}={value} → ioc={entry.id}",
+    )
+    return {
+        "message": "Observable promoted to IOC",
+        "ioc_id": entry.id,
+        "ioc_type": ioc_type.value,
+    }
+
+
+# ─── Tasks (Phase 0) ──────────────────────────────────────────────────────────
+
+
+@router.get("/{case_id}/tasks")
+async def list_case_tasks(
+    case_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:read")),
+):
+    """List a case's checklist tasks in manual order, with a progress roll-up."""
+    await _get_case_scoped(user, case_id)  # tenant gate
+    store = get_task_store()
+    tasks = await store.list_for_case(case_id)
+    progress = await store.progress(case_id)
+    return {
+        "case_id": case_id,
+        "tasks": tasks,
+        "count": len(tasks),
+        "progress": progress,
+        "can_write": _can_write(user),
+        "statuses": list(TASK_STATUSES),
+    }
+
+
+@router.post("/{case_id}/tasks")
+async def add_case_task(
+    case_id: str,
+    body: TaskAddRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Add a checklist task to a case."""
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    try:
+        task = await get_task_store().add(
+            case_id=case_id,
+            title=body.title,
+            actor=user.sub,
+            assignee=body.assignee,
+            due_at=body.due_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.task_add",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"task={task.get('task_id')} title={task.get('title')}",
+    )
+    return {"message": "Task added", "task": task}
+
+
+@router.post("/{case_id}/tasks/{task_id}/state")
+async def set_case_task_state(
+    case_id: str,
+    task_id: str,
+    body: TaskStateRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Set a task's status, assignee and/or due date."""
+    if body.status is None and body.assignee is None and body.due_at is None:
+        raise HTTPException(
+            status_code=400, detail="Provide status, assignee and/or due_at."
+        )
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    try:
+        task = await get_task_store().set_state(
+            case_id=case_id,
+            task_id=task_id,
+            actor=user.sub,
+            status=body.status,
+            assignee=body.assignee,
+            due_at=body.due_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.task_state",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"task={task_id} status={body.status} assignee={body.assignee}",
+    )
+    return {"message": "Task updated", "task": task}
+
+
+@router.post("/{case_id}/tasks/{task_id}/note")
+async def add_case_task_note(
+    case_id: str,
+    task_id: str,
+    body: TaskNoteRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Append a note to a task."""
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    try:
+        task = await get_task_store().add_note(
+            case_id=case_id, task_id=task_id, actor=user.sub, text=body.text
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.task_note",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"task={task_id} note_len={len(body.text)}",
+    )
+    return {"message": "Note added", "task": task}
+
+
+@router.delete("/{case_id}/tasks/{task_id}")
+async def remove_case_task(
+    case_id: str,
+    task_id: str,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Delete a task from a case."""
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    removed = await get_task_store().remove(case_id=case_id, task_id=task_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    await get_audit_logger().log(
+        actor=user.sub,
+        action="investigation.task_remove",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=f"task={task_id}",
+    )
+    return {"message": "Task removed"}
