@@ -279,6 +279,20 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
   marking-definitions), case → `grouping`/`report`. TLP/PAP gate enforced here.
 - **Lookup**: on IOC-check, also query OpenCTI for context (score, labels, related
   campaigns) and attach to the observable.
+  - **DONE (interactive lookup)**: `admin/services/integrations/opencti.py`
+    (`OpenCTIConnector`, raw `httpx` GraphQL, no `pycti`) exposes
+    `lookup_observable()` — queries `indicators(search,orderBy:x_opencti_score)`,
+    filters to STIX patterns literally containing the value, folds the worst-level
+    **active** (non-revoked) indicator into a `not_found`/`clean`/`suspicious`/
+    `malicious` verdict (`score_verdict`, thresholds 40/70). Wired via
+    `POST /admin/investigation/cases/{id}/observables/{obs}/lookup` (mirrors the
+    Cortex enrich path: folds into `enrichment['opencti']`, marks `is_ioc` +
+    auto-raises origin-risk on `malicious`, fail-open 502). Registry adds the
+    `opencti` type + `build_lookup_connector` + health probe. Admin UI: OpenCTI
+    verdict badge + "Threat-intel lookup" panel on the observables card. Tests:
+    `tests/test_opencti_connector.py` (17), plus `test_integrations.py` +
+    `test_investigation_cases.py` coverage.
+    Remaining for later: **push** (SCO/indicator/sighting + TLP, case→report).
 
 ### Phase 2 acceptance
 An observable can be enriched by Cortex and looked up in OpenCTI with reports

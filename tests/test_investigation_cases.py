@@ -2042,6 +2042,21 @@ class _FakeRedis:
         return 3600
 
 
+class _FakeOpenCtiConnector:
+    """Stand-in for :class:`OpenCTIConnector` — records lookups, returns/raises."""
+
+    def __init__(self, *, result=None, error=None):
+        self._result = result or {}
+        self._error = error
+        self.calls: list[dict] = []
+
+    async def lookup_observable(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
 class _FakeRegistry:
     def __init__(self, *, config=None, connector=None):
         self._config = config
@@ -2051,6 +2066,9 @@ class _FakeRegistry:
         return self._config
 
     def build_enrichment_connector(self, config):
+        return self._connector
+
+    def build_lookup_connector(self, config):
         return self._connector
 
 
@@ -2480,6 +2498,189 @@ class TestObservableResponderEndpoint:
         body = inv_cases.ObservableResponderRequest(integration_id="cx1", responder_id="r1")
         with pytest.raises(HTTPException) as ei:
             await inv_cases.run_observable_responder(
+                made["case_id"], added["observable"]["observable_id"],
+                body=body, user=_admin(tenant="acme"),
+            )
+        assert ei.value.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 2 — observable lookup (OpenCTI threat-intel)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestObservableLookupEndpoint:
+    async def _seed_observable(self, inv_cases, cases, otype="ip", value="1.2.3.4"):
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        body = inv_cases.ObservableAddRequest(type=otype, value=value)
+        added = await inv_cases.add_case_observable(cid, body=body, user=_admin())
+        return cid, added["observable"]["observable_id"]
+
+    def _oc_config(self, inv_cases, **kw):
+        return _FakeConfig(type="opencti", **kw)
+
+    async def test_lookup_malicious_marks_ioc(self, wired, monkeypatch):
+        inv_cases, cases, _, audit = wired
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        result = {
+            "connector": "opencti", "verdict": "malicious", "is_malicious": True,
+            "found": True, "score": 85, "indicator_count": 2,
+            "labels": ["apt"], "indicators": [],
+        }
+        connector = _FakeOpenCtiConnector(result=result)
+        registry = _FakeRegistry(config=self._oc_config(inv_cases), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        out = await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        assert out["enrichment"]["verdict"] == "malicious"
+        assert out["observable"]["enrichment"]["opencti"]["score"] == 85
+        assert out["observable"]["is_ioc"] is True
+        # The connector was driven with the observable's type + value.
+        assert connector.calls[0]["observable_type"] == "ip"
+        assert connector.calls[0]["value"] == "1.2.3.4"
+        assert audit.entries[-1]["action"] == "investigation.observable_lookup"
+
+    async def test_lookup_clean_does_not_mark_ioc(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        result = {"verdict": "not_found", "is_malicious": False, "found": False}
+        connector = _FakeOpenCtiConnector(result=result)
+        registry = _FakeRegistry(config=self._oc_config(inv_cases), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        out = await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        assert out["observable"]["is_ioc"] is False
+        # A non-malicious verdict never touches origin risk.
+        assert "origin_risk" not in out
+
+    async def test_lookup_malicious_auto_raises_origin(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        add = inv_cases.ObservableAddRequest(type="ip", value="9.9.9.9")
+        added = await inv_cases.add_case_observable(cid, body=add, user=_admin())
+        oid = added["observable"]["observable_id"]
+        await cases.add_subject(
+            case_id=cid, subject_type="origin",
+            subject_key="session:0123456789abcdef", actor="a",
+        )
+        connector = _FakeOpenCtiConnector(
+            result={"verdict": "malicious", "is_malicious": True, "indicator_count": 1}
+        )
+        registry = _FakeRegistry(config=self._oc_config(inv_cases), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis())
+        monkeypatch.setattr(inv_cases, "_correlation_enabled", lambda: True)
+
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        out = await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        risk = out["origin_risk"]
+        assert len(risk["raised"]) == 1
+        assert risk["raised"][0]["new_score"] >= 7.0
+
+    async def test_lookup_observable_missing_is_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        registry = _FakeRegistry(
+            config=self._oc_config(inv_cases), connector=_FakeOpenCtiConnector()
+        )
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.lookup_case_observable(
+                made["case_id"], "obs_nope", body=body, user=_admin()
+            )
+        assert ei.value.status_code == 404
+
+    async def test_lookup_integration_not_found_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=None)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableLookupRequest(integration_id="nope")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 404
+
+    async def test_lookup_wrong_type_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=_FakeConfig(type="cortex"))
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableLookupRequest(integration_id="cx1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_lookup_disabled_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=self._oc_config(inv_cases, enabled=False))
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_lookup_not_configured_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=self._oc_config(inv_cases), connector=None)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_lookup_connector_error_is_502_fail_open(self, wired, monkeypatch):
+        inv_cases, cases, _, audit = wired
+        from fastapi import HTTPException
+
+        from admin.services.integrations.base import ConnectorError
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        connector = _FakeOpenCtiConnector(error=ConnectorError("opencti unreachable"))
+        registry = _FakeRegistry(config=self._oc_config(inv_cases), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 502
+        # Fail-open: the observable is never mutated on a failed lookup.
+        listed = await inv_cases.list_case_observables(cid, user=_admin())
+        assert listed["observables"][0]["enrichment"] == {}
+        assert listed["observables"][0]["is_ioc"] is False
+        assert audit.entries[-1]["action"] == "investigation.observable_lookup_failed"
+
+    async def test_lookup_cross_tenant_is_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        add = inv_cases.ObservableAddRequest(type="ip", value="1.1.1.1")
+        added = await inv_cases.add_case_observable(
+            made["case_id"], body=add, user=_admin(tenant="evil")
+        )
+        registry = _FakeRegistry(
+            config=self._oc_config(inv_cases), connector=_FakeOpenCtiConnector()
+        )
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableLookupRequest(integration_id="oc1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.lookup_case_observable(
                 made["case_id"], added["observable"]["observable_id"],
                 body=body, user=_admin(tenant="acme"),
             )

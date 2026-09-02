@@ -106,6 +106,18 @@ def _cortex_config():
     )
 
 
+def _opencti_config():
+    from admin.services.integrations.registry import IntegrationConfig
+
+    return IntegrationConfig(
+        id="oc1",
+        name="Prod OpenCTI",
+        type="opencti",
+        base_url="http://opencti.test",
+        api_key="secret-key",
+    )
+
+
 _CASE = {
     "case_id": "case_abc",
     "title": "Suspicious exfiltration",
@@ -254,6 +266,41 @@ async def test_registry_health_probes_cortex_via_enrichment_connector(registry, 
     health = await registry.health("cx1", force=True)
     assert health.ok is True
     assert health.detail == "authenticated"
+
+
+def test_registry_supports_opencti_type():
+    from admin.services.integrations.registry import INTEGRATION_TYPES
+
+    assert "opencti" in INTEGRATION_TYPES
+
+
+def test_registry_builds_lookup_connector_for_opencti(registry):
+    from admin.services.integrations.opencti import OpenCTIConnector
+
+    conn = registry.build_lookup_connector(_opencti_config())
+    assert isinstance(conn, OpenCTIConnector)
+    # OpenCTI is neither a push target nor an enrichment (Cortex) target.
+    assert registry.build_lookup_connector(_cortex_config()) is None
+    assert registry.build_connector(_opencti_config()) is None
+    assert registry.build_enrichment_connector(_opencti_config()) is None
+
+
+def test_registry_lookup_connector_none_when_incomplete(registry):
+    from admin.services.integrations.registry import IntegrationConfig
+
+    incomplete = IntegrationConfig(id="x", name="x", type="opencti", base_url="", api_key="")
+    assert registry.build_lookup_connector(incomplete) is None
+
+
+async def test_registry_health_probes_opencti_via_lookup_connector(registry, httpx_mock):
+    registry.add(_opencti_config())
+    httpx_mock.add_response(
+        method="POST", url="http://opencti.test/graphql",
+        json={"data": {"about": {"version": "6.2.0"}}},
+    )
+    health = await registry.health("oc1", force=True)
+    assert health.ok is True
+    assert "6.2.0" in health.detail
 
 
 # ─── TheHive connector ───────────────────────────────────────────────────────

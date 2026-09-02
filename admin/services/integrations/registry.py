@@ -33,6 +33,7 @@ from ..secrets import read_secret
 from .base import Connector, ConnectorHealth
 from .cortex import CortexConnector
 from .dfir_iris import DfirIrisConnector
+from .opencti import OpenCTIConnector
 from .thehive import TheHiveConnector
 from .util import iso_now
 
@@ -45,9 +46,10 @@ _CONFIG_FILE = Path(
 )
 
 # Supported connector types. ``thehive`` / ``dfir_iris`` are case *push* targets
-# (they implement the ``Connector`` protocol); ``cortex`` is an *enrichment* target
-# (observable analysis), built via :meth:`build_enrichment_connector`.
-INTEGRATION_TYPES = ("thehive", "dfir_iris", "cortex")
+# (they implement the ``Connector`` protocol); ``cortex`` and ``opencti`` are
+# *enrichment* targets (observable analysis / threat-intel lookup), built via
+# :meth:`build_enrichment_connector` / :meth:`build_lookup_connector`.
+INTEGRATION_TYPES = ("thehive", "dfir_iris", "cortex", "opencti")
 
 # How long a health probe result is cached before a fresh probe is allowed.
 _HEALTH_TTL_SECONDS = 30.0
@@ -250,6 +252,27 @@ class IntegrationRegistry:
             timeout=config.timeout,
         )
 
+    def build_lookup_connector(
+        self, config: IntegrationConfig
+    ) -> Optional[OpenCTIConnector]:
+        """Build a threat-intel lookup connector (OpenCTI) from a config, or ``None``.
+
+        Like the enrichment factory, lookup connectors do not implement the
+        ``Connector`` *push* protocol, so they are built separately. Returns
+        ``None`` for non-lookup types or an incompletely configured target.
+        """
+        if config.type != "opencti":
+            return None
+        api_key = self._resolve_api_key(config)
+        if not config.base_url or not api_key:
+            return None
+        return OpenCTIConnector(
+            base_url=config.base_url,
+            api_key=api_key,
+            verify_tls=config.verify_tls,
+            timeout=config.timeout,
+        )
+
     # ─── Health cache ─────────────────────────────────────────────────────────
 
     async def health(self, integration_id: str, *, force: bool = False) -> ConnectorHealth:
@@ -266,8 +289,13 @@ class IntegrationRegistry:
 
         # Probe whichever connector kind this config maps to — push targets via
         # ``build_connector``, enrichment targets (Cortex) via the enrichment
-        # factory. Both expose ``test_connection``.
-        probe = self.build_connector(config) or self.build_enrichment_connector(config)
+        # factory, lookup targets (OpenCTI) via the lookup factory. All expose
+        # ``test_connection``.
+        probe = (
+            self.build_connector(config)
+            or self.build_enrichment_connector(config)
+            or self.build_lookup_connector(config)
+        )
         if probe is None:
             snapshot = ConnectorHealth(
                 ok=False, detail="incomplete configuration", checked_at=iso_now()

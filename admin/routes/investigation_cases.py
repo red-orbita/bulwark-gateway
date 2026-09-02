@@ -72,6 +72,7 @@ from .investigation import (
 
 if TYPE_CHECKING:
     from ..services.integrations.cortex import CortexConnector
+    from ..services.integrations.opencti import OpenCTIConnector
 
 router = APIRouter()
 
@@ -395,6 +396,12 @@ class ObservableResponderRequest(BaseModel):
     integration_id: str = Field(..., min_length=1, max_length=64)
     responder_id: str = Field(..., min_length=1, max_length=128)
     tlp: Optional[str] = Field(default=None, description=f"one of {TLP_LEVELS}")
+
+
+class ObservableLookupRequest(BaseModel):
+    """Look an observable up against an OpenCTI integration's indicator graph."""
+
+    integration_id: str = Field(..., min_length=1, max_length=64)
 
 
 class TaskAddRequest(BaseModel):
@@ -1276,6 +1283,29 @@ def _resolve_cortex_connector(integration_id: str) -> "CortexConnector":
     return connector
 
 
+def _resolve_opencti_connector(integration_id: str) -> "OpenCTIConnector":
+    """Resolve a configured, enabled OpenCTI lookup connector, or raise.
+
+    Mirrors :func:`_resolve_cortex_connector`: unknown id ⇒ 404; non-opencti ⇒
+    400; disabled ⇒ 400; missing credentials ⇒ 400. The returned connector is
+    ready to call.
+    """
+    registry = get_integration_registry()
+    config = registry.get(integration_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if config.type != "opencti":
+        raise HTTPException(
+            status_code=400, detail="This action requires an opencti integration"
+        )
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Integration is disabled")
+    connector = registry.build_lookup_connector(config)
+    if connector is None:
+        raise HTTPException(status_code=400, detail="Integration is not fully configured")
+    return connector
+
+
 def _case_origin_tokens(case: dict) -> list[str]:
     """Return the valid ``scope_type:digest`` origin tokens linked to a case.
 
@@ -1511,6 +1541,92 @@ async def run_observable_responder(
         "observable": updated,
         "responder": outcome,
     }
+
+
+@router.post("/{case_id}/observables/{observable_id}/lookup")
+async def lookup_case_observable(
+    case_id: str,
+    observable_id: str,
+    body: ObservableLookupRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Look an observable up against an OpenCTI integration's indicators (Phase 2).
+
+    Searches OpenCTI for the observable's literal value, folds the matching STIX
+    indicators into a compact verdict blob, and stores it under
+    ``enrichment['opencti']``. A ``malicious`` verdict flags the observable
+    ``is_ioc`` *and* auto-hardens every ``origin`` subject linked to the case
+    (best-effort — see :func:`_auto_raise_case_origins`) so the confirmed-bad
+    indicator escalates the origins that produced it. Fail-open: an
+    unreachable/failing OpenCTI surfaces a ``502`` (audited) and never mutates the
+    observable.
+    """
+    case = await _get_case_scoped(user, case_id)  # tenant gate
+
+    observable = await get_observable_store().get(case_id, observable_id)
+    if observable is None:
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    connector = _resolve_opencti_connector(body.integration_id)
+
+    audit = get_audit_logger()
+    try:
+        enrichment = await connector.lookup_observable(
+            observable_type=observable.get("type") or "other",
+            value=observable.get("value") or "",
+        )
+    except ConnectorError as exc:
+        await audit.log(
+            actor=user.sub,
+            action="investigation.observable_lookup_failed",
+            resource_type="investigation_case",
+            resource_id=case_id,
+            details=str({"observable_id": observable_id, "error": str(exc)}),
+        )
+        # Fail-open: surface the failure without ever touching the observable.
+        raise HTTPException(status_code=502, detail=f"Lookup failed: {exc}") from None
+
+    is_malicious = bool(enrichment.get("is_malicious"))
+    updated = await get_observable_store().set_enrichment(
+        case_id=case_id,
+        observable_id=observable_id,
+        key="opencti",
+        data=enrichment,
+        mark_ioc=is_malicious,
+    )
+    if updated is None:  # pragma: no cover — observable existence checked above
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    # A confirmed-malicious verdict auto-hardens the case's linked origins so the
+    # proxy escalates their next request. Best-effort / fail-open — never blocks the
+    # lookup response, even if Redis is down or no origins are linked.
+    origin_risk: Optional[dict] = None
+    if is_malicious:
+        origin_risk = await _auto_raise_case_origins(case, case_id=case_id, actor=user.sub)
+
+    await audit.log(
+        actor=user.sub,
+        action="investigation.observable_lookup",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=str(
+            {
+                "observable_id": observable_id,
+                "integration_id": body.integration_id,
+                "verdict": enrichment.get("verdict"),
+                "indicators": enrichment.get("indicator_count"),
+                "origins_raised": len(origin_risk["raised"]) if origin_risk else 0,
+            }
+        ),
+    )
+    response: dict = {
+        "message": "Observable looked up",
+        "observable": updated,
+        "enrichment": enrichment,
+    }
+    if origin_risk is not None:
+        response["origin_risk"] = origin_risk
+    return response
 
 
 # ─── Tasks (Phase 0) ──────────────────────────────────────────────────────────

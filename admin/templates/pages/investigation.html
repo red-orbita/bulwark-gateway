@@ -775,8 +775,14 @@
                                         <i data-lucide="zap" class="w-3 h-3"></i>RESPONDED
                                     </span>
                                 </template>
+                                <!-- OpenCTI lookup verdict (Fase 2) -->
+                                <template x-if="o.enrichment && o.enrichment.opencti && o.enrichment.opencti.verdict">
+                                    <span class="text-[9px] px-1.5 py-0.5 rounded inline-flex items-center gap-1" :class="openctiVerdictClass(o.enrichment.opencti.verdict)" :title="'OpenCTI · score ' + (o.enrichment.opencti.score || 0) + ' · ' + (o.enrichment.opencti.indicator_count || 0) + ' indicator(s)'">
+                                        <i data-lucide="globe" class="w-3 h-3"></i><span x-text="'CTI:' + o.enrichment.opencti.verdict.toUpperCase()"></span>
+                                    </span>
+                                </template>
                                 <div class="ml-auto flex items-center gap-1">
-                                    <button x-show="caseCortexIntegrations.length > 0" @click="toggleEnrichPanel(o.observable_id)" :disabled="!caseCanWrite || saving" class="sg-btn sg-btn-ghost sg-btn-sm transition-colors" :class="enrichPanelObsId === o.observable_id ? 'text-indigo-300' : ''" title="Enrich / respond via Cortex" aria-label="Enrich observable">
+                                    <button x-show="caseCortexIntegrations.length > 0 || caseOpenCtiIntegrations.length > 0" @click="toggleEnrichPanel(o.observable_id)" :disabled="!caseCanWrite || saving" class="sg-btn sg-btn-ghost sg-btn-sm transition-colors" :class="enrichPanelObsId === o.observable_id ? 'text-indigo-300' : ''" title="Enrich / lookup / respond" aria-label="Enrich observable">
                                         <i data-lucide="scan-search" class="w-3.5 h-3.5"></i>
                                     </button>
                                     <button x-show="!o.is_ioc" @click="promoteObservable(o.observable_id)" :disabled="!caseCanWrite || saving" class="sg-btn sg-btn-ghost sg-btn-sm" title="Promote to live IOC" aria-label="Promote to IOC">
@@ -790,7 +796,7 @@
 
                             <!-- Cortex enrich / respond panel (Fase 2) -->
                             <div x-show="enrichPanelObsId === o.observable_id" x-cloak class="mt-2.5 pt-2.5 border-t border-gray-800 space-y-2.5">
-                                <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
+                                <div x-show="caseCortexIntegrations.length > 0" class="flex flex-col sm:flex-row gap-2 sm:items-center">
                                     <label class="text-[10px] text-gray-500 uppercase tracking-wider sm:w-28 shrink-0">Cortex</label>
                                     <select x-model="enrichPanel.integrationId" @change="onEnrichIntegrationChange()" class="sg-input flex-1" aria-label="Cortex integration">
                                         <option value="">Select integration…</option>
@@ -836,6 +842,22 @@
                                         </select>
                                         <button @click="runResponder(o.observable_id)" :disabled="!caseCanWrite || enrichPanel.running || !enrichPanel.selectedResponder" class="sg-btn sg-btn-ghost sg-btn-sm shrink-0">
                                             <i data-lucide="zap" class="w-3.5 h-3.5"></i>Run responder
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- OpenCTI threat-intel lookup (Fase 2) -->
+                                <div x-show="caseOpenCtiIntegrations.length > 0" class="pt-2 border-t border-gray-800/60">
+                                    <p class="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Threat-intel lookup</p>
+                                    <div class="flex flex-col sm:flex-row gap-2">
+                                        <select x-model="enrichPanel.openctiIntegrationId" class="sg-input flex-1" aria-label="OpenCTI integration">
+                                            <option value="">Select OpenCTI…</option>
+                                            <template x-for="oi in caseOpenCtiIntegrations" :key="'oi-' + oi.id">
+                                                <option :value="oi.id" x-text="oi.name"></option>
+                                            </template>
+                                        </select>
+                                        <button @click="runLookup(o.observable_id)" :disabled="!caseCanWrite || enrichPanel.lookupRunning || !enrichPanel.openctiIntegrationId" class="sg-btn sg-btn-ghost sg-btn-sm shrink-0">
+                                            <i data-lucide="globe" class="w-3.5 h-3.5" :class="enrichPanel.lookupRunning ? 'animate-spin' : ''"></i>Look up
                                         </button>
                                     </div>
                                 </div>
@@ -1571,8 +1593,9 @@ function investigationPage() {
             caseTlpLevels: ['red', 'amber', 'green', 'white'],
             caseObsNew: { type: 'ip', value: '', is_ioc: false, tlp: 'amber' },
             caseCortexIntegrations: [],
+            caseOpenCtiIntegrations: [],
             enrichPanelObsId: null,
-            enrichPanel: { integrationId: '', analyzers: [], selectedAnalyzers: [], responders: [], selectedResponder: '', catalogLoading: false, running: false, error: '' },
+            enrichPanel: { integrationId: '', analyzers: [], selectedAnalyzers: [], responders: [], selectedResponder: '', openctiIntegrationId: '', lookupRunning: false, catalogLoading: false, running: false, error: '' },
             caseTasks: [],
             caseTasksLoading: false,
             caseTaskProgress: { total: 0, done: 0, open: 0 },
@@ -2516,7 +2539,7 @@ function investigationPage() {
                     this.loadRelatedCases();
                     this.loadCaseObservables();
                     this.loadCaseTasks();
-                    this.loadCortexIntegrations();
+                    this.loadEnrichmentIntegrations();
                     this.$nextTick(() => window.lucide && window.lucide.createIcons());
                 } else if (res.status === 404) {
                     showToast('Case not found', 'error');
@@ -2537,6 +2560,7 @@ function investigationPage() {
             this.caseObservables = [];
             this.caseObsNew = { type: 'ip', value: '', is_ioc: false, tlp: 'amber' };
             this.caseCortexIntegrations = [];
+            this.caseOpenCtiIntegrations = [];
             this.enrichPanelObsId = null;
             this.caseTasks = [];
             this.caseTaskProgress = { total: 0, done: 0, open: 0 };
@@ -2684,16 +2708,18 @@ function investigationPage() {
             await this.loadCaseObservables();
         },
 
-        // ─── Cortex enrichment / responders (Fase 2) ──────────────────────
-        async loadCortexIntegrations() {
+        // ─── Enrichment / lookup / responders (Fase 2) ────────────────────
+        async loadEnrichmentIntegrations() {
             try {
                 const res = await fetch('/admin/integrations');
-                if (!res.ok) { this.caseCortexIntegrations = []; return; }
+                if (!res.ok) { this.caseCortexIntegrations = []; this.caseOpenCtiIntegrations = []; return; }
                 const data = await res.json();
                 const all = Array.isArray(data.integrations) ? data.integrations : [];
                 this.caseCortexIntegrations = all.filter(c => c.type === 'cortex' && c.enabled);
+                this.caseOpenCtiIntegrations = all.filter(c => c.type === 'opencti' && c.enabled);
             } catch (e) {
                 this.caseCortexIntegrations = [];
+                this.caseOpenCtiIntegrations = [];
             }
         },
 
@@ -2704,7 +2730,8 @@ function investigationPage() {
             }
             this.enrichPanelObsId = observableId;
             const preselect = this.caseCortexIntegrations.length === 1 ? this.caseCortexIntegrations[0].id : '';
-            this.enrichPanel = { integrationId: preselect, analyzers: [], selectedAnalyzers: [], responders: [], selectedResponder: '', catalogLoading: false, running: false, error: '' };
+            const openctiPreselect = this.caseOpenCtiIntegrations.length === 1 ? this.caseOpenCtiIntegrations[0].id : '';
+            this.enrichPanel = { integrationId: preselect, analyzers: [], selectedAnalyzers: [], responders: [], selectedResponder: '', openctiIntegrationId: openctiPreselect, lookupRunning: false, catalogLoading: false, running: false, error: '' };
             if (preselect) this.onEnrichIntegrationChange();
             this.$nextTick(() => window.lucide && window.lucide.createIcons());
         },
@@ -2808,6 +2835,37 @@ function investigationPage() {
                 showToast('Network error running responder', 'error');
             } finally {
                 this.enrichPanel.running = false;
+            }
+        },
+
+        async runLookup(observableId) {
+            if (!this.caseDetail) return;
+            if (!this.enrichPanel.openctiIntegrationId) return;
+            const id = this.caseDetail.case_id;
+            this.enrichPanel.lookupRunning = true;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id) + '/observables/' + encodeURIComponent(observableId) + '/lookup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ integration_id: this.enrichPanel.openctiIntegrationId }),
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.detail || 'Lookup failed', 'error');
+                    return;
+                }
+                const data = await res.json();
+                const verdict = (data.enrichment && data.enrichment.verdict) || 'unknown';
+                const raised = data.origin_risk && Array.isArray(data.origin_risk.raised) ? data.origin_risk.raised.length : 0;
+                let msg = 'Looked up · verdict: ' + verdict;
+                if (raised > 0) msg += ' · ' + raised + ' origin(s) hardened';
+                showToast(msg, verdict === 'malicious' ? 'error' : 'success');
+                await this.loadCaseObservables();
+                this.loadCaseTimeline();
+            } catch (e) {
+                showToast('Network error during lookup', 'error');
+            } finally {
+                this.enrichPanel.lookupRunning = false;
             }
         },
 
@@ -3115,6 +3173,13 @@ function investigationPage() {
             if (v === 'malicious') return 'bg-red-500/15 text-red-300 border border-red-500/30';
             if (v === 'suspicious') return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
             if (v === 'safe') return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+            return 'bg-gray-500/15 text-gray-300 border border-gray-600/30';
+        },
+        openctiVerdictClass(v) {
+            if (v === 'malicious') return 'bg-red-500/15 text-red-300 border border-red-500/30';
+            if (v === 'suspicious') return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
+            if (v === 'clean') return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+            if (v === 'not_found') return 'bg-gray-500/15 text-gray-400 border border-gray-600/30';
             return 'bg-gray-500/15 text-gray-300 border border-gray-600/30';
         },
         triageClass(s) {
