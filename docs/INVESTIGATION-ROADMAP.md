@@ -221,6 +221,15 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
 - `run_responder`: map our bounded response actions to Cortex **responders**.
 - Analyzer/responder catalog fetched from Cortex and cached; per-observable-type
   routing configurable in the UI.
+  - **DONE (connector core)**: `admin/services/integrations/cortex.py` —
+    `CortexConnector` (reuses `HttpConnectorBase` retry + circuit breaker) with
+    `test_connection`, `list_analyzers`, `enrich_observable` (submit→bounded-poll→
+    report, folds `summary.taxonomies` into a worst-level verdict blob) and
+    `run_responder`. Pure helpers `cortex_datatype` / taxonomy extraction / worst-
+    level folding. Fail-open + bounded polling. Tests: `tests/test_cortex_connector.py`
+    (15). **Pending (next slice)**: registry config type + `/admin/integrations`
+    wiring, the observable-enrich endpoint (store `enrichment` + `is_ioc`, optional
+    origin-risk raise), and the UI action.
 
 ### 4.2 OpenCTI (`opencti.py`)
 - **Pull** (closes the MISP/OpenCTI feed gap): query indicators via OpenCTI GraphQL
