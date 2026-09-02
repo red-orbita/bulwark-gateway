@@ -121,6 +121,23 @@ def _load_permissions(raw: object) -> list[str]:
         return []
 
 
+def _coerce_rate_limit(value: object) -> Optional[int]:
+    """Normalise a requested per-key rate limit (RPM) override.
+
+    Returns ``None`` (no override — the account inherits the environment default)
+    when the value is absent/blank/unparseable, otherwise a non-negative int.
+    A value of ``0`` is a deliberate, explicit "unlimited for this key" opt-out;
+    negatives are clamped to ``0``. Raises nothing, so a caller can pass raw input.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        rpm = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return max(0, rpm)
+
+
 def _row_to_account(row) -> dict:
     """Convert a DB row into the PUBLIC account dict (never exposes ``key_hash``)."""
     d = row.to_dict() if hasattr(row, "to_dict") else dict(row)
@@ -134,6 +151,8 @@ def _row_to_account(row) -> dict:
         "created_at": d.get("created_at"),
         "last_used_at": d.get("last_used_at"),
         "expires_at": d.get("expires_at"),
+        # Per-key RPM override (Phase 3.2c). ``None`` ⇒ inherit env default.
+        "rate_limit_rpm": _coerce_rate_limit(d.get("rate_limit_rpm")),
     }
 
 
@@ -170,6 +189,7 @@ class ServiceAccountStore:
         permissions: object,
         created_by: str,
         expires_at: Optional[str] = None,
+        rate_limit_rpm: object = None,
     ) -> dict:
         """Create a new service account and return it WITH the raw key (once).
 
@@ -177,12 +197,17 @@ class ServiceAccountStore:
         ``bwk_sa_…`` credential. This is the ONLY time it is ever available —
         callers must surface it to the operator immediately; it cannot be
         recovered afterwards. Raises ``ValueError`` on invalid input.
+
+        ``rate_limit_rpm`` is an optional per-key requests-per-minute override
+        (Phase 3.2c): ``None`` inherits the environment default, a positive int
+        caps this key, and ``0`` explicitly opts the key out of throttling.
         """
         clean_name = (name or "").strip()[:_MAX_NAME_LEN]
         if not clean_name:
             raise ValueError("name is required")
         perms = normalise_permissions(permissions)
         clean_created_by = (created_by or "").strip()[:_MAX_CREATED_BY_LEN]
+        clean_rate_limit = _coerce_rate_limit(rate_limit_rpm)
 
         clean_expires: Optional[str] = None
         if expires_at:
@@ -197,8 +222,8 @@ class ServiceAccountStore:
         await self._db().execute(
             "INSERT INTO service_account "
             "(account_id, name, key_prefix, key_hash, permissions, enabled, "
-            "created_by, created_at, last_used_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "created_by, created_at, last_used_at, expires_at, rate_limit_rpm) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 account_id,
                 clean_name,
@@ -210,11 +235,12 @@ class ServiceAccountStore:
                 now,
                 None,
                 clean_expires,
+                clean_rate_limit,
             ],
         )
         logger.info(
-            "service account minted: id=%s name=%s perms=%s by=%s",
-            account_id, clean_name, ",".join(perms), clean_created_by,
+            "service account minted: id=%s name=%s perms=%s by=%s rpm=%s",
+            account_id, clean_name, ",".join(perms), clean_created_by, clean_rate_limit,
         )
 
         account = {
@@ -227,6 +253,7 @@ class ServiceAccountStore:
             "created_at": now,
             "last_used_at": None,
             "expires_at": clean_expires,
+            "rate_limit_rpm": clean_rate_limit,
             # Shown exactly once — never persisted in plaintext.
             "key": raw_key,
         }

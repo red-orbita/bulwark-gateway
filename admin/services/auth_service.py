@@ -251,6 +251,28 @@ def require_permission(permission: str):
     return _check
 
 
+async def _audit_rate_limited(account_id: str, limit: int) -> None:
+    """Record a service-account rate-limit rejection (best-effort, never raises).
+
+    A throttled request already returns 429; a failure to write the audit trail
+    must not mask that or crash the request path, so any error is swallowed.
+    """
+    try:
+        import json
+
+        from .audit_logger import get_audit_logger
+
+        await get_audit_logger().log(
+            actor=f"service-account:{account_id}",
+            action="service_account.rate_limited",
+            resource_type="service_account",
+            resource_id=account_id,
+            details=json.dumps({"limit_rpm": limit, "window_seconds": 60}),
+        )
+    except Exception:  # noqa: S110,BLE001 - audit is advisory; never break the 429 path
+        pass
+
+
 def require_permission_automation(permission: str):
     """Dependency factory for automation-enabled endpoints (Phase 3.2a).
 
@@ -289,6 +311,21 @@ def require_permission_automation(permission: str):
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=f"Service account missing permission: {permission}",
+                    )
+                # Per-key rate limit (Phase 3.2c). A per-account override wins,
+                # else the environment default; a resolved limit <= 0 is unbounded.
+                from .automation_rate_limit import (
+                    default_rate_limit_rpm,
+                    get_automation_rate_limiter,
+                )
+                override = account.get("rate_limit_rpm")
+                limit = override if isinstance(override, int) else default_rate_limit_rpm()
+                if not get_automation_rate_limiter().consume(account["account_id"], limit):
+                    await _audit_rate_limited(account["account_id"], limit)
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Service account rate limit exceeded",
+                        headers={"Retry-After": "60"},
                     )
                 now = datetime.now(timezone.utc)
                 return TokenPayload(

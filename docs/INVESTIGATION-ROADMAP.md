@@ -364,7 +364,18 @@ Playbooks need to act back. The verbs already exist (`/respond`,
   `automation:respond`; case/observable/task/triage writes → `investigation:write`),
   and a `Bearer bwk_sa_…` request is exempt from CSRF (bearer auth is CSRF-immune;
   cookie sessions keep full enforcement).
-- **Rate limits + audit** on the automation surface (reuse audit logger; per-key rpm).
+- **Rate limits + audit** on the automation surface ✅ DONE (3.2c): every
+  authenticated service-account request that passes `require_permission_automation`
+  consumes one token from a per-key sliding-window budget
+  (`admin/services/automation_rate_limit.py`); exceeding it returns `429`
+  (`Retry-After: 60`) and writes a `service_account.rate_limited` audit record
+  instead of executing. The limit is the account's optional `rate_limit_rpm`
+  override (migration v12 — positive int caps the key, `0` opts it out) else the
+  `BULWARK_AUTOMATION_RATE_LIMIT_RPM` env default (120; `<= 0` disables). Redis-first
+  sliding window (`bulwark:automation:ratelimit:{account_id}`, shared across
+  replicas) with a per-process in-memory fallback — a Redis error degrades to local
+  enforcement rather than unthrottling or hard-denying. Operator sessions/JWTs are
+  never throttled by it. UI management page + `*_FILE` seeding deferred to 3.2d.
 
 ### 5.3 Reference playbooks (documented, runner-agnostic)
 1. **Auto-open case** when incident confidence ≥ threshold or origin crosses BLOCK.

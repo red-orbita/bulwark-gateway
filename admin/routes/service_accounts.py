@@ -38,6 +38,7 @@ class ServiceAccountCreate(BaseModel):
     name: str
     permissions: list[str]
     expires_at: Optional[str] = None
+    rate_limit_rpm: Optional[int] = None
 
 
 class ServiceAccountToggle(BaseModel):
@@ -73,6 +74,7 @@ async def create_service_account(
             permissions=data.permissions,
             created_by=user.sub,
             expires_at=data.expires_at,
+            rate_limit_rpm=data.rate_limit_rpm,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
@@ -87,6 +89,7 @@ async def create_service_account(
             "name": account["name"],
             "permissions": account["permissions"],
             "expires_at": account.get("expires_at"),
+            "rate_limit_rpm": account.get("rate_limit_rpm"),
         }),
     )
     # ``account`` carries the one-time ``key`` field; surface it to the operator.

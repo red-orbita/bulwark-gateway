@@ -602,6 +602,7 @@ bulwark:recent_blocks            # List (last N blocked requests)
 bulwark:risk:{scope}:{digest}    # HASH {score, ts} — decayed origin risk (scope: tenant|session|input)
 bulwark:correlation:config       # HASH — runtime-tunable correlation overrides (throttled re-read)
 bulwark:correlation:counters     # HASH — replica-safe HINCRBY correlation metrics (incidents_*, origin_risk_*, tap_*, eval_lat_* inline-evaluation latency histogram)
+bulwark:automation:ratelimit:{account_id}  # Sorted set (sliding window) — per-service-account automation RPM budget
 ```
 
 TLS supported via `rediss://` URL scheme. External Redis (Azure/AWS/GCP) fully supported.
@@ -665,6 +666,7 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_CORRELATION_WINDOW_SECONDS` | float | `30.0` | **Latent/reserved — not currently enforced.** Same-request input↔output pairing needs no time window; retained (accepted, bounded) for a future cross-request/async correlator. Wiring it to the backend round-trip would false-negative on slow LLM responses. Admin UI shows it read-only |
 | `BULWARK_CORRELATION_CONFIDENCE_BLOCK_THRESHOLD` | float | `0.5` | Min content-corroboration confidence (0–1) to escalate a correlated exfiltration incident from WARN to BLOCK (only when blocking is on). Runtime-tunable |
 | `BULWARK_METRICS_SCRAPE_TOKEN` | str | `""` | **Admin-side** (read via `read_secret`, `*_FILE` supported). Dedicated least-privilege bearer that gates `GET /admin/health/metrics` for Prometheus (`hmac.compare_digest`). Empty ⇒ scrape-token path inert, endpoint requires `admin:read` JWT |
+| `BULWARK_AUTOMATION_RATE_LIMIT_RPM` | int | `120` | **Admin-side**. Default per-key sliding-window RPM for service-account automation calls, used when an account carries no `rate_limit_rpm` override. `<= 0` disables throttling for keys without an override. Enforced only in the service-account branch of `require_permission_automation` (429 + `service_account.rate_limited` audit) |
 
 ### Docker Secrets Support
 
@@ -941,7 +943,23 @@ without re-executing the handler on any later request carrying the same key. The
 per-credential (SHA-256 of the presented key) × method × path with a 24h TTL, engages ONLY for a
 service-account request carrying the header on a mutating `/admin/investigation` call, and is
 **fail-open** end-to-end (any storage error degrades to normal execution — the action still runs). The
-per-key rate-limit + audit layer remains deferred to phase 3.2c.
+per-key rate-limit + audit layer is delivered in phase 3.2c (below).
+
+**Per-key rate limiting (Phase 3.2c)** caps how fast a single service-account key may drive the
+automation surface, so a leaked or runaway playbook key cannot hammer it. Every authenticated
+service-account request that passes `require_permission_automation` also consumes one token from a
+per-key sliding-window budget (`admin/services/automation_rate_limit.py`); exceeding it returns
+`429 Too Many Requests` (with `Retry-After: 60`) and writes a `service_account.rate_limited` audit
+record instead of executing the action. The limit resolves to the account's optional `rate_limit_rpm`
+override (migration v12, mint-time `rate_limit_rpm` field — a positive int caps the key, `0` opts it
+out) else the `BULWARK_AUTOMATION_RATE_LIMIT_RPM` env default (120; `<= 0` disables throttling for
+keys without an override). The limiter is Redis-first (a shared sliding-window sorted set,
+`bulwark:automation:ratelimit:{account_id}`, 60s, one MULTI/EXEC of core commands) with a per-process
+in-memory fallback: a Redis-side error degrades to local enforcement (the admin service is
+single-replica, so this stays accurate) rather than either silently unthrottling or hard-denying
+legitimate automation. Enforcement lives only in the service-account branch of the resolver — operator
+sessions/JWTs are never rate-limited by it. The management UI page + `*_FILE` seeding remain deferred
+to phase 3.2d.
 
 ### Authentication
 

@@ -780,6 +780,16 @@ MIGRATIONS: list[Migration] = [
                 ON automation_idempotency(expires_at);
         """,
     ),
+    Migration(
+        version=12,
+        description="Automation Phase 3.2c: per-key rate limit override on service_account",
+        sqlite_sql="""
+            ALTER TABLE service_account ADD COLUMN rate_limit_rpm INTEGER;
+        """,
+        postgresql_sql="""
+            ALTER TABLE service_account ADD COLUMN IF NOT EXISTS rate_limit_rpm INTEGER;
+        """,
+    ),
 ]
 
 
