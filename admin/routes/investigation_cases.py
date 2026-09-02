@@ -18,7 +18,7 @@ existence leak).
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
@@ -60,7 +60,18 @@ from ..services.investigation_task_store import (
 # on the investigation module is honoured here too — the events store is a shared
 # singleton, so both surfaces must resolve it through the same reference.
 from . import investigation as _investigation
-from .investigation import _MAX_TIMELINE, _authorize_subject, _can_write, _scoped_tenant
+from .correlation import _DIGEST_RE, _VALID_SCOPES, _redis
+from .investigation import (
+    _MAX_TIMELINE,
+    _authorize_subject,
+    _can_write,
+    _correlation_enabled,
+    _raise_origin_risk,
+    _scoped_tenant,
+)
+
+if TYPE_CHECKING:
+    from ..services.integrations.cortex import CortexConnector
 
 router = APIRouter()
 
@@ -375,6 +386,14 @@ class ObservableEnrichRequest(BaseModel):
 
     integration_id: str = Field(..., min_length=1, max_length=64)
     analyzer_ids: list[str] = Field(..., min_length=1, max_length=20)
+    tlp: Optional[str] = Field(default=None, description=f"one of {TLP_LEVELS}")
+
+
+class ObservableResponderRequest(BaseModel):
+    """Run a Cortex responder (response action) against an observable."""
+
+    integration_id: str = Field(..., min_length=1, max_length=64)
+    responder_id: str = Field(..., min_length=1, max_length=128)
     tlp: Optional[str] = Field(default=None, description=f"one of {TLP_LEVELS}")
 
 
@@ -1227,6 +1246,102 @@ async def promote_observable_to_ioc(
     }
 
 
+# Amount added on top of the effective block threshold when an enrichment
+# auto-hardens a case's origins. ``0.0`` sets each origin's score to *exactly* the
+# block threshold — guaranteeing the origin's next request is escalated by the
+# proxy without over-penalising it (mirrors the manual raise_risk default).
+_ENRICH_AUTORAISE_AMOUNT = 0.0
+
+
+def _resolve_cortex_connector(integration_id: str) -> "CortexConnector":
+    """Resolve a configured, enabled Cortex enrichment connector, or raise.
+
+    Shared by the observable enrich + responder endpoints so both apply identical
+    validation: unknown id ⇒ 404; non-cortex ⇒ 400; disabled ⇒ 400; missing
+    credentials ⇒ 400. The returned connector is ready to call.
+    """
+    registry = get_integration_registry()
+    config = registry.get(integration_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if config.type != "cortex":
+        raise HTTPException(
+            status_code=400, detail="This action requires a cortex integration"
+        )
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Integration is disabled")
+    connector = registry.build_enrichment_connector(config)
+    if connector is None:
+        raise HTTPException(status_code=400, detail="Integration is not fully configured")
+    return connector
+
+
+def _case_origin_tokens(case: dict) -> list[str]:
+    """Return the valid ``scope_type:digest`` origin tokens linked to a case.
+
+    Only ``origin`` subjects whose key parses as a known correlation scope + a
+    16-hex digest are returned; anything malformed is dropped (never raised).
+    """
+    tokens: list[str] = []
+    for subject in case.get("subjects") or []:
+        if subject.get("subject_type") != "origin":
+            continue
+        key = str(subject.get("subject_key") or "")
+        scope, _, digest = key.partition(":")
+        if scope in _VALID_SCOPES and _DIGEST_RE.match(digest):
+            tokens.append(key)
+    return tokens
+
+
+async def _auto_raise_case_origins(case: dict, *, case_id: str, actor: str) -> dict:
+    """Harden every at-risk origin linked to a case (best-effort, fail-open).
+
+    Invoked when an enrichment confirms an observable is ``malicious``: each
+    ``origin`` subject on the case is pushed to (or above) the effective block
+    threshold so its next request is escalated by the proxy. Never raises — a
+    missing/unreachable Redis simply yields ``raised=[]`` with a reason, and the
+    enrichment response is unaffected. Successful raises are journalled onto the
+    case's append-only action trail.
+    """
+    result: dict = {"raised": [], "correlation_enabled": _correlation_enabled()}
+    tokens = _case_origin_tokens(case)
+    if not tokens:
+        result["skipped_reason"] = "no_origin_subjects"
+        return result
+    r = _redis()
+    if r is None:
+        result["skipped_reason"] = "redis_unavailable"
+        return result
+    try:
+        r.ping()
+    except Exception:
+        result["skipped_reason"] = "redis_unavailable"
+        return result
+
+    raised: list[dict] = []
+    for token in tokens:
+        try:
+            effect = _raise_origin_risk(r, token, _ENRICH_AUTORAISE_AMOUNT)
+        except Exception:  # noqa: BLE001, S112 - one origin failing must not abort the rest
+            continue
+        raised.append({"token": token, **effect})
+    result["raised"] = raised
+
+    if raised:
+        try:
+            await get_case_store().add_action_note(
+                case_id=case_id,
+                actor=actor,
+                text=(
+                    f"enrichment auto-raised {len(raised)} origin(s) to block threshold: "
+                    f"{', '.join(e['token'] for e in raised)}"
+                ),
+            )
+        except Exception:  # noqa: BLE001, S110 - journaling is best-effort, never fatal
+            pass
+    return result
+
+
 @router.post("/{case_id}/observables/{observable_id}/enrich")
 async def enrich_case_observable(
     case_id: str,
@@ -1238,11 +1353,13 @@ async def enrich_case_observable(
 
     Runs the requested ``analyzer_ids`` against the observable, folds the reports
     into a compact verdict blob, and stores it under ``enrichment['cortex']``. A
-    ``malicious`` verdict flags the observable ``is_ioc`` so the UI reflects it as
-    a tracked indicator. Fail-open: an unreachable/failing Cortex surfaces a
+    ``malicious`` verdict flags the observable ``is_ioc`` *and* auto-hardens every
+    ``origin`` subject linked to the case (best-effort — see
+    :func:`_auto_raise_case_origins`) so the confirmed-bad indicator escalates the
+    origins that produced it. Fail-open: an unreachable/failing Cortex surfaces a
     ``502`` (audited) and never mutates the observable.
     """
-    await _get_case_scoped(user, case_id)  # tenant gate
+    case = await _get_case_scoped(user, case_id)  # tenant gate
 
     observable = await get_observable_store().get(case_id, observable_id)
     if observable is None:
@@ -1253,22 +1370,7 @@ async def enrich_case_observable(
             status_code=400, detail=f"tlp must be one of: {', '.join(TLP_LEVELS)}"
         )
 
-    registry = get_integration_registry()
-    config = registry.get(body.integration_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Integration not found")
-    if config.type != "cortex":
-        raise HTTPException(
-            status_code=400, detail="Enrichment requires a cortex integration"
-        )
-    if not config.enabled:
-        raise HTTPException(status_code=400, detail="Integration is disabled")
-
-    connector = registry.build_enrichment_connector(config)
-    if connector is None:
-        raise HTTPException(
-            status_code=400, detail="Integration is not fully configured"
-        )
+    connector = _resolve_cortex_connector(body.integration_id)
 
     tlp = body.tlp or observable.get("tlp") or "amber"
     audit = get_audit_logger()
@@ -1301,6 +1403,13 @@ async def enrich_case_observable(
     if updated is None:  # pragma: no cover — observable existence checked above
         raise HTTPException(status_code=404, detail="Observable not found")
 
+    # A confirmed-malicious verdict auto-hardens the case's linked origins so the
+    # proxy escalates their next request. Best-effort / fail-open — never blocks the
+    # enrichment response, even if Redis is down or no origins are linked.
+    origin_risk: Optional[dict] = None
+    if is_malicious:
+        origin_risk = await _auto_raise_case_origins(case, case_id=case_id, actor=user.sub)
+
     await audit.log(
         actor=user.sub,
         action="investigation.observable_enrich",
@@ -1312,13 +1421,95 @@ async def enrich_case_observable(
                 "integration_id": body.integration_id,
                 "verdict": enrichment.get("verdict"),
                 "analyzers": len(body.analyzer_ids),
+                "origins_raised": len(origin_risk["raised"]) if origin_risk else 0,
+            }
+        ),
+    )
+    response: dict = {
+        "message": "Observable enriched",
+        "observable": updated,
+        "enrichment": enrichment,
+    }
+    if origin_risk is not None:
+        response["origin_risk"] = origin_risk
+    return response
+
+
+@router.post("/{case_id}/observables/{observable_id}/respond")
+async def run_observable_responder(
+    case_id: str,
+    observable_id: str,
+    body: ObservableResponderRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Run a Cortex responder (response action) against an observable (Phase 2).
+
+    Triggers a bounded Cortex responder (block an IP, notify, …) against the
+    observable's value and records the outcome under ``enrichment['cortex_responder']``
+    (never flags ``is_ioc`` — a responder is an action, not a verdict). Fail-open:
+    an unreachable/failing Cortex surfaces a ``502`` (audited) and never mutates the
+    observable.
+    """
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    observable = await get_observable_store().get(case_id, observable_id)
+    if observable is None:
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    if body.tlp is not None and body.tlp not in TLP_LEVELS:
+        raise HTTPException(
+            status_code=400, detail=f"tlp must be one of: {', '.join(TLP_LEVELS)}"
+        )
+
+    connector = _resolve_cortex_connector(body.integration_id)
+
+    tlp = body.tlp or observable.get("tlp") or "amber"
+    audit = get_audit_logger()
+    try:
+        outcome = await connector.run_responder(
+            responder_id=body.responder_id,
+            observable_type=observable.get("type") or "other",
+            value=observable.get("value") or "",
+            tlp=tlp,
+        )
+    except ConnectorError as exc:
+        await audit.log(
+            actor=user.sub,
+            action="investigation.observable_respond_failed",
+            resource_type="investigation_case",
+            resource_id=case_id,
+            details=str({"observable_id": observable_id, "error": str(exc)}),
+        )
+        # Fail-open: surface the failure without ever touching the observable.
+        raise HTTPException(status_code=502, detail=f"Responder failed: {exc}") from None
+
+    updated = await get_observable_store().set_enrichment(
+        case_id=case_id,
+        observable_id=observable_id,
+        key="cortex_responder",
+        data=outcome,
+    )
+    if updated is None:  # pragma: no cover — observable existence checked above
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    await audit.log(
+        actor=user.sub,
+        action="investigation.observable_respond",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=str(
+            {
+                "observable_id": observable_id,
+                "integration_id": body.integration_id,
+                "responder_id": body.responder_id,
+                "status": outcome.get("status"),
             }
         ),
     )
     return {
-        "message": "Observable enriched",
+        "message": "Responder executed",
         "observable": updated,
-        "enrichment": enrichment,
+        "responder": outcome,
     }
 
 

@@ -143,24 +143,32 @@ class CortexConnector(HttpConnectorBase):
 
     async def list_analyzers(self) -> list[dict]:
         """Return the enabled analyzer catalog as ``{id, name, data_types}`` dicts."""
-        resp = await self._request("GET", "/api/analyzer", expected=(200,))
+        return await self._list_catalog("/api/analyzer")
+
+    async def list_responders(self) -> list[dict]:
+        """Return the enabled responder catalog as ``{id, name, data_types}`` dicts."""
+        return await self._list_catalog("/api/responder")
+
+    async def _list_catalog(self, path: str) -> list[dict]:
+        """Fetch + normalize an analyzer/responder catalog (shared shape)."""
+        resp = await self._request("GET", path, expected=(200,))
         try:
             raw = resp.json()
         except ValueError:
             return []
-        analyzers: list[dict] = []
+        catalog: list[dict] = []
         for item in raw if isinstance(raw, list) else []:
             if not isinstance(item, dict):
                 continue
             aid = str(item.get("id") or item.get("_id") or "")
             if not aid:
                 continue
-            analyzers.append({
+            catalog.append({
                 "id": aid,
                 "name": str(item.get("name") or aid),
                 "data_types": [str(t) for t in item.get("dataTypeList", []) if isinstance(t, str)],
             })
-        return analyzers
+        return catalog
 
     async def enrich_observable(
         self,

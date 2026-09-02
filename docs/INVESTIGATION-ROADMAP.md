@@ -242,8 +242,24 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
     `tests/test_integrations.py` (registry + analyzers route),
     `tests/test_investigation_cases.py` (`TestObservableStore.set_enrichment*`,
     `TestObservableEnrichEndpoint`).
-  - **Pending (next slice)**: optional origin-risk auto-raise on a malicious
-    verdict, the `run_responder` endpoint, and the UI action.
+   - **DONE (responders + auto-raise + UI action)**: `cortex.py` grew
+     `list_responders` (shared `_list_catalog` helper) →
+     `GET /admin/integrations/{id}/responders` (cortex-only, fail-open 502).
+     `POST /admin/investigation/cases/{case_id}/observables/{observable_id}/respond`
+     runs a bounded Cortex **responder** and records the outcome under
+     `enrichment['cortex_responder']` (a responder is an action, never a verdict —
+     it never flags `is_ioc`; fail-open audited 502). A confirmed-**malicious**
+     enrich verdict now auto-hardens **every `origin` subject linked to the case**
+     (`_auto_raise_case_origins` → reuses `_raise_origin_risk`, best-effort /
+     fail-open: Redis down ⇒ `skipped_reason`, enrich still returns 200; journals an
+     action note; the response carries `origin_risk.raised`). The Investigation UI
+     (`investigation.html` Observables section) gained a per-observable **Enrich**
+     panel — pick a Cortex integration, check analyzers, run enrich (shows the
+     verdict badge + hardened-origin count), and dispatch a responder. Tests:
+     `tests/test_cortex_connector.py` (`test_list_responders`),
+     `tests/test_integrations.py` (responders route ×4),
+     `tests/test_investigation_cases.py` (`TestEnrichAutoRaiseOrigins` ×6,
+     `TestObservableResponderEndpoint` ×8).
 
 ### 4.2 OpenCTI (`opencti.py`)
 - **Pull** (closes the MISP/OpenCTI feed gap): query indicators via OpenCTI GraphQL

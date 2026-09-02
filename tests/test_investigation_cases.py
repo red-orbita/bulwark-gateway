@@ -1996,16 +1996,50 @@ class _FakeConfig:
 class _FakeCortexConnector:
     """Stand-in for :class:`CortexConnector` — records calls, returns/raises."""
 
-    def __init__(self, *, result=None, error=None):
+    def __init__(self, *, result=None, error=None, responder_result=None, responder_error=None):
         self._result = result or {}
         self._error = error
+        self._responder_result = responder_result or {}
+        self._responder_error = responder_error
         self.calls: list[dict] = []
+        self.responder_calls: list[dict] = []
 
     async def enrich_observable(self, **kwargs):
         self.calls.append(kwargs)
         if self._error is not None:
             raise self._error
         return self._result
+
+    async def run_responder(self, **kwargs):
+        self.responder_calls.append(kwargs)
+        if self._responder_error is not None:
+            raise self._responder_error
+        return self._responder_result
+
+
+class _FakeRedis:
+    """Minimal Redis stand-in for the origin auto-raise path (HASH ops + ping)."""
+
+    def __init__(self, *, ping_error=False):
+        self._store: dict[str, dict] = {}
+        self._ping_error = ping_error
+
+    def ping(self):
+        if self._ping_error:
+            raise RuntimeError("redis down")
+        return True
+
+    def hgetall(self, key):
+        return dict(self._store.get(key, {}))
+
+    def hset(self, key, mapping=None):
+        self._store.setdefault(key, {}).update(mapping or {})
+
+    def expire(self, key, ttl):
+        return True
+
+    def ttl(self, key):
+        return 3600
 
 
 class _FakeRegistry:
@@ -2183,8 +2217,273 @@ class TestObservableEnrichEndpoint:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Phase 0 — task endpoints
+# Phase 2 — enrichment auto-raise of a case's origins (malicious verdict)
 # ═══════════════════════════════════════════════════════════════════════
+
+
+_ORIGIN_TOKEN = "session:0123456789abcdef"
+
+
+class TestEnrichAutoRaiseOrigins:
+    async def _seed_case_with_origin(self, inv_cases, cases, *, malicious=True):
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        add = inv_cases.ObservableAddRequest(type="ip", value="9.9.9.9")
+        added = await inv_cases.add_case_observable(cid, body=add, user=_admin())
+        await cases.add_subject(
+            case_id=cid, subject_type="origin", subject_key=_ORIGIN_TOKEN, actor="a"
+        )
+        result = {
+            "connector": "cortex", "verdict": "malicious" if malicious else "safe",
+            "is_malicious": malicious, "analyzers": [],
+        }
+        connector = _FakeCortexConnector(result=result)
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        return cid, added["observable"]["observable_id"], registry
+
+    async def test_malicious_auto_raises_case_origin(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        cid, oid, registry = await self._seed_case_with_origin(inv_cases, cases)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis())
+        monkeypatch.setattr(inv_cases, "_correlation_enabled", lambda: True)
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+
+        risk = out["origin_risk"]
+        assert risk["correlation_enabled"] is True
+        assert len(risk["raised"]) == 1
+        raised = risk["raised"][0]
+        assert raised["token"] == _ORIGIN_TOKEN
+        # Score is pushed to (at least) the effective block threshold (7.0).
+        assert raised["new_score"] >= 7.0
+        # The escalation is journalled onto the case's action trail.
+        case = await cases.get(cid)
+        assert any(
+            n.get("kind") == "action" and "auto-raised" in n.get("text", "")
+            for n in case["notes"]
+        )
+
+    async def test_malicious_without_origins_is_skipped(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        # Seed a case + observable but NO origin subject.
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        add = inv_cases.ObservableAddRequest(type="ip", value="8.8.8.8")
+        added = await inv_cases.add_case_observable(cid, body=add, user=_admin())
+        oid = added["observable"]["observable_id"]
+        connector = _FakeCortexConnector(
+            result={"verdict": "malicious", "is_malicious": True, "analyzers": []}
+        )
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis())
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert out["origin_risk"]["raised"] == []
+        assert out["origin_risk"]["skipped_reason"] == "no_origin_subjects"
+        # The observable is still flagged as an IOC.
+        assert out["observable"]["is_ioc"] is True
+
+    async def test_malicious_redis_unavailable_still_succeeds(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        cid, oid, registry = await self._seed_case_with_origin(inv_cases, cases)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        monkeypatch.setattr(inv_cases, "_redis", lambda: None)
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert out["origin_risk"]["raised"] == []
+        assert out["origin_risk"]["skipped_reason"] == "redis_unavailable"
+        assert out["observable"]["is_ioc"] is True
+
+    async def test_malicious_redis_ping_failure_is_skipped(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        cid, oid, registry = await self._seed_case_with_origin(inv_cases, cases)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis(ping_error=True))
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert out["origin_risk"]["skipped_reason"] == "redis_unavailable"
+
+    async def test_benign_verdict_does_not_raise(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        cid, oid, registry = await self._seed_case_with_origin(
+            inv_cases, cases, malicious=False
+        )
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis())
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        # A non-malicious verdict never touches origin risk.
+        assert "origin_risk" not in out
+        assert out["observable"]["is_ioc"] is False
+
+    async def test_malformed_origin_token_is_ignored(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        add = inv_cases.ObservableAddRequest(type="ip", value="7.7.7.7")
+        added = await inv_cases.add_case_observable(cid, body=add, user=_admin())
+        oid = added["observable"]["observable_id"]
+        # An incident subject (not an origin) + an origin with a non-hex digest.
+        await cases.add_subject(
+            case_id=cid, subject_type="incident", subject_key="inc-123", actor="a"
+        )
+        await cases.add_subject(
+            case_id=cid, subject_type="origin", subject_key="session:not-a-digest", actor="a"
+        )
+        connector = _FakeCortexConnector(
+            result={"verdict": "malicious", "is_malicious": True, "analyzers": []}
+        )
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis())
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        # Neither malformed subject yields a raise.
+        assert out["origin_risk"]["raised"] == []
+        assert out["origin_risk"]["skipped_reason"] == "no_origin_subjects"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 2 — observable responder (Cortex response action)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestObservableResponderEndpoint:
+    async def _seed_observable(self, inv_cases, cases, otype="ip", value="1.2.3.4"):
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        body = inv_cases.ObservableAddRequest(type=otype, value=value)
+        added = await inv_cases.add_case_observable(cid, body=body, user=_admin())
+        return cid, added["observable"]["observable_id"]
+
+    async def test_responder_success_records_outcome(self, wired, monkeypatch):
+        inv_cases, cases, _, audit = wired
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        outcome = {"responder": "block-ip", "job_id": "j1", "status": "Success"}
+        connector = _FakeCortexConnector(responder_result=outcome)
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+
+        body = inv_cases.ObservableResponderRequest(
+            integration_id="cx1", responder_id="block-ip", tlp="red",
+        )
+        out = await inv_cases.run_observable_responder(cid, oid, body=body, user=_admin())
+        assert out["responder"]["status"] == "Success"
+        assert out["observable"]["enrichment"]["cortex_responder"]["job_id"] == "j1"
+        # A responder is an action, not a verdict — it never flags is_ioc.
+        assert out["observable"]["is_ioc"] is False
+        assert connector.responder_calls[0]["responder_id"] == "block-ip"
+        assert connector.responder_calls[0]["value"] == "1.2.3.4"
+        assert connector.responder_calls[0]["tlp"] == "red"
+        assert audit.entries[-1]["action"] == "investigation.observable_respond"
+
+    async def test_responder_defaults_tlp_to_observable(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        connector = _FakeCortexConnector(responder_result={"status": "Success"})
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableResponderRequest(integration_id="cx1", responder_id="r1")
+        await inv_cases.run_observable_responder(cid, oid, body=body, user=_admin())
+        assert connector.responder_calls[0]["tlp"] == "amber"
+
+    async def test_responder_connector_error_is_502_fail_open(self, wired, monkeypatch):
+        inv_cases, cases, _, audit = wired
+        from fastapi import HTTPException
+
+        from admin.services.integrations.base import ConnectorError
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        connector = _FakeCortexConnector(responder_error=ConnectorError("cortex down"))
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableResponderRequest(integration_id="cx1", responder_id="r1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.run_observable_responder(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 502
+        # Fail-open: observable untouched.
+        listed = await inv_cases.list_case_observables(cid, user=_admin())
+        assert listed["observables"][0]["enrichment"] == {}
+        assert audit.entries[-1]["action"] == "investigation.observable_respond_failed"
+
+    async def test_responder_wrong_type_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=_FakeConfig(type="thehive"))
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableResponderRequest(integration_id="th1", responder_id="r1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.run_observable_responder(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_responder_integration_not_found_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=None)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableResponderRequest(integration_id="nope", responder_id="r1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.run_observable_responder(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 404
+
+    async def test_responder_observable_missing_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        registry = _FakeRegistry(config=_FakeConfig(), connector=_FakeCortexConnector())
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableResponderRequest(integration_id="cx1", responder_id="r1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.run_observable_responder(
+                made["case_id"], "obs_nope", body=body, user=_admin()
+            )
+        assert ei.value.status_code == 404
+
+    async def test_responder_invalid_tlp_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=_FakeConfig(), connector=_FakeCortexConnector())
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableResponderRequest(
+            integration_id="cx1", responder_id="r1", tlp="purple",
+        )
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.run_observable_responder(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_responder_cross_tenant_is_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        add = inv_cases.ObservableAddRequest(type="ip", value="1.1.1.1")
+        added = await inv_cases.add_case_observable(
+            made["case_id"], body=add, user=_admin(tenant="evil")
+        )
+        registry = _FakeRegistry(config=_FakeConfig(), connector=_FakeCortexConnector())
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableResponderRequest(integration_id="cx1", responder_id="r1")
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.run_observable_responder(
+                made["case_id"], added["observable"]["observable_id"],
+                body=body, user=_admin(tenant="acme"),
+            )
+        assert ei.value.status_code == 404
 
 
 class TestTaskEndpoints:

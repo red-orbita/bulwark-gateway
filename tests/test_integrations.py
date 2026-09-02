@@ -606,6 +606,76 @@ async def test_route_analyzers_unreachable_is_502(wired_routes, httpx_mock, monk
     assert exc.value.status_code == 502
 
 
+# ─── Cortex responders route (Phase 2 response actions) ──────────────────────
+
+
+async def test_route_responders_lists_for_cortex(wired_routes, httpx_mock):
+    routes = wired_routes
+    await routes.create_integration(
+        data={
+            "name": "Cortex", "type": "cortex",
+            "base_url": "http://cortex.test", "api_key": "k",
+        },
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+    httpx_mock.add_response(
+        method="GET", url="http://cortex.test/api/responder",
+        json=[{"id": "block_ip_1", "name": "Block IP", "dataTypeList": ["ip"]}],
+    )
+    out = await routes.list_integration_responders(integration_id, user=_admin())
+    assert out["count"] == 1
+    assert out["responders"][0]["id"] == "block_ip_1"
+
+
+async def test_route_responders_rejects_non_cortex(wired_routes):
+    from fastapi import HTTPException
+
+    routes = wired_routes
+    await routes.create_integration(
+        data={
+            "name": "TheHive", "type": "thehive",
+            "base_url": "http://thehive.test", "api_key": "k",
+        },
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+    with pytest.raises(HTTPException) as exc:
+        await routes.list_integration_responders(integration_id, user=_admin())
+    assert exc.value.status_code == 400
+
+
+async def test_route_responders_unknown_integration_is_404(wired_routes):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await wired_routes.list_integration_responders("nope", user=_admin())
+    assert exc.value.status_code == 404
+
+
+async def test_route_responders_unreachable_is_502(wired_routes, httpx_mock, monkeypatch):
+    from fastapi import HTTPException
+
+    from admin.services.integrations import base as base_mod
+
+    monkeypatch.setattr(base_mod, "_BASE_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(base_mod, "_MAX_BACKOFF_SECONDS", 0.0)
+    routes = wired_routes
+    await routes.create_integration(
+        data={
+            "name": "Cortex", "type": "cortex",
+            "base_url": "http://cortex.test", "api_key": "k",
+        },
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+    for _ in range(base_mod._MAX_ATTEMPTS):
+        httpx_mock.add_exception(httpx.ConnectError("boom"))
+    with pytest.raises(HTTPException) as exc:
+        await routes.list_integration_responders(integration_id, user=_admin())
+    assert exc.value.status_code == 502
+
+
 # ─── Event webhooks (SOAR trigger seed, Phase 1.3) ───────────────────────────
 
 

@@ -862,7 +862,8 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/investigation/cases/{id}/observables` | Session | Add an observable (idempotent per type+value) — `investigation:write` |
 | DELETE | `/admin/investigation/cases/{id}/observables/{obs}` | Session | Remove an observable — `investigation:write` |
 | POST | `/admin/investigation/cases/{id}/observables/{obs}/promote-ioc` | Session | Promote ip/domain/url/hash to the IOC database — `investigation:write` |
-| POST | `/admin/investigation/cases/{id}/observables/{obs}/enrich` | Session | Enrich an observable via a Cortex integration's analyzers (folds worst-level verdict into `enrichment['cortex']`, flags `is_ioc` on malicious; fail-open 502) — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/observables/{obs}/enrich` | Session | Enrich an observable via a Cortex integration's analyzers (folds worst-level verdict into `enrichment['cortex']`, flags `is_ioc` on malicious; a malicious verdict auto-raises origin-risk on every `origin` subject linked to the case — best-effort/fail-open, returns `origin_risk.raised`; fail-open 502) — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/observables/{obs}/respond` | Session | Run a Cortex **responder** (response action) against an observable; records the outcome under `enrichment['cortex_responder']` (never flags `is_ioc` — an action, not a verdict; fail-open 502) — `investigation:write` |
 | GET | `/admin/investigation/cases/{id}/tasks` | Session | List checklist tasks + progress roll-up — `investigation:read` |
 | POST | `/admin/investigation/cases/{id}/tasks` | Session | Add a checklist task — `investigation:write` |
 | POST | `/admin/investigation/cases/{id}/tasks/{task}/state` | Session | Set task status/assignee/due — `investigation:write` |
@@ -878,6 +879,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/integrations/{id}/test` | Session | Live `test_connection` probe — `integrations:write` |
 | GET | `/admin/integrations/{id}/health` | Session | Cached health (TTL 30s) — `integrations:read` |
 | GET | `/admin/integrations/{id}/analyzers` | Session | List a Cortex integration's analyzer catalog (cortex-only; fail-open 502) — `integrations:read` |
+| GET | `/admin/integrations/{id}/responders` | Session | List a Cortex integration's responder catalog (cortex-only; fail-open 502) — `integrations:read` |
 | POST | `/admin/integrations/reload` | Session | Reload connector registry from disk — `integrations:write` |
 | POST | `/admin/integrations/push/case/{case_id}` | Session | Idempotent push of a case to TheHive/IRIS (create-or-update via link store; fail-open) — `integrations:write` |
 | GET | `/admin/integrations/push/case/{case_id}/links` | Session | List remote links (remote_id/url/last_synced_at) for a case — `integrations:read` |

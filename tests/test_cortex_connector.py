@@ -99,6 +99,24 @@ async def test_list_analyzers(httpx_mock):
     assert analyzers[1]["id"] == "AB_1_0"
 
 
+# ─── list_responders ─────────────────────────────────────────────────────────
+
+async def test_list_responders(httpx_mock):
+    httpx_mock.add_response(
+        method="GET", url="http://cortex.test/api/responder",
+        json=[
+            {"id": "block_ip_1", "name": "Block IP", "dataTypeList": ["ip"]},
+            {"_id": "notify_1", "name": "Notify", "dataTypeList": ["mail"]},
+            {"name": "no-id-dropped"},
+        ],
+    )
+    responders = await _connector().list_responders()
+    assert len(responders) == 2
+    assert responders[0]["id"] == "block_ip_1"
+    assert responders[0]["data_types"] == ["ip"]
+    assert responders[1]["id"] == "notify_1"
+
+
 # ─── enrich_observable (submit → poll → report) ──────────────────────────────
 
 async def test_enrich_observable_malicious(httpx_mock):
