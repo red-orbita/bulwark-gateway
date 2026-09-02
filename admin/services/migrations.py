@@ -690,6 +690,62 @@ MIGRATIONS: list[Migration] = [
                 ON integration_link(local_type, local_id);
         """,
     ),
+    # Version 10: Automation service accounts (Phase 3.2a). A service account is a
+    # scoped, non-interactive credential a SOAR/playbook (Shuffle, n8n, …) presents
+    # to call back into the admin automation surface — distinct from an operator's
+    # session cookie. It carries an explicit, least-privilege permission set (a
+    # whitelisted subset of the RBAC namespaces + the dedicated ``automation:*``
+    # verbs), never a role, so a leaked playbook key can do exactly what it was
+    # minted for and nothing more.
+    #
+    # Only the SHA-256 of the raw key is stored (``key_hash`` — the same one-way
+    # scheme used for session tokens; the raw ``bwk_sa_…`` key is shown exactly once
+    # at mint and is unrecoverable thereafter). ``key_prefix`` keeps a short,
+    # non-secret display fragment so the UI can identify a key without ever holding
+    # the secret. ``permissions`` is a JSON array; ``enabled`` is an INTEGER 0/1 flag
+    # (kept INTEGER on BOTH backends to avoid BOOLEAN coercion divergence, matching
+    # the observable ``is_ioc`` precedent); ``expires_at`` is an optional hard expiry.
+    # Indexed by ``key_hash`` (the auth hot-path lookup) and ``enabled``.
+    Migration(
+        version=10,
+        description="Automation Phase 3.2a: service_account table (scoped API-key credential)",
+        sqlite_sql="""
+            CREATE TABLE IF NOT EXISTS service_account (
+                account_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                key_prefix TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                permissions TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT,
+                expires_at TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_service_account_key_hash
+                ON service_account(key_hash);
+            CREATE INDEX IF NOT EXISTS idx_service_account_enabled
+                ON service_account(enabled);
+        """,
+        postgresql_sql="""
+            CREATE TABLE IF NOT EXISTS service_account (
+                account_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                key_prefix TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                permissions TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                last_used_at TIMESTAMPTZ,
+                expires_at TIMESTAMPTZ
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_service_account_key_hash
+                ON service_account(key_hash);
+            CREATE INDEX IF NOT EXISTS idx_service_account_enabled
+                ON service_account(enabled);
+        """,
+    ),
 ]
 
 

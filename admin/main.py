@@ -57,6 +57,7 @@ from .routes import (
     quotas,
     rate_limits,
     rbac,
+    service_accounts,
     sessions,
     siem,
     skills,
@@ -412,6 +413,11 @@ app.include_router(quotas.router, prefix="/admin/quotas", tags=["quotas"])
 app.include_router(cost.router, prefix="/admin/cost", tags=["cost"])
 app.include_router(cache.router, prefix="/admin/cache", tags=["cache"])
 app.include_router(sessions.router, prefix="/admin/sessions", tags=["sessions"])
+app.include_router(
+    service_accounts.router,
+    prefix="/admin/service-accounts",
+    tags=["service-accounts"],
+)
 app.include_router(correlation.router, prefix="/admin/correlation", tags=["correlation"])
 app.include_router(investigation.router, prefix="/admin/investigation", tags=["investigation"])
 app.include_router(

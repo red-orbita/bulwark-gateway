@@ -336,12 +336,23 @@ echoed back — responses expose only `has_secret`).
 
 ### 5.2 Inbound Action API + service-account auth
 Playbooks need to act back. The verbs already exist (`/respond`,
-`/triage/state`, `/triage/note`, cases CRUD, observables, tasks). What's missing:
+`/triage/state`, `/triage/note`, cases CRUD, observables, tasks). Progress:
 
-- **Service-account auth** distinct from the session cookie: a scoped API key /
-  service JWT with a dedicated `automation:*` permission namespace (least-privilege;
+- **Service-account auth** distinct from the session cookie ✅ DONE (3.2a): a scoped
+  API key with a dedicated `automation:*` permission namespace (least-privilege;
   e.g. a playbook token that may `investigation:write` + `automation:respond` but
-  not manage users). Keys minted/revoked in the UI, stored hashed, `*_FILE` seedable.
+  not manage users). Raw key `bwk_sa_<hex>` (192-bit) is shown exactly once at mint
+  and stored SHA-256-hashed at rest in the `service_account` table (migration v10);
+  the grantable set is a whitelist (`AUTOMATION_GRANTABLE_PERMISSIONS`) that
+  deliberately excludes `automation:manage`, so a leaked playbook key can never
+  mint/toggle/revoke service accounts (including itself). Verification is an indexed
+  `key_hash` lookup enforcing `enabled` + optional `expires_at`, stamping
+  `last_used_at`. A dedicated `require_permission_automation(perm)` resolver is wired
+  ONLY onto automation-enabled endpoints (minimal blast radius): a `bwk_sa_…` bearer
+  is resolved exclusively on the service-account path (401 unknown/disabled/expired,
+  403 missing permission) and yields the lowest-privilege `TokenPayload`; any other
+  token falls back to standard session/JWT + RBAC. Management routes
+  (`/admin/service-accounts/*`) are session-only (`automation:manage`).
 - **Idempotency-Key header** honored on all mutating automation endpoints (dedupe
   retried playbook steps) — backed by a small `automation_idempotency` table with TTL.
 - **Rate limits + audit** on the automation surface (reuse audit logger; per-key rpm).

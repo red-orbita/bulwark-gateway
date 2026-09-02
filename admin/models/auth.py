@@ -161,6 +161,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "correlation:read", "correlation:write",
         "investigation:read", "investigation:write",
         "integrations:read", "integrations:write",
+        "automation:manage", "automation:respond",
     },
     UserRole.SECURITY: {
         "policies:read", "policies:write", "policies:apply",
@@ -182,6 +183,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "correlation:read", "correlation:write",
         "investigation:read", "investigation:write",
         "integrations:read", "integrations:write",
+        "automation:manage", "automation:respond",
     },
     UserRole.AUDITOR: {
         "policies:read",
@@ -218,4 +220,24 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
         "correlation:read",
         "investigation:read",
     },
+}
+
+
+# ─── Automation service-account permission whitelist ──────────────────────────
+#
+# The subset of RBAC permissions a *service account* (a scoped, non-interactive
+# automation credential — see ``service_account_store``) may be granted. It is
+# deliberately narrow and least-privilege: a playbook token can act on the
+# investigation / integrations / correlation / IOC surfaces and invoke the
+# dedicated ``automation:respond`` verb, but can NEVER manage users, rotate
+# secrets, edit guardrails/policies, or manage service accounts themselves
+# (``automation:manage`` is human-operator-only and is intentionally absent
+# here). Minting rejects any permission outside this set, so a service account
+# can never be escalated beyond what an automation playbook legitimately needs.
+AUTOMATION_GRANTABLE_PERMISSIONS: set[str] = {
+    "investigation:read", "investigation:write",
+    "integrations:read", "integrations:write",
+    "correlation:read", "correlation:write",
+    "iocs:read", "iocs:write",
+    "automation:respond",
 }

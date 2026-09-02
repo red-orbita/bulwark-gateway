@@ -892,6 +892,11 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/integrations/webhooks/{id}/toggle` | Session | Enable/disable a subscription — `integrations:write` |
 | POST | `/admin/integrations/webhooks/{id}/test` | Session | Send a synthetic `test.ping` (ignores filters/enabled) — `integrations:write` |
 | POST | `/admin/integrations/webhooks/reload` | Session | Reload subscriptions from disk — `integrations:write` |
+| GET | `/admin/service-accounts/grantable-permissions` | Session | List the whitelist of permissions a service account may be granted — `automation:manage` |
+| GET | `/admin/service-accounts/` | Session | List service accounts (metadata only — never the key) — `automation:manage` |
+| POST | `/admin/service-accounts/` | Session | Mint a service account; raw `bwk_sa_…` key returned ONCE in the response — `automation:manage` |
+| POST | `/admin/service-accounts/{account_id}/toggle` | Session | Enable/disable (revoke-on-disable) a service account — `automation:manage` |
+| DELETE | `/admin/service-accounts/{account_id}` | Session | Permanently delete a service account — `automation:manage` |
 
 Event webhooks fire a stable, versioned JSON envelope (`schema_version`/`event`/`event_id`/
 `timestamp`/`tenant`/`data`) to admin-configured HTTP endpoints on case **lifecycle** transitions —
@@ -903,8 +908,24 @@ is signed as `X-Bulwark-Signature: sha256=<hex>` (GitHub-style, computed over th
 POSTed) alongside `X-Bulwark-Event` / `X-Bulwark-Delivery` headers, so a SOAR receiver can verify
 authenticity + integrity. The secret is resolved from `BULWARK_INTEGRATION_WEBHOOK_<ID>_SECRET` (or
 its `_FILE` Docker variant) in preference to the inline value, and is **write-only** — never echoed
-back over the API (responses expose only a `has_secret` flag via `to_public_dict`). The inbound
-action API remains deferred to a later phase.
+back over the API (responses expose only a `has_secret` flag via `to_public_dict`).
+
+**Service accounts (Phase 3.2a)** are the scoped, non-interactive credentials a SOAR/playbook
+presents to call the admin automation surface (distinct from an operator session cookie). A service
+account carries an **explicit, least-privilege permission list** (a whitelisted subset —
+`AUTOMATION_GRANTABLE_PERMISSIONS`, which deliberately excludes `automation:manage`) rather than a
+role. The raw key `bwk_sa_<hex>` (192-bit entropy) is shown **exactly once** at mint and stored only
+as its SHA-256 (`key_hash`) in the `service_account` table (migration v10) — a DB read never yields a
+usable key. Verification is an indexed `key_hash` lookup enforcing the `enabled` flag + optional hard
+`expires_at`, and best-effort stamps `last_used_at`. A dedicated
+`require_permission_automation(perm)` resolver (`admin/services/auth_service.py`) is wired ONLY onto
+automation-enabled endpoints: a `bwk_sa_…` bearer is resolved **exclusively** on the service-account
+path (401 for unknown/disabled/expired, 403 for a missing permission) and yields the lowest-privilege
+`TokenPayload` (`sub=service-account:<id>`, role `viewer`); any non-`bwk_sa_` token falls back to the
+standard session/JWT + RBAC check. The *management* routes (`/admin/service-accounts/*`) stay
+session-only under `automation:manage`, so a playbook key can never mint/toggle/revoke service
+accounts (including itself). The inbound action-API wiring (idempotency + per-key rate limits) remains
+deferred to phases 3.2b/3.2c.
 
 ### Authentication
 
@@ -916,6 +937,7 @@ action API remains deferred to a later phase.
 - **Correlation RBAC**: `correlation:read` (status/origins/config view) and `correlation:write` (tuning/reset) — dedicated permission namespace, not reused from `sessions:*`
 - **Investigation RBAC**: `investigation:read` (case/observable/task/timeline view + export) and `investigation:write` (create/mutate/promote-ioc) — admin + security hold both; auditor/viewer are read-only. All cases are tenant-scoped (cross-tenant id ⇒ 404, no existence leak)
 - **Integrations RBAC**: `integrations:read` (list/status/health/links view) and `integrations:write` (create/update/delete/toggle/test/reload/push) — admin + security hold both; auditor/viewer are read-only. Connector secrets are masked on read; push is idempotent (link store) and fail-open (never mutates the local case)
+- **Automation RBAC**: `automation:manage` (mint/list/toggle/revoke service accounts — admin + security, session-only) and `automation:respond` (a grantable verb a service-account key may hold to drive response actions). `automation:manage` is deliberately NOT in `AUTOMATION_GRANTABLE_PERMISSIONS`, so a `bwk_sa_…` key can never manage service accounts
 
 ---
 

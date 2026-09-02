@@ -251,6 +251,65 @@ def require_permission(permission: str):
     return _check
 
 
+def require_permission_automation(permission: str):
+    """Dependency factory for automation-enabled endpoints (Phase 3.2a).
+
+    Accepts EITHER:
+      * a valid operator session/JWT whose role carries ``permission`` (normal
+        interactive admin auth, via ``get_current_user`` + ``ROLE_PERMISSIONS``), OR
+      * a **service-account key** (``bwk_sa_…``) presented as
+        ``Authorization: Bearer <key>`` whose explicit, least-privilege permission
+        set contains ``permission`` (see ``service_account_store``).
+
+    This is wired ONLY onto endpoints explicitly opened to automation, so the
+    service-account credential path has minimal blast radius — every other admin
+    endpoint keeps using ``require_permission`` (session-only). A presented token
+    that begins with the service-account prefix is resolved EXCLUSIVELY on the
+    service-account path (an unknown/disabled/expired key is rejected outright,
+    never silently retried as a session token), which keeps failure modes
+    unambiguous. The returned ``TokenPayload`` identifies the service account
+    (``sub='service-account:<id>'``) with the lowest role so no downstream
+    role-based check can widen its access beyond the explicit permission grant.
+    """
+    async def _check(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    ) -> TokenPayload:
+        presented = credentials.credentials if credentials is not None else None
+        if presented:
+            from .service_account_store import KEY_PREFIX, ServiceAccountStore
+            if presented.startswith(KEY_PREFIX):
+                account = await ServiceAccountStore().verify(presented)
+                if account is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid, disabled or expired service-account key",
+                    )
+                if permission not in set(account.get("permissions", [])):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"Service account missing permission: {permission}",
+                    )
+                now = datetime.now(timezone.utc)
+                return TokenPayload(
+                    sub=f"service-account:{account['account_id']}",
+                    role=UserRole.VIEWER,
+                    exp=now + timedelta(minutes=1),
+                    iat=now,
+                )
+
+        # Fall back to the standard operator JWT/session validation + RBAC check.
+        user = await get_current_user(request, credentials)
+        user_perms = ROLE_PERMISSIONS.get(user.role, set())
+        if permission not in user_perms:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: {permission}",
+            )
+        return user
+    return _check
+
+
 def require_permission_or_scrape_token(permission: str):
     """Dependency factory for the Prometheus metrics endpoint.
 
