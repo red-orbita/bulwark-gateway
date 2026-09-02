@@ -353,8 +353,17 @@ Playbooks need to act back. The verbs already exist (`/respond`,
   403 missing permission) and yields the lowest-privilege `TokenPayload`; any other
   token falls back to standard session/JWT + RBAC. Management routes
   (`/admin/service-accounts/*`) are session-only (`automation:manage`).
-- **Idempotency-Key header** honored on all mutating automation endpoints (dedupe
-  retried playbook steps) — backed by a small `automation_idempotency` table with TTL.
+- **Idempotency-Key header** ✅ DONE (3.2b): honored on the mutating automation
+  endpoints under `/admin/investigation` (dedupe retried playbook steps) — backed by
+  the `automation_idempotency` table (migration v11) with a 24h TTL. A repeated
+  service-account `Idempotency-Key` replays the stored 2xx response (stamped
+  `Idempotency-Replay: true`) without re-executing; the dedupe scope is per-credential
+  (SHA-256 of the presented key) × method × path, and the whole layer is fail-open
+  (any storage error degrades to normal execution). Also wired: the action endpoints
+  now accept a service-account key via `require_permission_automation` (`/respond` →
+  `automation:respond`; case/observable/task/triage writes → `investigation:write`),
+  and a `Bearer bwk_sa_…` request is exempt from CSRF (bearer auth is CSRF-immune;
+  cookie sessions keep full enforcement).
 - **Rate limits + audit** on the automation surface (reuse audit logger; per-key rpm).
 
 ### 5.3 Reference playbooks (documented, runner-agnostic)

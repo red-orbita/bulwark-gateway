@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from ..models.auth import TokenPayload
 from ..services.audit_logger import get_audit_logger
-from ..services.auth_service import require_permission
+from ..services.auth_service import require_permission, require_permission_automation
 from ..services.integrations.base import ConnectorError
 from ..services.integrations.event_webhook import get_event_webhook_emitter
 from ..services.integrations.registry import get_integration_registry
@@ -527,7 +527,7 @@ async def list_case_templates(
 @router.post("")
 async def create_case(
     body: CaseCreateRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Open a new case, owned by the operator's tenant scope.
 
@@ -853,7 +853,7 @@ async def related_cases(
 async def set_case_state(
     case_id: str,
     body: CaseStateRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Set a case's status, severity and/or assignee."""
     if body.status is None and body.severity is None and body.assignee is None:
@@ -903,7 +903,7 @@ async def set_case_state(
 async def add_case_note(
     case_id: str,
     body: CaseNoteRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Append an investigation note to a case."""
     await _get_case_scoped(user, case_id)  # tenant gate
@@ -931,7 +931,7 @@ async def add_case_note(
 async def add_case_subject(
     case_id: str,
     body: CaseSubjectRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Link a triage subject to a case (validates subject + tenant scope)."""
     await _get_case_scoped(user, case_id)  # case tenant gate
@@ -963,7 +963,7 @@ async def add_case_subject(
 @router.delete("/{case_id}/subject")
 async def remove_case_subject(
     case_id: str,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
     subject_type: str = Query(...),
     subject_key: str = Query(..., min_length=1, max_length=256),
 ):
@@ -996,7 +996,7 @@ async def remove_case_subject(
 async def set_case_tags(
     case_id: str,
     body: CaseTagsRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Replace a case's tag (TTP / label badge) list.
 
@@ -1046,7 +1046,7 @@ def _validate_event_ts(event_ts: Optional[str]) -> Optional[str]:
 async def add_case_timeline_entry(
     case_id: str,
     body: CaseTimelineEntryRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Add a manual entry to a case's reconstructed timeline.
 
@@ -1113,7 +1113,7 @@ async def list_case_observables(
 async def add_case_observable(
     case_id: str,
     body: ObservableAddRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Add an observable to a case (idempotent per type+value)."""
     await _get_case_scoped(user, case_id)  # tenant gate
@@ -1147,7 +1147,7 @@ async def add_case_observable(
 async def remove_case_observable(
     case_id: str,
     observable_id: str,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Remove an observable from a case."""
     await _get_case_scoped(user, case_id)  # tenant gate
@@ -1172,7 +1172,7 @@ async def remove_case_observable(
 async def promote_observable_to_ioc(
     case_id: str,
     observable_id: str,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Promote a case observable into the shared IOC database.
 
@@ -1377,7 +1377,7 @@ async def enrich_case_observable(
     case_id: str,
     observable_id: str,
     body: ObservableEnrichRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Enrich an observable via a Cortex integration's analyzers (Phase 2).
 
@@ -1470,7 +1470,7 @@ async def run_observable_responder(
     case_id: str,
     observable_id: str,
     body: ObservableResponderRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Run a Cortex responder (response action) against an observable (Phase 2).
 
@@ -1548,7 +1548,7 @@ async def lookup_case_observable(
     case_id: str,
     observable_id: str,
     body: ObservableLookupRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Look an observable up against an OpenCTI integration's indicators (Phase 2).
 
@@ -1656,7 +1656,7 @@ async def list_case_tasks(
 async def add_case_task(
     case_id: str,
     body: TaskAddRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Add a checklist task to a case."""
     await _get_case_scoped(user, case_id)  # tenant gate
@@ -1687,7 +1687,7 @@ async def set_case_task_state(
     case_id: str,
     task_id: str,
     body: TaskStateRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Set a task's status, assignee and/or due date."""
     if body.status is None and body.assignee is None and body.due_at is None:
@@ -1725,7 +1725,7 @@ async def add_case_task_note(
     case_id: str,
     task_id: str,
     body: TaskNoteRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Append a note to a task."""
     await _get_case_scoped(user, case_id)  # tenant gate
@@ -1753,7 +1753,7 @@ async def add_case_task_note(
 async def remove_case_task(
     case_id: str,
     task_id: str,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Delete a task from a case."""
     await _get_case_scoped(user, case_id)  # tenant gate

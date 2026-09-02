@@ -312,11 +312,27 @@ _CSRF_EXEMPT = {
 }
 
 
+def _is_service_account_request(request: Request) -> bool:
+    """True when the request authenticates with a service-account key (Phase 3.2b).
+
+    CSRF is a browser/cookie-session defence: a cross-site attacker can silently
+    replay ambient cookies but cannot set a custom ``Authorization`` header on a
+    cross-origin request (that requires a CORS preflight the admin never grants).
+    A service-account key (``Authorization: Bearer bwk_sa_…``) is therefore
+    inherently CSRF-immune, so exempting it lets SOAR/playbook automation reach the
+    mutating action endpoints without a CSRF token — while every cookie-session
+    request keeps full CSRF enforcement. The scope is deliberately narrow (only the
+    ``bwk_sa_`` prefix), so ordinary admin JWTs/sessions are never exempted.
+    """
+    auth = request.headers.get("authorization", "")
+    return auth.startswith("Bearer bwk_sa_")
+
+
 @app.middleware("http")
 async def csrf_protection(request: Request, call_next):
     """Validate CSRF token on state-changing requests."""
     if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-        if request.url.path not in _CSRF_EXEMPT:
+        if request.url.path not in _CSRF_EXEMPT and not _is_service_account_request(request):
             csrf_cookie = request.cookies.get("_csrf_token")
             csrf_header = request.headers.get("x-csrf-token")
             if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
@@ -336,6 +352,76 @@ async def csrf_protection(request: Request, call_next):
             secure=_should_set_secure_cookie(request)
         )
     return response
+
+
+# Phase 3.2b: Idempotency-Key dedupe for the inbound automation action API.
+_IDEMPOTENT_METHODS = {"POST", "PUT", "DELETE"}
+_IDEMPOTENT_PATH_PREFIX = "/admin/investigation"
+
+
+@app.middleware("http")
+async def automation_idempotency(request: Request, call_next):
+    """Replay the cached response for a repeated automation ``Idempotency-Key``.
+
+    Deliberately narrow so it is zero-cost for everything else: it engages ONLY for
+    a service-account request (``Authorization: Bearer bwk_sa_…``) that carries an
+    ``Idempotency-Key`` header on a mutating call to the investigation action
+    surface. Restricting it to service-account credentials means the dedupe scope is
+    always a distinct per-key digest (a human cookie session, which carries no such
+    header, can never collide) and matches the sole use case — a SOAR/playbook step
+    that retries after a timeout must not double-apply its effect.
+
+    The first request runs normally; only a 2xx response is cached (a transient
+    failure stays freely retryable). A later request with the same key replays the
+    stored response instead of re-executing. Every storage touch is fail-open: any
+    error degrades to normal execution, never breaking the action.
+    """
+    idem_key = request.headers.get("idempotency-key")
+    if (
+        not idem_key
+        or request.method not in _IDEMPOTENT_METHODS
+        or not request.url.path.startswith(_IDEMPOTENT_PATH_PREFIX)
+        or not _is_service_account_request(request)
+    ):
+        return await call_next(request)
+
+    from .services.idempotency_store import IdempotencyStore, caller_scope
+
+    scope = caller_scope(request.headers.get("authorization"))
+    method = request.method
+    path = request.url.path
+    store = IdempotencyStore()
+
+    cached = await store.get(scope, method, path, idem_key)
+    if cached is not None:
+        return Response(
+            content=cached["response_body"],
+            status_code=cached["status_code"],
+            media_type="application/json",
+            headers={"Idempotency-Replay": "true"},
+        )
+
+    response = await call_next(request)
+
+    # Buffer the streamed body so it can be both cached and returned. These action
+    # endpoints are small JSON responses (never SSE), so this is bounded.
+    chunks = [section async for section in response.body_iterator]
+    raw = b"".join(chunks)
+    rebuilt = Response(
+        content=raw,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.media_type,
+    )
+    if 200 <= response.status_code < 300:
+        try:
+            await store.put(
+                scope, method, path, idem_key,
+                response.status_code, raw.decode("utf-8", errors="replace"),
+            )
+        except Exception:  # noqa: BLE001 - fail-open: caching must never break the response
+            logger.debug("automation idempotency store failed (fail-open)", exc_info=True)
+    return rebuilt
 
 
 # Static files + templates

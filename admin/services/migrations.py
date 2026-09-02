@@ -746,6 +746,40 @@ MIGRATIONS: list[Migration] = [
                 ON service_account(enabled);
         """,
     ),
+    Migration(
+        version=11,
+        description="Automation Phase 3.2b: automation_idempotency table (Idempotency-Key dedupe)",
+        sqlite_sql="""
+            CREATE TABLE IF NOT EXISTS automation_idempotency (
+                scope TEXT NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                idem_key TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                response_body TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                PRIMARY KEY (scope, method, path, idem_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_automation_idempotency_expires
+                ON automation_idempotency(expires_at);
+        """,
+        postgresql_sql="""
+            CREATE TABLE IF NOT EXISTS automation_idempotency (
+                scope TEXT NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                idem_key TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                response_body TEXT NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                expires_at DOUBLE PRECISION NOT NULL,
+                PRIMARY KEY (scope, method, path, idem_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_automation_idempotency_expires
+                ON automation_idempotency(expires_at);
+        """,
+    ),
 ]
 
 

@@ -927,6 +927,22 @@ session-only under `automation:manage`, so a playbook key can never mint/toggle/
 accounts (including itself). The inbound action-API wiring (idempotency + per-key rate limits) remains
 deferred to phases 3.2b/3.2c.
 
+**Inbound action API (Phase 3.2b)** opens the investigation action surface to service-account keys.
+The mutating endpoints under `/admin/investigation` are wired with
+`require_permission_automation` (drop-in over `require_permission`, backward-compatible for operator
+sessions): `POST /respond` requires `automation:respond`; every case/observable/task/triage write
+requires `investigation:write`. Because a `Bearer bwk_sa_…` request is inherently CSRF-immune (a
+cross-site attacker cannot set a custom `Authorization` header), such requests are exempt from the
+admin CSRF middleware while cookie sessions keep full enforcement (`_is_service_account_request` in
+`admin/main.py`). Retried playbook steps are de-duplicated by an **`Idempotency-Key`** request header:
+the `automation_idempotency` middleware (`admin/main.py` + `admin/services/idempotency_store.py`,
+migration v11) caches the first 2xx response and replays it (stamped `Idempotency-Replay: true`)
+without re-executing the handler on any later request carrying the same key. The dedupe scope is
+per-credential (SHA-256 of the presented key) × method × path with a 24h TTL, engages ONLY for a
+service-account request carrying the header on a mutating `/admin/investigation` call, and is
+**fail-open** end-to-end (any storage error degrades to normal execution — the action still runs). The
+per-key rate-limit + audit layer remains deferred to phase 3.2c.
+
 ### Authentication
 
 - **JWT**: `Authorization: Bearer <token>` — token must have `sub`, `aud=bulwark-proxy`

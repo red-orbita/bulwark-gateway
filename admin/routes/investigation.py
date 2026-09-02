@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from ..models.auth import TokenPayload
 from ..services.audit_logger import get_audit_logger
-from ..services.auth_service import require_permission
+from ..services.auth_service import require_permission, require_permission_automation
 from ..services.investigation_store import STATUSES, SUBJECT_TYPES, get_triage_store
 from ..services.security_events_store import get_security_events_store
 
@@ -730,7 +730,7 @@ async def _dispatch_advisory_notification(
 @router.post("/respond")
 async def investigation_respond(
     body: RespondRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("automation:respond")),
 ):
     """Take a bounded, auditable response action from the Investigation Center.
 
@@ -983,7 +983,7 @@ async def investigation_triage_list(
 @router.post("/triage/state")
 async def investigation_triage_state(
     body: TriageStateRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Set an alert's workflow status and/or assignee."""
     if body.status is None and body.assignee is None:
@@ -1016,7 +1016,7 @@ async def investigation_triage_state(
 @router.post("/triage/note")
 async def investigation_triage_note(
     body: TriageNoteRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Append an investigation note to an alert."""
     tenant = await _authorize_subject(user, body.subject_type, body.subject_key)
@@ -1045,7 +1045,7 @@ async def investigation_triage_note(
 @router.post("/triage/bulk")
 async def investigation_triage_bulk(
     body: BulkTriageRequest,
-    user: TokenPayload = Depends(require_permission("investigation:write")),
+    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
     """Apply one status/assignee change to several subjects at once.
 
