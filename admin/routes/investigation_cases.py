@@ -28,7 +28,9 @@ from pydantic import BaseModel, Field
 from ..models.auth import TokenPayload
 from ..services.audit_logger import get_audit_logger
 from ..services.auth_service import require_permission
+from ..services.integrations.base import ConnectorError
 from ..services.integrations.event_webhook import get_event_webhook_emitter
+from ..services.integrations.registry import get_integration_registry
 from ..services.investigation_case_store import (
     CASE_SEVERITIES,
     CASE_STATUSES,
@@ -366,6 +368,14 @@ class ObservableAddRequest(BaseModel):
     pap: str = Field(default="amber", description=f"one of {PAP_LEVELS}")
     tags: list[str] = Field(default_factory=list, max_length=50)
     source: str = Field(default="manual", description=f"one of {OBSERVABLE_SOURCES}")
+
+
+class ObservableEnrichRequest(BaseModel):
+    """Enrich an observable via a Cortex integration's analyzers."""
+
+    integration_id: str = Field(..., min_length=1, max_length=64)
+    analyzer_ids: list[str] = Field(..., min_length=1, max_length=20)
+    tlp: Optional[str] = Field(default=None, description=f"one of {TLP_LEVELS}")
 
 
 class TaskAddRequest(BaseModel):
@@ -1214,6 +1224,101 @@ async def promote_observable_to_ioc(
         "message": "Observable promoted to IOC",
         "ioc_id": entry.id,
         "ioc_type": ioc_type.value,
+    }
+
+
+@router.post("/{case_id}/observables/{observable_id}/enrich")
+async def enrich_case_observable(
+    case_id: str,
+    observable_id: str,
+    body: ObservableEnrichRequest,
+    user: TokenPayload = Depends(require_permission("investigation:write")),
+):
+    """Enrich an observable via a Cortex integration's analyzers (Phase 2).
+
+    Runs the requested ``analyzer_ids`` against the observable, folds the reports
+    into a compact verdict blob, and stores it under ``enrichment['cortex']``. A
+    ``malicious`` verdict flags the observable ``is_ioc`` so the UI reflects it as
+    a tracked indicator. Fail-open: an unreachable/failing Cortex surfaces a
+    ``502`` (audited) and never mutates the observable.
+    """
+    await _get_case_scoped(user, case_id)  # tenant gate
+
+    observable = await get_observable_store().get(case_id, observable_id)
+    if observable is None:
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    if body.tlp is not None and body.tlp not in TLP_LEVELS:
+        raise HTTPException(
+            status_code=400, detail=f"tlp must be one of: {', '.join(TLP_LEVELS)}"
+        )
+
+    registry = get_integration_registry()
+    config = registry.get(body.integration_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if config.type != "cortex":
+        raise HTTPException(
+            status_code=400, detail="Enrichment requires a cortex integration"
+        )
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Integration is disabled")
+
+    connector = registry.build_enrichment_connector(config)
+    if connector is None:
+        raise HTTPException(
+            status_code=400, detail="Integration is not fully configured"
+        )
+
+    tlp = body.tlp or observable.get("tlp") or "amber"
+    audit = get_audit_logger()
+    try:
+        enrichment = await connector.enrich_observable(
+            observable_type=observable.get("type") or "other",
+            value=observable.get("value") or "",
+            analyzer_ids=body.analyzer_ids,
+            tlp=tlp,
+        )
+    except ConnectorError as exc:
+        await audit.log(
+            actor=user.sub,
+            action="investigation.observable_enrich_failed",
+            resource_type="investigation_case",
+            resource_id=case_id,
+            details=str({"observable_id": observable_id, "error": str(exc)}),
+        )
+        # Fail-open: surface the failure without ever touching the observable.
+        raise HTTPException(status_code=502, detail=f"Enrichment failed: {exc}") from None
+
+    is_malicious = bool(enrichment.get("is_malicious"))
+    updated = await get_observable_store().set_enrichment(
+        case_id=case_id,
+        observable_id=observable_id,
+        key="cortex",
+        data=enrichment,
+        mark_ioc=is_malicious,
+    )
+    if updated is None:  # pragma: no cover — observable existence checked above
+        raise HTTPException(status_code=404, detail="Observable not found")
+
+    await audit.log(
+        actor=user.sub,
+        action="investigation.observable_enrich",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=str(
+            {
+                "observable_id": observable_id,
+                "integration_id": body.integration_id,
+                "verdict": enrichment.get("verdict"),
+                "analyzers": len(body.analyzer_ids),
+            }
+        ),
+    )
+    return {
+        "message": "Observable enriched",
+        "observable": updated,
+        "enrichment": enrichment,
     }
 
 

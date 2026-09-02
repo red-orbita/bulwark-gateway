@@ -18,7 +18,8 @@ known indicator refreshes its ``last_seen`` rather than creating a duplicate.
 An observable can be flagged ``is_ioc`` (stored as INTEGER 0/1 in *both* backends
 to avoid cross-dialect BOOLEAN coercion) and carries TLP/PAP handling markers, a
 free-form tag list, a provenance ``source``, and a JSON ``enrichment`` blob
-reserved for Phase 2 (threat-intel lookups). Enrichment is never populated here.
+populated by the Phase 2 threat-intel connectors (Cortex analyzers, keyed by
+connector) via :meth:`ObservableStore.set_enrichment`.
 """
 
 from __future__ import annotations
@@ -65,6 +66,11 @@ _MAX_VALUE_LEN = 2048
 _MAX_TAGS = 50
 _MAX_TAG_LEN = 64
 _MAX_ACTOR_LEN = 128
+# Cap the number of distinct enrichment keys stored on one observable so a runaway
+# caller (or many re-runs under different keys) can never bloat the JSON blob. When
+# the cap is hit, the oldest key is evicted (dicts preserve insertion order).
+_MAX_ENRICHMENT_KEYS = 20
+_MAX_ENRICHMENT_KEY_LEN = 64
 
 
 def _iso_now() -> str:
@@ -290,6 +296,53 @@ class ObservableStore:
         if created is None:  # pragma: no cover — write-then-read is authoritative
             raise RuntimeError("observable creation failed")
         return created
+
+    async def set_enrichment(
+        self,
+        *,
+        case_id: str,
+        observable_id: str,
+        key: str,
+        data: dict,
+        mark_ioc: bool = False,
+    ) -> Optional[dict]:
+        """Merge a threat-intel enrichment blob onto an observable (Phase 2).
+
+        Stores ``data`` under ``enrichment[key]`` (merging with any prior blobs),
+        refreshes ``last_seen``, and optionally flags the observable ``is_ioc``
+        (used when an enrichment verdict is malicious). Returns the refreshed
+        observable, or ``None`` if it does not exist under ``case_id``.
+
+        The enrichment map is bounded to ``_MAX_ENRICHMENT_KEYS`` — when full, the
+        oldest key is evicted so the JSON blob can never grow unbounded. ``is_ioc``
+        is sticky: it is only ever raised here, never cleared.
+        """
+        existing = await self.get(case_id, observable_id)
+        if existing is None:
+            return None
+
+        norm_key = str(key).strip()[:_MAX_ENRICHMENT_KEY_LEN]
+        if not norm_key:
+            raise ValueError("enrichment key is required")
+
+        enrichment = dict(existing.get("enrichment") or {})
+        enrichment[norm_key] = data
+        # Evict oldest keys (insertion order) until within the cap.
+        while len(enrichment) > _MAX_ENRICHMENT_KEYS:
+            oldest = next(iter(enrichment))
+            enrichment.pop(oldest, None)
+
+        is_ioc = bool(existing.get("is_ioc")) or mark_ioc
+        now = _iso_now()
+        await self._db().execute(
+            "UPDATE investigation_observable SET enrichment = ?, is_ioc = ?, "
+            "last_seen = ? WHERE case_id = ? AND observable_id = ?",
+            [json.dumps(enrichment), 1 if is_ioc else 0, now, case_id, observable_id],
+        )
+        refreshed = await self.get(case_id, observable_id)
+        if refreshed is None:  # pragma: no cover — write-then-read is authoritative
+            raise RuntimeError("observable enrichment update failed")
+        return refreshed
 
     async def remove(self, *, case_id: str, observable_id: str) -> bool:
         """Delete an observable from a case. Returns ``True`` if a row was removed."""

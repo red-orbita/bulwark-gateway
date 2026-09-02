@@ -1719,6 +1719,77 @@ class TestObservableStore:
             case_id="c", observable_id=made["observable_id"]
         ) is False
 
+    # ─── set_enrichment (Phase 2) ────────────────────────────────────────────
+
+    async def test_set_enrichment_merges_and_marks_ioc(self, observable_store):
+        made = await observable_store.add(
+            case_id="c", observable_type="ip", value="1.2.3.4", actor="a",
+        )
+        oid = made["observable_id"]
+        updated = await observable_store.set_enrichment(
+            case_id="c", observable_id=oid, key="cortex",
+            data={"verdict": "malicious", "is_malicious": True}, mark_ioc=True,
+        )
+        assert updated is not None
+        assert updated["enrichment"]["cortex"]["verdict"] == "malicious"
+        assert updated["is_ioc"] is True
+
+    async def test_set_enrichment_preserves_prior_blobs(self, observable_store):
+        made = await observable_store.add(
+            case_id="c", observable_type="ip", value="1.2.3.4", actor="a",
+        )
+        oid = made["observable_id"]
+        await observable_store.set_enrichment(
+            case_id="c", observable_id=oid, key="cortex", data={"verdict": "safe"},
+        )
+        updated = await observable_store.set_enrichment(
+            case_id="c", observable_id=oid, key="opencti", data={"hits": 3},
+        )
+        assert updated is not None
+        assert set(updated["enrichment"]) == {"cortex", "opencti"}
+        # is_ioc is sticky/only-raised — a non-malicious second blob never clears it.
+        assert updated["is_ioc"] is False
+
+    async def test_set_enrichment_missing_observable_is_none(self, observable_store):
+        assert await observable_store.set_enrichment(
+            case_id="c", observable_id="obs_nope", key="cortex", data={},
+        ) is None
+
+    async def test_set_enrichment_is_case_scoped(self, observable_store):
+        made = await observable_store.add(
+            case_id="c1", observable_type="ip", value="1.1.1.1", actor="a",
+        )
+        # Right id under the wrong case must not resolve (no cross-case write).
+        assert await observable_store.set_enrichment(
+            case_id="c2", observable_id=made["observable_id"], key="cortex", data={},
+        ) is None
+
+    async def test_set_enrichment_rejects_empty_key(self, observable_store):
+        made = await observable_store.add(
+            case_id="c", observable_type="ip", value="1.1.1.1", actor="a",
+        )
+        with pytest.raises(ValueError):
+            await observable_store.set_enrichment(
+                case_id="c", observable_id=made["observable_id"], key="   ", data={},
+            )
+
+    async def test_set_enrichment_evicts_oldest_key_past_cap(self, observable_store):
+        from admin.services.investigation_observable_store import _MAX_ENRICHMENT_KEYS
+
+        made = await observable_store.add(
+            case_id="c", observable_type="ip", value="1.1.1.1", actor="a",
+        )
+        oid = made["observable_id"]
+        for i in range(_MAX_ENRICHMENT_KEYS + 5):
+            await observable_store.set_enrichment(
+                case_id="c", observable_id=oid, key=f"k{i}", data={"n": i},
+            )
+        got = await observable_store.get("c", oid)
+        assert got is not None
+        assert len(got["enrichment"]) == _MAX_ENRICHMENT_KEYS
+        assert "k0" not in got["enrichment"]  # oldest evicted
+        assert f"k{_MAX_ENRICHMENT_KEYS + 4}" in got["enrichment"]  # newest kept
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 0 — TaskStore CRUD
@@ -1909,6 +1980,206 @@ class TestObservableEndpoints:
                 cid, added["observable"]["observable_id"], user=_admin()
             )
         assert ei.value.status_code == 400
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 2 — observable enrichment (Cortex)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _FakeConfig:
+    def __init__(self, *, type: str = "cortex", enabled: bool = True):
+        self.type = type
+        self.enabled = enabled
+
+
+class _FakeCortexConnector:
+    """Stand-in for :class:`CortexConnector` — records calls, returns/raises."""
+
+    def __init__(self, *, result=None, error=None):
+        self._result = result or {}
+        self._error = error
+        self.calls: list[dict] = []
+
+    async def enrich_observable(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class _FakeRegistry:
+    def __init__(self, *, config=None, connector=None):
+        self._config = config
+        self._connector = connector
+
+    def get(self, integration_id):
+        return self._config
+
+    def build_enrichment_connector(self, config):
+        return self._connector
+
+
+class TestObservableEnrichEndpoint:
+    async def _seed_observable(self, inv_cases, cases, otype="ip", value="1.2.3.4"):
+        made = await cases.create_case(title="t", actor="a")
+        cid = made["case_id"]
+        body = inv_cases.ObservableAddRequest(type=otype, value=value)
+        added = await inv_cases.add_case_observable(cid, body=body, user=_admin())
+        return cid, added["observable"]["observable_id"]
+
+    async def test_enrich_success_marks_ioc(self, wired, monkeypatch):
+        inv_cases, cases, _, audit = wired
+        cid, oid = await self._seed_observable(inv_cases, cases)
+
+        result = {
+            "connector": "cortex", "data_type": "ip", "verdict": "malicious",
+            "is_malicious": True, "analyzers": [{"analyzer": "VT", "level": "malicious"}],
+        }
+        connector = _FakeCortexConnector(result=result)
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+
+        body = inv_cases.ObservableEnrichRequest(
+            integration_id="cx1", analyzer_ids=["VT"], tlp="green",
+        )
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert out["enrichment"]["verdict"] == "malicious"
+        assert out["observable"]["enrichment"]["cortex"]["verdict"] == "malicious"
+        assert out["observable"]["is_ioc"] is True
+        # The connector was driven with the observable's type/value + requested tlp.
+        assert connector.calls[0]["observable_type"] == "ip"
+        assert connector.calls[0]["value"] == "1.2.3.4"
+        assert connector.calls[0]["tlp"] == "green"
+        assert audit.entries[-1]["action"] == "investigation.observable_enrich"
+
+    async def test_enrich_defaults_tlp_to_observable(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        connector = _FakeCortexConnector(result={"verdict": "safe", "is_malicious": False})
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        # No tlp on the request → falls back to the observable's own tlp (amber).
+        assert connector.calls[0]["tlp"] == "amber"
+
+    async def test_enrich_observable_missing_is_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a")
+        registry = _FakeRegistry(config=_FakeConfig(), connector=_FakeCortexConnector())
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(
+                made["case_id"], "obs_nope", body=body, user=_admin()
+            )
+        assert ei.value.status_code == 404
+
+    async def test_enrich_integration_not_found_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=None)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(integration_id="nope", analyzer_ids=["VT"])
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 404
+
+    async def test_enrich_wrong_type_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=_FakeConfig(type="thehive"))
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(integration_id="th1", analyzer_ids=["VT"])
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_enrich_disabled_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=_FakeConfig(enabled=False))
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_enrich_not_configured_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=_FakeConfig(), connector=None)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_enrich_invalid_tlp_is_400(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        registry = _FakeRegistry(config=_FakeConfig(), connector=_FakeCortexConnector())
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(
+            integration_id="cx1", analyzer_ids=["VT"], tlp="purple",
+        )
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 400
+
+    async def test_enrich_connector_error_is_502_fail_open(self, wired, monkeypatch):
+        inv_cases, cases, _, audit = wired
+        from fastapi import HTTPException
+
+        from admin.services.integrations.base import ConnectorError
+
+        cid, oid = await self._seed_observable(inv_cases, cases)
+        connector = _FakeCortexConnector(error=ConnectorError("cortex unreachable"))
+        registry = _FakeRegistry(config=_FakeConfig(), connector=connector)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+        assert ei.value.status_code == 502
+        # Fail-open: the observable is never mutated on a failed enrichment.
+        listed = await inv_cases.list_case_observables(cid, user=_admin())
+        assert listed["observables"][0]["enrichment"] == {}
+        assert listed["observables"][0]["is_ioc"] is False
+        assert audit.entries[-1]["action"] == "investigation.observable_enrich_failed"
+
+    async def test_enrich_cross_tenant_is_404(self, wired, monkeypatch):
+        inv_cases, cases, _, _ = wired
+        from fastapi import HTTPException
+
+        made = await cases.create_case(title="t", actor="a", tenant="evil")
+        body_add = inv_cases.ObservableAddRequest(type="ip", value="1.1.1.1")
+        # Seed as the owning tenant so the observable exists.
+        added = await inv_cases.add_case_observable(
+            made["case_id"], body=body_add, user=_admin(tenant="evil")
+        )
+        registry = _FakeRegistry(config=_FakeConfig(), connector=_FakeCortexConnector())
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        with pytest.raises(HTTPException) as ei:
+            await inv_cases.enrich_case_observable(
+                made["case_id"], added["observable"]["observable_id"],
+                body=body, user=_admin(tenant="acme"),
+            )
+        assert ei.value.status_code == 404
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -31,6 +31,7 @@ from typing import Optional
 
 from ..secrets import read_secret
 from .base import Connector, ConnectorHealth
+from .cortex import CortexConnector
 from .dfir_iris import DfirIrisConnector
 from .thehive import TheHiveConnector
 from .util import iso_now
@@ -43,8 +44,10 @@ _CONFIG_FILE = Path(
     os.environ.get("BULWARK_INTEGRATIONS_FILE", "data/integrations.json")
 )
 
-# Supported connector types.
-INTEGRATION_TYPES = ("thehive", "dfir_iris")
+# Supported connector types. ``thehive`` / ``dfir_iris`` are case *push* targets
+# (they implement the ``Connector`` protocol); ``cortex`` is an *enrichment* target
+# (observable analysis), built via :meth:`build_enrichment_connector`.
+INTEGRATION_TYPES = ("thehive", "dfir_iris", "cortex")
 
 # How long a health probe result is cached before a fresh probe is allowed.
 _HEALTH_TTL_SECONDS = 30.0
@@ -226,6 +229,27 @@ class IntegrationRegistry:
             )
         return None
 
+    def build_enrichment_connector(
+        self, config: IntegrationConfig
+    ) -> Optional[CortexConnector]:
+        """Build an enrichment connector (Cortex) from a config, or ``None``.
+
+        Enrichment connectors do not implement the ``Connector`` *push* protocol,
+        so they are built separately from :meth:`build_connector`. Returns ``None``
+        for non-enrichment types or an incompletely configured target.
+        """
+        if config.type != "cortex":
+            return None
+        api_key = self._resolve_api_key(config)
+        if not config.base_url or not api_key:
+            return None
+        return CortexConnector(
+            base_url=config.base_url,
+            api_key=api_key,
+            verify_tls=config.verify_tls,
+            timeout=config.timeout,
+        )
+
     # ─── Health cache ─────────────────────────────────────────────────────────
 
     async def health(self, integration_id: str, *, force: bool = False) -> ConnectorHealth:
@@ -240,13 +264,16 @@ class IntegrationRegistry:
             if time.time() - ts < _HEALTH_TTL_SECONDS:
                 return snapshot
 
-        connector = self.build_connector(config)
-        if connector is None:
+        # Probe whichever connector kind this config maps to — push targets via
+        # ``build_connector``, enrichment targets (Cortex) via the enrichment
+        # factory. Both expose ``test_connection``.
+        probe = self.build_connector(config) or self.build_enrichment_connector(config)
+        if probe is None:
             snapshot = ConnectorHealth(
                 ok=False, detail="incomplete configuration", checked_at=iso_now()
             )
         else:
-            snapshot = await connector.test_connection()
+            snapshot = await probe.test_connection()
         self._health[integration_id] = (snapshot, time.time())
         return snapshot
 

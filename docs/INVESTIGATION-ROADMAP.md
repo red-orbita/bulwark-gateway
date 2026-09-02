@@ -227,9 +227,23 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
     report, folds `summary.taxonomies` into a worst-level verdict blob) and
     `run_responder`. Pure helpers `cortex_datatype` / taxonomy extraction / worst-
     level folding. Fail-open + bounded polling. Tests: `tests/test_cortex_connector.py`
-    (15). **Pending (next slice)**: registry config type + `/admin/integrations`
-    wiring, the observable-enrich endpoint (store `enrichment` + `is_ioc`, optional
-    origin-risk raise), and the UI action.
+    (15).
+  - **DONE (registry + endpoint wiring)**: `cortex` is now an
+    `INTEGRATION_TYPES` member built via `registry.build_enrichment_connector`
+    (separate from the push-only `build_connector`); `registry.health` probes a
+    Cortex through the enrichment factory. `GET /admin/integrations/{id}/analyzers`
+    lists a Cortex's analyzer catalog (cortex-only, fail-open 502).
+    `POST /admin/investigation/cases/{case_id}/observables/{observable_id}/enrich`
+    runs the requested `analyzer_ids`, folds the verdict into
+    `enrichment['cortex']` via the new bounded
+    `ObservableStore.set_enrichment` (evicts oldest key past the cap), flags
+    `is_ioc` on a malicious verdict, and is fully fail-open (a failing Cortex
+    surfaces an audited 502 and never mutates the observable). Tests:
+    `tests/test_integrations.py` (registry + analyzers route),
+    `tests/test_investigation_cases.py` (`TestObservableStore.set_enrichment*`,
+    `TestObservableEnrichEndpoint`).
+  - **Pending (next slice)**: optional origin-risk auto-raise on a malicious
+    verdict, the `run_responder` endpoint, and the UI action.
 
 ### 4.2 OpenCTI (`opencti.py`)
 - **Pull** (closes the MISP/OpenCTI feed gap): query indicators via OpenCTI GraphQL

@@ -222,6 +222,37 @@ async def integration_health(
     }
 
 
+@router.get("/{integration_id}/analyzers")
+async def list_integration_analyzers(
+    integration_id: str,
+    user: TokenPayload = Depends(require_permission("integrations:read")),
+):
+    """List a Cortex integration's enabled analyzer catalog.
+
+    Enrichment (Cortex) only: other integration types have no analyzer concept and
+    are rejected 400. Fail-open — a Cortex that is unreachable surfaces a ``502``
+    without ever touching local state.
+    """
+    registry = get_integration_registry()
+    config = registry.get(integration_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if config.type != "cortex":
+        raise HTTPException(
+            status_code=400, detail="Analyzers are only available for cortex integrations"
+        )
+    connector = registry.build_enrichment_connector(config)
+    if connector is None:
+        raise HTTPException(
+            status_code=400, detail="Integration is not fully configured"
+        )
+    try:
+        analyzers = await connector.list_analyzers()
+    except ConnectorError as exc:
+        raise HTTPException(status_code=502, detail=f"Analyzer list failed: {exc}") from None
+    return {"analyzers": analyzers, "count": len(analyzers)}
+
+
 @router.post("/reload")
 async def reload_integrations(
     user: TokenPayload = Depends(require_permission("integrations:write")),
