@@ -3,8 +3,7 @@
 A small, dependency-light dispatcher that fires structured JSON to admin-configured
 HTTP endpoints on case **lifecycle events** (``case.opened``,
 ``case.severity_raised``, ``case.resolved``). This is the trigger surface a SOAR
-runner (Shuffle / n8n) subscribes to; Phase 3 layers HMAC signing and versioned
-payload schemas on top of exactly this shape.
+runner (Shuffle / n8n) subscribes to.
 
 Design mirrors the connector registry:
 
@@ -18,13 +17,23 @@ Design mirrors the connector registry:
   error is swallowed (logged) rather than raised. A malformed config file degrades
   to no subscriptions.
 
-Deliberately *not* here (Phase 3): HMAC request signing, retry/circuit breaking
-(this is best-effort fan-out, not a durable queue), and the inbound action API.
+**HMAC signing (Phase 3.1)** — each subscription may carry a shared secret. When
+present, every delivery is signed: the exact JSON bytes POSTed are HMAC-SHA256'd
+and the digest is sent as ``X-Bulwark-Signature: sha256=<hex>`` (GitHub-style), so
+a SOAR receiver can verify authenticity and integrity. The secret is resolved from
+an out-of-band ``BULWARK_INTEGRATION_WEBHOOK_<ID>_SECRET`` (or its ``_FILE`` Docker
+variant) in preference to the inline value, and is never emitted back over the API.
+The envelope carries a ``schema_version`` so receivers can pin a contract.
+
+Deliberately *not* here: retry/circuit breaking (this is best-effort fan-out, not a
+durable queue) and the inbound action API (deferred to a later phase).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -35,9 +44,14 @@ from typing import Optional
 
 import httpx
 
+from ..secrets import read_secret
 from .util import iso_now
 
 logger = logging.getLogger(__name__)
+
+# Envelope contract version. Bumped only on a breaking payload-shape change so a
+# SOAR receiver can pin/branch on it. Additive fields do not bump this.
+EVENT_SCHEMA_VERSION = "1.0"
 
 # Persistent storage path — data/ is a PVC in k8s, same convention as the
 # integration + notification channel stores.
@@ -65,12 +79,17 @@ class WebhookSubscription:
     events: list[str] = field(default_factory=list)  # empty ⇒ all events
     enabled: bool = True
     verify_tls: bool = True
+    secret: str = ""  # HMAC signing key; may be injected out-of-band (see below)
 
     def wants(self, event_type: str) -> bool:
         """True if this subscription should receive ``event_type``."""
         return self.enabled and (not self.events or event_type in self.events)
 
     def to_dict(self) -> dict:
+        """Full record including the raw secret — for disk persistence only.
+
+        Never return this over the API; use :meth:`to_public_dict` for responses.
+        """
         return {
             "id": self.id,
             "name": self.name,
@@ -78,6 +97,19 @@ class WebhookSubscription:
             "events": list(self.events),
             "enabled": self.enabled,
             "verify_tls": self.verify_tls,
+            "secret": self.secret,
+        }
+
+    def to_public_dict(self) -> dict:
+        """API-safe view: never emits the raw secret, only whether one is set."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "events": list(self.events),
+            "enabled": self.enabled,
+            "verify_tls": self.verify_tls,
+            "has_secret": bool(self.secret),
         }
 
     @classmethod
@@ -91,6 +123,7 @@ class WebhookSubscription:
             events=events,
             enabled=bool(d.get("enabled", True)),
             verify_tls=bool(d.get("verify_tls", True)),
+            secret=str(d.get("secret") or ""),
         )
 
 
@@ -196,6 +229,7 @@ class EventWebhookEmitter:
     def _envelope(event_type: str, tenant: Optional[str], data: Optional[dict]) -> dict:
         """Build the stable event envelope POSTed to every subscriber."""
         return {
+            "schema_version": EVENT_SCHEMA_VERSION,
             "event": event_type,
             "event_id": f"evt_{uuid.uuid4().hex[:16]}",
             "timestamp": iso_now(),
@@ -203,15 +237,42 @@ class EventWebhookEmitter:
             "data": data or {},
         }
 
+    @staticmethod
+    def _resolve_secret(sub: WebhookSubscription) -> str:
+        """Resolve a subscription's HMAC secret (out-of-band env/file over inline).
+
+        Priority: an out-of-band ``BULWARK_INTEGRATION_WEBHOOK_<ID>_SECRET`` (or its
+        ``_FILE`` Docker-secret variant) wins over the inline value, so operators can
+        keep the signing key off disk. Falls back to the inline config value.
+        """
+        env_name = f"BULWARK_INTEGRATION_WEBHOOK_{sub.id.upper()}_SECRET"
+        return read_secret(env_name, default="") or sub.secret
+
     async def _deliver(
         self, sub: WebhookSubscription, envelope: dict
     ) -> DeliveryResult:
-        """POST one envelope to one subscriber. Never raises (fail-open)."""
+        """POST one envelope to one subscriber. Never raises (fail-open).
+
+        The envelope is serialized to bytes here (not via httpx's ``json=``) so the
+        HMAC signature is computed over the exact bytes transmitted.
+        """
+        body = json.dumps(envelope).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Bulwark-Event": str(envelope.get("event", "")),
+            "X-Bulwark-Delivery": str(envelope.get("event_id", "")),
+        }
+        secret = self._resolve_secret(sub)
+        if secret:
+            digest = hmac.new(
+                secret.encode("utf-8"), body, hashlib.sha256
+            ).hexdigest()
+            headers["X-Bulwark-Signature"] = f"sha256={digest}"
         try:
             async with httpx.AsyncClient(
                 timeout=_DELIVERY_TIMEOUT_SECONDS, verify=sub.verify_tls
             ) as client:
-                resp = await client.post(sub.url, json=envelope)
+                resp = await client.post(sub.url, content=body, headers=headers)
         except (httpx.HTTPError, OSError) as exc:
             detail = f"{type(exc).__name__}: {exc}"
             logger.warning(

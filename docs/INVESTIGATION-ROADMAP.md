@@ -324,9 +324,15 @@ GraphQL responses.
 
 Two directions close the loop.
 
-### 5.1 Outbound triggers
-The Phase 1 event-webhook is the workflow trigger surface. Add per-event payload
-schemas (stable, versioned) and HMAC signing so Shuffle/n8n can verify authenticity.
+### 5.1 Outbound triggers ✅ DONE
+The Phase 1 event-webhook is the workflow trigger surface. The envelope now carries
+a `schema_version` (stable, versioned contract) and each subscription may hold an
+HMAC-SHA256 signing secret: every delivery is signed as
+`X-Bulwark-Signature: sha256=<hex>` over the exact JSON bytes POSTed (alongside
+`X-Bulwark-Event` / `X-Bulwark-Delivery`), so Shuffle/n8n can verify authenticity +
+integrity. The secret is write-only (resolved from
+`BULWARK_INTEGRATION_WEBHOOK_<ID>_SECRET` / `_FILE` over the inline value; never
+echoed back — responses expose only `has_secret`).
 
 ### 5.2 Inbound Action API + service-account auth
 Playbooks need to act back. The verbs already exist (`/respond`,

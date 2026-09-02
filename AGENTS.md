@@ -893,12 +893,18 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/integrations/webhooks/{id}/test` | Session | Send a synthetic `test.ping` (ignores filters/enabled) — `integrations:write` |
 | POST | `/admin/integrations/webhooks/reload` | Session | Reload subscriptions from disk — `integrations:write` |
 
-Event webhooks fire a stable JSON envelope (`event`/`event_id`/`timestamp`/`tenant`/`data`) to
-admin-configured HTTP endpoints on case **lifecycle** transitions — `case.opened`,
-`case.severity_raised` (escalation only), `case.resolved` (transition into resolved only). Fan-out is
-best-effort and **fail-open**: an empty subscription list costs nothing, deliveries run concurrently
-under a short timeout, and a slow/dead endpoint never delays or breaks case management. HMAC signing
-and the inbound action API are deferred to Phase 3.
+Event webhooks fire a stable, versioned JSON envelope (`schema_version`/`event`/`event_id`/
+`timestamp`/`tenant`/`data`) to admin-configured HTTP endpoints on case **lifecycle** transitions —
+`case.opened`, `case.severity_raised` (escalation only), `case.resolved` (transition into resolved
+only). Fan-out is best-effort and **fail-open**: an empty subscription list costs nothing, deliveries
+run concurrently under a short timeout, and a slow/dead endpoint never delays or breaks case
+management. Each subscription may carry an **HMAC-SHA256 signing secret**: when present every delivery
+is signed as `X-Bulwark-Signature: sha256=<hex>` (GitHub-style, computed over the exact JSON bytes
+POSTed) alongside `X-Bulwark-Event` / `X-Bulwark-Delivery` headers, so a SOAR receiver can verify
+authenticity + integrity. The secret is resolved from `BULWARK_INTEGRATION_WEBHOOK_<ID>_SECRET` (or
+its `_FILE` Docker variant) in preference to the inline value, and is **write-only** — never echoed
+back over the API (responses expose only a `has_secret` flag via `to_public_dict`). The inbound
+action API remains deferred to a later phase.
 
 ### Authentication
 

@@ -9,7 +9,9 @@ integration lookup.
 
 Reuses the ``integrations:read`` / ``integrations:write`` permission namespace.
 Emission itself is best-effort and fail-open (see
-:mod:`admin.services.integrations.event_webhook`).
+:mod:`admin.services.integrations.event_webhook`). A subscription's HMAC signing
+secret is write-only: it is accepted on create/update but never echoed back —
+responses expose only a ``has_secret`` flag via ``to_public_dict``.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ async def list_webhooks(
     """List all configured event-webhook subscriptions."""
     emitter = get_event_webhook_emitter()
     return {
-        "webhooks": [s.to_dict() for s in emitter.subscriptions],
+        "webhooks": [s.to_public_dict() for s in emitter.subscriptions],
         "event_types": list(EVENT_TYPES),
     }
 
@@ -76,7 +78,7 @@ async def create_webhook(
         resource_id=sub.id,
         details=str({"name": sub.name, "events": sub.events or "all"}),
     )
-    return {"webhook": sub.to_dict(), "message": "Webhook created"}
+    return {"webhook": sub.to_public_dict(), "message": "Webhook created"}
 
 
 @router.put("/{subscription_id}")
@@ -98,7 +100,7 @@ async def update_webhook(
         resource_id=subscription_id,
         details=str({"fields": list(data.keys())}),
     )
-    return {"webhook": updated.to_dict(), "message": "Webhook updated"}
+    return {"webhook": updated.to_public_dict(), "message": "Webhook updated"}
 
 
 @router.delete("/{subscription_id}")

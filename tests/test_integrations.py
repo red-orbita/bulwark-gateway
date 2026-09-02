@@ -822,6 +822,22 @@ def test_webhook_subscription_filtering_and_roundtrip():
     assert WebhookSubscription.from_dict(named.to_dict()) == named
 
 
+def test_webhook_public_dict_masks_secret():
+    from admin.services.integrations.event_webhook import WebhookSubscription
+
+    sub = _sub(secret="topsecret")
+    # Disk view keeps the raw secret so persistence + update-merge work.
+    assert sub.to_dict()["secret"] == "topsecret"
+    # A full disk round-trip preserves the secret.
+    assert WebhookSubscription.from_dict(sub.to_dict()) == sub
+
+    # API view never leaks the raw secret, only whether one is set.
+    public = sub.to_public_dict()
+    assert "secret" not in public
+    assert public["has_secret"] is True
+    assert _sub(secret="").to_public_dict()["has_secret"] is False
+
+
 def test_emitter_add_persists_and_reloads(webhook_env):
     emitter = webhook_env.get_event_webhook_emitter()
     emitter.add(_sub())
@@ -926,6 +942,67 @@ async def test_emitter_test_ping(webhook_env, httpx_mock):
     assert "unknown" in missing.detail
 
 
+# ─── HMAC signing + versioned envelope (Phase 3.1) ───────────────────────────
+
+
+async def test_envelope_carries_schema_version(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(url="http://soar.test/hook"))
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+
+    await emitter.emit("case.opened", tenant="acme", data={"case_id": "c1"})
+    body = json.loads(httpx_mock.get_requests()[0].content)
+    assert body["schema_version"] == webhook_env.EVENT_SCHEMA_VERSION
+
+
+async def test_delivery_is_hmac_signed_when_secret_present(webhook_env, httpx_mock):
+    import hashlib
+    import hmac
+
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(url="http://soar.test/hook", secret="s3cr3t"))
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+
+    await emitter.emit("case.opened", tenant="acme", data={"case_id": "c1"})
+    req = httpx_mock.get_requests()[0]
+
+    # The signature must verify against the EXACT bytes transmitted.
+    expected = hmac.new(b"s3cr3t", req.content, hashlib.sha256).hexdigest()
+    assert req.headers["X-Bulwark-Signature"] == f"sha256={expected}"
+    # Delivery metadata headers are always present.
+    assert req.headers["X-Bulwark-Event"] == "case.opened"
+    assert req.headers["X-Bulwark-Delivery"].startswith("evt_")
+    assert req.headers["content-type"] == "application/json"
+
+
+async def test_delivery_is_unsigned_when_no_secret(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(url="http://soar.test/hook"))  # no secret
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+
+    await emitter.emit("case.opened")
+    req = httpx_mock.get_requests()[0]
+    # No secret ⇒ no signature header, but metadata headers still ride along.
+    assert "X-Bulwark-Signature" not in req.headers
+    assert req.headers["X-Bulwark-Event"] == "case.opened"
+
+
+async def test_secret_resolved_from_env_over_inline(webhook_env, httpx_mock, monkeypatch):
+    import hashlib
+    import hmac
+
+    # An out-of-band env secret must win over the inline value.
+    monkeypatch.setenv("BULWARK_INTEGRATION_WEBHOOK_W1_SECRET", "env-wins")
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(id="w1", url="http://soar.test/hook", secret="inline-loses"))
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+
+    await emitter.emit("case.opened")
+    req = httpx_mock.get_requests()[0]
+    expected = hmac.new(b"env-wins", req.content, hashlib.sha256).hexdigest()
+    assert req.headers["X-Bulwark-Signature"] == f"sha256={expected}"
+
+
 # ─── webhook routes ──────────────────────────────────────────────────────────
 
 
@@ -956,6 +1033,26 @@ async def test_wh_route_create_validation_and_listing(webhook_env):
     assert set(events["event_types"]) == {
         "case.opened", "case.severity_raised", "case.resolved"
     }
+
+
+async def test_wh_route_masks_secret_on_create_and_list(webhook_env):
+    from admin.routes import integration_webhooks as wr
+
+    out = await wr.create_webhook(
+        data={"name": "SOAR", "url": "http://soar.test/hook", "secret": "topsecret"},
+        user=_admin(),
+    )
+    # The write-only secret is never echoed back — only a has_secret flag.
+    assert "secret" not in out["webhook"]
+    assert out["webhook"]["has_secret"] is True
+
+    listing = await wr.list_webhooks(user=_admin())
+    assert all("secret" not in w for w in listing["webhooks"])
+    assert listing["webhooks"][0]["has_secret"] is True
+
+    # But the secret is persisted on disk (needed for signing) and usable.
+    stored = webhook_env.get_event_webhook_emitter().get(out["webhook"]["id"])
+    assert stored.secret == "topsecret"
 
 
 async def test_wh_route_missing_subscription_is_404(webhook_env):
