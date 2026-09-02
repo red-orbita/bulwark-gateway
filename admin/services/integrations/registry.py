@@ -229,6 +229,15 @@ class IntegrationRegistry:
                 verify_tls=config.verify_tls,
                 timeout=config.timeout,
             )
+        if config.type == "opencti":
+            # OpenCTI implements the push protocol (case → SCOs/indicators/report)
+            # in addition to lookup, so it is a valid ``/push/case`` target.
+            return OpenCTIConnector(
+                base_url=config.base_url,
+                api_key=api_key,
+                verify_tls=config.verify_tls,
+                timeout=config.timeout,
+            )
         return None
 
     def build_enrichment_connector(

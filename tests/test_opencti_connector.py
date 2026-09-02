@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import pytest
 
-from admin.services.integrations.base import ConnectorError
+from admin.services.integrations.base import ConnectorError, TlpGateError
 from admin.services.integrations.opencti import (
     OpenCTIConnector,
     _coerce_score,
+    _indicator_pattern,
+    _main_observable_type,
     _node_labels,
+    _observable_payload,
+    _report_input,
     score_verdict,
+    select_report_marking,
 )
 
 _URL = "http://opencti.test/graphql"
@@ -206,3 +211,187 @@ async def test_lookup_transport_error_surfaces(httpx_mock):
         httpx_mock.add_exception(httpx.ConnectError("down"))
     with pytest.raises(ConnectorError):
         await _connector().lookup_observable(observable_type="ip", value="1.2.3.4")
+
+
+# ─── Push pure helpers ───────────────────────────────────────────────────────
+
+def _obs(otype: str, value: str, *, tlp: str = "amber", is_ioc: bool = False, **extra) -> dict:
+    node = {"type": otype, "value": value, "tlp": tlp, "is_ioc": is_ioc}
+    node.update(extra)
+    return node
+
+
+def test_select_report_marking_picks_most_restrictive():
+    assert select_report_marking([_obs("ip", "1.2.3.4", tlp="green"),
+                                  _obs("domain", "x.test", tlp="amber")]) == "amber"
+    assert select_report_marking([_obs("ip", "1.2.3.4", tlp="white"),
+                                  _obs("domain", "x.test", tlp="green")]) == "green"
+    assert select_report_marking([_obs("ip", "1.2.3.4", tlp="white")]) == "white"
+
+
+def test_select_report_marking_excludes_red_and_defaults_amber():
+    # red is skipped; with nothing else it defaults to amber.
+    assert select_report_marking([_obs("ip", "1.2.3.4", tlp="red")]) == "amber"
+    # unmarked observables default to amber.
+    assert select_report_marking([{"type": "ip", "value": "1.2.3.4"}]) == "amber"
+
+
+def test_observable_payload_maps_known_types():
+    assert _observable_payload(_obs("ip", "1.2.3.4")) == (
+        "IPv4-Addr", "IPv4Addr", {"value": "1.2.3.4"})
+    assert _observable_payload(_obs("ip", "2001:db8::1")) == (
+        "IPv6-Addr", "IPv6Addr", {"value": "2001:db8::1"})
+    assert _observable_payload(_obs("domain", "evil.test")) == (
+        "Domain-Name", "DomainName", {"value": "evil.test"})
+    octype, var_key, payload = _observable_payload(_obs("hash", "d41d8cd98f00b204e9800998ecf8427e"))
+    assert octype == "StixFile"
+    assert payload == {"hashes": [{"algorithm": "MD5", "hash": "d41d8cd98f00b204e9800998ecf8427e"}]}
+
+
+def test_observable_payload_unmappable_returns_none():
+    assert _observable_payload(_obs("other", "whatever")) is None
+    assert _observable_payload(_obs("ip", "   ")) is None
+    assert _observable_payload(_obs("hash", "deadbeef")) is None  # no known algorithm length
+
+
+def test_indicator_pattern_builds_and_escapes():
+    assert _indicator_pattern(_obs("ip", "1.2.3.4")) == "[ipv4-addr:value = '1.2.3.4']"
+    assert _indicator_pattern(_obs("domain", "evil.test")) == "[domain-name:value = 'evil.test']"
+    # single quotes in the value are STIX-escaped.
+    assert _indicator_pattern(_obs("url", "http://x/'a")) == "[url:value = 'http://x/\\'a']"
+    assert _indicator_pattern(_obs("other", "x")) is None
+
+
+def test_main_observable_type():
+    assert _main_observable_type(_obs("ip", "1.2.3.4")) == "IPv4-Addr"
+    assert _main_observable_type(_obs("ip", "2001:db8::1")) == "IPv6-Addr"
+    assert _main_observable_type(_obs("domain", "x.test")) == "Domain-Name"
+    assert _main_observable_type(_obs("other", "x")) == "Unknown"
+
+
+def test_report_input_shape():
+    case = {"case_id": "C-1", "title": "Intrusion", "summary": "bad",
+            "updated_at": "2026-01-01T00:00:00Z"}
+    got = _report_input(case, ["obs1", "ind1"], "marking-x")
+    assert got["name"] == "Intrusion"
+    assert got["published"] == "2026-01-01T00:00:00Z"
+    assert got["objectMarking"] == ["marking-x"]
+    assert got["objects"] == ["obs1", "ind1"]
+    assert got["report_types"] == ["threat-report"]
+
+
+# ─── push_case flow ──────────────────────────────────────────────────────────
+
+def _gql(key: str, node: dict) -> dict:
+    return {"data": {key: node}}
+
+
+_CASE = {"case_id": "C-1", "title": "Intrusion", "summary": "bad guy",
+         "updated_at": "2026-01-01T00:00:00Z"}
+
+
+async def test_push_creates_report(httpx_mock):
+    # ip (IOC) → obs + indicator + sighting; domain (non-IOC) → obs only; then report.
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("indicatorAdd", {"id": "ind1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixSightingRelationshipAdd", {"id": "sig1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs2"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportAdd", {"id": "rep1"}))
+
+    result = await _connector().push_case(
+        _CASE,
+        [_obs("ip", "1.2.3.4", is_ioc=True), _obs("domain", "evil.test")],
+        [],
+    )
+    assert result.created is True
+    assert result.remote_id == "rep1"
+    assert "rep1" in result.remote_url
+    assert "3 objects" in result.detail
+    assert "1 indicators" in result.detail
+    assert "1 sightings" in result.detail
+    assert "0 TLP:RED excluded" in result.detail
+
+
+async def test_push_excludes_tlp_red(httpx_mock):
+    # red observable is dropped; only the amber domain is shared.
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportAdd", {"id": "rep1"}))
+
+    result = await _connector().push_case(
+        _CASE,
+        [_obs("ip", "9.9.9.9", tlp="red", is_ioc=True), _obs("domain", "evil.test")],
+        [],
+    )
+    assert result.created is True
+    assert "1 TLP:RED excluded" in result.detail
+
+
+async def test_push_all_red_raises_gate(httpx_mock):
+    # everything is red → nothing shareable → refused with no remote call.
+    with pytest.raises(TlpGateError):
+        await _connector().push_case(
+            _CASE, [_obs("ip", "9.9.9.9", tlp="red")], [],
+        )
+
+
+async def test_push_no_mappable_raises_gate(httpx_mock):
+    # non-red but unmappable observable → still nothing to push.
+    with pytest.raises(TlpGateError):
+        await _connector().push_case(
+            _CASE, [_obs("other", "freeform note")], [],
+        )
+
+
+async def test_push_sighting_failure_best_effort(httpx_mock):
+    # sighting create fails (GraphQL errors body) but the push still completes.
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("indicatorAdd", {"id": "ind1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json={"errors": [{"message": "sighting boom"}]})
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportAdd", {"id": "rep1"}))
+
+    result = await _connector().push_case(
+        _CASE, [_obs("ip", "1.2.3.4", is_ioc=True)], [],
+    )
+    assert result.created is True
+    assert "1 indicators" in result.detail
+    assert "0 sightings" in result.detail
+
+
+async def test_push_update_patches_report(httpx_mock):
+    # re-push: obs upsert, then report fieldPatch + relationAdd for the new ref.
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportEdit", {"fieldPatch": {"id": "rep-existing"}}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportEdit", {"relationAdd": {"id": "rel1"}}))
+
+    result = await _connector().push_case(
+        _CASE, [_obs("domain", "evil.test")], [], remote_id="rep-existing",
+    )
+    assert result.created is False
+    assert result.remote_id == "rep-existing"
+    assert "report updated" in result.detail
+
+
+async def test_push_report_no_id_raises(httpx_mock):
+    # a report create that returns no id is a hard failure.
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL, json=_gql("reportAdd", {}))
+
+    with pytest.raises(ConnectorError):
+        await _connector().push_case(
+            _CASE, [_obs("domain", "evil.test")], [],
+        )

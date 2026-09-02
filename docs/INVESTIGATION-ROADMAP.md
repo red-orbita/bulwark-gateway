@@ -275,24 +275,42 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
     `feed_scheduler` → `trigger_feed_update` path. README + `config/feeds/README.md`
     now declare OpenCTI honestly. Tests: `tests/test_opencti_feed.py` (13).
     Remaining for later: push (SCO/indicator/sighting + TLP) and lookup-on-IOC-check.
-- **Push**: observables → SCOs, `is_ioc` → `indicator` + `sighting` (with TLP
-  marking-definitions), case → `grouping`/`report`. TLP/PAP gate enforced here.
-- **Lookup**: on IOC-check, also query OpenCTI for context (score, labels, related
-  campaigns) and attach to the observable.
-  - **DONE (interactive lookup)**: `admin/services/integrations/opencti.py`
-    (`OpenCTIConnector`, raw `httpx` GraphQL, no `pycti`) exposes
-    `lookup_observable()` — queries `indicators(search,orderBy:x_opencti_score)`,
-    filters to STIX patterns literally containing the value, folds the worst-level
-    **active** (non-revoked) indicator into a `not_found`/`clean`/`suspicious`/
-    `malicious` verdict (`score_verdict`, thresholds 40/70). Wired via
-    `POST /admin/investigation/cases/{id}/observables/{obs}/lookup` (mirrors the
-    Cortex enrich path: folds into `enrichment['opencti']`, marks `is_ioc` +
-    auto-raises origin-risk on `malicious`, fail-open 502). Registry adds the
-    `opencti` type + `build_lookup_connector` + health probe. Admin UI: OpenCTI
-    verdict badge + "Threat-intel lookup" panel on the observables card. Tests:
-    `tests/test_opencti_connector.py` (17), plus `test_integrations.py` +
-    `test_investigation_cases.py` coverage.
-    Remaining for later: **push** (SCO/indicator/sighting + TLP, case→report).
+ - **Push**: observables → SCOs, `is_ioc` → `indicator` + `sighting` (with TLP
+   marking-definitions), case → `grouping`/`report`. TLP/PAP gate enforced here.
+   - **DONE**: `OpenCTIConnector` implements the `Connector` push protocol
+     (`push_case`) so it reuses the shared `/push/case` route + link-store
+     idempotency. It materialises the case via raw GraphQL create mutations (no
+     `pycti`): one Cyber-observable (SCO) per mappable observable, an `indicator`
+     + a `sighting` per flagged IOC, and a container `report` tying them together
+     (the report's internal id is the `remote_id`; a re-push patches that report
+     and best-effort re-attaches new object refs — SCOs/indicators upsert
+     server-side via `update: true`). **TLP data-sharing gate**: `TLP:RED`
+     observables are excluded and a wholly-restricted (no shareable/mappable
+     observable) case is refused with `TlpGateError` → `400` **before** any remote
+     call — included objects carry the case's most-restrictive remaining TLP
+     marking-definition. `registry.build_connector` now returns an
+     `OpenCTIConnector` for the `opencti` type; the push menu is filtered to
+     push-capable connectors (thehive/dfir_iris/opencti). Markings are referenced
+     by standard STIX id (no `markingDefinitions` round-trip); labels/tags are not
+     propagated in v1 (`objectLabel` resolves by id, follow-up). Tests:
+     `tests/test_opencti_connector.py` (push helpers + create/exclude-red/gate/
+     sighting-failure/update/no-id flows) + `test_integrations.py` route push
+     (create + TLP-gate 400).
+ - **Lookup**: on IOC-check, also query OpenCTI for context (score, labels, related
+   campaigns) and attach to the observable.
+   - **DONE (interactive lookup)**: `admin/services/integrations/opencti.py`
+     (`OpenCTIConnector`, raw `httpx` GraphQL, no `pycti`) exposes
+     `lookup_observable()` — queries `indicators(search,orderBy:x_opencti_score)`,
+     filters to STIX patterns literally containing the value, folds the worst-level
+     **active** (non-revoked) indicator into a `not_found`/`clean`/`suspicious`/
+     `malicious` verdict (`score_verdict`, thresholds 40/70). Wired via
+     `POST /admin/investigation/cases/{id}/observables/{obs}/lookup` (mirrors the
+     Cortex enrich path: folds into `enrichment['opencti']`, marks `is_ioc` +
+     auto-raises origin-risk on `malicious`, fail-open 502). Registry adds the
+     `opencti` type + `build_lookup_connector` + health probe. Admin UI: OpenCTI
+     verdict badge + "Threat-intel lookup" panel on the observables card. Tests:
+     `tests/test_opencti_connector.py` (17), plus `test_integrations.py` +
+     `test_investigation_cases.py` coverage.
 
 ### Phase 2 acceptance
 An observable can be enriched by Cortex and looked up in OpenCTI with reports

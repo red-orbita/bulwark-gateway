@@ -602,7 +602,7 @@
                                     <button @click="pushCaseTo(t.id)" :disabled="pushing"
                                             class="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-white/5 sg-interactive flex items-center justify-between">
                                         <span x-text="t.name"></span>
-                                        <span class="text-[10px] text-gray-500" x-text="t.type === 'thehive' ? 'TheHive' : 'IRIS'"></span>
+                                        <span class="text-[10px] text-gray-500" x-text="pushTargetLabel(t.type)"></span>
                                     </button>
                                 </template>
                             </div>
@@ -2464,9 +2464,21 @@ function investigationPage() {
                 const res = await fetch('/admin/integrations/status');
                 if (res.ok) {
                     const data = await res.json();
-                    this.pushTargets = (data.integrations || []).filter(i => i.enabled);
+                    // Only case-push-capable platforms belong in the push menu —
+                    // enrichment/lookup-only targets (Cortex) cannot receive a case.
+                    const pushable = ['thehive', 'dfir_iris', 'opencti'];
+                    this.pushTargets = (data.integrations || []).filter(
+                        i => i.enabled && pushable.includes(i.type)
+                    );
                 }
             } catch (e) { /* non-fatal */ }
+        },
+
+        pushTargetLabel(type) {
+            if (type === 'thehive') return 'TheHive';
+            if (type === 'dfir_iris') return 'IRIS';
+            if (type === 'opencti') return 'OpenCTI';
+            return type;
         },
 
         async pushCaseTo(integrationId) {

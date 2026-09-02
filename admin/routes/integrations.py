@@ -2,12 +2,14 @@
 
 Exposes the integration registry to the admin UI: list/create/update/delete
 targets, toggle them, probe health, and push an investigation case to a
-configured platform (TheHive / DFIR-IRIS).
+configured platform (TheHive / DFIR-IRIS / OpenCTI).
 
 Everything is **fail-open**: a push that the remote rejects is audited and
 returned as a ``502`` with a human-readable detail, but it never mutates or
-blocks the local case. Secrets are masked in every response. All routes are gated
-by the dedicated ``integrations:read`` / ``integrations:write`` permissions.
+blocks the local case. A push refused by local data-sharing policy (e.g. an
+all-``TLP:RED`` case to OpenCTI) is a ``400`` — the remote is never contacted.
+Secrets are masked in every response. All routes are gated by the dedicated
+``integrations:read`` / ``integrations:write`` permissions.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from ..models.auth import ROLE_PERMISSIONS, TokenPayload
 from ..services.audit_logger import get_audit_logger
 from ..services.auth_service import require_permission
 from ..services.integration_link_store import get_integration_link_store
-from ..services.integrations.base import ConnectorError
+from ..services.integrations.base import ConnectorError, TlpGateError
 from ..services.integrations.registry import (
     INTEGRATION_TYPES,
     IntegrationConfig,
@@ -339,6 +341,17 @@ async def push_case(
         result = await connector.push_case(
             case, observables, tasks, remote_id=remote_id
         )
+    except TlpGateError as exc:
+        # Local data-sharing policy refusal (e.g. everything is TLP:RED) — the
+        # remote was never contacted for the restricted data. Audit + 400.
+        await audit.log(
+            actor=user.sub,
+            action="integration_push_blocked",
+            resource_type="integration",
+            resource_id=integration_id,
+            details=str({"case_id": case_id, "reason": str(exc)}),
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except ConnectorError as exc:
         await audit.log(
             actor=user.sub,

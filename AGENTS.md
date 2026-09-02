@@ -882,7 +882,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | GET | `/admin/integrations/{id}/analyzers` | Session | List a Cortex integration's analyzer catalog (cortex-only; fail-open 502) — `integrations:read` |
 | GET | `/admin/integrations/{id}/responders` | Session | List a Cortex integration's responder catalog (cortex-only; fail-open 502) — `integrations:read` |
 | POST | `/admin/integrations/reload` | Session | Reload connector registry from disk — `integrations:write` |
-| POST | `/admin/integrations/push/case/{case_id}` | Session | Idempotent push of a case to TheHive/IRIS (create-or-update via link store; fail-open) — `integrations:write` |
+| POST | `/admin/integrations/push/case/{case_id}` | Session | Idempotent push of a case to TheHive/IRIS/OpenCTI (create-or-update via link store; fail-open). OpenCTI materialises SCOs + indicators + sightings + a container report via raw GraphQL, gated by a TLP data-sharing policy — `TLP:RED` observables are excluded and a wholly-restricted case is refused with `400` (never contacts the remote for restricted data) — `integrations:write` |
 | GET | `/admin/integrations/push/case/{case_id}/links` | Session | List remote links (remote_id/url/last_synced_at) for a case — `integrations:read` |
 | GET | `/admin/integrations/webhooks` | Session | List event-webhook subscriptions (SOAR trigger seed) + available event types — `integrations:read` |
 | GET | `/admin/integrations/webhooks/events` | Session | List lifecycle event types a subscription can filter on — `integrations:read` |

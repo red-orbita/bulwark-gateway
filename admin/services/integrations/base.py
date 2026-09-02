@@ -42,6 +42,18 @@ class ConnectorError(Exception):
         self.status = status
 
 
+class TlpGateError(ConnectorError):
+    """A push refused by a *local* data-sharing policy (not a remote failure).
+
+    Raised when an outbound connector declines to share a case because its
+    markings are too restrictive (e.g. every shareable observable is ``TLP:RED``).
+    Unlike a plain :class:`ConnectorError` — which reflects a remote/transport
+    problem and maps to ``502`` — this is a client-side policy decision the route
+    layer surfaces as a ``400`` so operators understand nothing was sent and the
+    remote was never contacted for the restricted data.
+    """
+
+
 @dataclass
 class PushResult:
     """Outcome of pushing a case to a remote platform.

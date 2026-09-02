@@ -279,9 +279,9 @@ def test_registry_builds_lookup_connector_for_opencti(registry):
 
     conn = registry.build_lookup_connector(_opencti_config())
     assert isinstance(conn, OpenCTIConnector)
-    # OpenCTI is neither a push target nor an enrichment (Cortex) target.
+    # OpenCTI is a lookup + push target (but not an enrichment/Cortex target).
     assert registry.build_lookup_connector(_cortex_config()) is None
-    assert registry.build_connector(_opencti_config()) is None
+    assert isinstance(registry.build_connector(_opencti_config()), OpenCTIConnector)
     assert registry.build_enrichment_connector(_opencti_config()) is None
 
 
@@ -546,6 +546,64 @@ async def test_route_push_failure_is_fail_open(wired_routes, httpx_mock):
         )
     # Fail-open: surfaced as a gateway error, the local case is untouched.
     assert exc.value.status_code == 502
+
+
+async def test_route_push_opencti_creates_report(wired_routes, httpx_mock):
+    from admin.services.investigation_case_store import CaseStore
+    from admin.services.investigation_observable_store import ObservableStore
+
+    routes = wired_routes
+    case = await CaseStore().create_case(title="Exfil", actor="admin", tenant="acme")
+    case_id = case["case_id"]
+    await ObservableStore().add(
+        case_id=case_id, observable_type="domain", value="evil.test",
+        actor="admin", tlp="amber",
+    )
+    await routes.create_integration(
+        data={"name": "OC", "type": "opencti", "base_url": "http://opencti.test", "api_key": "k"},
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+
+    # obs upsert, then report create.
+    httpx_mock.add_response(method="POST", url="http://opencti.test/graphql",
+                            json={"data": {"stixCyberObservableAdd": {"id": "obs1"}}})
+    httpx_mock.add_response(method="POST", url="http://opencti.test/graphql",
+                            json={"data": {"reportAdd": {"id": "rep1"}}})
+
+    result = await routes.push_case(
+        case_id, data={"integration_id": integration_id}, user=_admin()
+    )
+    assert result["created"] is True
+    assert result["remote_id"] == "rep1"
+
+
+async def test_route_push_opencti_tlp_gate_returns_400(wired_routes):
+    from fastapi import HTTPException
+
+    from admin.services.investigation_case_store import CaseStore
+    from admin.services.investigation_observable_store import ObservableStore
+
+    routes = wired_routes
+    case = await CaseStore().create_case(title="Exfil", actor="admin", tenant="acme")
+    case_id = case["case_id"]
+    # Only a TLP:RED observable → nothing shareable → local policy refusal (400),
+    # the remote is never contacted (no HTTP responses registered).
+    await ObservableStore().add(
+        case_id=case_id, observable_type="ip", value="9.9.9.9",
+        actor="admin", tlp="red", pap="red",
+    )
+    await routes.create_integration(
+        data={"name": "OC", "type": "opencti", "base_url": "http://opencti.test", "api_key": "k"},
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.push_case(
+            case_id, data={"integration_id": integration_id}, user=_admin()
+        )
+    assert exc.value.status_code == 400
 
 
 async def test_route_rbac_viewer_cannot_create(wired_routes):
