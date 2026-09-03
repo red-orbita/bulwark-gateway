@@ -1,11 +1,13 @@
 # Investigation Center — Evolution Roadmap & Integration Design
 
-Status: **DRAFT / for review** · Owner: SOC platform · Scope: `admin/` (off proxy hot-path)
+Status: **Phases 0–3 DELIVERED · Phases 4–5 PLANNED** · Owner: SOC platform · Scope: `admin/` (off proxy hot-path)
 
-This document proposes how to grow the Investigation / Triage / Cases workspace
-into a SOC-grade IR platform, and how to prepare Bulwark Gateway to integrate with
-**TheHive**, **Cortex**, **DFIR-IRIS**, **OpenCTI**, and automation runners
-(**Shuffle**, **n8n**). It is written to be implemented in reviewable slices.
+This document tracks how the Investigation / Triage / Cases workspace grew into a
+SOC-grade IR platform, and how Bulwark Gateway integrates with **TheHive**,
+**Cortex**, **DFIR-IRIS**, **OpenCTI**, and automation runners (**Shuffle**,
+**n8n**). It is implemented in reviewable slices: Phases 0–3 have landed; Phases
+4–5 are planned (scope to be finalised with product). The product-input decisions
+in §8 also remain open.
 
 > Nothing here touches the proxy hot path. All work lives in `admin/` and the
 > durable SQL store; the fail-closed request pipeline in `src/` is unchanged.
