@@ -2045,9 +2045,10 @@ class _FakeRedis:
 class _FakeOpenCtiConnector:
     """Stand-in for :class:`OpenCTIConnector` — records lookups, returns/raises."""
 
-    def __init__(self, *, result=None, error=None):
+    def __init__(self, *, result=None, error=None, kind="opencti"):
         self._result = result or {}
         self._error = error
+        self.kind = kind
         self.calls: list[dict] = []
 
     async def lookup_observable(self, **kwargs):

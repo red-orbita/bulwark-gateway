@@ -33,6 +33,7 @@ from ..secrets import read_secret
 from .base import Connector, ConnectorHealth
 from .cortex import CortexConnector
 from .dfir_iris import DfirIrisConnector
+from .misp import MispConnector
 from .opencti import OpenCTIConnector
 from .thehive import TheHiveConnector
 from .util import iso_now
@@ -48,8 +49,9 @@ _CONFIG_FILE = Path(
 # Supported connector types. ``thehive`` / ``dfir_iris`` are case *push* targets
 # (they implement the ``Connector`` protocol); ``cortex`` and ``opencti`` are
 # *enrichment* targets (observable analysis / threat-intel lookup), built via
-# :meth:`build_enrichment_connector` / :meth:`build_lookup_connector`.
-INTEGRATION_TYPES = ("thehive", "dfir_iris", "cortex", "opencti")
+# :meth:`build_enrichment_connector` / :meth:`build_lookup_connector`. ``misp`` is
+# both a *push* target (case → Event) and a *lookup* target (attribute search).
+INTEGRATION_TYPES = ("thehive", "dfir_iris", "cortex", "opencti", "misp")
 
 # How long a health probe result is cached before a fresh probe is allowed.
 _HEALTH_TTL_SECONDS = 30.0
@@ -238,6 +240,15 @@ class IntegrationRegistry:
                 verify_tls=config.verify_tls,
                 timeout=config.timeout,
             )
+        if config.type == "misp":
+            # MISP implements the push protocol (case → Event/Attributes) in
+            # addition to lookup, so it is a valid ``/push/case`` target.
+            return MispConnector(
+                base_url=config.base_url,
+                api_key=api_key,
+                verify_tls=config.verify_tls,
+                timeout=config.timeout,
+            )
         return None
 
     def build_enrichment_connector(
@@ -263,18 +274,26 @@ class IntegrationRegistry:
 
     def build_lookup_connector(
         self, config: IntegrationConfig
-    ) -> Optional[OpenCTIConnector]:
-        """Build a threat-intel lookup connector (OpenCTI) from a config, or ``None``.
+    ) -> Optional[OpenCTIConnector | MispConnector]:
+        """Build a threat-intel lookup connector (OpenCTI or MISP), or ``None``.
 
-        Like the enrichment factory, lookup connectors do not implement the
-        ``Connector`` *push* protocol, so they are built separately. Returns
-        ``None`` for non-lookup types or an incompletely configured target.
+        Both platforms expose an observable ``lookup_observable`` surface. Like the
+        enrichment factory, lookup connectors are built separately from
+        :meth:`build_connector`. Returns ``None`` for a non-lookup type or an
+        incompletely configured target.
         """
-        if config.type != "opencti":
+        if config.type not in ("opencti", "misp"):
             return None
         api_key = self._resolve_api_key(config)
         if not config.base_url or not api_key:
             return None
+        if config.type == "misp":
+            return MispConnector(
+                base_url=config.base_url,
+                api_key=api_key,
+                verify_tls=config.verify_tls,
+                timeout=config.timeout,
+            )
         return OpenCTIConnector(
             base_url=config.base_url,
             api_key=api_key,

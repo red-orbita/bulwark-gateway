@@ -72,6 +72,7 @@ from .investigation import (
 
 if TYPE_CHECKING:
     from ..services.integrations.cortex import CortexConnector
+    from ..services.integrations.misp import MispConnector
     from ..services.integrations.opencti import OpenCTIConnector
 
 router = APIRouter()
@@ -1283,20 +1284,22 @@ def _resolve_cortex_connector(integration_id: str) -> "CortexConnector":
     return connector
 
 
-def _resolve_opencti_connector(integration_id: str) -> "OpenCTIConnector":
-    """Resolve a configured, enabled OpenCTI lookup connector, or raise.
+def _resolve_lookup_connector(integration_id: str) -> "OpenCTIConnector | MispConnector":
+    """Resolve a configured, enabled threat-intel lookup connector, or raise.
 
-    Mirrors :func:`_resolve_cortex_connector`: unknown id ⇒ 404; non-opencti ⇒
-    400; disabled ⇒ 400; missing credentials ⇒ 400. The returned connector is
-    ready to call.
+    Mirrors :func:`_resolve_cortex_connector` but accepts either an OpenCTI or a
+    MISP integration (both expose ``lookup_observable``): unknown id ⇒ 404;
+    non-lookup type ⇒ 400; disabled ⇒ 400; missing credentials ⇒ 400. The returned
+    connector is ready to call.
     """
     registry = get_integration_registry()
     config = registry.get(integration_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Integration not found")
-    if config.type != "opencti":
+    if config.type not in ("opencti", "misp"):
         raise HTTPException(
-            status_code=400, detail="This action requires an opencti integration"
+            status_code=400,
+            detail="This action requires an opencti or misp integration",
         )
     if not config.enabled:
         raise HTTPException(status_code=400, detail="Integration is disabled")
@@ -1550,16 +1553,16 @@ async def lookup_case_observable(
     body: ObservableLookupRequest,
     user: TokenPayload = Depends(require_permission_automation("investigation:write")),
 ):
-    """Look an observable up against an OpenCTI integration's indicators (Phase 2).
+    """Look an observable up against an OpenCTI or MISP integration (Phase 2/5).
 
-    Searches OpenCTI for the observable's literal value, folds the matching STIX
-    indicators into a compact verdict blob, and stores it under
-    ``enrichment['opencti']``. A ``malicious`` verdict flags the observable
-    ``is_ioc`` *and* auto-hardens every ``origin`` subject linked to the case
-    (best-effort — see :func:`_auto_raise_case_origins`) so the confirmed-bad
-    indicator escalates the origins that produced it. Fail-open: an
-    unreachable/failing OpenCTI surfaces a ``502`` (audited) and never mutates the
-    observable.
+    Searches the threat-intel platform for the observable's literal value, folds
+    the matching indicators/attributes into a compact verdict blob, and stores it
+    under ``enrichment['opencti']`` or ``enrichment['misp']`` (keyed by the
+    connector). A ``malicious`` verdict flags the observable ``is_ioc`` *and*
+    auto-hardens every ``origin`` subject linked to the case (best-effort — see
+    :func:`_auto_raise_case_origins`) so the confirmed-bad indicator escalates the
+    origins that produced it. Fail-open: an unreachable/failing platform surfaces a
+    ``502`` (audited) and never mutates the observable.
     """
     case = await _get_case_scoped(user, case_id)  # tenant gate
 
@@ -1567,7 +1570,7 @@ async def lookup_case_observable(
     if observable is None:
         raise HTTPException(status_code=404, detail="Observable not found")
 
-    connector = _resolve_opencti_connector(body.integration_id)
+    connector = _resolve_lookup_connector(body.integration_id)
 
     audit = get_audit_logger()
     try:
@@ -1586,11 +1589,14 @@ async def lookup_case_observable(
         # Fail-open: surface the failure without ever touching the observable.
         raise HTTPException(status_code=502, detail=f"Lookup failed: {exc}") from None
 
+    # Store under the connector's own key (``opencti`` / ``misp``) so a case can
+    # carry independent verdicts from each platform.
+    enrichment_key = str(enrichment.get("connector") or connector.kind)
     is_malicious = bool(enrichment.get("is_malicious"))
     updated = await get_observable_store().set_enrichment(
         case_id=case_id,
         observable_id=observable_id,
-        key="opencti",
+        key=enrichment_key,
         data=enrichment,
         mark_ioc=is_malicious,
     )

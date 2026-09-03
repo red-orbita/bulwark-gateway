@@ -118,6 +118,18 @@ def _opencti_config():
     )
 
 
+def _misp_config():
+    from admin.services.integrations.registry import IntegrationConfig
+
+    return IntegrationConfig(
+        id="mp1",
+        name="Prod MISP",
+        type="misp",
+        base_url="http://misp.test",
+        api_key="secret-key",
+    )
+
+
 _CASE = {
     "case_id": "case_abc",
     "title": "Suspicious exfiltration",
@@ -459,6 +471,40 @@ async def test_registry_health_probes_opencti_via_lookup_connector(registry, htt
     health = await registry.health("oc1", force=True)
     assert health.ok is True
     assert "6.2.0" in health.detail
+
+
+def test_registry_supports_misp_type():
+    from admin.services.integrations.registry import INTEGRATION_TYPES
+
+    assert "misp" in INTEGRATION_TYPES
+
+
+def test_registry_builds_connectors_for_misp(registry):
+    from admin.services.integrations.misp import MispConnector
+
+    # MISP is both a push target and a lookup target (not an enrichment/Cortex one).
+    assert isinstance(registry.build_connector(_misp_config()), MispConnector)
+    assert isinstance(registry.build_lookup_connector(_misp_config()), MispConnector)
+    assert registry.build_enrichment_connector(_misp_config()) is None
+
+
+def test_registry_misp_connector_none_when_incomplete(registry):
+    from admin.services.integrations.registry import IntegrationConfig
+
+    incomplete = IntegrationConfig(id="x", name="x", type="misp", base_url="", api_key="")
+    assert registry.build_connector(incomplete) is None
+    assert registry.build_lookup_connector(incomplete) is None
+
+
+async def test_registry_health_probes_misp_via_push_connector(registry, httpx_mock):
+    registry.add(_misp_config())
+    httpx_mock.add_response(
+        method="GET", url="http://misp.test/servers/getVersion",
+        json={"version": "2.4.190"},
+    )
+    health = await registry.health("mp1", force=True)
+    assert health.ok is True
+    assert "2.4.190" in health.detail
 
 
 # ─── TheHive connector ───────────────────────────────────────────────────────
