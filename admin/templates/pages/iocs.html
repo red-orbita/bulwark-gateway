@@ -203,10 +203,16 @@
                 <tbody>
                     <template x-for="feed in feeds" :key="feed.id">
                         <tr>
-                            <td class="font-medium text-cyan-400 text-xs" x-text="feed.name"></td>
+                            <td class="font-medium text-cyan-400 text-xs">
+                                <span x-text="feed.name"></span>
+                                <span x-show="feed.managed_by" class="sg-badge sg-badge-neutral ml-1.5 align-middle" title="Provisioned and managed by an integration connector — edit it under Integrations.">
+                                    <i data-lucide="link" class="w-3 h-3 mr-0.5 inline-block align-middle"></i>via Integration
+                                </span>
+                            </td>
                             <td><span class="sg-badge sg-badge-neutral" x-text="feed.feed_type"></span></td>
                             <td>
-                                <button @click="toggleFeed(feed)" class="sg-badge" :class="feed.enabled ? 'sg-badge-success' : 'sg-badge-danger'" x-text="feed.enabled ? 'Enabled' : 'Disabled'"></button>
+                                <button x-show="!feed.managed_by" @click="toggleFeed(feed)" class="sg-badge" :class="feed.enabled ? 'sg-badge-success' : 'sg-badge-danger'" x-text="feed.enabled ? 'Enabled' : 'Disabled'"></button>
+                                <span x-show="feed.managed_by" class="sg-badge" :class="feed.enabled ? 'sg-badge-success' : 'sg-badge-danger'" x-text="feed.enabled ? 'Enabled' : 'Disabled'"></span>
                             </td>
                             <td class="text-gray-400 text-xs" x-text="feed.interval_minutes >= 60 ? Math.round(feed.interval_minutes/60) + 'h' : feed.interval_minutes + 'min'"></td>
                             <td class="text-xs" :class="feed.last_error ? 'text-red-400' : 'text-gray-400'" x-text="feed.last_run ? new Date(feed.last_run).toLocaleString() : 'Never'"></td>
@@ -219,12 +225,15 @@
                                     <button @click="triggerFeed(feed)" class="sg-btn sg-btn-ghost sg-btn-sm" title="Run now">
                                         <i data-lucide="play" class="w-3.5 h-3.5"></i>
                                     </button>
-                                    <button @click="editFeed(feed)" aria-label="Edit feed" title="Edit" class="sg-btn sg-btn-secondary sg-btn-sm">
+                                    <button x-show="!feed.managed_by" @click="editFeed(feed)" aria-label="Edit feed" title="Edit" class="sg-btn sg-btn-secondary sg-btn-sm">
                                         <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                                     </button>
-                                    <button @click="deleteFeed(feed)" aria-label="Delete feed" title="Delete" class="sg-btn sg-btn-danger sg-btn-sm">
+                                    <button x-show="!feed.managed_by" @click="deleteFeed(feed)" aria-label="Delete feed" title="Delete" class="sg-btn sg-btn-danger sg-btn-sm">
                                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                     </button>
+                                    <span x-show="feed.managed_by" class="sg-btn sg-btn-ghost sg-btn-sm cursor-not-allowed opacity-60" title="Managed by an integration — edit under Integrations.">
+                                        <i data-lucide="lock" class="w-3.5 h-3.5"></i>
+                                    </span>
                                 </div>
                             </td>
                         </tr>
