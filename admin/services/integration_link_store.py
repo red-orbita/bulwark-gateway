@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 # explicit — Phase 1 only pushes cases.
 LINK_TYPES = ("case",)
 
+# Outcome of the last inbound reconcile (Phase 4, migration v13). ``synced`` — the
+# local case reflects the last remote read; ``pending`` — a remote read is queued
+# but not yet folded in; ``conflict`` — the remote state cannot be safely applied
+# (e.g. the remote reopened a locally-closed case) and needs analyst attention.
+# NULL (absent from this tuple) means no inbound sync has happened yet.
+RECONCILE_STATES = ("synced", "pending", "conflict")
+
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -40,6 +47,9 @@ def _row_to_link(row) -> dict:
         "remote_url": d.get("remote_url") or "",
         "last_synced_at": d.get("last_synced_at"),
         "etag": d.get("etag") or "",
+        "last_remote_update": d.get("last_remote_update") or "",
+        "last_reconciled_at": d.get("last_reconciled_at"),
+        "reconcile_state": d.get("reconcile_state") or "",
     }
 
 
@@ -109,6 +119,55 @@ class IntegrationLinkStore:
         if stored is None:  # pragma: no cover — write-then-read is authoritative
             raise RuntimeError("integration link upsert failed")
         return stored
+
+    async def set_reconcile(
+        self,
+        *,
+        connector: str,
+        local_type: str,
+        local_id: str,
+        reconcile_state: str,
+        last_remote_update: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Record the outcome of an inbound reconcile on an existing link.
+
+        Stamps ``last_reconciled_at`` to now and sets ``reconcile_state`` (one of
+        :data:`RECONCILE_STATES`). ``last_remote_update`` — the remote-reported
+        "last modified" marker from the read that drove this reconcile — is
+        persisted only when provided (a ``None`` leaves the stored value intact so
+        a conflict/pending update does not erase the last good marker).
+
+        Returns the updated link, or ``None`` if no link exists for the triple
+        (reconcile only ever runs against an already-pushed object, so a missing
+        link is a no-op rather than an error).
+        """
+        if not connector or not local_type or not local_id:
+            return None
+        if reconcile_state not in RECONCILE_STATES:
+            raise ValueError(f"invalid reconcile_state: {reconcile_state}")
+        existing = await self.get(connector, local_type, local_id)
+        if existing is None:
+            return None
+
+        now = _iso_now()
+        if last_remote_update is not None:
+            await self._db().execute(
+                "UPDATE integration_link SET reconcile_state = ?, "
+                "last_reconciled_at = ?, last_remote_update = ? "
+                "WHERE connector = ? AND local_type = ? AND local_id = ?",
+                [
+                    reconcile_state, now, last_remote_update,
+                    connector, local_type, local_id,
+                ],
+            )
+        else:
+            await self._db().execute(
+                "UPDATE integration_link SET reconcile_state = ?, "
+                "last_reconciled_at = ? "
+                "WHERE connector = ? AND local_type = ? AND local_id = ?",
+                [reconcile_state, now, connector, local_type, local_id],
+            )
+        return await self.get(connector, local_type, local_id)
 
     async def delete(self, connector: str, local_type: str, local_id: str) -> bool:
         """Remove a link. Returns ``True`` if a row was deleted."""

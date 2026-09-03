@@ -790,6 +790,38 @@ MIGRATIONS: list[Migration] = [
             ALTER TABLE service_account ADD COLUMN IF NOT EXISTS rate_limit_rpm INTEGER;
         """,
     ),
+    # Version 13: Integrations Phase 4 — inbound reconcile bookkeeping on
+    # ``integration_link``. Phase 1 (v9) made the link table a one-way idempotency
+    # map for *outbound* pushes (does a local object already exist remotely?).
+    # Phase 4 turns it bidirectional: after a push, Bulwark periodically reads the
+    # remote case's workflow state back (``sync_status`` → ``RemoteState``) and
+    # reconciles the non-authoritative fields (status/assignee/severity/notes) onto
+    # the local case. These three columns record that inbound leg without a new
+    # table (the link row already is the 1:1 local↔remote pivot):
+    #   * ``last_remote_update`` — the remote-reported "last modified" marker from
+    #     the most recent successful read (opaque ISO string; used to skip
+    #     no-op reconciles and to show "remote changed at" in the UI).
+    #   * ``last_reconciled_at`` — when Bulwark last folded a remote read into the
+    #     local case (provenance / staleness display).
+    #   * ``reconcile_state`` — the outcome of that last reconcile: one of
+    #     ``synced`` / ``pending`` / ``conflict`` (e.g. remote reopened a
+    #     local-closed case — surfaced as a banner, never auto-applied). NULL until
+    #     the first inbound sync. All three are additive, nullable, and dialect-only
+    #     differ in nothing (plain TEXT on both backends).
+    Migration(
+        version=13,
+        description="Integrations Phase 4: inbound reconcile columns on integration_link",
+        sqlite_sql="""
+            ALTER TABLE integration_link ADD COLUMN last_remote_update TEXT;
+            ALTER TABLE integration_link ADD COLUMN last_reconciled_at TEXT;
+            ALTER TABLE integration_link ADD COLUMN reconcile_state TEXT;
+        """,
+        postgresql_sql="""
+            ALTER TABLE integration_link ADD COLUMN IF NOT EXISTS last_remote_update TEXT;
+            ALTER TABLE integration_link ADD COLUMN IF NOT EXISTS last_reconciled_at TEXT;
+            ALTER TABLE integration_link ADD COLUMN IF NOT EXISTS reconcile_state TEXT;
+        """,
+    ),
 ]
 
 

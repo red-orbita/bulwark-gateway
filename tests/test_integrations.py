@@ -177,6 +177,89 @@ async def test_link_store_rejects_unknown_local_type(link_store):
         )
 
 
+async def test_link_store_reconcile_columns_default_empty(link_store):
+    """A freshly pushed link has no inbound-reconcile bookkeeping yet (v13)."""
+    link = await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_r", remote_id="~1"
+    )
+    assert link["reconcile_state"] == ""
+    assert link["last_reconciled_at"] is None
+    assert link["last_remote_update"] == ""
+
+
+async def test_link_store_set_reconcile_records_state(link_store):
+    await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_r", remote_id="~1"
+    )
+    updated = await link_store.set_reconcile(
+        connector="thehive",
+        local_type="case",
+        local_id="case_r",
+        reconcile_state="synced",
+        last_remote_update="2024-01-02T03:04:05+00:00",
+    )
+    assert updated is not None
+    assert updated["reconcile_state"] == "synced"
+    assert updated["last_remote_update"] == "2024-01-02T03:04:05+00:00"
+    assert updated["last_reconciled_at"] is not None
+    # The outbound provenance (remote_id) is untouched by an inbound reconcile.
+    assert updated["remote_id"] == "~1"
+
+
+async def test_link_store_set_reconcile_preserves_marker_when_omitted(link_store):
+    """A conflict/pending update without a fresh marker keeps the last good one."""
+    await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_r", remote_id="~1"
+    )
+    await link_store.set_reconcile(
+        connector="thehive", local_type="case", local_id="case_r",
+        reconcile_state="synced", last_remote_update="2024-01-02T03:04:05+00:00",
+    )
+    updated = await link_store.set_reconcile(
+        connector="thehive", local_type="case", local_id="case_r",
+        reconcile_state="conflict",
+    )
+    assert updated is not None
+    assert updated["reconcile_state"] == "conflict"
+    assert updated["last_remote_update"] == "2024-01-02T03:04:05+00:00"
+
+
+async def test_link_store_set_reconcile_missing_link_is_none(link_store):
+    assert await link_store.set_reconcile(
+        connector="thehive", local_type="case", local_id="nope",
+        reconcile_state="synced",
+    ) is None
+
+
+async def test_link_store_set_reconcile_rejects_bad_state(link_store):
+    await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_r", remote_id="~1"
+    )
+    with pytest.raises(ValueError):
+        await link_store.set_reconcile(
+            connector="thehive", local_type="case", local_id="case_r",
+            reconcile_state="bogus",
+        )
+
+
+async def test_link_store_upsert_preserves_reconcile_columns(link_store):
+    """A re-push (outbound) must not clobber inbound reconcile bookkeeping."""
+    await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_r", remote_id="~1"
+    )
+    await link_store.set_reconcile(
+        connector="thehive", local_type="case", local_id="case_r",
+        reconcile_state="synced", last_remote_update="2024-01-02T03:04:05+00:00",
+    )
+    re_pushed = await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_r",
+        remote_id="~1", etag="v2",
+    )
+    assert re_pushed["etag"] == "v2"
+    assert re_pushed["reconcile_state"] == "synced"
+    assert re_pushed["last_remote_update"] == "2024-01-02T03:04:05+00:00"
+
+
 # ─── IntegrationRegistry ─────────────────────────────────────────────────────
 
 
