@@ -96,6 +96,10 @@ class FeedConfig(BaseModel):
     min_confidence: float = 0.7
     ioc_types: list[str] = Field(default_factory=lambda: ["domain", "ip", "url", "hash_sha256"])
     created_at: Optional[datetime] = None
+    # When set, this feed is owned by an integration connector of the same id
+    # tail (``int-<connector_id>``). Managed feeds are read-only in the IOC UI —
+    # their lifecycle is driven by the integrations layer.
+    managed_by: str = ""
 
 
 class FeedCreate(BaseModel):

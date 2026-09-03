@@ -74,6 +74,12 @@ class IntegrationConfig:
     # DFIR-IRIS-specific
     customer_id: int = 1
     source: str = "config"  # config | env
+    # Managed IOC feed (opencti | misp only): when on, this connector's
+    # credential is reused to auto-provision an inbound IOC feed in the IOC
+    # store (id ``int-<id>``), eliminating a separate feed configuration.
+    pull_feed: bool = False
+    pull_interval_minutes: int = 1440
+    pull_min_confidence: float = 0.7
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +94,9 @@ class IntegrationConfig:
             "organisation": self.organisation,
             "customer_id": self.customer_id,
             "source": self.source,
+            "pull_feed": self.pull_feed,
+            "pull_interval_minutes": self.pull_interval_minutes,
+            "pull_min_confidence": self.pull_min_confidence,
         }
 
     @classmethod
@@ -104,6 +113,13 @@ class IntegrationConfig:
             organisation=str(d.get("organisation") or ""),
             customer_id=int(d.get("customer_id") or 1),
             source=str(d.get("source") or "config"),
+            pull_feed=bool(d.get("pull_feed", False)),
+            pull_interval_minutes=int(d.get("pull_interval_minutes") or 1440),
+            pull_min_confidence=float(
+                d.get("pull_min_confidence")
+                if d.get("pull_min_confidence") is not None
+                else 0.7
+            ),
         )
 
 

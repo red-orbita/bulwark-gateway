@@ -33,6 +33,16 @@ from admin.models.iocs import (
 
 logger = logging.getLogger(__name__)
 
+
+class ManagedFeedError(Exception):
+    """Raised when a caller tries to mutate an integration-managed feed.
+
+    Managed feeds (``managed_by`` set) are provisioned and owned by an
+    integration connector; their lifecycle must be driven through the
+    integrations layer, so the IOC feed CRUD surface refuses to mutate them.
+    """
+
+
 _DEFAULT_IOC_PATH = Path(os.environ.get("BULWARK_IOC_PATH", "data/iocs.json"))
 _LEGACY_IOC_PATH = Path("config/iocs.json")
 FEED_STATE_PATH = Path("data/feed_state.json")
@@ -547,6 +557,7 @@ class IOCStore:
                 min_confidence=state.get("min_confidence", 0.7),
                 ioc_types=state.get("ioc_types", ["domain", "ip", "url", "hash_sha256"]),
                 created_at=datetime.fromisoformat(state["created_at"]) if state.get("created_at") else None,
+                managed_by=state.get("managed_by", ""),
             ))
         return sorted(feeds, key=lambda f: f.name)
 
@@ -588,6 +599,8 @@ class IOCStore:
         self._ensure_default_feeds()
         if feed_id not in self._feed_state.get("feeds", {}):
             return None
+        if self._feed_state["feeds"][feed_id].get("managed_by"):
+            raise ManagedFeedError(f"feed '{feed_id}' is managed by an integration")
         with self._lock:
             state = self._feed_state["feeds"][feed_id]
             if req.name is not None:
@@ -613,6 +626,8 @@ class IOCStore:
         self._ensure_default_feeds()
         if feed_id not in self._feed_state.get("feeds", {}):
             return False
+        if self._feed_state["feeds"][feed_id].get("managed_by"):
+            raise ManagedFeedError(f"feed '{feed_id}' is managed by an integration")
         with self._lock:
             del self._feed_state["feeds"][feed_id]
             self._save_feed_state()
@@ -622,11 +637,86 @@ class IOCStore:
         self._ensure_default_feeds()
         if feed_id not in self._feed_state.get("feeds", {}):
             return None
+        if self._feed_state["feeds"][feed_id].get("managed_by"):
+            raise ManagedFeedError(f"feed '{feed_id}' is managed by an integration")
         with self._lock:
             state = self._feed_state["feeds"][feed_id]
             state["enabled"] = not state.get("enabled", True)
             self._save_feed_state()
         return self.get_feed(feed_id)
+
+    # --- Integration-managed feeds ---
+
+    @staticmethod
+    def managed_feed_id(connector_id: str) -> str:
+        """Derive the stable feed id for an integration-managed feed."""
+        return f"int-{connector_id}"
+
+    def upsert_managed_feed(
+        self,
+        *,
+        connector_id: str,
+        feed_type: FeedType,
+        name: str,
+        url: str,
+        api_key: str = "",
+        enabled: bool = True,
+        interval_minutes: int = 1440,
+        min_confidence: float = 0.7,
+    ) -> FeedConfig:
+        """Create or update the IOC feed owned by an integration connector.
+
+        Idempotent by the derived id ``int-<connector_id>`` and flagged
+        ``managed_by=<connector_id>`` so the IOC UI renders it read-only. Runtime
+        state (last_run/last_count/last_error/created_at) and an operator-set
+        ``ioc_types`` selection are preserved across upserts. An empty ``api_key``
+        leaves any previously stored key intact (the connector may resolve its
+        credential from the environment instead).
+        """
+        self._ensure_default_feeds()
+        feed_id = self.managed_feed_id(connector_id)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            feeds = self._feed_state.setdefault("feeds", {})
+            existing = feeds.get(feed_id, {})
+            feeds[feed_id] = {
+                "id": feed_id,
+                "name": name,
+                "feed_type": feed_type.value,
+                "url": url,
+                "auth_header": existing.get("auth_header", ""),
+                "api_key": api_key or existing.get("api_key", ""),
+                "enabled": enabled,
+                "interval_minutes": interval_minutes,
+                "min_confidence": min_confidence,
+                "ioc_types": existing.get(
+                    "ioc_types", ["domain", "ip", "url", "hash_sha256"]
+                ),
+                "last_run": existing.get("last_run"),
+                "last_count": existing.get("last_count", 0),
+                "last_error": existing.get("last_error", ""),
+                "created_at": existing.get("created_at", now),
+                "managed_by": connector_id,
+            }
+            self._save_feed_state()
+        return self.get_feed(feed_id)  # type: ignore[return-value]
+
+    def remove_managed_feed(self, connector_id: str) -> bool:
+        """Remove the feed owned by ``connector_id`` (idempotent, guarded).
+
+        Only deletes a feed actually flagged ``managed_by=<connector_id>`` — it
+        never removes a hand-made feed that happens to collide on id.
+        """
+        self._ensure_default_feeds()
+        feed_id = self.managed_feed_id(connector_id)
+        with self._lock:
+            feeds = self._feed_state.get("feeds", {})
+            state = feeds.get(feed_id)
+            if not state or state.get("managed_by") != connector_id:
+                return False
+            del feeds[feed_id]
+            self._save_feed_state()
+        return True
 
     def trigger_feed_update(self, feed_id: Optional[str] = None) -> dict:
         """Fetch IOCs from enabled feeds (or a specific one) and persist."""

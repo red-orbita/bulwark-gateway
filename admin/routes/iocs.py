@@ -19,7 +19,7 @@ from admin.models.iocs import (
 )
 from admin.services.audit_logger import AuditLogger, get_audit_logger
 from admin.services.auth_service import require_permission
-from admin.services.ioc_store import IOCStore, get_ioc_store
+from admin.services.ioc_store import IOCStore, ManagedFeedError, get_ioc_store
 
 router = APIRouter(prefix="/admin/iocs", tags=["iocs"])
 
@@ -206,7 +206,10 @@ async def update_feed(
     user: TokenPayload = Depends(require_permission("iocs:write")),
 ):
     """Update feed configuration."""
-    result = store.update_feed(feed_id, req)
+    try:
+        result = store.update_feed(feed_id, req)
+    except ManagedFeedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not result:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     await audit.log(
@@ -224,7 +227,11 @@ async def delete_feed(
     user: TokenPayload = Depends(require_permission("iocs:write")),
 ):
     """Delete a feed source."""
-    if not store.delete_feed(feed_id):
+    try:
+        deleted = store.delete_feed(feed_id)
+    except ManagedFeedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     await audit.log(
         actor=user.sub, action="feed_delete", resource_type="feed",
@@ -241,7 +248,10 @@ async def toggle_feed(
     user: TokenPayload = Depends(require_permission("iocs:write")),
 ):
     """Toggle feed enabled/disabled."""
-    result = store.toggle_feed(feed_id)
+    try:
+        result = store.toggle_feed(feed_id)
+    except ManagedFeedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not result:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     await audit.log(
