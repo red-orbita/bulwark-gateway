@@ -1214,7 +1214,7 @@ async def test_reconcile_poller_poll_once_sweeps_enabled(reconcile_env, monkeypa
 
 
 @pytest.fixture
-def wired_routes(engine, registry, monkeypatch):
+def wired_routes(engine, registry, monkeypatch, tmp_path):
     """Wire the route-layer singletons to the throwaway engine + registry."""
     from admin.routes import integrations as routes
     from admin.services import (
@@ -1229,6 +1229,7 @@ def wired_routes(engine, registry, monkeypatch):
     from admin.services import (
         investigation_task_store as task_mod,
     )
+    from admin.services.ioc_store import IOCStore
 
     monkeypatch.setattr(link_mod, "get_database", lambda: engine)
     monkeypatch.setattr(case_mod, "get_database", lambda: engine)
@@ -1237,6 +1238,10 @@ def wired_routes(engine, registry, monkeypatch):
     monkeypatch.setattr(link_mod, "_store", link_mod.IntegrationLinkStore())
     monkeypatch.setattr(case_mod, "_store", None, raising=False)
     monkeypatch.setattr(routes, "get_integration_registry", lambda: registry)
+    _ioc_store = IOCStore(
+        ioc_path=tmp_path / "iocs.json", feed_state_path=tmp_path / "feed_state.json"
+    )
+    monkeypatch.setattr(routes, "get_ioc_store", lambda: _ioc_store)
     return routes
 
 
@@ -1276,6 +1281,108 @@ async def test_route_create_rejects_bad_type(wired_routes):
             user=_admin(),
         )
     assert exc.value.status_code == 400
+
+
+# ─── managed IOC feed sync (opencti/misp connectors) ─────────────────────────
+
+
+async def test_route_create_opencti_with_pull_provisions_managed_feed(wired_routes):
+    routes = wired_routes
+    await routes.create_integration(
+        data={
+            "name": "Prod OpenCTI",
+            "type": "opencti",
+            "base_url": "http://opencti.test",
+            "api_key": "tok",
+            "pull_feed": True,
+            "pull_interval_minutes": 60,
+            "pull_min_confidence": 0.8,
+        },
+        user=_admin(),
+    )
+    cid = routes.get_integration_registry().configs[0].id
+    feed = routes.get_ioc_store().get_feed(f"int-{cid}")
+    assert feed is not None
+    assert feed.managed_by == cid
+    assert feed.feed_type.value == "opencti"
+    assert feed.url == "http://opencti.test"
+    assert feed.api_key_configured is True
+    assert feed.interval_minutes == 60
+    assert feed.min_confidence == 0.8
+
+
+async def test_route_create_opencti_without_pull_provisions_nothing(wired_routes):
+    routes = wired_routes
+    await routes.create_integration(
+        data={"name": "OpenCTI", "type": "opencti", "base_url": "http://opencti.test", "api_key": "tok"},
+        user=_admin(),
+    )
+    cid = routes.get_integration_registry().configs[0].id
+    assert routes.get_ioc_store().get_feed(f"int-{cid}") is None
+
+
+async def test_route_create_thehive_pull_ignored(wired_routes):
+    # A non-feed-capable connector never provisions a feed, even with pull_feed on.
+    routes = wired_routes
+    await routes.create_integration(
+        data={"name": "TH", "type": "thehive", "base_url": "http://thehive.test",
+              "api_key": "k", "pull_feed": True},
+        user=_admin(),
+    )
+    cid = routes.get_integration_registry().configs[0].id
+    assert routes.get_ioc_store().get_feed(f"int-{cid}") is None
+
+
+async def test_route_update_toggles_pull_feed_on_and_off(wired_routes):
+    routes = wired_routes
+    await routes.create_integration(
+        data={"name": "MISP", "type": "misp", "base_url": "http://misp.test", "api_key": "k"},
+        user=_admin(),
+    )
+    cid = routes.get_integration_registry().configs[0].id
+    assert routes.get_ioc_store().get_feed(f"int-{cid}") is None
+
+    # Turn pull on → feed appears.
+    await routes.update_integration(cid, data={"pull_feed": True}, user=_admin())
+    assert routes.get_ioc_store().get_feed(f"int-{cid}") is not None
+
+    # Turn pull off → feed removed.
+    await routes.update_integration(cid, data={"pull_feed": False}, user=_admin())
+    assert routes.get_ioc_store().get_feed(f"int-{cid}") is None
+
+
+async def test_route_toggle_connector_disables_managed_feed(wired_routes):
+    routes = wired_routes
+    await routes.create_integration(
+        data={"name": "OpenCTI", "type": "opencti", "base_url": "http://opencti.test",
+              "api_key": "tok", "pull_feed": True},
+        user=_admin(),
+    )
+    cid = routes.get_integration_registry().configs[0].id
+    assert routes.get_ioc_store().get_feed(f"int-{cid}").enabled is True
+
+    # Disabling the connector keeps the feed but disables it (state preserved).
+    await routes.toggle_integration(cid, user=_admin())
+    feed = routes.get_ioc_store().get_feed(f"int-{cid}")
+    assert feed is not None and feed.enabled is False
+
+    # Re-enabling the connector re-enables the feed.
+    await routes.toggle_integration(cid, user=_admin())
+    assert routes.get_ioc_store().get_feed(f"int-{cid}").enabled is True
+
+
+async def test_route_delete_connector_tears_down_managed_feed(wired_routes):
+    routes = wired_routes
+    await routes.create_integration(
+        data={"name": "OpenCTI", "type": "opencti", "base_url": "http://opencti.test",
+              "api_key": "tok", "pull_feed": True},
+        user=_admin(),
+    )
+    cid = routes.get_integration_registry().configs[0].id
+    assert routes.get_ioc_store().get_feed(f"int-{cid}") is not None
+
+    await routes.delete_integration(cid, user=_admin())
+    assert routes.get_ioc_store().get_feed(f"int-{cid}") is None
 
 
 async def test_route_push_create_then_idempotent_update(wired_routes, httpx_mock, monkeypatch):

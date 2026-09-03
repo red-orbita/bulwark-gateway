@@ -15,11 +15,13 @@ Secrets are masked in every response. All routes are gated by the dedicated
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from ..models.auth import ROLE_PERMISSIONS, TokenPayload
+from ..models.iocs import FeedType
 from ..services.audit_logger import get_audit_logger
 from ..services.auth_service import require_permission, require_permission_automation
 from ..services.integration_link_store import get_integration_link_store
@@ -39,8 +41,13 @@ from ..services.integrations.registry import (
 from ..services.investigation_case_store import get_case_store
 from ..services.investigation_observable_store import get_observable_store
 from ..services.investigation_task_store import get_task_store
+from ..services.ioc_store import get_ioc_store
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Connector types that can also drive an inbound IOC feed (managed feed).
+_FEED_CAPABLE_TYPES = {"opencti", "misp"}
 
 
 def _can_write(user: TokenPayload) -> bool:
@@ -54,6 +61,37 @@ def _mask(config: dict) -> dict:
     if masked.get("api_key"):
         masked["api_key"] = "***"
     return masked
+
+
+def _sync_managed_feed(config: IntegrationConfig) -> None:
+    """Reconcile a connector's managed IOC feed with its config. Fail-open.
+
+    When an ``opencti``/``misp`` connector has ``pull_feed`` on, its credential
+    is reused to (idempotently) provision an inbound IOC feed ``int-<id>`` that
+    tracks the connector's enabled state; otherwise any previously provisioned
+    managed feed is removed. Any storage error is logged and swallowed so feed
+    bookkeeping never breaks connector management.
+    """
+    try:
+        store = get_ioc_store()
+        if config.type in _FEED_CAPABLE_TYPES and config.pull_feed:
+            store.upsert_managed_feed(
+                connector_id=config.id,
+                feed_type=FeedType(config.type),
+                name=f"{config.name} (integration)",
+                url=config.base_url,
+                api_key=config.api_key,
+                enabled=config.enabled,
+                interval_minutes=config.pull_interval_minutes,
+                min_confidence=config.pull_min_confidence,
+            )
+        else:
+            store.remove_managed_feed(config.id)
+    except Exception as exc:  # noqa: BLE001 — fail-open bookkeeping
+        logger.warning(
+            "managed_feed_sync_failed",
+            extra={"integration_id": config.id, "error": str(exc)},
+        )
 
 
 async def _get_case_scoped(user: TokenPayload, case_id: str) -> dict:
@@ -134,6 +172,7 @@ async def create_integration(
     data["id"] = str(uuid.uuid4())[:8]
     config = IntegrationConfig.from_dict(data)
     registry.add(config)
+    _sync_managed_feed(config)
 
     await audit.log(
         actor=user.sub,
@@ -159,6 +198,7 @@ async def update_integration(
     updated = registry.update(integration_id, data)
     if updated is None:
         raise HTTPException(status_code=404, detail="Integration not found")
+    _sync_managed_feed(updated)
 
     await audit.log(
         actor=user.sub,
@@ -182,6 +222,15 @@ async def delete_integration(
     if not registry.remove(integration_id):
         raise HTTPException(status_code=404, detail="Integration not found")
 
+    # Tear down any managed IOC feed this connector provisioned (fail-open).
+    try:
+        get_ioc_store().remove_managed_feed(integration_id)
+    except Exception as exc:  # noqa: BLE001 — fail-open bookkeeping
+        logger.warning(
+            "managed_feed_teardown_failed",
+            extra={"integration_id": integration_id, "error": str(exc)},
+        )
+
     await audit.log(
         actor=user.sub,
         action="integration_deleted",
@@ -197,9 +246,13 @@ async def toggle_integration(
     user: TokenPayload = Depends(require_permission("integrations:write")),
 ):
     """Enable/disable an integration."""
-    enabled = get_integration_registry().toggle(integration_id)
+    registry = get_integration_registry()
+    enabled = registry.toggle(integration_id)
     if enabled is None:
         raise HTTPException(status_code=404, detail="Integration not found")
+    config = registry.get(integration_id)
+    if config is not None:
+        _sync_managed_feed(config)
     return {
         "enabled": enabled,
         "message": f"Integration {'enabled' if enabled else 'disabled'}",
