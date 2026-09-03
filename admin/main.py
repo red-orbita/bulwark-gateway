@@ -146,7 +146,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.events_sync import get_events_sync
     events_sync = get_events_sync()
     await events_sync.start()
+    # Start the reconcile poller (Investigation Phase 4): the poll-fallback half of
+    # the two inbound-sync trigger paths. On a configurable interval it sweeps every
+    # enabled, sync-capable (TheHive / DFIR-IRIS) connector's active linked cases
+    # and folds any remote workflow change back into the local case. Fail-open: a
+    # dead remote or a sweep error is one skipped cycle, never a crash.
+    from .services.integrations.reconcile_poller import get_reconcile_poller
+    reconcile_poller = get_reconcile_poller()
+    await reconcile_poller.start()
     yield
+    await reconcile_poller.stop()
     await events_sync.stop()
     await scheduler.stop()
     await gdpr_service.close()
@@ -322,6 +331,14 @@ _CSRF_EXEMPT = {
     "/admin/health/sse",
 }
 
+# CSRF-exempt path *prefixes* (Phase 4). The inbound reconcile receiver
+# (``/admin/integrations/inbound/{integration_id}``) authenticates a remote/SOAR
+# callback with a per-request HMAC over the raw body — it uses no ambient cookie,
+# so it is structurally CSRF-immune and must be reachable without a CSRF token.
+# The path carries a dynamic id, so it is matched by prefix rather than by the
+# exact-match set above.
+_CSRF_EXEMPT_PREFIXES = ("/admin/integrations/inbound/",)
+
 
 def _is_service_account_request(request: Request) -> bool:
     """True when the request authenticates with a service-account key (Phase 3.2b).
@@ -343,7 +360,13 @@ def _is_service_account_request(request: Request) -> bool:
 async def csrf_protection(request: Request, call_next):
     """Validate CSRF token on state-changing requests."""
     if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-        if request.url.path not in _CSRF_EXEMPT and not _is_service_account_request(request):
+        path = request.url.path
+        exempt = (
+            path in _CSRF_EXEMPT
+            or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)
+            or _is_service_account_request(request)
+        )
+        if not exempt:
             csrf_cookie = request.cookies.get("_csrf_token")
             csrf_header = request.headers.get("x-csrf-token")
             if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):

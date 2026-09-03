@@ -1915,3 +1915,203 @@ async def test_case_state_deescalation_does_not_fire(engine, webhook_env, httpx_
     assert resp["case"]["severity"] == "low"
     # A lowered severity is not a lifecycle event: no delivery attempted.
     assert httpx_mock.get_requests() == []
+
+
+# ─── inbound reconcile routes (Phase 4.5: sync / inbound / resolve-conflict) ──
+
+
+def _inbound_request(integration_id: str, raw: bytes, signature: str | None):
+    """Build a minimal Starlette Request for the HMAC-only inbound endpoint."""
+    from starlette.requests import Request
+
+    headers = []
+    if signature is not None:
+        headers.append((b"x-bulwark-signature", signature.encode()))
+
+    async def _receive():
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": f"/admin/integrations/inbound/{integration_id}",
+        "headers": headers,
+        "query_string": b"",
+    }
+    return Request(scope, _receive)
+
+
+async def _make_thehive_integration(routes):
+    """Create a thehive integration via the route layer and return its id."""
+    await routes.create_integration(
+        data={
+            "name": "TheHive", "type": "thehive",
+            "base_url": "http://thehive.test", "api_key": "k",
+        },
+        user=_admin(),
+    )
+    return routes.get_integration_registry().configs[0].id
+
+
+async def test_route_sync_case_manual_reconcile(wired_routes, reconcile_env, monkeypatch):
+    routes = wired_routes
+    env = reconcile_env
+    case = await env["linked_case"](severity="medium")  # linked to remote "~1"
+    integration_id = await _make_thehive_integration(routes)
+
+    conn = _FakeSyncConn(_remote_state(status="in_progress", severity="high"))
+    monkeypatch.setattr(
+        routes.get_integration_registry(), "build_connector", lambda config: conn
+    )
+    monkeypatch.setattr(routes, "get_reconcile_engine", lambda: env["engine"])
+
+    out = await routes.sync_case(
+        case["case_id"], data={"integration_id": integration_id}, user=_admin()
+    )
+    assert out["ok"] is True
+    assert out["reconcile_state"] == "synced"
+    stored = await env["case_store"].get(case["case_id"])
+    assert stored["status"] == "investigating"
+    assert stored["severity"] == "high"
+
+
+async def test_route_sync_case_requires_integration_id(wired_routes):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await wired_routes.sync_case("some-case", data={}, user=_admin())
+    assert exc.value.status_code == 400
+
+
+async def test_route_inbound_valid_signature_reconciles(wired_routes, reconcile_env, monkeypatch):
+    from admin.services.integrations.inbound_webhook import InboundDebouncer
+
+    routes = wired_routes
+    env = reconcile_env
+    case = await env["linked_case"](severity="medium")  # linked to remote "~1"
+    integration_id = await _make_thehive_integration(routes)
+
+    secret = "inbound-shh"
+    monkeypatch.setenv(
+        f"BULWARK_INTEGRATION_{integration_id.upper()}_INBOUND_SECRET", secret
+    )
+    conn = _FakeSyncConn(_remote_state(status="in_progress", severity="high"))
+    monkeypatch.setattr(
+        routes.get_integration_registry(), "build_connector", lambda config: conn
+    )
+    monkeypatch.setattr(routes, "get_reconcile_engine", lambda: env["engine"])
+    monkeypatch.setattr(routes, "get_inbound_debouncer", lambda: InboundDebouncer(0))
+
+    raw = b'{"objectId":"~1"}'
+    req = _inbound_request(integration_id, raw, _sign(secret, raw))
+    out = await routes.inbound_reconcile(integration_id, req)
+    assert out["ok"] is True
+    assert out["reconciled"] == 1
+    assert out["remote_id"] == "~1"
+    stored = await env["case_store"].get(case["case_id"])
+    assert stored["status"] == "investigating"
+
+
+async def test_route_inbound_bad_signature_is_401(wired_routes, monkeypatch):
+    from fastapi import HTTPException
+
+    routes = wired_routes
+    integration_id = await _make_thehive_integration(routes)
+    monkeypatch.setenv(
+        f"BULWARK_INTEGRATION_{integration_id.upper()}_INBOUND_SECRET", "right"
+    )
+
+    raw = b'{"objectId":"~1"}'
+    # Signed with the wrong key ⇒ fail-CLOSED at the auth boundary.
+    req = _inbound_request(integration_id, raw, _sign("wrong", raw))
+    with pytest.raises(HTTPException) as exc:
+        await routes.inbound_reconcile(integration_id, req)
+    assert exc.value.status_code == 401
+
+
+async def test_route_inbound_no_remote_id_is_accepted_noop(wired_routes, monkeypatch):
+    from admin.services.integrations.inbound_webhook import InboundDebouncer
+
+    routes = wired_routes
+    integration_id = await _make_thehive_integration(routes)
+    secret = "shh"
+    monkeypatch.setenv(
+        f"BULWARK_INTEGRATION_{integration_id.upper()}_INBOUND_SECRET", secret
+    )
+    monkeypatch.setattr(routes, "get_inbound_debouncer", lambda: InboundDebouncer(0))
+
+    # Verified signature, but no resolvable remote id ⇒ fail-open no-op (not a 5xx).
+    raw = b'{"unrelated":1}'
+    req = _inbound_request(integration_id, raw, _sign(secret, raw))
+    out = await routes.inbound_reconcile(integration_id, req)
+    assert out["ok"] is True
+    assert out["reconciled"] == 0
+
+
+async def test_route_resolve_conflict_accept_remote_reopens(wired_routes, reconcile_env, monkeypatch):
+    routes = wired_routes
+    env = reconcile_env
+    case = await env["linked_case"]()  # linked to remote "~1"
+    # Close it locally so a remote "open" would be a conflict under the guard.
+    await env["case_store"].set_state(
+        case_id=case["case_id"], actor="admin", status="closed"
+    )
+    integration_id = await _make_thehive_integration(routes)
+
+    conn = _FakeSyncConn(_remote_state(status="open", raw_status="New"))
+    monkeypatch.setattr(
+        routes.get_integration_registry(), "build_connector", lambda config: conn
+    )
+    monkeypatch.setattr(routes, "get_reconcile_engine", lambda: env["engine"])
+
+    out = await routes.resolve_conflict(
+        case["case_id"],
+        data={"integration_id": integration_id, "resolution": "accept_remote"},
+        user=_admin(),
+    )
+    assert out["resolution"] == "accept_remote"
+    assert out["reconcile_state"] == "synced"
+    stored = await env["case_store"].get(case["case_id"])
+    # Operator explicitly accepted the remote ⇒ the case reopens.
+    assert stored["status"] == "open"
+
+
+async def test_route_resolve_conflict_keep_local_marks_synced(wired_routes, reconcile_env, monkeypatch):
+    routes = wired_routes
+    env = reconcile_env
+    case = await env["linked_case"]()  # linked to remote "~1"
+    await env["case_store"].set_state(
+        case_id=case["case_id"], actor="admin", status="closed"
+    )
+    integration_id = await _make_thehive_integration(routes)
+
+    # keep_local never contacts the remote (no connector needed).
+    out = await routes.resolve_conflict(
+        case["case_id"],
+        data={"integration_id": integration_id, "resolution": "keep_local"},
+        user=_admin(),
+    )
+    assert out["resolution"] == "keep_local"
+    assert out["reconcile_state"] == "synced"
+    stored = await env["case_store"].get(case["case_id"])
+    # The local decision stands: the workflow is untouched.
+    assert stored["status"] == "closed"
+    link = await env["link_store"].get("thehive", "case", case["case_id"])
+    assert link["reconcile_state"] == "synced"
+    # The operator decision is recorded as a [remote]-tagged note.
+    texts = [n.get("text", "") for n in stored.get("notes", [])]
+    assert any("keep local" in t for t in texts)
+
+
+async def test_route_resolve_conflict_rejects_bad_resolution(wired_routes):
+    from fastapi import HTTPException
+
+    routes = wired_routes
+    integration_id = await _make_thehive_integration(routes)
+    with pytest.raises(HTTPException) as exc:
+        await routes.resolve_conflict(
+            "some-case",
+            data={"integration_id": integration_id, "resolution": "nope"},
+            user=_admin(),
+        )
+    assert exc.value.status_code == 400

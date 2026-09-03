@@ -14,15 +14,23 @@ Secrets are masked in every response. All routes are gated by the dedicated
 
 from __future__ import annotations
 
+import json
 import uuid
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from ..models.auth import ROLE_PERMISSIONS, TokenPayload
 from ..services.audit_logger import get_audit_logger
-from ..services.auth_service import require_permission
+from ..services.auth_service import require_permission, require_permission_automation
 from ..services.integration_link_store import get_integration_link_store
 from ..services.integrations.base import ConnectorError, TlpGateError
+from ..services.integrations.inbound_webhook import (
+    SIGNATURE_HEADER,
+    extract_remote_id,
+    get_inbound_debouncer,
+    verify_inbound_signature,
+)
+from ..services.integrations.reconcile import get_reconcile_engine
 from ..services.integrations.registry import (
     INTEGRATION_TYPES,
     IntegrationConfig,
@@ -404,3 +412,233 @@ async def case_links(
     await _get_case_scoped(user, case_id)
     links = await get_integration_link_store().list_for_local("case", case_id)
     return {"links": links}
+
+
+# ─── Inbound reconcile (Phase 4 — bidirectional federation) ─────────────────────
+
+
+def _reconcile_payload(result) -> dict:
+    """Shape a :class:`ReconcileResult` into the JSON body the UI/automation reads."""
+    return {
+        "ok": result.ok,
+        "detail": result.detail,
+        "reconcile_state": result.reconcile_state,
+        "status": result.status,
+        "severity": result.severity,
+        "assignee": result.assignee,
+        "comments_added": result.comments_added,
+        "conflict": result.conflict,
+        "conflict_reason": result.conflict_reason,
+        "remote_id": result.remote_id,
+    }
+
+
+@router.post("/sync/case/{case_id}")
+async def sync_case(
+    case_id: str,
+    data: dict = Body(default={}),
+    user: TokenPayload = Depends(require_permission_automation("integrations:write")),
+):
+    """Manually trigger an inbound reconcile of one case against one integration.
+
+    Opened to service-account automation (``require_permission_automation``) so a
+    SOAR playbook can force a pull after acting on the remote, as well as to an
+    interactive operator. Fail-open: an unreachable/unlinked remote returns
+    ``ok=False`` with a reason, never a 5xx, and never mutates detection facts.
+    """
+    integration_id = str(data.get("integration_id") or "").strip()
+    if not integration_id:
+        raise HTTPException(status_code=400, detail="'integration_id' is required")
+
+    registry = get_integration_registry()
+    config = registry.get(integration_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Integration is disabled")
+
+    case = await _get_case_scoped(user, case_id)
+    connector = registry.build_connector(config)
+    if connector is None:
+        raise HTTPException(
+            status_code=400, detail="Integration is not fully configured"
+        )
+
+    result = await get_reconcile_engine().reconcile_case(
+        connector=connector,
+        connector_type=config.type,
+        integration_id=integration_id,
+        case=case,
+    )
+    return _reconcile_payload(result)
+
+
+@router.post("/inbound/{integration_id}")
+async def inbound_reconcile(integration_id: str, request: Request):
+    """Receive a remote's case-updated callback and reconcile the linked case(s).
+
+    Authentication is **HMAC only** (no session) — this endpoint is reachable by a
+    remote platform / SOAR forwarder, so it is exempt from CSRF (no ambient cookie
+    is used) and verified with a constant-time HMAC-SHA256 over the exact raw body
+    against a per-integration inbound secret. A bad/absent signature is **401
+    fail-CLOSED**. Everything past a verified signature is fail-open: an
+    unparseable body, an unknown remote id, or a debounced duplicate is accepted as
+    a no-op rather than surfaced as an error.
+    """
+    raw = await request.body()
+    if not verify_inbound_signature(
+        integration_id, raw, request.headers.get(SIGNATURE_HEADER)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or missing signature")
+
+    # Signature verified — from here everything is fail-open.
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if raw else {}
+    except (ValueError, UnicodeDecodeError):
+        parsed = {}
+    payload = parsed if isinstance(parsed, dict) else {}
+
+    registry = get_integration_registry()
+    config = registry.get(integration_id)
+    if config is None:
+        return {"ok": True, "reconciled": 0, "detail": "unknown integration"}
+
+    remote_id = extract_remote_id(config.type, payload)
+    if not remote_id:
+        return {"ok": True, "reconciled": 0, "detail": "no remote id in payload"}
+
+    if not get_inbound_debouncer().claim(config.type, remote_id):
+        return {"ok": True, "reconciled": 0, "detail": "debounced", "remote_id": remote_id}
+
+    connector = registry.build_connector(config)
+    if connector is None:
+        return {"ok": True, "reconciled": 0, "detail": "integration not configured"}
+
+    results = await get_reconcile_engine().reconcile_by_remote_id(
+        connector=connector,
+        connector_type=config.type,
+        integration_id=integration_id,
+        remote_id=remote_id,
+    )
+    return {
+        "ok": True,
+        "reconciled": sum(1 for r in results if r.ok),
+        "remote_id": remote_id,
+    }
+
+
+@router.post("/sync/case/{case_id}/resolve-conflict")
+async def resolve_conflict(
+    case_id: str,
+    data: dict = Body(...),
+    user: TokenPayload = Depends(require_permission("integrations:write")),
+):
+    """Operator adjudication of a reconcile ``conflict`` (locally-terminal case).
+
+    A conflict is raised when a remote's active state would reopen a case the
+    operator has closed/resolved here — the anti-reopen guard never auto-applies it.
+    This route settles it two ways:
+
+    * ``accept_remote`` — re-run the reconcile with the anti-reopen guard disarmed,
+      letting the remote's state reopen the local case (→ ``synced``).
+    * ``keep_local`` — the local decision stands: the workflow is untouched, an
+      audited ``[remote]``-tagged note records the choice, and the link is marked
+      ``synced`` so the conflict clears. (The poll sweep already skips terminal
+      cases, so this stays settled unless the remote changes again.)
+
+    Session-only (``integrations:write``): adjudicating a conflict is a human
+    decision, not an automation verb.
+    """
+    integration_id = str(data.get("integration_id") or "").strip()
+    resolution = str(data.get("resolution") or "").strip().lower()
+    if not integration_id:
+        raise HTTPException(status_code=400, detail="'integration_id' is required")
+    if resolution not in ("accept_remote", "keep_local"):
+        raise HTTPException(
+            status_code=400,
+            detail="'resolution' must be 'accept_remote' or 'keep_local'",
+        )
+
+    registry = get_integration_registry()
+    config = registry.get(integration_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    case = await _get_case_scoped(user, case_id)
+    link_store = get_integration_link_store()
+    existing = await link_store.get(config.type, "case", case_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=404, detail="Case is not linked to this integration"
+        )
+
+    audit = get_audit_logger()
+
+    if resolution == "accept_remote":
+        if not config.enabled:
+            raise HTTPException(status_code=400, detail="Integration is disabled")
+        connector = registry.build_connector(config)
+        if connector is None:
+            raise HTTPException(
+                status_code=400, detail="Integration is not fully configured"
+            )
+        result = await get_reconcile_engine().reconcile_case(
+            connector=connector,
+            connector_type=config.type,
+            integration_id=integration_id,
+            case=case,
+            allow_reopen=True,
+        )
+        await audit.log(
+            actor=user.sub,
+            action="integration_conflict_resolved",
+            resource_type="investigation_case",
+            resource_id=case_id,
+            details=str(
+                {
+                    "integration_id": integration_id,
+                    "resolution": resolution,
+                    "reconcile_state": result.reconcile_state,
+                    "status": result.status,
+                }
+            ),
+        )
+        body = _reconcile_payload(result)
+        body["resolution"] = resolution
+        return body
+
+    # keep_local — local decision stands; clear the conflict without touching state.
+    note = "[remote] conflict resolved: keep local (remote change ignored)"
+    try:
+        await get_case_store().add_action_note(case_id=case_id, actor=user.sub, text=note)
+    except Exception:  # noqa: S110,BLE001 — fail-open: the note is advisory
+        pass
+    link = None
+    try:
+        link = await link_store.set_reconcile(
+            connector=config.type,
+            local_type="case",
+            local_id=case_id,
+            reconcile_state="synced",
+        )
+    except Exception:  # noqa: S110,BLE001 — fail-open
+        pass
+    await audit.log(
+        actor=user.sub,
+        action="integration_conflict_resolved",
+        resource_type="investigation_case",
+        resource_id=case_id,
+        details=str(
+            {
+                "integration_id": integration_id,
+                "resolution": resolution,
+                "reconcile_state": "synced",
+            }
+        ),
+    )
+    return {
+        "ok": True,
+        "resolution": resolution,
+        "reconcile_state": "synced",
+        "link": link,
+    }

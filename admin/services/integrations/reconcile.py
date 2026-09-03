@@ -175,6 +175,7 @@ def plan_reconcile(
     *,
     escalate_only_severity: bool = True,
     known_remote_texts: Optional[set[str]] = None,
+    allow_reopen: bool = False,
 ) -> ReconcilePlan:
     """Compute the workflow changes to fold a remote state into a local case.
 
@@ -182,6 +183,12 @@ def plan_reconcile(
     a :class:`ReconcilePlan`. ``known_remote_texts`` is the set of remote comment /
     conflict texts already recorded on the case (see :func:`_note_texts_from_remote`);
     comments already present are not re-added.
+
+    ``allow_reopen`` deliberately *disarms* the anti-reopen guard: it is set only on
+    the operator-driven ``accept_remote`` conflict-adjudication path, where a human
+    has explicitly chosen to let the remote's active state reopen a locally-terminal
+    case. In every automated path (webhook, poll, manual sync) it stays ``False`` so
+    a remote can never silently reopen a closed case.
     """
     plan = ReconcilePlan()
     known = set(known_remote_texts or ())
@@ -193,7 +200,7 @@ def plan_reconcile(
     if target and target != local_status:
         local_is_terminal = local_status in _LOCAL_TERMINAL_STATUSES
         remote_is_active = remote.status in _REMOTE_ACTIVE_STATUSES
-        if local_is_terminal and remote_is_active:
+        if local_is_terminal and remote_is_active and not allow_reopen:
             # Never silently reopen a locally-closed/resolved case — surface a
             # conflict for an operator instead. This is the anti-ping-pong guard.
             plan.conflict = True
@@ -262,12 +269,17 @@ class ReconcileEngine:
         integration_id: str,
         case: dict,
         escalate_only_severity: bool = True,
+        allow_reopen: bool = False,
     ) -> ReconcileResult:
         """Fold a linked remote's workflow state into one local case.
 
         ``case`` is the already tenant-scoped local case dict (the route resolves +
         authorizes it). ``connector_type`` is the link-store key (``config.type``);
         ``integration_id`` identifies the instance for the audit/actor/event trail.
+
+        ``allow_reopen`` is threaded straight to :func:`plan_reconcile` — it is set
+        only by the operator ``accept_remote`` adjudication route, never by an
+        automated trigger.
 
         Fail-open: an unlinked case, a connector without ``sync_status``, an
         unreachable remote, or any downstream error returns ``ok=False`` with a
@@ -298,6 +310,7 @@ class ReconcileEngine:
             case, remote,
             escalate_only_severity=escalate_only_severity,
             known_remote_texts=known,
+            allow_reopen=allow_reopen,
         )
 
         applied_case = case
