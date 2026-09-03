@@ -375,7 +375,21 @@ Playbooks need to act back. The verbs already exist (`/respond`,
   sliding window (`bulwark:automation:ratelimit:{account_id}`, shared across
   replicas) with a per-process in-memory fallback — a Redis error degrades to local
   enforcement rather than unthrottling or hard-denying. Operator sessions/JWTs are
-  never throttled by it. UI management page + `*_FILE` seeding deferred to 3.2d.
+  never throttled by it. UI management page + `*_FILE` seeding delivered in 3.2d.
+
+- **Management UI + declarative seeding** ✅ DONE (3.2d): the **Govern → Service
+  Accounts** admin page (`/service-accounts`, `pages/service_accounts.html`) is the
+  session-only (`automation:manage`) operator control plane — list (metadata only),
+  mint (name + grantable-permission checkboxes + optional `rate_limit_rpm`/`expires_at`),
+  one-time copy-to-clipboard key reveal, toggle/delete; a `403` on load degrades to an
+  "insufficient permission" notice. For GitOps/unattended deploys,
+  `seed_service_accounts()` (`admin/services/service_account_seed.py`, run best-effort in
+  the admin lifespan) provisions accounts from a JSON-array spec read from
+  `BULWARK_SERVICE_ACCOUNTS_SEED` (or its `_FILE` variant). The operator supplies the
+  plaintext `key` so the SOAR side can be configured out-of-band; only its SHA-256 is
+  stored. `ServiceAccountStore.seed_from_spec` validates the key shape + grantable
+  whitelist, is idempotent by key hash (safe to re-run every boot), and is fail-open (a
+  bad spec/entry is logged and skipped, never crashes startup).
 
 ### 5.3 Reference playbooks (documented, runner-agnostic)
 1. **Auto-open case** when incident confidence ≥ threshold or origin crosses BLOCK.

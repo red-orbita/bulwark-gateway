@@ -100,6 +100,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.user_store import get_user_store
     user_store = get_user_store()
     user_store.initialize()
+    # Declaratively seed service accounts from BULWARK_SERVICE_ACCOUNTS_SEED[_FILE]
+    # so a SOAR/playbook key exists the moment a fresh gateway boots (GitOps /
+    # unattended deploys). Idempotent (keyed on the key hash) and best-effort: a
+    # bad spec is logged and skipped, never fatal. Runs after the DB is migrated
+    # (service_account table exists) and the user store is up.
+    try:
+        from .services.service_account_seed import seed_service_accounts
+        await seed_service_accounts()
+    except Exception as exc:  # noqa: BLE001 — startup seeding is best-effort
+        logger.warning("service_account_seed_deferred error=%s", exc)
     # Eagerly seed the agents registry at startup so agents.yaml exists in the
     # shared admin_data volume / admin-data PVC BEFORE the proxy reads it
     # read-only. TenantManager is a lazy singleton whose __init__ seeds from the
@@ -244,7 +254,8 @@ async def auth_guard_pages(request: Request, call_next):
                  "/plugins", "/evaluation", "/discovery", "/ml-scanners",
                  "/rate-limits", "/enrichment", "/events", "/tenant-analytics",
                  "/gdpr", "/virtual-keys", "/quotas", "/cost", "/cache",
-                 "/sessions", "/correlation", "/investigation", "/integrations")
+                 "/sessions", "/correlation", "/investigation", "/integrations",
+                 "/service-accounts")
     )
 
     if is_page_route:
@@ -732,3 +743,9 @@ async def investigation_page(request: Request):
 async def integrations_page(request: Request):
     """Integrations — outbound case-management connectors (TheHive / DFIR-IRIS)."""
     return templates.TemplateResponse(request, "pages/integrations.html")
+
+
+@app.get("/service-accounts", response_class=HTMLResponse)
+async def service_accounts_page(request: Request):
+    """Service accounts — scoped, non-interactive automation credentials."""
+    return templates.TemplateResponse(request, "pages/service_accounts.html")

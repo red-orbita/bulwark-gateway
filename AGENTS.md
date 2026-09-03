@@ -667,6 +667,7 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_CORRELATION_CONFIDENCE_BLOCK_THRESHOLD` | float | `0.5` | Min content-corroboration confidence (0–1) to escalate a correlated exfiltration incident from WARN to BLOCK (only when blocking is on). Runtime-tunable |
 | `BULWARK_METRICS_SCRAPE_TOKEN` | str | `""` | **Admin-side** (read via `read_secret`, `*_FILE` supported). Dedicated least-privilege bearer that gates `GET /admin/health/metrics` for Prometheus (`hmac.compare_digest`). Empty ⇒ scrape-token path inert, endpoint requires `admin:read` JWT |
 | `BULWARK_AUTOMATION_RATE_LIMIT_RPM` | int | `120` | **Admin-side**. Default per-key sliding-window RPM for service-account automation calls, used when an account carries no `rate_limit_rpm` override. `<= 0` disables throttling for keys without an override. Enforced only in the service-account branch of `require_permission_automation` (429 + `service_account.rate_limited` audit) |
+| `BULWARK_SERVICE_ACCOUNTS_SEED` | str | `""` | **Admin-side** (read via `read_secret`, `*_FILE` supported). Declarative JSON-array spec of service accounts to provision at admin startup (`seed_service_accounts()`). Each entry `{name, permissions[], key, rate_limit_rpm?, expires_at?}` supplies the operator's plaintext `bwk_sa_<hex>` key (only its SHA-256 is stored). Idempotent by key hash, fail-open (bad spec/entry logged + skipped) |
 
 ### Docker Secrets Support
 
@@ -958,8 +959,26 @@ keys without an override). The limiter is Redis-first (a shared sliding-window s
 in-memory fallback: a Redis-side error degrades to local enforcement (the admin service is
 single-replica, so this stays accurate) rather than either silently unthrottling or hard-denying
 legitimate automation. Enforcement lives only in the service-account branch of the resolver — operator
-sessions/JWTs are never rate-limited by it. The management UI page + `*_FILE` seeding remain deferred
-to phase 3.2d.
+sessions/JWTs are never rate-limited by it. The management UI page + `*_FILE` seeding are delivered in
+phase 3.2d (below).
+
+**Management UI + declarative seeding (Phase 3.2d)** completes the service-account surface with an
+operator control plane and unattended provisioning. The **Govern → Service Accounts** admin page
+(`/service-accounts`, `pages/service_accounts.html`) is the human view over the session-only
+management API (`automation:manage`): it lists accounts (metadata only — never the key), mints new
+ones (name + a checkbox pick from the `grantable-permissions` whitelist + optional `rate_limit_rpm` /
+`expires_at`), reveals the raw `bwk_sa_…` key **exactly once** in a copy-to-clipboard modal, and
+toggles/deletes keys. A `403` on load degrades to an "insufficient permission" notice rather than an
+error. For GitOps/unattended deploys, `seed_service_accounts()`
+(`admin/services/service_account_seed.py`, run best-effort in the admin lifespan after the user store
+is up) provisions accounts from a declarative JSON-array spec read from
+`BULWARK_SERVICE_ACCOUNTS_SEED` (or its `_FILE` Docker-secret variant, via `read_secret`). Unlike an
+interactively minted account, the operator supplies the plaintext `key` (from their IaC/secret store)
+so the SOAR side can be configured with the same value out-of-band; only its SHA-256 is persisted (the
+raw key is never logged). The backing `ServiceAccountStore.seed_from_spec` validates the key shape
+(`bwk_sa_<hex>`, ≥128 bits) and the grantable-permission whitelist, is **idempotent** by key hash (safe
+to re-run every boot), and is **fail-open**: a malformed spec or a single bad entry is logged and
+skipped — it never crashes startup.
 
 ### Authentication
 

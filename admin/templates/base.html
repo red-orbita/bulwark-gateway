@@ -267,6 +267,10 @@
                     <i data-lucide="users" class="nav-icon" aria-hidden="true"></i>
                     <span x-show="sidebarOpen" class="nav-label">Users &amp; Roles</span>
                 </a>
+                <a href="/service-accounts" class="nav-item" data-page="service-accounts" data-section="govern" aria-label="Service Accounts">
+                    <i data-lucide="key-square" class="nav-icon" aria-hidden="true"></i>
+                    <span x-show="sidebarOpen" class="nav-label">Service Accounts</span>
+                </a>
                 <a href="/gdpr" class="nav-item" data-page="gdpr" data-section="govern" aria-label="GDPR and Privacy">
                     <i data-lucide="scale" class="nav-icon" aria-hidden="true"></i>
                     <span x-show="sidebarOpen" class="nav-label">GDPR / Privacy</span>
@@ -723,17 +727,18 @@
                     { id: 19, label: 'Agents', href: '/agents', icon: 'bot', section: 'Govern' },
                     { id: 20, label: 'Policies', href: '/policies', icon: 'file-lock', section: 'Govern' },
                     { id: 21, label: 'Users & Roles', href: '/rbac', icon: 'users', section: 'Govern' },
-                    { id: 22, label: 'GDPR / Privacy', href: '/gdpr', icon: 'scale', section: 'Govern' },
-                    { id: 23, label: 'Audit Log', href: '/audit', icon: 'scroll-text', section: 'Govern' },
-                    { id: 24, label: 'Rate Limits', href: '/rate-limits', icon: 'gauge', section: 'Traffic & Cost' },
-                    { id: 25, label: 'Quotas', href: '/quotas', icon: 'sliders-horizontal', section: 'Traffic & Cost' },
-                    { id: 26, label: 'Cost & Usage', href: '/cost', icon: 'coins', section: 'Traffic & Cost' },
-                    { id: 27, label: 'Virtual Keys', href: '/virtual-keys', icon: 'key-round', section: 'Traffic & Cost' },
-                    { id: 28, label: 'Response Cache', href: '/cache', icon: 'database-zap', section: 'Traffic & Cost' },
-                    { id: 29, label: 'SIEM Export', href: '/siem', icon: 'radio-tower', section: 'Platform' },
-                    { id: 30, label: 'Notifications', href: '/notifications', icon: 'bell-ring', section: 'Platform' },
-                    { id: 31, label: 'Plugins', href: '/plugins', icon: 'puzzle', section: 'Platform' },
-                    { id: 32, label: 'Settings', href: '/settings', icon: 'settings', section: 'Platform' },
+                    { id: 22, label: 'Service Accounts', href: '/service-accounts', icon: 'key-square', section: 'Govern' },
+                    { id: 23, label: 'GDPR / Privacy', href: '/gdpr', icon: 'scale', section: 'Govern' },
+                    { id: 24, label: 'Audit Log', href: '/audit', icon: 'scroll-text', section: 'Govern' },
+                    { id: 25, label: 'Rate Limits', href: '/rate-limits', icon: 'gauge', section: 'Traffic & Cost' },
+                    { id: 26, label: 'Quotas', href: '/quotas', icon: 'sliders-horizontal', section: 'Traffic & Cost' },
+                    { id: 27, label: 'Cost & Usage', href: '/cost', icon: 'coins', section: 'Traffic & Cost' },
+                    { id: 28, label: 'Virtual Keys', href: '/virtual-keys', icon: 'key-round', section: 'Traffic & Cost' },
+                    { id: 29, label: 'Response Cache', href: '/cache', icon: 'database-zap', section: 'Traffic & Cost' },
+                    { id: 30, label: 'SIEM Export', href: '/siem', icon: 'radio-tower', section: 'Platform' },
+                    { id: 31, label: 'Notifications', href: '/notifications', icon: 'bell-ring', section: 'Platform' },
+                    { id: 32, label: 'Plugins', href: '/plugins', icon: 'puzzle', section: 'Platform' },
+                    { id: 33, label: 'Settings', href: '/settings', icon: 'settings', section: 'Platform' },
                 ],
                 get filtered() {
                     if (!this.query) return this.items;

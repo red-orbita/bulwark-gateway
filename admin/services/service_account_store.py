@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -47,6 +48,12 @@ logger = logging.getLogger(__name__)
 KEY_PREFIX = "bwk_sa_"
 _KEY_ENTROPY_BYTES = 24
 _PREFIX_DISPLAY_LEN = len(KEY_PREFIX) + 8
+
+# Accepted shape of an OPERATOR-SUPPLIED seed key (Phase 3.2d). Same namespace as
+# a minted key, and at least 32 lowercase-hex chars (128 bits) so a weak/guessable
+# seed value is rejected outright — the operator's IaC/Docker-secret must carry
+# real entropy just like a generated key.
+_SEED_KEY_RE = re.compile(r"^bwk_sa_[0-9a-f]{32,}$")
 
 # Bounds so a single account can never carry unbounded metadata.
 _MAX_NAME_LEN = 128
@@ -258,6 +265,85 @@ class ServiceAccountStore:
             "key": raw_key,
         }
         return account
+
+    # ─── Seed (declarative provisioning) ─────────────────────────────────────
+
+    async def seed_from_spec(
+        self,
+        *,
+        name: str,
+        permissions: object,
+        raw_key: str,
+        created_by: str = "startup-seed",
+        expires_at: Optional[str] = None,
+        rate_limit_rpm: object = None,
+    ) -> Optional[str]:
+        """Provision a service account from an OPERATOR-SUPPLIED key (idempotent).
+
+        Unlike :meth:`mint`, the caller supplies the plaintext ``bwk_sa_…`` key
+        (from IaC / a Docker secret) so a SOAR runner configured out-of-band with
+        that exact value authenticates immediately after a fresh deploy. Only the
+        SHA-256 is stored — the raw key is never persisted or logged.
+
+        Idempotent by ``key_hash``: if an account already carries this key the
+        call is a no-op and returns ``None`` (so re-running the seed on every boot
+        is safe). Returns the new ``account_id`` when a row is created. Raises
+        ``ValueError`` on an invalid key shape or permission list, so the seed
+        driver can skip a bad entry without aborting the rest.
+        """
+        clean_key = (raw_key or "").strip()
+        if not _SEED_KEY_RE.match(clean_key):
+            raise ValueError(
+                "seed key must match bwk_sa_<hex> with at least 128 bits of entropy"
+            )
+        clean_name = (name or "").strip()[:_MAX_NAME_LEN]
+        if not clean_name:
+            raise ValueError("name is required")
+        perms = normalise_permissions(permissions)
+        clean_created_by = (created_by or "startup-seed").strip()[:_MAX_CREATED_BY_LEN]
+        clean_rate_limit = _coerce_rate_limit(rate_limit_rpm)
+
+        clean_expires: Optional[str] = None
+        if expires_at:
+            if _to_epoch(expires_at) is None:
+                raise ValueError("expires_at must be an ISO-8601 timestamp")
+            clean_expires = str(expires_at)
+
+        key_hash = _hash_key(clean_key)
+
+        # Idempotency: never create a duplicate for a key that already exists.
+        existing = await self._db().fetch_one(
+            "SELECT account_id FROM service_account WHERE key_hash = ?", [key_hash]
+        )
+        if existing is not None:
+            return None
+
+        account_id = _new_account_id()
+        now = _iso_now()
+        await self._db().execute(
+            "INSERT INTO service_account "
+            "(account_id, name, key_prefix, key_hash, permissions, enabled, "
+            "created_by, created_at, last_used_at, expires_at, rate_limit_rpm) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                account_id,
+                clean_name,
+                clean_key[:_PREFIX_DISPLAY_LEN],
+                key_hash,
+                json.dumps(perms),
+                1,
+                clean_created_by,
+                now,
+                None,
+                clean_expires,
+                clean_rate_limit,
+            ],
+        )
+        logger.info(
+            "service account seeded: id=%s name=%s perms=%s by=%s rpm=%s",
+            account_id, clean_name, ",".join(perms), clean_created_by, clean_rate_limit,
+        )
+        return account_id
 
     # ─── Verify (auth hot-path) ──────────────────────────────────────────────
 
