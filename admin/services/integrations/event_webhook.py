@@ -26,7 +26,9 @@ variant) in preference to the inline value, and is never emitted back over the A
 The envelope carries a ``schema_version`` so receivers can pin a contract.
 
 Deliberately *not* here: retry/circuit breaking (this is best-effort fan-out, not a
-durable queue) and the inbound action API (deferred to a later phase).
+durable queue) and the inbound action API (a separate concern — the scoped
+service-account action surface delivered in Phase 3.2, wired via
+``require_permission_automation`` onto the ``/admin/investigation`` mutating routes).
 """
 
 from __future__ import annotations
