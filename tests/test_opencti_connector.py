@@ -16,6 +16,7 @@ from admin.services.integrations.opencti import (
     _coerce_score,
     _indicator_pattern,
     _main_observable_type,
+    _match_indicator_id,
     _node_labels,
     _observable_payload,
     _report_input,
@@ -395,3 +396,78 @@ async def test_push_report_no_id_raises(httpx_mock):
         await _connector().push_case(
             _CASE, [_obs("domain", "evil.test")], [],
         )
+
+
+# ─── _match_indicator_id (pure) ──────────────────────────────────────────────
+
+def _sedge(pattern: str, *, iid: str = "ind-1", revoked: bool = False,
+           ptype: str = "stix") -> dict:
+    return {"node": {"id": iid, "pattern": pattern, "pattern_type": ptype,
+                     "revoked": revoked}}
+
+
+def test_match_indicator_id_returns_active_stix_match():
+    edges = [_sedge("[ipv4-addr:value = '1.2.3.4']", iid="ind-42")]
+    assert _match_indicator_id(edges, "1.2.3.4") == "ind-42"
+
+
+def test_match_indicator_id_skips_revoked_and_non_stix_and_fuzzy():
+    # revoked → skip; yara → skip; literal-miss (fuzzy) → skip.
+    edges = [
+        _sedge("[ipv4-addr:value = '1.2.3.4']", iid="r", revoked=True),
+        _sedge("rule x {}", iid="y", ptype="yara"),
+        _sedge("[ipv4-addr:value = '9.9.9.9']", iid="f"),
+    ]
+    assert _match_indicator_id(edges, "1.2.3.4") == ""
+
+
+def test_match_indicator_id_tolerates_garbage_edges():
+    assert _match_indicator_id(None, "1.2.3.4") == ""
+    assert _match_indicator_id([{}, {"node": None}, "x"], "1.2.3.4") == ""
+
+
+# ─── report_sighting flow ────────────────────────────────────────────────────
+
+async def test_report_sighting_creates_sighting(httpx_mock):
+    # lookup resolves an active indicator id, then the sighting mutation succeeds.
+    httpx_mock.add_response(
+        method="POST", url=_URL,
+        json={"data": {"indicators": {"edges": [
+            _sedge("[ipv4-addr:value = '1.2.3.4']", iid="ind-7")]}}},
+    )
+    httpx_mock.add_response(
+        method="POST", url=_URL,
+        json=_gql("stixSightingRelationshipAdd", {"id": "sig-9"}),
+    )
+    result = await _connector().report_sighting(observable_type="ip", value="1.2.3.4")
+    assert result["reported"] is True
+    assert result["indicator_id"] == "ind-7"
+    assert result["sighting_id"] == "sig-9"
+
+
+async def test_report_sighting_noop_when_no_active_indicator(httpx_mock):
+    # only a revoked indicator matches → nothing to sight, no mutation call made.
+    httpx_mock.add_response(
+        method="POST", url=_URL,
+        json={"data": {"indicators": {"edges": [
+            _sedge("[ipv4-addr:value = '1.2.3.4']", revoked=True)]}}},
+    )
+    result = await _connector().report_sighting(observable_type="ip", value="1.2.3.4")
+    assert result["reported"] is False
+    assert result["indicator_id"] == ""
+    assert len(httpx_mock.get_requests()) == 1  # lookup only, no mutation
+
+
+async def test_report_sighting_empty_value_short_circuits(httpx_mock):
+    result = await _connector().report_sighting(observable_type="ip", value="   ")
+    assert result["reported"] is False
+    assert len(httpx_mock.get_requests()) == 0
+
+
+async def test_report_sighting_transport_error_raises(httpx_mock):
+    import httpx
+
+    for _ in range(3):  # exhaust the retry budget on the lookup
+        httpx_mock.add_exception(httpx.ConnectError("down"))
+    with pytest.raises(ConnectorError):
+        await _connector().report_sighting(observable_type="ip", value="1.2.3.4")

@@ -154,7 +154,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.integrations.reconcile_poller import get_reconcile_poller
     reconcile_poller = get_reconcile_poller()
     await reconcile_poller.start()
+    # Start the sighting feedback dispatcher (Investigation Phase 5.3): sweeps
+    # freshly-blocked IOC matches and reports each as a sighting back to the
+    # threat-intel platform (OpenCTI / MISP) the indicator came from, closing the
+    # consume→contribute loop. Off by default (BULWARK_SIGHTING_FEEDBACK_ENABLED),
+    # fully inert when disabled and fail-open when on.
+    from .services.integrations.sighting_dispatcher import get_sighting_dispatcher
+    sighting_dispatcher = get_sighting_dispatcher()
+    await sighting_dispatcher.start()
     yield
+    await sighting_dispatcher.stop()
     await reconcile_poller.stop()
     await events_sync.stop()
     await scheduler.stop()

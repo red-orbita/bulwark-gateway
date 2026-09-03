@@ -359,6 +359,56 @@ class MispConnector(HttpConnectorBase):
             "attributes": [],
         }
 
+    # ─── Sighting report (proxy IOC match → CTI feedback) ──────────────────────
+
+    async def report_sighting(self, *, value: str, observable_type: str = "") -> dict:
+        """Report a sighting of an attribute value back to MISP (``/sightings/add``).
+
+        MISP's ``/sightings/add`` matches on the literal value and records a
+        sighting (type 0) against every attribute carrying it — no need to resolve
+        an attribute id first. Returns a compact blob::
+
+            {connector, reported, detail}
+
+        ``reported`` reflects whether MISP accepted the request (HTTP 200 with no
+        ``errors`` envelope); the returned message is surfaced verbatim so an
+        audit records exactly what MISP did (including a "0 sightings" no-op).
+        Raises :class:`ConnectorError` on a transport failure or a 4xx (e.g. no
+        matching attribute), which the fail-open caller audits and moves past.
+        ``observable_type`` is accepted for call-surface parity.
+        """
+        needle = value.strip()
+        if not needle:
+            return {"connector": "misp", "reported": False, "detail": "empty value"}
+
+        resp = await self._request(
+            "POST", "/sightings/add", json_body={"value": needle}, expected=(200,)
+        )
+        body = self._parse_sighting(resp)
+        message = str(
+            body.get("message") or body.get("name") or "sighting added"
+        ).strip()
+        return {"connector": "misp", "reported": True, "detail": message[:200]}
+
+    def _parse_sighting(self, resp) -> dict:
+        """Parse a ``/sightings/add`` reply (tolerant of MISP's success envelope).
+
+        Unlike :meth:`_parse`, this does **not** treat a bare ``{name, message}``
+        body as an error — a successful sighting-add returns exactly that shape
+        (e.g. ``{"name": "1 sighting successfully added.", ...}``). Only an explicit
+        ``errors`` field is surfaced as :class:`ConnectorError`.
+        """
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ConnectorError("MISP returned a non-JSON response") from exc
+        if not isinstance(data, dict):
+            raise ConnectorError("MISP returned an unexpected payload")
+        errors = data.get("errors")
+        if errors:
+            raise ConnectorError(f"MISP error: {_error_text(errors)}")
+        return data
+
     # ─── Push (case → event) ───────────────────────────────────────────────────
 
     async def push_case(

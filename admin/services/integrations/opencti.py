@@ -112,6 +112,25 @@ query BulwarkLookup($search: String!, $first: Int!) {
 }
 """
 
+# Sighting-report lookup — like ``_LOOKUP_QUERY`` but returns the indicator's
+# internal ``id`` so a sighting relationship can be anchored on it. Bulwark only
+# ever *sights* intel it already tracks, so this resolves an existing indicator by
+# value rather than creating one.
+_SIGHTING_LOOKUP_QUERY = """
+query BulwarkSightingLookup($search: String!, $first: Int!) {
+    indicators(search: $search, first: $first, orderBy: x_opencti_score, orderMode: desc) {
+        edges {
+            node {
+                id
+                pattern
+                pattern_type
+                revoked
+            }
+        }
+    }
+}
+"""
+
 # ─── Push mutations ───────────────────────────────────────────────────────────
 
 # Create a Cyber-observable. All per-type inputs are nullable variables; only the
@@ -334,6 +353,26 @@ def _report_input(case: dict, object_ids: list[str], marking: str) -> dict:
     }
 
 
+def _match_indicator_id(edges: object, needle: str) -> str:
+    """Pick the internal id of the first active STIX indicator matching ``needle``.
+
+    ``needle`` is the lowercased observable value; ``edges`` is the raw GraphQL
+    ``indicators.edges`` list. Only an active (non-revoked) ``stix``-pattern node
+    whose pattern literally contains the value qualifies — we never sight a
+    revoked or non-STIX (yara/sigma) indicator. Pure; returns ``""`` on no match.
+    """
+    for edge in edges if isinstance(edges, list) else []:
+        node = (edge or {}).get("node") or {} if isinstance(edge, dict) else {}
+        if bool(node.get("revoked")):
+            continue
+        if (node.get("pattern_type") or "stix").lower() != "stix":
+            continue
+        if needle not in str(node.get("pattern") or "").lower():
+            continue
+        internal_id = str(node.get("id") or "")
+        if internal_id:
+            return internal_id
+    return ""
 
 
 class OpenCTIConnector(HttpConnectorBase):
@@ -457,6 +496,74 @@ class OpenCTIConnector(HttpConnectorBase):
             "indicator_count": 0,
             "labels": [],
             "indicators": [],
+        }
+
+    # ─── Sighting report (proxy IOC match → CTI feedback) ──────────────────────
+
+    async def report_sighting(self, *, observable_type: str, value: str) -> dict:
+        """Report a sighting of an existing indicator (matched on ``value``).
+
+        Bulwark only *sights* intel it already tracks — it never fabricates an
+        indicator just to sight it. So this resolves the value in the ``indicators``
+        collection and, only when an active (non-revoked) STIX indicator literally
+        matches, creates a ``stixSightingRelationship`` anchored on that indicator
+        (count 1, first/last seen = now). Returns a compact blob::
+
+            {connector, reported, indicator_id, sighting_id, detail}
+
+        ``reported`` is ``False`` (no error) when the value is unknown or only
+        matches revoked/non-STIX indicators — there is simply nothing to sight.
+        Raises :class:`ConnectorError` only on a transport/GraphQL failure, which
+        the fail-open caller audits and moves past. ``observable_type`` is accepted
+        for call-surface parity; matching is by literal value.
+        """
+        needle = value.strip()
+        if not needle:
+            return self._sighting_result(reported=False, detail="empty value")
+
+        data = await self._graphql(
+            _SIGHTING_LOOKUP_QUERY, {"search": value, "first": _DEFAULT_LOOKUP_FIRST}
+        )
+        edges = ((data.get("indicators") or {}).get("edges")) or []
+        indicator_id = _match_indicator_id(edges, needle.lower())
+        if not indicator_id:
+            return self._sighting_result(
+                reported=False, detail="no active indicator matched"
+            )
+
+        now = iso_now()
+        input_obj = {
+            "fromId": indicator_id,
+            "count": 1,
+            "first_seen": now,
+            "last_seen": now,
+        }
+        result = await self._graphql(_SIGHTING_MUTATION, {"input": input_obj})
+        node = result.get("stixSightingRelationshipAdd") or {}
+        sighting_id = str(node.get("id") or "")
+        return self._sighting_result(
+            reported=bool(sighting_id),
+            indicator_id=indicator_id,
+            sighting_id=sighting_id,
+            detail="sighting created" if sighting_id else "sighting not created",
+        )
+
+    def _sighting_result(
+        self,
+        *,
+        reported: bool,
+        indicator_id: str = "",
+        sighting_id: str = "",
+        detail: str = "",
+    ) -> dict:
+        """A well-formed sighting-report outcome blob."""
+        return {
+            "connector": "opencti",
+            "checked_at": iso_now(),
+            "reported": reported,
+            "indicator_id": indicator_id,
+            "sighting_id": sighting_id,
+            "detail": detail,
         }
 
     # ─── Push (case → graph) ───────────────────────────────────────────────────

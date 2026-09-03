@@ -785,6 +785,11 @@ async def chat_completions(request: Request):
                 description=f"IOC detected in input: {', '.join(ioc_matches[:5])}",
                 source="ioc_check",
                 severity="critical",
+                # Carry the exact "<type>:<value>" atoms so the admin sighting
+                # feedback loop can report them upstream to threat-intel platforms
+                # without re-parsing the human-readable description. Capped to keep
+                # the durable-store row bounded.
+                metadata={"ioc_matches": ioc_matches[:16]},
             )
             await _log_events([event], source_ip)
             asyncio.create_task(_fire_webhook_alert([event], tenant_id, agent_id))

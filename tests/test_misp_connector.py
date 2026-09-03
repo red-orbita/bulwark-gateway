@@ -259,3 +259,47 @@ async def test_push_create_missing_uuid_raises(httpx_mock):
     observables = [_obs("ip", "1.2.3.4", is_ioc=True)]
     with pytest.raises(ConnectorError):
         await _connector().push_case(_case(), observables, [])
+
+
+# ─── report_sighting ─────────────────────────────────────────────────────────
+
+
+async def test_report_sighting_success(httpx_mock):
+    # MISP's success envelope carries a `name` — the tolerant parser must NOT
+    # treat that as an error (unlike the attribute/event parser).
+    httpx_mock.add_response(
+        method="POST", url=f"{_BASE}/sightings/add",
+        json={"name": "1 sighting successfully added.", "message": "1 sighting added."},
+    )
+    result = await _connector().report_sighting(value="1.2.3.4", observable_type="ip")
+    assert result["reported"] is True
+    assert result["connector"] == "misp"
+    assert "sighting" in result["detail"].lower()
+
+    import json as _json
+
+    sent = _json.loads(httpx_mock.get_requests()[0].content)
+    assert sent == {"value": "1.2.3.4"}
+
+
+async def test_report_sighting_empty_value_short_circuits(httpx_mock):
+    result = await _connector().report_sighting(value="   ")
+    assert result["reported"] is False
+    assert len(httpx_mock.get_requests()) == 0
+
+
+async def test_report_sighting_error_envelope_raises(httpx_mock):
+    httpx_mock.add_response(
+        method="POST", url=f"{_BASE}/sightings/add",
+        json={"errors": "No matching attribute"},
+    )
+    with pytest.raises(ConnectorError):
+        await _connector().report_sighting(value="9.9.9.9")
+
+
+async def test_report_sighting_4xx_raises(httpx_mock):
+    httpx_mock.add_response(
+        method="POST", url=f"{_BASE}/sightings/add", status_code=404, json={}
+    )
+    with pytest.raises(ConnectorError):
+        await _connector().report_sighting(value="9.9.9.9")
