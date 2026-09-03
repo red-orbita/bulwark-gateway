@@ -54,6 +54,28 @@ _IRIS_STATE = {
 }
 
 
+# Bulwark task-status vocabulary → IRIS ``task-status`` ``status_name``. IRIS
+# rejects the legacy string ``task_status``/``task_assignee`` fields since v1.5.0
+# and requires an integer ``task_status_id`` (resolved from this name via a runtime
+# lookup) plus a ``task_assignees_id`` list. Anything unmapped falls back to
+# "To do" (the IRIS default), so a task always attaches rather than 400-ing.
+_IRIS_TASK_STATUS_NAME = {
+    "todo": "To do",
+    "open": "To do",
+    "pending": "To do",
+    "in_progress": "In progress",
+    "inprogress": "In progress",
+    "on_hold": "On hold",
+    "onhold": "On hold",
+    "done": "Done",
+    "completed": "Done",
+    "closed": "Done",
+    "cancelled": "Canceled",
+    "canceled": "Canceled",
+}
+_IRIS_DEFAULT_TASK_STATUS = "To do"
+
+
 def _map_iris_status(state_name: str) -> str:
     """Map an IRIS ``state_name`` to a normalized status (defensive)."""
     return _IRIS_STATE.get((state_name or "").strip().lower(), "")
@@ -85,6 +107,13 @@ class DfirIrisConnector(HttpConnectorBase):
             "Content-Type": "application/json",
         }
         self.customer_id = customer_id
+        # Lazily-populated, per-instance name→id lookup caches. IRIS reference ids
+        # (ioc types, TLPs, task statuses) are auto-increment and NOT stable across
+        # instances, so we resolve them at attach time from the live server rather
+        # than hardcoding. ``None`` means "not yet fetched".
+        self._ioc_type_ids: Optional[dict[str, int]] = None
+        self._tlp_ids: Optional[dict[str, int]] = None
+        self._task_status_ids: Optional[dict[str, int]] = None
 
     @property
     def kind(self) -> str:
@@ -161,15 +190,26 @@ class DfirIrisConnector(HttpConnectorBase):
         )
 
     async def _attach_children(self, remote_id: str, body: dict) -> str:
-        """Best-effort attach IOCs + tasks to a freshly created case."""
+        """Best-effort attach IOCs + tasks to a freshly created case.
+
+        IRIS's ``/case/ioc/add`` and ``/case/tasks/add`` want integer reference ids
+        (``ioc_type_id``/``ioc_tlp_id``/``task_status_id``), not the human names the
+        pure builder emits, and reject the legacy ``task_assignee`` string since
+        v1.5.0. We translate names→ids here via cached runtime lookups so the pure
+        builder stays dialect-neutral. Each attach is independent and best-effort:
+        one failure is logged and never aborts the rest or the push.
+        """
         iocs_ok = 0
         tasks_ok = 0
         for ioc in body.get("iocs", []):
             try:
+                payload = await self._iris_ioc_payload(ioc)
+                if payload is None:
+                    continue
                 resp = await self._request(
                     "POST",
                     f"/case/ioc/add?cid={remote_id}",
-                    json_body=ioc,
+                    json_body=payload,
                     expected=(200,),
                 )
                 _require_success(resp)
@@ -178,10 +218,11 @@ class DfirIrisConnector(HttpConnectorBase):
                 logger.warning("iris_ioc_attach_failed", extra={"error": str(exc)})
         for task in body.get("tasks", []):
             try:
+                payload = await self._iris_task_payload(task)
                 resp = await self._request(
                     "POST",
                     f"/case/tasks/add?cid={remote_id}",
-                    json_body=task,
+                    json_body=payload,
                     expected=(200,),
                 )
                 _require_success(resp)
@@ -189,6 +230,97 @@ class DfirIrisConnector(HttpConnectorBase):
             except ConnectorError as exc:
                 logger.warning("iris_task_attach_failed", extra={"error": str(exc)})
         return f"{iocs_ok} iocs, {tasks_ok} tasks"
+
+    async def _load_lookup(
+        self, path: str, id_key: str, name_key: str
+    ) -> dict[str, int]:
+        """Fetch an IRIS reference list into a lower-cased ``name → id`` map.
+
+        Fail-open: a missing/malformed list yields ``{}`` so callers degrade to
+        their own fallback rather than raising.
+        """
+        try:
+            resp = await self._request("GET", path, expected=(200,))
+            data = _unwrap(resp)
+        except ConnectorError as exc:
+            logger.warning(
+                "iris_lookup_failed", extra={"path": path, "error": str(exc)}
+            )
+            return {}
+        out: dict[str, int] = {}
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get(name_key) or "").strip().lower()
+                value = item.get(id_key)
+                if name and isinstance(value, int):
+                    out[name] = value
+        return out
+
+    async def _ioc_type_id(self, name: str) -> Optional[int]:
+        """Resolve an IRIS ioc-type name to its id (falls back to ``other``)."""
+        if self._ioc_type_ids is None:
+            self._ioc_type_ids = await self._load_lookup(
+                "/manage/ioc-types/list", "type_id", "type_name"
+            )
+        table = self._ioc_type_ids
+        return table.get((name or "").strip().lower()) or table.get("other")
+
+    async def _tlp_id(self, name: str) -> Optional[int]:
+        """Resolve an IRIS TLP name to its id (falls back to ``amber``)."""
+        if self._tlp_ids is None:
+            self._tlp_ids = await self._load_lookup(
+                "/manage/tlp/list", "tlp_id", "tlp_name"
+            )
+        table = self._tlp_ids
+        return table.get((name or "").strip().lower()) or table.get("amber")
+
+    async def _task_status_id(self, bulwark_status: str) -> Optional[int]:
+        """Resolve a Bulwark task status to an IRIS ``task_status_id``."""
+        if self._task_status_ids is None:
+            self._task_status_ids = await self._load_lookup(
+                "/manage/task-status/list", "id", "status_name"
+            )
+        table = self._task_status_ids
+        iris_name = _IRIS_TASK_STATUS_NAME.get(
+            (bulwark_status or "").strip().lower(), _IRIS_DEFAULT_TASK_STATUS
+        )
+        return table.get(iris_name.lower()) or table.get(
+            _IRIS_DEFAULT_TASK_STATUS.lower()
+        )
+
+    async def _iris_ioc_payload(self, ioc: dict) -> Optional[dict]:
+        """Translate a builder ioc (name-based) to an IRIS add payload (id-based)."""
+        type_id = await self._ioc_type_id(str(ioc.get("ioc_type") or ""))
+        if type_id is None:
+            logger.warning(
+                "iris_ioc_type_unresolved", extra={"type": ioc.get("ioc_type")}
+            )
+            return None
+        payload: dict = {
+            "ioc_value": ioc.get("ioc_value") or "",
+            "ioc_type_id": type_id,
+            "ioc_tags": ioc.get("ioc_tags") or "",
+            "ioc_description": ioc.get("ioc_description") or "",
+        }
+        tlp_id = await self._tlp_id(str(ioc.get("ioc_tlp") or "amber"))
+        if tlp_id is not None:
+            payload["ioc_tlp_id"] = tlp_id
+        return payload
+
+    async def _iris_task_payload(self, task: dict) -> dict:
+        """Translate a builder task (name-based) to an IRIS add payload (id-based)."""
+        payload: dict = {
+            "task_title": task.get("task_title") or "",
+            "task_description": task.get("task_description") or "",
+            "task_assignees_id": [],
+            "task_tags": "",
+        }
+        status_id = await self._task_status_id(str(task.get("task_status") or "todo"))
+        if status_id is not None:
+            payload["task_status_id"] = status_id
+        return payload
 
     async def sync_status(self, remote_id: str) -> Optional[RemoteState]:
         """Read a case's current workflow state from IRIS (Phase 4 reconcile).
@@ -226,12 +358,18 @@ class DfirIrisConnector(HttpConnectorBase):
         closed = status == REMOTE_STATUS_CLOSED or bool(close_date)
         if closed:
             status = REMOTE_STATUS_CLOSED
+        elif not status:
+            # IRIS's ``state_name`` is often null on the default case shape; an
+            # existing, non-closed case is open. Default to OPEN so reconcile has a
+            # real workflow signal instead of an empty one.
+            status = REMOTE_STATUS_OPEN
         assignee = str(data.get("owner") or data.get("user_name") or "")
+        # IRIS exposes no single "last modified" field on the case payload; use the
+        # best available real timestamp (closure > creation timestamp > open date).
         updated = str(
-            data.get("last_update_date")
-            or close_date
-            or data.get("modification_history_date")
-            or data.get("case_open_date")
+            close_date
+            or data.get("initial_date")
+            or data.get("open_date")
             or ""
         ).strip()
         comments = _extract_iris_comments(data)
@@ -263,8 +401,13 @@ def _extract_iris_comments(data: dict) -> list[str]:
     return out
 
 
-def _require_success(resp) -> dict:
-    """Unwrap IRIS's ``{"status","data"}`` envelope. Raises on ``status != success``."""
+def _unwrap(resp) -> object:
+    """Unwrap IRIS's ``{"status","data"}`` envelope, returning the raw ``data``.
+
+    Returns the payload as-is (a dict for single objects, a list for reference
+    lists). Raises :class:`ConnectorError` on a non-JSON body, an unexpected shape,
+    or an ``status != success`` envelope.
+    """
     try:
         parsed = resp.json()
     except ValueError:
@@ -274,5 +417,10 @@ def _require_success(resp) -> dict:
     if parsed.get("status") not in (None, "success"):
         message = parsed.get("message") or "IRIS reported an error"
         raise ConnectorError(str(message))
-    data = parsed.get("data")
+    return parsed.get("data")
+
+
+def _require_success(resp) -> dict:
+    """Unwrap IRIS's envelope, coercing the payload to a dict (``{}`` otherwise)."""
+    data = _unwrap(resp)
     return data if isinstance(data, dict) else {}

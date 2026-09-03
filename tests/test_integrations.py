@@ -604,6 +604,74 @@ async def test_iris_push_create(httpx_mock):
     assert result.remote_id == "42"
 
 
+async def test_iris_push_create_attaches_children_with_id_lookups(httpx_mock):
+    """IOC/task attach must resolve IRIS integer reference ids (v1.5.0 contract):
+    ioc_type_id/ioc_tlp_id and task_status_id + task_assignees_id — never the
+    legacy name strings, which IRIS 400s."""
+    from admin.services.integrations.dfir_iris import DfirIrisConnector
+
+    httpx_mock.add_response(
+        method="POST",
+        url="http://iris.test/manage/cases/add",
+        json={"status": "success", "data": {"case_id": 42}},
+        status_code=200,
+    )
+    # Reference-list lookups (name → id). Ids are deliberately non-default to prove
+    # the connector reads them live rather than hardcoding.
+    httpx_mock.add_response(
+        method="GET",
+        url="http://iris.test/manage/ioc-types/list",
+        json={"status": "success", "data": [
+            {"type_id": 76, "type_name": "ip-any"},
+            {"type_id": 96, "type_name": "other"},
+        ]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url="http://iris.test/manage/tlp/list",
+        json={"status": "success", "data": [
+            {"tlp_id": 2, "tlp_name": "amber"},
+            {"tlp_id": 3, "tlp_name": "green"},
+        ]},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url="http://iris.test/manage/task-status/list",
+        json={"status": "success", "data": [
+            {"id": 1, "status_name": "To do"},
+            {"id": 2, "status_name": "In progress"},
+        ]},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url="http://iris.test/case/ioc/add?cid=42",
+        json={"status": "success", "data": {"ioc_id": 1}},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url="http://iris.test/case/tasks/add?cid=42",
+        json={"status": "success", "data": {"task_id": 1}},
+    )
+
+    obs = [{"type": "ip", "value": "203.0.113.7", "tlp": "amber",
+            "tags": ["c2"], "source": "bulwark"}]
+    tasks = [{"title": "Triage the origin", "status": "todo", "assignee": ""}]
+    conn = DfirIrisConnector(base_url="http://iris.test", api_key="k", customer_id=2)
+    result = await conn.push_case(_CASE, obs, tasks)
+    assert result.created is True
+    assert result.detail == "case created (1 iocs, 1 tasks)"
+
+    reqs = {(r.method, r.url.path): r for r in httpx_mock.get_requests()}
+    ioc_body = json.loads(reqs[("POST", "/case/ioc/add")].content)
+    assert ioc_body["ioc_type_id"] == 76
+    assert ioc_body["ioc_tlp_id"] == 2
+    assert "ioc_type" not in ioc_body and "ioc_tlp" not in ioc_body
+    task_body = json.loads(reqs[("POST", "/case/tasks/add")].content)
+    assert task_body["task_status_id"] == 1
+    assert task_body["task_assignees_id"] == []
+    assert "task_status" not in task_body and "task_assignee" not in task_body
+
+
 async def test_iris_error_envelope_raises(httpx_mock):
     from admin.services.integrations.base import ConnectorError
     from admin.services.integrations.dfir_iris import DfirIrisConnector
@@ -724,7 +792,7 @@ async def test_iris_sync_status_maps_state(httpx_mock):
                 "state_name": "Open",
                 "severity_id": 4,
                 "owner": "ir-lead",
-                "last_update_date": "2024-01-02T03:04:05",
+                "initial_date": "2024-01-02T03:04:05",
                 "comments": [{"comment_text": "opened"}, {"comment_text": ""}],
             },
         },
@@ -738,6 +806,36 @@ async def test_iris_sync_status_maps_state(httpx_mock):
     assert state.closed is False
     assert state.last_remote_update == "2024-01-02T03:04:05"
     assert state.comments == ["opened"]
+
+
+async def test_iris_sync_status_null_state_defaults_open(httpx_mock):
+    """Live IRIS leaves ``state_name`` null on the default case shape; an existing,
+    non-closed case must still reconcile as OPEN (not an empty signal)."""
+    from admin.services.integrations.base import REMOTE_STATUS_OPEN
+    from admin.services.integrations.dfir_iris import DfirIrisConnector
+
+    httpx_mock.add_response(
+        method="GET",
+        url="http://iris.test/manage/cases/9?cid=9",
+        json={
+            "status": "success",
+            "data": {
+                "state_name": None,
+                "owner": "administrator",
+                "open_date": "2026-09-03",
+                "initial_date": "2026-09-03T15:29:04.055618",
+                "close_date": None,
+            },
+        },
+    )
+    conn = DfirIrisConnector(base_url="http://iris.test", api_key="k")
+    state = await conn.sync_status("9")
+    assert state is not None
+    assert state.status == REMOTE_STATUS_OPEN
+    assert state.raw_status == ""
+    assert state.severity == ""
+    assert state.closed is False
+    assert state.last_remote_update == "2026-09-03T15:29:04.055618"
 
 
 async def test_iris_sync_status_close_date_marks_closed(httpx_mock):
