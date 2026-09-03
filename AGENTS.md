@@ -603,6 +603,7 @@ bulwark:risk:{scope}:{digest}    # HASH {score, ts} — decayed origin risk (sco
 bulwark:correlation:config       # HASH — runtime-tunable correlation overrides (throttled re-read)
 bulwark:correlation:counters     # HASH — replica-safe HINCRBY correlation metrics (incidents_*, origin_risk_*, tap_*, eval_lat_* inline-evaluation latency histogram)
 bulwark:automation:ratelimit:{account_id}  # Sorted set (sliding window) — per-service-account automation RPM budget
+bulwark:sightings:watermark      # STRING — high-water ts already swept by the sighting feedback dispatcher (no cold-start replay)
 ```
 
 TLS supported via `rediss://` URL scheme. External Redis (Azure/AWS/GCP) fully supported.
@@ -668,6 +669,10 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_METRICS_SCRAPE_TOKEN` | str | `""` | **Admin-side** (read via `read_secret`, `*_FILE` supported). Dedicated least-privilege bearer that gates `GET /admin/health/metrics` for Prometheus (`hmac.compare_digest`). Empty ⇒ scrape-token path inert, endpoint requires `admin:read` JWT |
 | `BULWARK_AUTOMATION_RATE_LIMIT_RPM` | int | `120` | **Admin-side**. Default per-key sliding-window RPM for service-account automation calls, used when an account carries no `rate_limit_rpm` override. `<= 0` disables throttling for keys without an override. Enforced only in the service-account branch of `require_permission_automation` (429 + `service_account.rate_limited` audit) |
 | `BULWARK_SERVICE_ACCOUNTS_SEED` | str | `""` | **Admin-side** (read via `read_secret`, `*_FILE` supported). Declarative JSON-array spec of service accounts to provision at admin startup (`seed_service_accounts()`). Each entry `{name, permissions[], key, rate_limit_rpm?, expires_at?}` supplies the operator's plaintext `bwk_sa_<hex>` key (only its SHA-256 is stored). Idempotent by key hash, fail-open (bad spec/entry logged + skipped) |
+| `BULWARK_SIGHTING_FEEDBACK_ENABLED` | bool | `false` | **Admin-side**. Master switch for the sighting feedback dispatcher — reports proxy IOC-match blocks back to the threat-intel platform (OpenCTI/MISP) the indicator came from. Fully inert when off; fail-open when on |
+| `BULWARK_SIGHTING_POLL_INTERVAL_SECONDS` | float | `300.0` | **Admin-side**. Interval between sighting-dispatch sweeps of the durable IOC-block feed |
+| `BULWARK_SIGHTING_SWEEP_LIMIT` | int | `200` | **Admin-side**. Max IOC-block events read from the store per sweep |
+| `BULWARK_SIGHTING_MAX_PER_SWEEP` | int | `50` | **Admin-side**. Max events actually dispatched per sweep; on hitting the cap the Redis watermark parks on the last fully-processed event so the remainder is picked up next cycle |
 
 ### Docker Secrets Support
 
@@ -867,7 +872,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | POST | `/admin/investigation/cases/{id}/observables/{obs}/promote-ioc` | Session | Promote ip/domain/url/hash to the IOC database — `investigation:write` |
 | POST | `/admin/investigation/cases/{id}/observables/{obs}/enrich` | Session | Enrich an observable via a Cortex integration's analyzers (folds worst-level verdict into `enrichment['cortex']`, flags `is_ioc` on malicious; a malicious verdict auto-raises origin-risk on every `origin` subject linked to the case — best-effort/fail-open, returns `origin_risk.raised`; fail-open 502) — `investigation:write` |
 | POST | `/admin/investigation/cases/{id}/observables/{obs}/respond` | Session | Run a Cortex **responder** (response action) against an observable; records the outcome under `enrichment['cortex_responder']` (never flags `is_ioc` — an action, not a verdict; fail-open 502) — `investigation:write` |
-| POST | `/admin/investigation/cases/{id}/observables/{obs}/lookup` | Session | Look up an observable against an **OpenCTI** integration's indicator graph (GraphQL); folds the worst-level active (non-revoked) indicator into `enrichment['opencti']` with a `not_found`/`clean`/`suspicious`/`malicious` verdict, flags `is_ioc` + auto-raises origin-risk on `malicious` (same fail-open path as enrich; fail-open 502) — `investigation:write` |
+| POST | `/admin/investigation/cases/{id}/observables/{obs}/lookup` | Session | Look up an observable against an **OpenCTI** (GraphQL indicator graph) or **MISP** (`/attributes/restSearch`) integration; folds the worst-level active (non-revoked) indicator/attribute into `enrichment['opencti']` or `enrichment['misp']` with a `not_found`/`clean`/`suspicious`/`malicious` verdict, flags `is_ioc` + auto-raises origin-risk on `malicious` (same fail-open path as enrich; fail-open 502) — `investigation:write` |
 | GET | `/admin/investigation/cases/{id}/tasks` | Session | List checklist tasks + progress roll-up — `investigation:read` |
 | POST | `/admin/investigation/cases/{id}/tasks` | Session | Add a checklist task — `investigation:write` |
 | POST | `/admin/investigation/cases/{id}/tasks/{task}/state` | Session | Set task status/assignee/due — `investigation:write` |
@@ -875,8 +880,9 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | DELETE | `/admin/investigation/cases/{id}/tasks/{task}` | Session | Delete a task — `investigation:write` |
 | GET | `/admin/integrations` | Session | List outbound connectors (secrets masked) — `integrations:read` |
 | GET | `/admin/integrations/status` | Session | Registry status + `can_write` flag — `integrations:read` |
+| GET | `/admin/integrations/sightings/status` | Session | Sighting feedback dispatcher observability snapshot (enabled/running + reported/suppressed/failed counters) — `integrations:read` |
 | GET | `/admin/integrations/{id}` | Session | Get one connector config (secret masked) — `integrations:read` |
-| POST | `/admin/integrations` | Session | Create connector (`thehive`\|`dfir_iris`\|`cortex`) — `integrations:write` |
+| POST | `/admin/integrations` | Session | Create connector (`thehive`\|`dfir_iris`\|`cortex`\|`opencti`\|`misp`) — `integrations:write` |
 | PUT | `/admin/integrations/{id}` | Session | Update connector config — `integrations:write` |
 | DELETE | `/admin/integrations/{id}` | Session | Delete connector — `integrations:write` |
 | POST | `/admin/integrations/{id}/toggle` | Session | Enable/disable connector — `integrations:write` |
@@ -885,7 +891,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | GET | `/admin/integrations/{id}/analyzers` | Session | List a Cortex integration's analyzer catalog (cortex-only; fail-open 502) — `integrations:read` |
 | GET | `/admin/integrations/{id}/responders` | Session | List a Cortex integration's responder catalog (cortex-only; fail-open 502) — `integrations:read` |
 | POST | `/admin/integrations/reload` | Session | Reload connector registry from disk — `integrations:write` |
-| POST | `/admin/integrations/push/case/{case_id}` | Session | Idempotent push of a case to TheHive/IRIS/OpenCTI (create-or-update via link store; fail-open). OpenCTI materialises SCOs + indicators + sightings + a container report via raw GraphQL, gated by a TLP data-sharing policy — `TLP:RED` observables are excluded and a wholly-restricted case is refused with `400` (never contacts the remote for restricted data) — `integrations:write` |
+| POST | `/admin/integrations/push/case/{case_id}` | Session | Idempotent push of a case to TheHive/IRIS/OpenCTI/MISP (create-or-update via link store; fail-open). OpenCTI materialises SCOs + indicators + sightings + a container report via raw GraphQL, MISP materialises an Event + Attributes, both gated by a TLP data-sharing policy — `TLP:RED` observables are excluded and a wholly-restricted case is refused with `400` (never contacts the remote for restricted data) — `integrations:write` |
 | GET | `/admin/integrations/push/case/{case_id}/links` | Session | List remote links (remote_id/url/last_synced_at + `reconcile_state`/`last_reconciled_at`/`last_remote_update`) for a case — `integrations:read` |
 | POST | `/admin/integrations/sync/case/{case_id}` | Session **or** service-account | Manually trigger an inbound reconcile of one case against one integration (folds the remote's workflow state — status/severity/assignee/comments — back into the local case; detection facts stay untouched; fail-open). Opened to automation via `require_permission_automation("integrations:write")` — `integrations:write` |
 | POST | `/admin/integrations/inbound/{integration_id}` | HMAC (no session) | Remote/SOAR case-updated callback. Verified with a constant-time HMAC-SHA256 over the exact raw body against `BULWARK_INTEGRATION_<ID>_INBOUND_SECRET` (+`_FILE`) — **401 fail-CLOSED** on a bad/absent signature; fail-open past that (unparseable body / unknown remote id / debounced duplicate → accepted no-op). CSRF-exempt (no ambient cookie). Debounced per `remote_id`; reconciles every locally-linked case for the resolved remote id |

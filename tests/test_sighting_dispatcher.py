@@ -318,3 +318,32 @@ async def test_dispatch_cap_limits_and_holds_watermark(wired):
     # Capped mid-sweep → watermark parks on the last fully-processed event (10.0),
     # NOT on `now`, so the un-processed one is picked up next cycle.
     assert state["watermark"] == 10.0
+
+
+# ─── status snapshot + route ─────────────────────────────────────────────────
+
+
+def test_status_snapshot_shape():
+    d = SightingDispatcher(enabled=True, interval_seconds=42.0, sweep_limit=7, max_per_sweep=3)
+    snap = d.status()
+    assert snap["enabled"] is True
+    assert snap["running"] is False
+    assert snap["interval_seconds"] == 42.0
+    assert snap["sweep_limit"] == 7
+    assert snap["max_per_sweep"] == 3
+    assert snap["total_reported"] == 0
+    assert snap["total_suppressed"] == 0
+    assert snap["total_failed"] == 0
+    assert snap["last_error"] is None
+
+
+async def test_sightings_status_route_returns_snapshot(monkeypatch):
+    import admin.services.integrations.sighting_dispatcher as disp_mod
+    from admin.routes.integrations import sightings_status
+
+    d = SightingDispatcher(enabled=False)
+    monkeypatch.setattr(disp_mod, "get_sighting_dispatcher", lambda: d)
+
+    result = await sightings_status(user=SimpleNamespace(sub="admin", role="admin"))
+    assert result == {"dispatcher": d.status()}
+    assert result["dispatcher"]["enabled"] is False

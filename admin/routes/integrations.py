@@ -81,6 +81,16 @@ async def status(user: TokenPayload = Depends(require_permission("integrations:r
     }
 
 
+@router.get("/sightings/status")
+async def sightings_status(
+    user: TokenPayload = Depends(require_permission("integrations:read")),
+):
+    """Observability snapshot for the sighting feedback dispatcher."""
+    from ..services.integrations.sighting_dispatcher import get_sighting_dispatcher
+
+    return {"dispatcher": get_sighting_dispatcher().status()}
+
+
 @router.get("")
 async def list_integrations(
     user: TokenPayload = Depends(require_permission("integrations:read")),

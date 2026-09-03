@@ -1127,8 +1127,10 @@ roll-up and reconstructed timeline; interop shapes carry the case's observables 
 
 ### Integrations (Outbound Case Connectors)
 
-Outbound **connectors** push investigation cases into an external case-management / SOAR platform.
-Two connector types ship: **TheHive 5** (`thehive`) and **DFIR-IRIS** (`dfir_iris`). Each connector
+Outbound **connectors** push investigation cases into an external case-management / SOAR / threat-intel
+platform. Five connector types ship: **TheHive 5** (`thehive`), **DFIR-IRIS** (`dfir_iris`),
+**Cortex** (`cortex`, enrichment/response), **OpenCTI** (`opencti`), and **MISP** (`misp`) — the last
+two are both case-push targets *and* observable-lookup / sighting-feedback platforms. Each connector
 is a flat config record (`name`, `type`, `base_url`, optional `api_key`, `verify_tls`, `enabled`)
 persisted to `data/integrations.json` (override with `BULWARK_INTEGRATIONS_FILE`).
 
@@ -1149,16 +1151,17 @@ both; auditor/viewer are read-only). All mutations are recorded in the admin aud
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
 | GET | `/status` | `integrations:read` | Registry status + `can_write` flag for the caller |
+| GET | `/sightings/status` | `integrations:read` | Sighting feedback dispatcher snapshot (enabled/running + reported/suppressed/failed) |
 | GET | `` | `integrations:read` | List connectors (secrets masked) |
 | GET | `/{id}` | `integrations:read` | Get one connector config (secret masked) |
-| POST | `` | `integrations:write` | Create a connector (`type` = `thehive`\|`dfir_iris`) |
+| POST | `` | `integrations:write` | Create a connector (`type` = `thehive`\|`dfir_iris`\|`cortex`\|`opencti`\|`misp`) |
 | PUT | `/{id}` | `integrations:write` | Update a connector config |
 | DELETE | `/{id}` | `integrations:write` | Delete a connector |
 | POST | `/{id}/toggle` | `integrations:write` | Enable / disable a connector |
 | POST | `/{id}/test` | `integrations:write` | Live `test_connection` probe against the platform |
 | GET | `/{id}/health` | `integrations:read` | Cached connector health (TTL 30s) |
 | POST | `/reload` | `integrations:write` | Reload the connector registry from disk |
-| POST | `/push/case/{case_id}` | `integrations:write` | Idempotent push of a case (create-or-update; fail-open) |
+| POST | `/push/case/{case_id}` | `integrations:write` | Idempotent push of a case to TheHive/IRIS/OpenCTI/MISP (create-or-update; fail-open) |
 | GET | `/push/case/{case_id}/links` | `integrations:read` | List remote links (`remote_id` / `remote_url` / `last_synced_at`) for a case |
 
 ```json

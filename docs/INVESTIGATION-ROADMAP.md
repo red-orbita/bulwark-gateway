@@ -1,6 +1,6 @@
 # Investigation Center — Evolution Roadmap & Integration Design
 
-Status: **Phases 0–4 DELIVERED · Phase 5 PLANNED** · Owner: SOC platform · Scope: `admin/` (off proxy hot-path)
+Status: **Phases 0–5 DELIVERED** · Owner: SOC platform · Scope: `admin/` (off proxy hot-path)
 
 This document tracks how the Investigation / Triage / Cases workspace grew into a
 SOC-grade IR platform, and how Bulwark Gateway integrates with **TheHive**,
@@ -498,8 +498,10 @@ HMAC verify (valid + forged), and webhook-vs-poll parity.
 
 ## 7. Phase 5 — Threat-intel federation: MISP + STIX/TAXII + sightings
 
-> **Status: PROPOSED — for review.** Scope drafted from §10.6 (MISP) + the standing
-> MISP/OpenCTI doc↔code gap; approve/adjust before implementation.
+> **Status: 7.1 MISP connector ✅ · 7.2 TAXII 2.1 feeds ✅ · 7.3 Sighting feedback
+> loop ✅ · 7.4 Config/docs ✅ — Phase 5 DELIVERED.** STIX 2.1 as plain dicts,
+> MISP + TAXII over raw `httpx` (no `pymisp`/`taxii2-client`/`stix2`); TLP-gated,
+> admin-side, off the hot path, fail-open.
 
 **Goal.** Phase 2 made Bulwark a CTI *consumer* (OpenCTI pull/lookup, Cortex
 enrich). Phase 5 makes it a bidirectional CTI *citizen*: consume standards-based
@@ -512,7 +514,7 @@ over raw `httpx` (no `pymisp`, `taxii2-client`, or `stix2`). The TLP/PAP gate is
 enforced at every outbound boundary (reuse the Phase-2 OpenCTI `TlpGateError`
 model). All admin-side, off the hot path, fail-open.
 
-### 7.1 MISP first-class connector (`admin/services/integrations/misp.py`)
+### 7.1 MISP first-class connector (`admin/services/integrations/misp.py`) ✅ DONE
 Promote the pull-only `IOCStore._fetch_misp` into a full `Connector`:
 - **Pull** (exists) — keep feeding the live IOC store; add attribute→observable-type
   mapping parity with the OpenCTI path.
@@ -526,7 +528,7 @@ Promote the pull-only `IOCStore._fetch_misp` into a full `Connector`:
   path as Cortex/OpenCTI.
 - Registry: add `misp` to `INTEGRATION_TYPES` with push + lookup factories + health.
 
-### 7.2 TAXII 2.1 collection feeds (`admin/services/integrations/taxii.py`)
+### 7.2 TAXII 2.1 collection feeds (`admin/services/integrations/taxii.py`) ✅ DONE
 - **Consume**: poll configured TAXII 2.1 collections (raw httpx, STIX 2.1 envelope),
   parse `indicator` SDOs (reuse the Phase-2 `_parse_stix_indicator_pattern`), drop
   revoked/sub-confidence, upsert into the live IOC store via `feed_scheduler` — a
@@ -535,20 +537,29 @@ Promote the pull-only `IOCStore._fetch_misp` into a full `Connector`:
   `export_case --format stix` already builds them) to an outbound TAXII collection.
 - SSRF-validate every collection URL (parity with the OpenCTI/MISP fetchers).
 
-### 7.3 Sighting feedback loop (the real bidirectional win)
+### 7.3 Sighting feedback loop (the real bidirectional win) ✅ DONE
 When a promoted IOC (Phase 0 → live proxy blocking) actually matches proxy traffic,
 report a **sighting** back to the CTI platform so the community sees Bulwark's
 telemetry:
-- The proxy already emits IOC-match security events and the admin already ingests
-  them (durable store). Add an async admin-side tap: on an IOC-match event whose
-  value maps to a known remote indicator (via `integration_link` / IOC provenance),
-  enqueue a sighting push to OpenCTI (`sightingAdd`) and/or MISP (`/sightings/add`).
-- Fully fail-open, batched, rate-limited, **TLP-gated** (never report a sighting for
-  a `TLP:RED`-sourced indicator to a broader-audience platform). Each audited.
+- The proxy stamps `metadata.ioc_matches` on each IOC-match block event (zero
+  hot-path cost — the atoms were already computed); the admin ingests them into the
+  durable store as today. A background `SightingDispatcher`
+  (`admin/services/integrations/sighting_dispatcher.py`, mirrors `ReconcilePoller`)
+  sweeps freshly-blocked IOC events on an interval, resolves each atom's feed
+  provenance (via the IOC store's `source`), and — only for indicators sourced from
+  a lookup-capable platform with an enabled connector — reports the sighting to
+  OpenCTI (`stixSightingRelationshipAdd`, resolving an active STIX indicator by
+  value; never fabricates one) and/or MISP (`/sightings/add`).
+- Fully fail-open, **TLP-gated** (a `TLP:RED`-tagged indicator is suppressed, never
+  shared to a broader-audience platform), bounded (per-sweep cap + LRU event dedupe
+  + Redis watermark so a cold start never replays history). Every outcome
+  (`sighting.reported`/`suppressed`/`failed`/`noop`) is audited.
 - **No hot-path cost**: the proxy emits its event exactly as today; all sighting
   logic is admin-side / async. `src/` never imports `admin/`.
+- Off by default (`BULWARK_SIGHTING_FEEDBACK_ENABLED`); tuned via
+  `BULWARK_SIGHTING_{POLL_INTERVAL_SECONDS,SWEEP_LIMIT,MAX_PER_SWEEP}`.
 
-### 7.4 Config, RBAC, docs
+### 7.4 Config, RBAC, docs ✅ DONE
 - Connector configs via the existing `data/integrations.json` + `*_FILE` secrets
   model; `integrations:{read,write}` RBAC (unchanged namespace).
 - New endpoint: `GET /admin/integrations/{id}/collections` (TAXII); lookup/push reuse
@@ -597,8 +608,7 @@ Phase 5  MISP first-class connector · TAXII 2.1 feeds · STIX publish · sighti
 ```
 
 Each phase ships behind config flags (off by default), is independently testable,
-and leaves the proxy hot path untouched. Phases 0–3 are delivered; 4–5 are proposed
-above (§6–§7) pending review.
+and leaves the proxy hot path untouched. Phases 0–5 are delivered (§2–§7).
 
 ---
 
