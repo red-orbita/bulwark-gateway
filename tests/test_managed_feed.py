@@ -176,3 +176,50 @@ def test_unmanaged_feed_crud_still_works(tmp_path: Path):
     assert store.update_feed(feed.id, FeedUpdate(name="renamed")).name == "renamed"
     assert store.toggle_feed(feed.id).enabled is False
     assert store.delete_feed(feed.id) is True
+
+
+# ─── credential resolution (env wins for managed feeds) ──────────────────────
+
+
+def test_managed_feed_key_falls_back_to_stored_inline(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("BULWARK_INTEGRATION_OCTI1_API_KEY", raising=False)
+    store = _store(tmp_path)
+    feed = store.upsert_managed_feed(
+        connector_id="octi1", feed_type=FeedType.OPENCTI, name="OpenCTI",
+        url="http://opencti.test", api_key="inline-tok",
+    )
+    assert store._get_feed_api_key(feed) == "inline-tok"
+
+
+def test_managed_feed_env_key_overrides_inline(tmp_path: Path, monkeypatch):
+    store = _store(tmp_path)
+    feed = store.upsert_managed_feed(
+        connector_id="octi1", feed_type=FeedType.OPENCTI, name="OpenCTI",
+        url="http://opencti.test", api_key="inline-tok",
+    )
+    monkeypatch.setenv("BULWARK_INTEGRATION_OCTI1_API_KEY", "env-tok")
+    assert store._get_feed_api_key(feed) == "env-tok"
+
+
+def test_managed_feed_env_file_variant(tmp_path: Path, monkeypatch):
+    store = _store(tmp_path)
+    feed = store.upsert_managed_feed(
+        connector_id="octi1", feed_type=FeedType.OPENCTI, name="OpenCTI",
+        url="http://opencti.test", api_key="",
+    )
+    secret_file = tmp_path / "octi.key"
+    secret_file.write_text("file-tok\n")
+    monkeypatch.delenv("BULWARK_INTEGRATION_OCTI1_API_KEY", raising=False)
+    monkeypatch.setenv("BULWARK_INTEGRATION_OCTI1_API_KEY_FILE", str(secret_file))
+    assert store._get_feed_api_key(feed) == "file-tok"
+
+
+def test_unmanaged_feed_ignores_integration_env(tmp_path: Path, monkeypatch):
+    # A hand-made feed never resolves an integration credential from the env.
+    store = _store(tmp_path)
+    feed = store.create_feed(
+        FeedCreate(name="hand made", feed_type=FeedType.CUSTOM, url="http://x.test",
+                   api_key="own-key")
+    )
+    monkeypatch.setenv(f"BULWARK_INTEGRATION_{feed.id.upper()}_API_KEY", "env-tok")
+    assert store._get_feed_api_key(feed) == "own-key"

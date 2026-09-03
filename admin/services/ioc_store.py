@@ -750,9 +750,24 @@ class IOCStore:
         return results
 
     def _get_feed_api_key(self, feed: FeedConfig) -> str:
-        """Get API key for a feed from stored state."""
+        """Get API key for a feed from stored state.
+
+        For an integration-managed feed (``managed_by`` set), an out-of-band
+        ``BULWARK_INTEGRATION_<connector>_API_KEY`` (or its ``_FILE`` variant)
+        wins over any stored inline key — parity with how the integration
+        connector resolves its own credential, so operators can keep the secret
+        off disk and configure it once.
+        """
         self._ensure_default_feeds()
         state = self._feed_state.get("feeds", {}).get(feed.id, {})
+        managed_by = state.get("managed_by")
+        if managed_by:
+            from .secrets import read_secret
+
+            env_name = f"BULWARK_INTEGRATION_{str(managed_by).upper()}_API_KEY"
+            resolved = read_secret(env_name, default="")
+            if resolved:
+                return resolved
         return state.get("api_key", "")
 
     def _fetch_feed_by_type(self, feed: FeedConfig) -> int:
