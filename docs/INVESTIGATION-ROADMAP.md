@@ -1,6 +1,6 @@
 # Investigation Center — Evolution Roadmap & Integration Design
 
-Status: **Phases 0–3 DELIVERED · Phases 4–5 PLANNED** · Owner: SOC platform · Scope: `admin/` (off proxy hot-path)
+Status: **Phases 0–4 DELIVERED · Phase 5 PLANNED** · Owner: SOC platform · Scope: `admin/` (off proxy hot-path)
 
 This document tracks how the Investigation / Triage / Cases workspace grew into a
 SOC-grade IR platform, and how Bulwark Gateway integrates with **TheHive**,
@@ -472,7 +472,7 @@ than widening the base `Protocol`: add `sync_status` to `thehive` + `dfir_iris`
 
 ### 6.4 Link store + UI
 - Extend `integration_link` with `last_remote_update`, `last_reconciled_at`,
-  `reconcile_state` (`in_sync` | `pending` | `conflict`) — migration **v13**.
+  `reconcile_state` (`synced` | `pending` | `conflict`) — migration **v13**.
 - Case-detail UI gains a per-link **Remote sync** strip: state badge, last-synced,
   a pending-conflict banner with an operator **accept remote / keep local** action,
   and a manual **Sync now** button.

@@ -655,6 +655,73 @@
                 </div>
             </div>
 
+            <!-- Remote sync — bidirectional federation (Fase 4) -->
+            <div class="sg-card" x-show="caseLinks.length > 0" x-cloak>
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="git-compare-arrows" class="w-4 h-4 text-indigo-300"></i>
+                        <h2 class="text-sm font-medium text-white">Remote Sync</h2>
+                        <span class="text-gray-600 text-[11px]" x-text="'(' + caseLinks.length + ')'"></span>
+                    </div>
+                    <button @click="loadCaseLinks()" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="caseLinksLoading" aria-label="Refresh remote links">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="caseLinksLoading ? 'animate-spin' : ''"></i>
+                    </button>
+                </div>
+
+                <p class="text-[11px] text-gray-500 mb-3">Case-management platforms this case is federated to. Bulwark folds a remote's workflow state (status, severity, assignee, comments) back into the local case; detection facts stay untouched.</p>
+
+                <div class="space-y-2">
+                    <template x-for="lnk in caseLinks" :key="'lnk-' + lnk.connector">
+                        <div class="rounded border border-gray-800 bg-gray-950/50 p-2.5">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-200 border border-indigo-400/30" x-text="pushTargetLabel(lnk.connector)"></span>
+                                <span class="sg-badge text-[10px]" :class="reconcileStateClass(lnk.reconcile_state)" x-text="reconcileStateLabel(lnk.reconcile_state)"></span>
+                                <template x-if="lnk.remote_url">
+                                    <a :href="lnk.remote_url" target="_blank" rel="noopener noreferrer" class="text-[11px] font-mono text-cyan-300 hover:underline break-all" x-text="lnk.remote_id || 'remote'"></a>
+                                </template>
+                                <template x-if="!lnk.remote_url">
+                                    <span class="text-[11px] font-mono text-gray-400 break-all" x-text="lnk.remote_id || 'remote'"></span>
+                                </template>
+                                <button @click="syncLink(lnk)" class="sg-btn sg-btn-ghost sg-btn-sm ml-auto shrink-0"
+                                        :disabled="!integrationsCanWrite || syncingConnector === lnk.connector || !integrationForConnector(lnk.connector)"
+                                        :title="integrationForConnector(lnk.connector) ? 'Pull remote workflow state now' : 'No enabled integration for this platform'"
+                                        aria-label="Sync now">
+                                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5" :class="syncingConnector === lnk.connector ? 'animate-spin' : ''"></i>
+                                    Sync now
+                                </button>
+                            </div>
+                            <div class="mt-1.5 flex items-center gap-3 flex-wrap text-[10px] text-gray-500">
+                                <span>Last synced: <span class="text-gray-400" x-text="fmtTime(lnk.last_synced_at)"></span></span>
+                                <span x-show="lnk.last_reconciled_at">Last reconciled: <span class="text-gray-400" x-text="fmtTime(lnk.last_reconciled_at)"></span></span>
+                                <span x-show="lnk.last_remote_update">Remote updated: <span class="text-gray-400" x-text="fmtTime(lnk.last_remote_update)"></span></span>
+                            </div>
+
+                            <!-- Conflict banner: a remote reopen of a locally-terminal case -->
+                            <div x-show="lnk.reconcile_state === 'conflict'" x-cloak class="mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2">
+                                <div class="flex items-start gap-2">
+                                    <i data-lucide="triangle-alert" class="w-3.5 h-3.5 text-amber-300 mt-0.5 shrink-0"></i>
+                                    <div class="min-w-0">
+                                        <p class="text-[11px] text-amber-200 font-medium">Remote change conflicts with your local decision</p>
+                                        <p class="text-[10px] text-amber-200/80 mt-0.5">The remote would reopen this closed/resolved case. Bulwark will not auto-apply it — choose how to settle it.</p>
+                                        <div class="flex gap-2 mt-2" x-show="integrationsCanWrite">
+                                            <button @click="resolveConflict(lnk, 'accept_remote')" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="resolvingConnector === lnk.connector || !integrationForConnector(lnk.connector)">
+                                                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                                                Accept remote
+                                            </button>
+                                            <button @click="resolveConflict(lnk, 'keep_local')" class="sg-btn sg-btn-ghost sg-btn-sm" :disabled="resolvingConnector === lnk.connector || !integrationForConnector(lnk.connector)">
+                                                <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+                                                Keep local
+                                            </button>
+                                        </div>
+                                        <p x-show="!integrationsCanWrite" class="text-[10px] text-amber-200/80 mt-1">Read-only role — cannot resolve conflicts.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
             <!-- Timeline reconstruction -->
             <div class="sg-card">
                 <div class="flex items-center justify-between gap-3 mb-4">
@@ -1582,6 +1649,12 @@ function investigationPage() {
             pushMenuOpen: false,
             pushTargets: [],
             pushing: false,
+            caseLinks: [],
+            caseLinksLoading: false,
+            allIntegrations: [],
+            integrationsCanWrite: false,
+            syncingConnector: null,
+            resolvingConnector: null,
             caseNoteInput: '',
             caseTimeline: [],
             caseTimelineLoading: false,
@@ -2498,11 +2571,144 @@ function investigationPage() {
                 }
                 showToast((data.created ? 'Case pushed' : 'Case updated') + ' → ' + (data.remote_id || 'remote'), 'success');
                 this.pushMenuOpen = false;
+                this.loadCaseLinks();
             } catch (e) {
                 showToast('Network error during push', 'error');
             } finally {
                 this.pushing = false;
             }
+        },
+
+        // ─── Remote sync (Fase 4 — bidirectional federation) ─────────────────
+        async loadCaseLinks() {
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            this.caseLinksLoading = true;
+            try {
+                // Load the integration registry first so links (keyed by connector
+                // type) can resolve back to a concrete integration id + write scope.
+                try {
+                    const sres = await fetch('/admin/integrations/status');
+                    if (sres.ok) {
+                        const sdata = await sres.json();
+                        this.allIntegrations = sdata.integrations || [];
+                        this.integrationsCanWrite = !!sdata.can_write;
+                    }
+                } catch (e) { /* non-fatal — links still render read-only */ }
+
+                const res = await fetch('/admin/integrations/push/case/' + encodeURIComponent(id) + '/links');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.caseLinks = data.links || [];
+                } else {
+                    this.caseLinks = [];
+                }
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            } catch (e) {
+                this.caseLinks = [];
+            } finally {
+                this.caseLinksLoading = false;
+            }
+        },
+
+        integrationForConnector(connectorType) {
+            // A link stores the connector *type* (e.g. "thehive"); resolve it to a
+            // concrete integration id, preferring an enabled one. Mirrors the
+            // backend's type-keyed link idempotency (one link per type per case).
+            const of = (this.allIntegrations || []).filter(i => i.type === connectorType);
+            return of.find(i => i.enabled) || of[0] || null;
+        },
+
+        async syncLink(lnk) {
+            if (!this.caseDetail || this.syncingConnector) return;
+            const integ = this.integrationForConnector(lnk.connector);
+            if (!integ) { showToast('No enabled integration for this platform', 'error'); return; }
+            this.syncingConnector = lnk.connector;
+            const id = this.caseDetail.case_id;
+            try {
+                const res = await fetch('/admin/integrations/sync/case/' + encodeURIComponent(id), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ integration_id: integ.id }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    showToast(data.detail || 'Sync failed', 'error');
+                    return;
+                }
+                if (data.conflict) {
+                    showToast('Remote conflicts with your local decision — resolve below', 'error');
+                } else if (data.ok) {
+                    showToast('Synced from ' + this.pushTargetLabel(lnk.connector) + (data.detail ? ' — ' + data.detail : ''), 'success');
+                } else {
+                    showToast(data.detail || 'Nothing to sync', 'info');
+                }
+                await this.loadCaseLinks();
+                await this.refreshCaseAfterRemote();
+            } catch (e) {
+                showToast('Network error during sync', 'error');
+            } finally {
+                this.syncingConnector = null;
+            }
+        },
+
+        async resolveConflict(lnk, resolution) {
+            if (!this.caseDetail || this.resolvingConnector) return;
+            const integ = this.integrationForConnector(lnk.connector);
+            if (!integ) { showToast('No enabled integration for this platform', 'error'); return; }
+            this.resolvingConnector = lnk.connector;
+            const id = this.caseDetail.case_id;
+            try {
+                const res = await fetch('/admin/integrations/sync/case/' + encodeURIComponent(id) + '/resolve-conflict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ integration_id: integ.id, resolution: resolution }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    showToast(data.detail || 'Resolution failed', 'error');
+                    return;
+                }
+                showToast(resolution === 'accept_remote' ? 'Remote change accepted' : 'Local decision kept', 'success');
+                await this.loadCaseLinks();
+                await this.refreshCaseAfterRemote();
+            } catch (e) {
+                showToast('Network error resolving conflict', 'error');
+            } finally {
+                this.resolvingConnector = null;
+            }
+        },
+
+        async refreshCaseAfterRemote() {
+            // A reconcile may have folded a new status/severity/assignee/notes into
+            // the local case — re-pull the detail + timeline so the UI reflects it.
+            if (!this.caseDetail) return;
+            const id = this.caseDetail.case_id;
+            try {
+                const res = await fetch('/admin/investigation/cases/' + encodeURIComponent(id));
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.case) {
+                        this.caseDetail = data.case;
+                        this.caseAssigneeInput = data.case.assignee || '';
+                    }
+                }
+            } catch (e) { /* non-fatal */ }
+            this.loadCaseTimeline();
+        },
+
+        reconcileStateClass(state) {
+            if (state === 'synced') return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+            if (state === 'conflict') return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
+            if (state === 'pending') return 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30';
+            return 'bg-gray-500/15 text-gray-400 border border-gray-600/30';
+        },
+
+        reconcileStateLabel(state) {
+            if (state === 'synced') return 'In sync';
+            if (state === 'conflict') return 'Conflict';
+            if (state === 'pending') return 'Pending';
+            return 'Not reconciled';
         },
 
         async createCase() {
@@ -2552,6 +2758,7 @@ function investigationPage() {
                     this.loadCaseObservables();
                     this.loadCaseTasks();
                     this.loadEnrichmentIntegrations();
+                    this.loadCaseLinks();
                     this.$nextTick(() => window.lucide && window.lucide.createIcons());
                 } else if (res.status === 404) {
                     showToast('Case not found', 'error');
@@ -2579,6 +2786,10 @@ function investigationPage() {
             this.caseTaskNew = { title: '', assignee: '' };
             this.caseTagInput = '';
             this.caseRelated = [];
+            this.caseLinks = [];
+            this.caseLinksLoading = false;
+            this.syncingConnector = null;
+            this.resolvingConnector = null;
         },
 
         async loadCaseTimeline() {
