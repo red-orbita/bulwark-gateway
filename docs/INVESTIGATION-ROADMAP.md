@@ -391,7 +391,11 @@ Playbooks need to act back. The verbs already exist (`/respond`,
   whitelist, is idempotent by key hash (safe to re-run every boot), and is fail-open (a
   bad spec/entry is logged and skipped, never crashes startup).
 
-### 5.3 Reference playbooks (documented, runner-agnostic)
+### 5.3 Reference playbooks (documented, runner-agnostic) ✅ DONE
+Documented in `docs/SOAR-PLAYBOOKS.md` — a runner-agnostic reference covering the
+signed event-webhook envelope + verification, the service-account action API
+(auth/idempotency/rate-limits), the mutating endpoint catalogue, and all seven
+recipes below:
 1. **Auto-open case** when incident confidence ≥ threshold or origin crosses BLOCK.
 2. **Auto-enrich** new alert → extract IOCs → Cortex + OpenCTI → attach → raise risk if malicious.
 3. **Auto-contain** repeated exfil origin → responder → `/respond raise_risk` to BLOCK + notify war-room.

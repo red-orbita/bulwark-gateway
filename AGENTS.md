@@ -1353,6 +1353,7 @@ Full troubleshooting: `docs/TROUBLESHOOTING.md`
 | Fix issues | `docs/TROUBLESHOOTING.md` |
 | Configure alerts | `docs/NOTIFICATIONS.md` |
 | API details | `docs/API-REFERENCE.md` |
+| SOAR / automation playbooks | `docs/SOAR-PLAYBOOKS.md` |
 | Validate pipeline e2e (K8s) | `docs/E2E-VALIDATION.md` |
 | Security posture | `docs/SECURITY-HARDENING.md` |
 | Accepted limitations / known gaps | `docs/LIMITATIONS.md` |
