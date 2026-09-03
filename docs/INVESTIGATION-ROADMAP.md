@@ -413,7 +413,156 @@ and fully audited. Tests cover auth scoping, idempotency replay, and signature v
 
 ---
 
-## 6. Cross-cutting concerns
+## 6. Phase 4 — Bidirectional case federation (close the §10.1 loop)
+
+> **Status: PROPOSED — for review.** Scope drafted from the §10 open decisions +
+> the remaining Phase 0–3 gaps; approve/adjust before implementation.
+
+**Goal.** Phases 1–3 made Bulwark a *producer* — push a case out, fire events out,
+accept scoped actions in. Phase 4 closes the other half of §10.1: reconcile remote
+case state **inbound** so a case worked in TheHive / DFIR-IRIS (or by a SOAR
+playbook) stays consistent in Bulwark — **without conflict loops**.
+
+**Design stance (resolves §10.1).** Bulwark stays **authoritative for
+detection-derived facts** (subjects, observables, enrichment, origin-risk,
+compliance) — a remote can never overwrite those. Remote systems are authoritative
+for **workflow state** (status, assignee, analyst notes, task completion). Reconcile
+is therefore **field-partitioned**, not last-writer-wins, which *structurally*
+removes the conflict-loop risk the original roadmap flagged. Fail-OPEN for the
+integration, off the proxy hot path, every change audited.
+
+### 6.1 Wire the `sync_status` connector method
+The `Connector` protocol already declares
+`sync_status(mapping: RemoteRef) -> SyncResult | None` (§3.1) but no connector
+implements it and nothing calls it. Implement for `thehive` + `dfir_iris`:
+- Read the remote case by the `remote_id` stored in `integration_link`.
+- Return a normalized `RemoteState` (status, severity, assignee, `closed?`,
+  `last_remote_update`, comments added since `last_synced_at`).
+- Fail-open + circuit breaker (reuse `HttpConnectorBase`); a dead remote yields
+  `None`, never raises.
+
+### 6.2 Reconcile engine (`admin/services/integrations/reconcile.py`)
+- Maps remote workflow state → local case through a **whitelist** of reconcilable
+  fields only: `status`, `severity` (escalate-only unless configured), `assignee`,
+  and remote comments → local notes tagged `source:remote`.
+- **Never** touches subjects / observables / enrichment / origin-risk.
+- **Never** auto-reopens a locally-`closed`/`resolved` case: a remote reopen becomes
+  an audited note + a surfaced `reconcile.conflict` for an operator to adjudicate —
+  the hard anti-ping-pong guard.
+- Every applied change is audit-logged (`case.reconciled`, actor `integration:<id>`)
+  and re-emits the existing lifecycle event webhooks so downstream SOAR sees the
+  reconciled state too (loop-safe: reconcile-origin events are marked to avoid
+  re-triggering a push back to the same remote).
+
+### 6.3 Two trigger paths (webhook-first, poll-fallback)
+- **Inbound webhook receiver** `POST /admin/integrations/inbound/{integration_id}` —
+  accepts a remote's case-updated callback, **HMAC-verified** against a per-integration
+  inbound secret (`BULWARK_INTEGRATION_<ID>_INBOUND_SECRET` / `_FILE`, mirroring the
+  outbound-webhook secret model), **fail-CLOSED on a bad signature** (auth boundary)
+  but fail-open on a downstream processing error. Debounced per `remote_id`.
+- **Poll fallback**: a `feed_scheduler`-driven periodic `sync_status` sweep of
+  linked, non-closed cases (configurable interval, bounded + jittered batch) for
+  connectors that cannot push inbound webhooks.
+
+### 6.4 Link store + UI
+- Extend `integration_link` with `last_remote_update`, `last_reconciled_at`,
+  `reconcile_state` (`in_sync` | `pending` | `conflict`) — migration **v13**.
+- Case-detail UI gains a per-link **Remote sync** strip: state badge, last-synced,
+  a pending-conflict banner with an operator **accept remote / keep local** action,
+  and a manual **Sync now** button.
+- Add `reconcile_state` to the existing
+  `GET /admin/integrations/push/case/{id}/links` output.
+
+### 6.5 Endpoints + RBAC
+| Method + Path | Auth | Purpose |
+|---------------|------|---------|
+| `POST /admin/integrations/sync/case/{case_id}` | `integrations:write` (session **or** service-account) | Manual reconcile trigger |
+| `POST /admin/integrations/inbound/{integration_id}` | HMAC (no session) | Remote lifecycle callback |
+| `POST /admin/integrations/sync/case/{case_id}/resolve-conflict` | `integrations:write` | Operator adjudication of a `conflict` |
+
+### Phase 4 acceptance
+A case pushed to TheHive/IRIS, then progressed or closed remotely (or by a
+playbook), reconciles back into Bulwark: status/assignee/notes update, detection
+facts stay untouched, a locally-closed case is never silently reopened, and every
+reconcile is audited + re-emitted. Tests mock the remote REST (pytest-httpx) for
+status-change, remote-close, comment-sync, the local-closed-vs-remote-open conflict,
+HMAC verify (valid + forged), and webhook-vs-poll parity.
+
+---
+
+## 7. Phase 5 — Threat-intel federation: MISP + STIX/TAXII + sightings
+
+> **Status: PROPOSED — for review.** Scope drafted from §10.6 (MISP) + the standing
+> MISP/OpenCTI doc↔code gap; approve/adjust before implementation.
+
+**Goal.** Phase 2 made Bulwark a CTI *consumer* (OpenCTI pull/lookup, Cortex
+enrich). Phase 5 makes it a bidirectional CTI *citizen*: consume standards-based
+feeds (MISP, TAXII 2.1), contribute back sightings + case intel under TLP
+governance, and finally promote MISP from a bare `_fetch_misp` pull to a
+first-class connector — closing §10.6 and the doc gap for good.
+
+**Design stance.** Standards over SDKs — **STIX 2.1 as plain dicts**, MISP + TAXII
+over raw `httpx` (no `pymisp`, `taxii2-client`, or `stix2`). The TLP/PAP gate is
+enforced at every outbound boundary (reuse the Phase-2 OpenCTI `TlpGateError`
+model). All admin-side, off the hot path, fail-open.
+
+### 7.1 MISP first-class connector (`admin/services/integrations/misp.py`)
+Promote the pull-only `IOCStore._fetch_misp` into a full `Connector`:
+- **Pull** (exists) — keep feeding the live IOC store; add attribute→observable-type
+  mapping parity with the OpenCTI path.
+- **Push** (`push_case`): case → MISP **Event**; observables → **Attributes**
+  (type-mapped); `is_ioc` → `to_ids=true`; tags → MISP tags incl. `bulwark:<category>`
+  + ATT&CK galaxy; TLP → MISP `tlp:` tag. Idempotent via `integration_link`
+  (event UUID = `remote_id`).
+- **Lookup** (`lookup_observable`): `/attributes/restSearch` for context (event
+  count, tags, sightings) → fold into `enrichment['misp']` with a
+  `not_found`/`clean`/`suspicious`/`malicious` verdict; same auto-raise-origin-risk
+  path as Cortex/OpenCTI.
+- Registry: add `misp` to `INTEGRATION_TYPES` with push + lookup factories + health.
+
+### 7.2 TAXII 2.1 collection feeds (`admin/services/integrations/taxii.py`)
+- **Consume**: poll configured TAXII 2.1 collections (raw httpx, STIX 2.1 envelope),
+  parse `indicator` SDOs (reuse the Phase-2 `_parse_stix_indicator_pattern`), drop
+  revoked/sub-confidence, upsert into the live IOC store via `feed_scheduler` — a
+  vendor-neutral feed source alongside OpenCTI/MISP.
+- **Publish** (optional, TLP-gated): expose case STIX bundles (Phase 0
+  `export_case --format stix` already builds them) to an outbound TAXII collection.
+- SSRF-validate every collection URL (parity with the OpenCTI/MISP fetchers).
+
+### 7.3 Sighting feedback loop (the real bidirectional win)
+When a promoted IOC (Phase 0 → live proxy blocking) actually matches proxy traffic,
+report a **sighting** back to the CTI platform so the community sees Bulwark's
+telemetry:
+- The proxy already emits IOC-match security events and the admin already ingests
+  them (durable store). Add an async admin-side tap: on an IOC-match event whose
+  value maps to a known remote indicator (via `integration_link` / IOC provenance),
+  enqueue a sighting push to OpenCTI (`sightingAdd`) and/or MISP (`/sightings/add`).
+- Fully fail-open, batched, rate-limited, **TLP-gated** (never report a sighting for
+  a `TLP:RED`-sourced indicator to a broader-audience platform). Each audited.
+- **No hot-path cost**: the proxy emits its event exactly as today; all sighting
+  logic is admin-side / async. `src/` never imports `admin/`.
+
+### 7.4 Config, RBAC, docs
+- Connector configs via the existing `data/integrations.json` + `*_FILE` secrets
+  model; `integrations:{read,write}` RBAC (unchanged namespace).
+- New endpoint: `GET /admin/integrations/{id}/collections` (TAXII); lookup/push reuse
+  the generic observable/case routes.
+- **Close §10.6 + the standing doc gap**: reconcile `AGENTS.md`,
+  `config/feeds/README.md`, and `docs/API-REFERENCE.md` so the MISP/OpenCTI/TAXII
+  claims match code exactly.
+
+### Phase 5 acceptance
+An analyst can: subscribe a TAXII 2.1 collection and a MISP feed that flow into live
+IOC blocking; push a case's observables to MISP as a TLP-tagged event; look an
+observable up in MISP; and — when a promoted IOC fires on live traffic — have a
+sighting reported back to OpenCTI/MISP automatically, TLP-gated and audited. Tests
+mock MISP REST + a TAXII 2.1 server + OpenCTI GraphQL (pytest-httpx) for pull, push
+(create + idempotent update), lookup verdicts, TLP-gate refusal, sighting emission,
+and SSRF rejection.
+
+---
+
+## 8. Cross-cutting concerns
 
 | Concern | Approach |
 |---------|----------|
@@ -429,32 +578,38 @@ and fully audited. Tests cover auth scoping, idempotency replay, and signature v
 
 ---
 
-## 7. Suggested sequencing
+## 9. Suggested sequencing
 
 ```
 Phase 0  Observables · Tasks · Templates · Tags/TTP · Manual timeline · STIX/TheHive/IRIS export
    └─> unblocks everything; valuable standalone
 Phase 1  Connector protocol + registry + health UI · TheHive push · DFIR-IRIS push · event-webhook
 Phase 2  Cortex analyzers/responders · OpenCTI pull (fix feed gap) + push + lookup
-Phase 3  Service-account auth + idempotency · signed triggers · Shuffle/n8n playbooks · status reconcile
+Phase 3  Service-account auth + idempotency · signed triggers · Shuffle/n8n playbooks
+Phase 4  Bidirectional case federation · sync_status · field-partitioned reconcile · inbound HMAC webhook + poll
+Phase 5  MISP first-class connector · TAXII 2.1 feeds · STIX publish · sighting feedback loop (TLP-gated)
 ```
 
 Each phase ships behind config flags (off by default), is independently testable,
-and leaves the proxy hot path untouched.
+and leaves the proxy hot path untouched. Phases 0–3 are delivered; 4–5 are proposed
+above (§6–§7) pending review.
 
 ---
 
-## 8. Open decisions (need product input)
+## 10. Open decisions (need product input)
 
 1. **Case source of truth** once TheHive/IRIS are live: does Bulwark remain
    authoritative (push-only) or do we reconcile status inbound (bidirectional)?
-   Bidirectional is more work and risks conflict loops.
+   Bidirectional is more work and risks conflict loops. *(Phase 4 §6 proposes a
+   field-partitioned resolution — needs sign-off.)*
 2. **Observable model depth**: minimal (type/value/tlp/tags) vs richer (kill-chain
    phase, confidence, sightings count).
 3. **Templates location**: YAML-in-repo only, or DB-editable per tenant via UI.
 4. **Automation auth**: reuse the proxy API-key scheme vs a dedicated admin
-   service-account store (recommended: dedicated, least-privilege).
+   service-account store. *(Resolved in Phase 3.2 — dedicated least-privilege store.)*
 5. **OpenCTI**: pull-only (safe, fills feed gap) first, or push observables/sightings
-   from day one (needs TLP governance sign-off).
-6. **MISP**: in scope alongside OpenCTI, or defer? (It's already half-referenced in docs.)
+   from day one (needs TLP governance sign-off). *(Pull + push + lookup delivered in
+   Phase 2; sightings proposed in Phase 5 §7.3.)*
+6. **MISP**: in scope alongside OpenCTI, or defer? (It's already half-referenced in
+   docs.) *(Phase 5 §7.1 proposes a first-class MISP connector — needs sign-off.)*
 ```
