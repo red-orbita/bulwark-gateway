@@ -164,8 +164,15 @@
                 <div>
                     <label class="text-xs text-gray-400 block mb-1.5" for="int-type">Type</label>
                     <select id="int-type" x-model="modal.form.type" class="sg-input w-full" :disabled="modal.editing">
-                        <option value="thehive">TheHive 5</option>
-                        <option value="dfir_iris">DFIR-IRIS</option>
+                        <optgroup label="Case management / SOAR">
+                            <option value="thehive">TheHive 5</option>
+                            <option value="dfir_iris">DFIR-IRIS</option>
+                        </optgroup>
+                        <optgroup label="Threat intel / enrichment">
+                            <option value="opencti">OpenCTI</option>
+                            <option value="misp">MISP</option>
+                            <option value="cortex">Cortex</option>
+                        </optgroup>
                     </select>
                 </div>
                 <div>
@@ -317,7 +324,10 @@ function integrationsPage() {
             } catch (e) { /* non-fatal */ }
         },
 
-        typeLabel(t) { return t === 'thehive' ? 'TheHive' : (t === 'dfir_iris' ? 'DFIR-IRIS' : t); },
+        typeLabel(t) {
+            const labels = { thehive: 'TheHive', dfir_iris: 'DFIR-IRIS', opencti: 'OpenCTI', misp: 'MISP', cortex: 'Cortex' };
+            return labels[t] || t;
+        },
 
         openCreate() {
             this.modal = {
