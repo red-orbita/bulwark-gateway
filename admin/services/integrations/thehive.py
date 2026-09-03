@@ -15,13 +15,57 @@ server-side, so an update deliberately syncs the case envelope, not its children
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from ..investigation_export import build_thehive_case
-from .base import ConnectorError, ConnectorHealth, HttpConnectorBase, PushResult
+from .base import (
+    REMOTE_STATUS_CLOSED,
+    REMOTE_STATUS_IN_PROGRESS,
+    REMOTE_STATUS_OPEN,
+    ConnectorError,
+    ConnectorHealth,
+    HttpConnectorBase,
+    PushResult,
+    RemoteState,
+)
 from .util import iso_now
 
 logger = logging.getLogger(__name__)
+
+# TheHive 5 severity is an integer 1–4; map it onto Bulwark's vocabulary.
+_THEHIVE_SEVERITY = {1: "low", 2: "medium", 3: "high", 4: "critical"}
+
+# TheHive 5 case ``stage`` vocabulary → normalized workflow status. Unknown stages
+# fall back to ``open`` (conservative: never implies closure without evidence).
+_THEHIVE_STAGE = {
+    "new": REMOTE_STATUS_OPEN,
+    "inprogress": REMOTE_STATUS_IN_PROGRESS,
+    "closed": REMOTE_STATUS_CLOSED,
+}
+
+
+def _map_thehive_status(stage: str) -> str:
+    """Map a TheHive ``stage`` string to a normalized status (defensive)."""
+    return _THEHIVE_STAGE.get((stage or "").strip().lower().replace(" ", ""), "")
+
+
+def _map_thehive_severity(value) -> str:
+    """Map a TheHive integer severity (1–4) to a normalized severity, or ``""``."""
+    try:
+        return _THEHIVE_SEVERITY.get(int(value), "")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _epoch_ms_to_iso(value) -> str:
+    """Convert a TheHive epoch-millis timestamp to an ISO-8601 string (or ``""``)."""
+    try:
+        return datetime.fromtimestamp(
+            int(value) / 1000.0, tz=timezone.utc
+        ).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
 
 
 class TheHiveConnector(HttpConnectorBase):
@@ -150,6 +194,73 @@ class TheHiveConnector(HttpConnectorBase):
             except ConnectorError as exc:
                 logger.warning("thehive_obs_attach_failed", extra={"error": str(exc)})
         return f"{tasks_ok} tasks, {obs_ok} observables"
+
+    async def sync_status(self, remote_id: str) -> Optional[RemoteState]:
+        """Read a case's current workflow state from TheHive (Phase 4 reconcile).
+
+        Fetches ``GET /api/v1/case/{id}`` and maps the platform's stage / severity /
+        assignee onto a normalized :class:`RemoteState`. Comments are best-effort:
+        a separate fetch that, if it fails or the endpoint is unavailable, yields an
+        empty comment list rather than failing the whole sync. Fail-open — any
+        connector error (open circuit, unreachable, 4xx) returns ``None``; the
+        caller treats that as "no update available", never an error.
+        """
+        if not remote_id:
+            return None
+        try:
+            resp = await self._request(
+                "GET", f"/api/v1/case/{remote_id}", expected=(200,)
+            )
+        except ConnectorError as exc:
+            logger.info(
+                "thehive_sync_status_unavailable",
+                extra={"remote_id": remote_id, "error": str(exc)},
+            )
+            return None
+
+        case = _safe_json(resp)
+        if not case:
+            return None
+
+        raw_stage = str(case.get("stage") or case.get("status") or "")
+        status = _map_thehive_status(raw_stage)
+        assignee = str(case.get("assignee") or case.get("owner") or "")
+        updated = _epoch_ms_to_iso(case.get("_updatedAt") or case.get("_createdAt"))
+        comments = await self._fetch_comments(remote_id)
+
+        return RemoteState(
+            remote_id=remote_id,
+            status=status,
+            raw_status=raw_stage,
+            severity=_map_thehive_severity(case.get("severity")),
+            assignee=assignee,
+            closed=status == REMOTE_STATUS_CLOSED,
+            last_remote_update=updated,
+            comments=comments,
+            detail="ok",
+        )
+
+    async def _fetch_comments(self, remote_id: str) -> list[str]:
+        """Best-effort fetch of a case's comments. Never raises — returns ``[]``."""
+        try:
+            resp = await self._request(
+                "GET", f"/api/v1/case/{remote_id}/comment", expected=(200,)
+            )
+        except ConnectorError:
+            return []
+        try:
+            parsed = resp.json()
+        except ValueError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        out: list[str] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                text = str(item.get("message") or "").strip()
+                if text:
+                    out.append(text)
+        return out
 
 
 def _safe_json(resp) -> dict:

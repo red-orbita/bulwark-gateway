@@ -416,6 +416,163 @@ async def test_iris_error_envelope_raises(httpx_mock):
         await conn.push_case(_CASE, [], [])
 
 
+# ─── connector sync_status (Phase 4 inbound reconcile) ───────────────────────
+
+
+async def test_thehive_sync_status_maps_state(httpx_mock):
+    from admin.services.integrations.base import REMOTE_STATUS_IN_PROGRESS
+    from admin.services.integrations.thehive import TheHiveConnector
+
+    httpx_mock.add_response(
+        method="GET",
+        url="http://thehive.test/api/v1/case/~123",
+        json={
+            "stage": "InProgress",
+            "severity": 3,
+            "assignee": "analyst@soc",
+            "_updatedAt": 1_700_000_000_000,
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url="http://thehive.test/api/v1/case/~123/comment",
+        json=[{"message": "triaged"}, {"message": ""}, {"nope": 1}],
+    )
+    conn = TheHiveConnector(base_url="http://thehive.test", api_key="k")
+    state = await conn.sync_status("~123")
+    assert state is not None
+    assert state.remote_id == "~123"
+    assert state.status == REMOTE_STATUS_IN_PROGRESS
+    assert state.raw_status == "InProgress"
+    assert state.severity == "high"
+    assert state.assignee == "analyst@soc"
+    assert state.closed is False
+    assert state.last_remote_update.startswith("2023-11-14")
+    assert state.comments == ["triaged"]
+
+
+async def test_thehive_sync_status_detects_closed(httpx_mock):
+    from admin.services.integrations.thehive import TheHiveConnector
+
+    httpx_mock.add_response(
+        method="GET",
+        url="http://thehive.test/api/v1/case/~9",
+        json={"stage": "Closed", "severity": 4},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url="http://thehive.test/api/v1/case/~9/comment",
+        json=[],
+    )
+    conn = TheHiveConnector(base_url="http://thehive.test", api_key="k")
+    state = await conn.sync_status("~9")
+    assert state is not None
+    assert state.closed is True
+    assert state.status == "closed"
+    assert state.severity == "critical"
+
+
+async def test_thehive_sync_status_unreachable_is_none(httpx_mock, monkeypatch):
+    from admin.services.integrations import base as base_mod
+    from admin.services.integrations.thehive import TheHiveConnector
+
+    monkeypatch.setattr(base_mod, "_MAX_ATTEMPTS", 1)
+    httpx_mock.add_exception(httpx.ConnectError("down"))
+    conn = TheHiveConnector(base_url="http://thehive.test", api_key="k")
+    assert await conn.sync_status("~123") is None
+
+
+async def test_thehive_sync_status_comment_fetch_fail_is_empty(httpx_mock, monkeypatch):
+    """A failing comment fetch degrades to [] — it never fails the whole sync."""
+    from admin.services.integrations import base as base_mod
+    from admin.services.integrations.thehive import TheHiveConnector
+
+    monkeypatch.setattr(base_mod, "_MAX_ATTEMPTS", 1)
+    httpx_mock.add_response(
+        method="GET",
+        url="http://thehive.test/api/v1/case/~5",
+        json={"stage": "New", "severity": 1},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url="http://thehive.test/api/v1/case/~5/comment",
+        status_code=404,
+        json={"message": "no comments endpoint"},
+    )
+    conn = TheHiveConnector(base_url="http://thehive.test", api_key="k")
+    state = await conn.sync_status("~5")
+    assert state is not None
+    assert state.status == "open"
+    assert state.severity == "low"
+    assert state.comments == []
+
+
+async def test_iris_sync_status_maps_state(httpx_mock):
+    from admin.services.integrations.base import REMOTE_STATUS_OPEN
+    from admin.services.integrations.dfir_iris import DfirIrisConnector
+
+    httpx_mock.add_response(
+        method="GET",
+        url="http://iris.test/manage/cases/42?cid=42",
+        json={
+            "status": "success",
+            "data": {
+                "state_name": "Open",
+                "severity_id": 4,
+                "owner": "ir-lead",
+                "last_update_date": "2024-01-02T03:04:05",
+                "comments": [{"comment_text": "opened"}, {"comment_text": ""}],
+            },
+        },
+    )
+    conn = DfirIrisConnector(base_url="http://iris.test", api_key="k")
+    state = await conn.sync_status("42")
+    assert state is not None
+    assert state.status == REMOTE_STATUS_OPEN
+    assert state.severity == "high"
+    assert state.assignee == "ir-lead"
+    assert state.closed is False
+    assert state.last_remote_update == "2024-01-02T03:04:05"
+    assert state.comments == ["opened"]
+
+
+async def test_iris_sync_status_close_date_marks_closed(httpx_mock):
+    from admin.services.integrations.dfir_iris import DfirIrisConnector
+
+    httpx_mock.add_response(
+        method="GET",
+        url="http://iris.test/manage/cases/7?cid=7",
+        json={
+            "status": "success",
+            "data": {
+                "state_name": "Open",
+                "severity_id": 2,
+                "close_date": "2024-02-01T00:00:00",
+            },
+        },
+    )
+    conn = DfirIrisConnector(base_url="http://iris.test", api_key="k")
+    state = await conn.sync_status("7")
+    assert state is not None
+    assert state.closed is True
+    assert state.status == "closed"
+
+
+async def test_iris_sync_status_error_envelope_is_none(httpx_mock, monkeypatch):
+    from admin.services.integrations import base as base_mod
+    from admin.services.integrations.dfir_iris import DfirIrisConnector
+
+    monkeypatch.setattr(base_mod, "_MAX_ATTEMPTS", 1)
+    httpx_mock.add_response(
+        method="GET",
+        url="http://iris.test/manage/cases/7?cid=7",
+        json={"status": "error", "message": "nope"},
+        status_code=200,
+    )
+    conn = DfirIrisConnector(base_url="http://iris.test", api_key="k")
+    assert await conn.sync_status("7") is None
+
+
 # ─── routes ──────────────────────────────────────────────────────────────────
 
 

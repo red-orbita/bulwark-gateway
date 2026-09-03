@@ -80,6 +80,37 @@ class ConnectorHealth:
     circuit_state: str = "closed"
 
 
+# Normalized case-workflow statuses a remote state maps onto. Kept deliberately
+# small and dialect-neutral: each connector translates its platform's own status
+# vocabulary (TheHive stages, IRIS state ids) into one of these so the reconcile
+# engine never has to know a platform's quirks. ``closed`` is the terminal marker
+# the anti-reopen guard keys on.
+REMOTE_STATUS_OPEN = "open"
+REMOTE_STATUS_IN_PROGRESS = "in_progress"
+REMOTE_STATUS_CLOSED = "closed"
+
+
+@dataclass
+class RemoteState:
+    """A normalized snapshot of a case's *workflow* state on a remote platform.
+
+    Returned by a connector's ``sync_status`` (Phase 4, inbound reconcile). It
+    carries only the fields Bulwark is willing to reconcile inbound — workflow
+    state, never detection facts — plus provenance for change detection. The
+    ``raw_*`` fields preserve the platform's original vocabulary for audit/UX.
+    """
+
+    remote_id: str
+    status: str = ""  # one of REMOTE_STATUS_* (normalized), "" if unknown
+    raw_status: str = ""  # platform-native status string (for audit/UX)
+    severity: str = ""  # normalized low|medium|high|critical, "" if unknown
+    assignee: str = ""
+    closed: bool = False
+    last_remote_update: str = ""
+    comments: list[str] = field(default_factory=list)
+    detail: str = ""
+
+
 @runtime_checkable
 class Connector(Protocol):
     """The contract every outbound case-management connector implements."""
