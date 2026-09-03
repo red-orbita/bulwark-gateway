@@ -338,6 +338,110 @@ class ReconcileEngine:
             remote_id=remote_id,
         )
 
+    async def reconcile_by_remote_id(
+        self,
+        *,
+        connector: object,
+        connector_type: str,
+        integration_id: str,
+        remote_id: str,
+        escalate_only_severity: bool = True,
+    ) -> list[ReconcileResult]:
+        """Reconcile every local case linked to one remote id (inbound-webhook path).
+
+        An inbound callback carries only the *remote* platform id, so this resolves
+        the local link(s) via the ``(connector, remote_id)`` index and reconciles
+        each case. Returns one :class:`ReconcileResult` per linked case (empty when
+        the remote id maps to nothing here). Fail-open: a per-case error is logged
+        and skipped, never raised.
+        """
+        if not remote_id:
+            return []
+        try:
+            links = await self._links.find_by_remote(connector_type, remote_id)
+        except Exception:  # noqa: BLE001 — fail-open: a lookup error is "no match"
+            logger.warning("reconcile_find_by_remote_failed", exc_info=True)
+            return []
+        results: list[ReconcileResult] = []
+        for link in links:
+            if link.get("local_type") != "case":
+                continue
+            results.append(
+                await self._reconcile_link_case(
+                    connector=connector,
+                    connector_type=connector_type,
+                    integration_id=integration_id,
+                    case_id=link.get("local_id") or "",
+                    escalate_only_severity=escalate_only_severity,
+                )
+            )
+        return results
+
+    async def sweep(
+        self,
+        *,
+        connector: object,
+        connector_type: str,
+        integration_id: str,
+        limit: int = 200,
+        escalate_only_severity: bool = True,
+    ) -> list[ReconcileResult]:
+        """Reconcile every *active* linked case on a connector (poll-fallback path).
+
+        Backs the periodic :class:`ReconcilePoller`: it walks the connector's
+        non-terminal linked cases (least-recently-reconciled first, bounded by
+        ``limit``) and reconciles each. Skips locally-terminal cases at the query
+        level (they need no further sync). Fail-open per case.
+        """
+        try:
+            links = await self._links.list_active_case_links(
+                connector_type,
+                exclude_statuses=_LOCAL_TERMINAL_STATUSES,
+                limit=limit,
+            )
+        except Exception:  # noqa: BLE001 — fail-open: a listing error is an empty sweep
+            logger.warning("reconcile_sweep_list_failed", exc_info=True)
+            return []
+        results: list[ReconcileResult] = []
+        for link in links:
+            results.append(
+                await self._reconcile_link_case(
+                    connector=connector,
+                    connector_type=connector_type,
+                    integration_id=integration_id,
+                    case_id=link.get("local_id") or "",
+                    escalate_only_severity=escalate_only_severity,
+                )
+            )
+        return results
+
+    async def _reconcile_link_case(
+        self,
+        *,
+        connector: object,
+        connector_type: str,
+        integration_id: str,
+        case_id: str,
+        escalate_only_severity: bool,
+    ) -> ReconcileResult:
+        """Load one linked case and reconcile it (shared by the two trigger paths)."""
+        if not case_id:
+            return ReconcileResult(ok=False, detail="missing case id")
+        try:
+            case = await self._cases.get(case_id)
+        except Exception:  # noqa: BLE001 — fail-open: a store error is "skip this case"
+            logger.warning("reconcile_case_load_failed", exc_info=True)
+            return ReconcileResult(ok=False, detail="case load failed")
+        if case is None:
+            return ReconcileResult(ok=False, detail="case not found")
+        return await self.reconcile_case(
+            connector=connector,
+            connector_type=connector_type,
+            integration_id=integration_id,
+            case=case,
+            escalate_only_severity=escalate_only_severity,
+        )
+
     async def _apply(
         self, *, case_id: str, actor: str, plan: ReconcilePlan, known: set[str]
     ) -> dict:

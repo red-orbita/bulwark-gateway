@@ -260,6 +260,81 @@ async def test_link_store_upsert_preserves_reconcile_columns(link_store):
     assert re_pushed["last_remote_update"] == "2024-01-02T03:04:05+00:00"
 
 
+async def test_link_store_find_by_remote(link_store):
+    """find_by_remote reverse-resolves the local link(s) from a remote id."""
+    await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_a", remote_id="~7"
+    )
+    await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_b", remote_id="~7"
+    )
+    # A different remote id / connector must not bleed in.
+    await link_store.upsert(
+        connector="thehive", local_type="case", local_id="case_c", remote_id="~8"
+    )
+    await link_store.upsert(
+        connector="dfir_iris", local_type="case", local_id="case_d", remote_id="~7"
+    )
+    hits = await link_store.find_by_remote("thehive", "~7")
+    assert {h["local_id"] for h in hits} == {"case_a", "case_b"}
+    assert await link_store.find_by_remote("thehive", "missing") == []
+    assert await link_store.find_by_remote("", "~7") == []
+
+
+@pytest.fixture
+async def link_and_cases(engine, monkeypatch):
+    """Wire both the link store and the case store to the throwaway engine."""
+    from admin.services import integration_link_store as link_mod
+    from admin.services import investigation_case_store as case_mod
+
+    monkeypatch.setattr(link_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(case_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(case_mod, "_store", None, raising=False)
+    return {
+        "links": link_mod.IntegrationLinkStore(),
+        "cases": case_mod.get_case_store(),
+    }
+
+
+async def test_link_store_list_active_case_links_excludes_terminal(link_and_cases):
+    """The JOIN skips locally-terminal cases and carries the joined case status."""
+    links = link_and_cases["links"]
+    cases = link_and_cases["cases"]
+
+    active = await cases.create_case(title="Active", actor="admin", tenant="acme")
+    closed = await cases.create_case(title="Closed", actor="admin", tenant="acme")
+    await cases.set_state(case_id=closed["case_id"], actor="admin", status="closed")
+    for c in (active, closed):
+        await links.upsert(
+            connector="thehive", local_type="case",
+            local_id=c["case_id"], remote_id="~" + c["case_id"],
+        )
+
+    rows = await links.list_active_case_links(
+        "thehive", exclude_statuses=("resolved", "closed")
+    )
+    ids = {r["local_id"] for r in rows}
+    assert active["case_id"] in ids
+    assert closed["case_id"] not in ids
+    row = next(r for r in rows if r["local_id"] == active["case_id"])
+    assert row["case_status"] == "open"
+    assert row["case_tenant"] == "acme"
+
+
+async def test_link_store_list_active_case_links_respects_limit(link_and_cases):
+    links = link_and_cases["links"]
+    cases = link_and_cases["cases"]
+    for i in range(3):
+        c = await cases.create_case(title=f"C{i}", actor="admin", tenant="acme")
+        await links.upsert(
+            connector="thehive", local_type="case",
+            local_id=c["case_id"], remote_id=f"~{i}",
+        )
+    rows = await links.list_active_case_links("thehive", limit=2)
+    assert len(rows) == 2
+    assert await links.list_active_case_links("") == []
+
+
 # ─── IntegrationRegistry ─────────────────────────────────────────────────────
 
 
@@ -915,6 +990,178 @@ async def test_reconcile_connector_without_sync_is_noop(reconcile_env):
     )
     assert result.ok is False
     assert "does not support" in result.detail
+
+
+# ─── reconcile trigger paths (Phase 4.4: by-remote-id + sweep) ───────────────
+
+
+async def test_reconcile_by_remote_id_reconciles_linked_case(reconcile_env):
+    env = reconcile_env
+    case = await env["linked_case"](severity="medium")  # linked to remote "~1"
+    conn = _FakeSyncConn(_remote_state(status="in_progress", severity="high"))
+    results = await env["engine"].reconcile_by_remote_id(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", remote_id="~1",
+    )
+    assert len(results) == 1 and results[0].ok is True
+    stored = await env["case_store"].get(case["case_id"])
+    assert stored["status"] == "investigating"
+    assert stored["severity"] == "high"
+
+
+async def test_reconcile_by_remote_id_unknown_remote_is_empty(reconcile_env):
+    env = reconcile_env
+    conn = _FakeSyncConn(_remote_state(status="open"))
+    results = await env["engine"].reconcile_by_remote_id(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", remote_id="~does-not-exist",
+    )
+    assert results == []
+    assert conn.calls == 0
+
+
+async def test_reconcile_sweep_reconciles_active_skips_closed(reconcile_env):
+    env = reconcile_env
+    # Two active linked cases + one locally-closed one (must be swept over).
+    from admin.services.integration_link_store import IntegrationLinkStore
+
+    links = IntegrationLinkStore()
+    active_ids = []
+    for i in range(2):
+        c = await env["case_store"].create_case(
+            title=f"Active{i}", actor="admin", tenant="acme"
+        )
+        await links.upsert(
+            connector="thehive", local_type="case",
+            local_id=c["case_id"], remote_id=f"~a{i}",
+        )
+        active_ids.append(c["case_id"])
+    closed = await env["case_store"].create_case(
+        title="Closed", actor="admin", tenant="acme"
+    )
+    await env["case_store"].set_state(
+        case_id=closed["case_id"], actor="admin", status="closed"
+    )
+    await links.upsert(
+        connector="thehive", local_type="case",
+        local_id=closed["case_id"], remote_id="~closed",
+    )
+
+    conn = _FakeSyncConn(_remote_state(status="in_progress", severity="high"))
+    results = await env["engine"].sweep(
+        connector=conn, connector_type="thehive", integration_id="th1",
+    )
+    assert len(results) == len(active_ids)
+    assert all(r.ok for r in results)
+    for cid in active_ids:
+        stored = await env["case_store"].get(cid)
+        assert stored["status"] == "investigating"
+
+
+# ─── inbound webhook receiver (Phase 4.4: HMAC verify + extract + debounce) ──
+
+
+def _sign(secret: str, body: bytes) -> str:
+    import hashlib
+    import hmac
+
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def test_inbound_verify_signature_valid(monkeypatch):
+    from admin.services.integrations import inbound_webhook as iw
+
+    monkeypatch.setenv("BULWARK_INTEGRATION_TH1_INBOUND_SECRET", "shh")
+    body = b'{"objectId":"~1"}'
+    assert iw.verify_inbound_signature("th1", body, _sign("shh", body)) is True
+
+
+def test_inbound_verify_signature_forged_is_rejected(monkeypatch):
+    from admin.services.integrations import inbound_webhook as iw
+
+    monkeypatch.setenv("BULWARK_INTEGRATION_TH1_INBOUND_SECRET", "shh")
+    body = b'{"objectId":"~1"}'
+    # Right shape, wrong key.
+    assert iw.verify_inbound_signature("th1", body, _sign("wrong", body)) is False
+    # Tampered body against a valid signature.
+    assert iw.verify_inbound_signature("th1", b'{"objectId":"~2"}', _sign("shh", body)) is False
+
+
+def test_inbound_verify_signature_fail_closed_without_secret(monkeypatch):
+    from admin.services.integrations import inbound_webhook as iw
+
+    monkeypatch.delenv("BULWARK_INTEGRATION_TH1_INBOUND_SECRET", raising=False)
+    body = b'{"objectId":"~1"}'
+    # No configured secret ⇒ cannot authenticate ⇒ reject (fail-closed).
+    assert iw.verify_inbound_signature("th1", body, _sign("anything", body)) is False
+    # Missing header ⇒ reject even with a secret.
+    monkeypatch.setenv("BULWARK_INTEGRATION_TH1_INBOUND_SECRET", "shh")
+    assert iw.verify_inbound_signature("th1", body, None) is False
+
+
+def test_inbound_extract_remote_id_per_type():
+    from admin.services.integrations.inbound_webhook import extract_remote_id
+
+    assert extract_remote_id("thehive", {"objectId": "~123"}) == "~123"
+    assert extract_remote_id("thehive", {"object": {"_id": "~9"}}) == "~9"
+    assert extract_remote_id("dfir_iris", {"case_id": 42}) == "42"
+    assert extract_remote_id("dfir_iris", {"data": {"case_id": 7}}) == "7"
+    # Generic fall-through for a hand-rolled forwarder.
+    assert extract_remote_id("thehive", {"id": "~5"}) == "~5"
+    # Nothing resolvable ⇒ empty (route treats as accepted no-op).
+    assert extract_remote_id("thehive", {"unrelated": 1}) == ""
+    assert extract_remote_id("thehive", "not-a-dict") == ""
+
+
+def test_inbound_debouncer_coalesces():
+    from admin.services.integrations.inbound_webhook import InboundDebouncer
+
+    deb = InboundDebouncer(window_seconds=100.0)
+    assert deb.claim("thehive", "~1") is True
+    # Immediate repeat inside the window is dropped.
+    assert deb.claim("thehive", "~1") is False
+    # A different remote id is independent.
+    assert deb.claim("thehive", "~2") is True
+    # Zero window disables debouncing.
+    always = InboundDebouncer(window_seconds=0)
+    assert always.claim("thehive", "~1") is True
+    assert always.claim("thehive", "~1") is True
+
+
+# ─── reconcile poller (Phase 4.4: poll fallback) ─────────────────────────────
+
+
+async def test_reconcile_poller_poll_once_sweeps_enabled(reconcile_env, monkeypatch):
+    env = reconcile_env
+    from admin.services.integrations import reconcile_poller as rp_mod
+    from admin.services.integrations.registry import IntegrationConfig
+
+    case = await env["linked_case"]()  # linked to remote "~1" on connector "thehive"
+
+    class _FakeRegistry:
+        configs = [
+            IntegrationConfig(
+                id="th1", name="TH", type="thehive",
+                base_url="http://th.test", api_key="k",
+            ),
+            # A disabled + a non-sync-capable type must be skipped.
+            IntegrationConfig(
+                id="cx1", name="CX", type="cortex",
+                base_url="http://cx.test", api_key="k",
+            ),
+        ]
+
+        def build_connector(self, config):
+            return _FakeSyncConn(_remote_state(status="in_progress"))
+
+    monkeypatch.setattr(rp_mod, "get_integration_registry", lambda: _FakeRegistry())
+    monkeypatch.setattr(rp_mod, "get_reconcile_engine", lambda: env["engine"])
+
+    poller = rp_mod.ReconcilePoller()
+    reconciled = await poller.poll_once()
+    assert reconciled == 1
+    stored = await env["case_store"].get(case["case_id"])
+    assert stored["status"] == "investigating"
 
 
 # ─── routes ──────────────────────────────────────────────────────────────────

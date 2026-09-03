@@ -83,6 +83,75 @@ class IntegrationLinkStore:
         )
         return [_row_to_link(r) for r in rows]
 
+    async def find_by_remote(self, connector: str, remote_id: str) -> list[dict]:
+        """Return every link on a connector that maps to a given remote id.
+
+        Served by the ``(connector, remote_id)`` composite index (migration v9).
+        This is the inbound reverse of :meth:`get`: an inbound webhook / poll only
+        knows the *remote* platform id and needs to find the local object(s) it is
+        linked to. Returns a list because the mapping is not enforced unique across
+        local objects — the caller reconciles each match. Ordered deterministically
+        so a repeated call is stable.
+        """
+        if not connector or not remote_id:
+            return []
+        rows = await self._db().fetch_all(
+            "SELECT * FROM integration_link "
+            "WHERE connector = ? AND remote_id = ? "
+            "ORDER BY local_type ASC, local_id ASC",
+            [connector, remote_id],
+        )
+        return [_row_to_link(r) for r in rows]
+
+    async def list_active_case_links(
+        self,
+        connector: str,
+        *,
+        exclude_statuses: tuple[str, ...] = (),
+        limit: int = 500,
+    ) -> list[dict]:
+        """Return case links on a connector whose local case is still *active*.
+
+        JOINs ``integration_link`` to ``investigation_case`` so the reconcile poll
+        fallback only re-reads remotes for cases still worth syncing — a terminal
+        (``resolved``/``closed``) local case is skipped via ``exclude_statuses``
+        (the terminal-status policy is owned by the reconcile layer and passed in,
+        so this store stays decoupled from the case status vocabulary).
+
+        Never-reconciled links (``last_reconciled_at IS NULL``) are ordered first
+        via ``COALESCE(..., '')`` — an empty string sorts before any ISO timestamp
+        on both SQLite and PostgreSQL (the column is TEXT on both) — so a bounded
+        sweep prioritises links that have never been read over recently-read ones.
+        Each returned dict carries the joined ``case_status`` / ``case_tenant``
+        alongside the link fields so the caller needs no second query per case.
+        """
+        if not connector:
+            return []
+        bounded = max(1, min(int(limit or 1), 5000))
+        params: list = [connector]
+        sql = (
+            "SELECT l.*, c.status AS case_status, c.tenant AS case_tenant "
+            "FROM integration_link l "
+            "JOIN investigation_case c ON c.case_id = l.local_id "
+            "WHERE l.connector = ? AND l.local_type = 'case' "
+            "AND l.remote_id IS NOT NULL AND l.remote_id != ''"
+        )
+        if exclude_statuses:
+            placeholders = ", ".join("?" for _ in exclude_statuses)
+            sql += f" AND c.status NOT IN ({placeholders})"
+            params.extend(exclude_statuses)
+        sql += " ORDER BY COALESCE(l.last_reconciled_at, '') ASC, l.local_id ASC LIMIT ?"
+        params.append(bounded)
+        rows = await self._db().fetch_all(sql, params)
+        out: list[dict] = []
+        for r in rows:
+            link = _row_to_link(r)
+            d = r.to_dict() if hasattr(r, "to_dict") else dict(r)
+            link["case_status"] = d.get("case_status") or ""
+            link["case_tenant"] = d.get("case_tenant") or ""
+            out.append(link)
+        return out
+
     async def upsert(
         self,
         *,

@@ -431,15 +431,21 @@ is therefore **field-partitioned**, not last-writer-wins, which *structurally*
 removes the conflict-loop risk the original roadmap flagged. Fail-OPEN for the
 integration, off the proxy hot path, every change audited.
 
-### 6.1 Wire the `sync_status` connector method
-The `Connector` protocol already declares
-`sync_status(mapping: RemoteRef) -> SyncResult | None` (§3.1) but no connector
-implements it and nothing calls it. Implement for `thehive` + `dfir_iris`:
-- Read the remote case by the `remote_id` stored in `integration_link`.
-- Return a normalized `RemoteState` (status, severity, assignee, `closed?`,
-  `last_remote_update`, comments added since `last_synced_at`).
-- Fail-open + circuit breaker (reuse `HttpConnectorBase`); a dead remote yields
-  `None`, never raises.
+### 6.1 Add the `sync_status` connector method
+`sync_status` appears in the §3.1 *design sketch* but was never implemented — the
+shipped `Connector` protocol (`base.py`) declares only `kind` / `test_connection`
+/ `push_case`, and later capabilities (`enrich_observable`, `lookup_observable`,
+`run_responder`) are added **ad-hoc on the concrete connectors** and called by
+duck-typing from the routes. Phase 4 follows that same established pattern rather
+than widening the base `Protocol`: add `sync_status` to `thehive` + `dfir_iris`
+(no base-protocol change; route-layer `hasattr`/capability check like the Cortex
+/ OpenCTI paths already use). Each implementation:
+- Reads the remote case by the `remote_id` stored in `integration_link`.
+- Returns a normalized `RemoteState` dataclass (status, severity, assignee,
+  `closed?`, `last_remote_update`, comments added since `last_synced_at`) — a new
+  result type added to `base.py` alongside `PushResult`.
+- Is fail-open + circuit-breaker-guarded (reuse `HttpConnectorBase._request`); a
+  dead remote yields `None`, never raises.
 
 ### 6.2 Reconcile engine (`admin/services/integrations/reconcile.py`)
 - Maps remote workflow state → local case through a **whitelist** of reconcilable
