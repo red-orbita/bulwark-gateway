@@ -656,6 +656,267 @@ async def test_iris_sync_status_error_envelope_is_none(httpx_mock, monkeypatch):
     assert await conn.sync_status("7") is None
 
 
+# ─── reconcile engine (Phase 4.2 field-partitioned inbound reconcile) ────────
+
+
+def _remote_state(**kw):
+    from admin.services.integrations.base import RemoteState
+
+    return RemoteState(remote_id=kw.pop("remote_id", "~1"), **kw)
+
+
+class _FakeSyncConn:
+    """A connector stub exposing only the ad-hoc ``sync_status`` capability."""
+
+    kind = "thehive"
+
+    def __init__(self, state):
+        self._state = state
+        self.calls = 0
+
+    async def sync_status(self, remote_id):
+        self.calls += 1
+        return self._state
+
+
+@pytest.fixture
+async def reconcile_env(engine, monkeypatch):
+    """Wire the reconcile engine's stores + a fresh webhook emitter to the test db."""
+    from admin.services import integration_link_store as link_mod
+    from admin.services import investigation_case_store as case_mod
+    from admin.services.integrations import event_webhook as ew_mod
+    from admin.services.integrations import reconcile as rec_mod
+
+    monkeypatch.setattr(link_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(case_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(link_mod, "_store", link_mod.IntegrationLinkStore())
+    monkeypatch.setattr(case_mod, "_store", None, raising=False)
+    monkeypatch.setattr(rec_mod, "_engine", None, raising=False)
+    # A fresh emitter with no subscriptions → re-emit is a cheap no-op we can spy on.
+    emitted: list[tuple] = []
+    emitter = ew_mod.EventWebhookEmitter()
+
+    async def _spy_emit(event_type, *, tenant=None, data=None):
+        emitted.append((event_type, tenant, data))
+        return []
+
+    monkeypatch.setattr(emitter, "emit", _spy_emit)
+    monkeypatch.setattr(ew_mod, "_emitter", emitter)
+
+    link_store = link_mod.IntegrationLinkStore()
+    case_store = case_mod.get_case_store()
+    engine_obj = rec_mod.ReconcileEngine()
+
+    async def _linked_case(**case_kw):
+        case = await case_store.create_case(
+            title=case_kw.pop("title", "Exfil"),
+            actor="admin",
+            severity=case_kw.pop("severity", "medium"),
+            tenant=case_kw.pop("tenant", "acme"),
+        )
+        await link_store.upsert(
+            connector="thehive", local_type="case",
+            local_id=case["case_id"], remote_id="~1",
+        )
+        return case
+
+    return {
+        "engine": engine_obj,
+        "case_store": case_store,
+        "link_store": link_store,
+        "linked_case": _linked_case,
+        "emitted": emitted,
+    }
+
+
+def test_plan_reconcile_pure_field_partition():
+    """The planner maps only whitelisted workflow fields — never detection facts."""
+    from admin.services.integrations.reconcile import plan_reconcile
+
+    case = {"status": "open", "severity": "medium", "assignee": ""}
+    remote = _remote_state(
+        status="in_progress", severity="high", assignee="analyst",
+        comments=["looked malicious"],
+    )
+    plan = plan_reconcile(case, remote)
+    assert plan.status == "investigating"
+    assert plan.severity == "high"
+    assert plan.assignee == "analyst"
+    assert plan.new_comments == ["looked malicious"]
+    assert plan.conflict is False
+    assert plan.reconcile_state == "synced"
+
+
+def test_plan_reconcile_severity_escalate_only():
+    """A remote severity *downgrade* is ignored by default (escalate-only)."""
+    from admin.services.integrations.reconcile import plan_reconcile
+
+    case = {"status": "investigating", "severity": "high"}
+    plan = plan_reconcile(case, _remote_state(status="in_progress", severity="low"))
+    assert plan.severity is None
+    # But an explicit non-escalate-only reconcile applies it.
+    plan2 = plan_reconcile(
+        case, _remote_state(status="in_progress", severity="low"),
+        escalate_only_severity=False,
+    )
+    assert plan2.severity == "low"
+
+
+def test_plan_reconcile_anti_reopen_is_conflict():
+    """A remote reopen of a locally-closed case never applies — it's a conflict."""
+    from admin.services.integrations.reconcile import plan_reconcile
+
+    case = {"status": "closed", "severity": "high"}
+    plan = plan_reconcile(case, _remote_state(status="open", raw_status="New"))
+    assert plan.status is None
+    assert plan.conflict is True
+    assert "reopen" in plan.conflict_reason
+    assert plan.reconcile_state == "conflict"
+
+
+def test_plan_reconcile_dedups_known_comments():
+    from admin.services.integrations.reconcile import plan_reconcile
+
+    case = {"status": "open"}
+    remote = _remote_state(status="open", comments=["a", "b", "a"])
+    plan = plan_reconcile(case, remote, known_remote_texts={"a"})
+    assert plan.new_comments == ["b"]
+
+
+async def test_reconcile_applies_status_severity_assignee(reconcile_env):
+    env = reconcile_env
+    case = await env["linked_case"](severity="medium")
+    conn = _FakeSyncConn(
+        _remote_state(status="in_progress", severity="high", assignee="ir-lead")
+    )
+    result = await env["engine"].reconcile_case(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", case=case,
+    )
+    assert result.ok is True
+    assert result.reconcile_state == "synced"
+    stored = await env["case_store"].get(case["case_id"])
+    assert stored["status"] == "investigating"
+    assert stored["severity"] == "high"
+    assert stored["assignee"] == "ir-lead"
+    link = await env["link_store"].get("thehive", "case", case["case_id"])
+    assert link["reconcile_state"] == "synced"
+
+
+async def test_reconcile_close_reemits_resolved_webhook(reconcile_env):
+    env = reconcile_env
+    case = await env["linked_case"](severity="high")
+    conn = _FakeSyncConn(_remote_state(status="closed", closed=True))
+    result = await env["engine"].reconcile_case(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", case=case,
+    )
+    assert result.status == "closed"
+    stored = await env["case_store"].get(case["case_id"])
+    assert stored["status"] == "closed"
+    # A reconcile-originated resolved event is re-emitted, tagged loop-safe.
+    kinds = [e[0] for e in env["emitted"]]
+    assert "case.resolved" in kinds
+    resolved = next(e for e in env["emitted"] if e[0] == "case.resolved")
+    assert resolved[2]["source"] == "reconcile"
+
+
+async def test_reconcile_anti_reopen_conflict_records_note(reconcile_env):
+    env = reconcile_env
+    case = await env["linked_case"]()
+    # Close the case locally first.
+    await env["case_store"].set_state(
+        case_id=case["case_id"], actor="admin", status="closed"
+    )
+    closed = await env["case_store"].get(case["case_id"])
+    conn = _FakeSyncConn(_remote_state(status="open", raw_status="New"))
+    result = await env["engine"].reconcile_case(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", case=closed,
+    )
+    assert result.conflict is True
+    assert result.reconcile_state == "conflict"
+    stored = await env["case_store"].get(case["case_id"])
+    # Never silently reopened.
+    assert stored["status"] == "closed"
+    assert any(
+        "reconcile conflict" in (n.get("text") or "") for n in stored["notes"]
+    )
+    link = await env["link_store"].get("thehive", "case", case["case_id"])
+    assert link["reconcile_state"] == "conflict"
+
+
+async def test_reconcile_comment_sync_is_idempotent(reconcile_env):
+    env = reconcile_env
+    case = await env["linked_case"]()
+    conn = _FakeSyncConn(_remote_state(status="open", comments=["remote note one"]))
+    await env["engine"].reconcile_case(
+        connector=conn, connector_type="thehive", integration_id="th1", case=case,
+    )
+    after_first = await env["case_store"].get(case["case_id"])
+    remote_notes_1 = [
+        n for n in after_first["notes"] if "remote note one" in (n.get("text") or "")
+    ]
+    assert len(remote_notes_1) == 1
+
+    # Re-reading the SAME remote comment must not double-append.
+    result2 = await env["engine"].reconcile_case(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", case=after_first,
+    )
+    assert result2.comments_added == 0
+    after_second = await env["case_store"].get(case["case_id"])
+    remote_notes_2 = [
+        n for n in after_second["notes"] if "remote note one" in (n.get("text") or "")
+    ]
+    assert len(remote_notes_2) == 1
+
+
+async def test_reconcile_unreachable_remote_is_noop(reconcile_env):
+    env = reconcile_env
+    case = await env["linked_case"]()
+    conn = _FakeSyncConn(None)  # dead remote
+    result = await env["engine"].reconcile_case(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", case=case,
+    )
+    assert result.ok is False
+    assert "unreachable" in result.detail
+    link = await env["link_store"].get("thehive", "case", case["case_id"])
+    # Link reconcile bookkeeping untouched on an unreachable remote.
+    assert link["reconcile_state"] == ""
+
+
+async def test_reconcile_unlinked_case_is_noop(reconcile_env):
+    env = reconcile_env
+    case = await env["case_store"].create_case(
+        title="Unlinked", actor="admin", tenant="acme"
+    )
+    conn = _FakeSyncConn(_remote_state(status="open"))
+    result = await env["engine"].reconcile_case(
+        connector=conn, connector_type="thehive",
+        integration_id="th1", case=case,
+    )
+    assert result.ok is False
+    assert "not linked" in result.detail
+    assert conn.calls == 0
+
+
+async def test_reconcile_connector_without_sync_is_noop(reconcile_env):
+    env = reconcile_env
+    case = await env["linked_case"]()
+
+    class _NoSync:
+        kind = "thehive"
+
+    result = await env["engine"].reconcile_case(
+        connector=_NoSync(), connector_type="thehive",
+        integration_id="th1", case=case,
+    )
+    assert result.ok is False
+    assert "does not support" in result.detail
+
+
 # ─── routes ──────────────────────────────────────────────────────────────────
 
 
