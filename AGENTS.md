@@ -882,7 +882,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | GET | `/admin/integrations/status` | Session | Registry status + `can_write` flag — `integrations:read` |
 | GET | `/admin/integrations/sightings/status` | Session | Sighting feedback dispatcher observability snapshot (enabled/running + reported/suppressed/failed counters) — `integrations:read` |
 | GET | `/admin/integrations/{id}` | Session | Get one connector config (secret masked) — `integrations:read` |
-| POST | `/admin/integrations` | Session | Create connector (`thehive`\|`dfir_iris`\|`cortex`\|`opencti`\|`misp`) — `integrations:write` |
+| POST | `/admin/integrations` | Session | Create connector (`thehive`\|`dfir_iris`\|`cortex`\|`opencti`\|`misp`). An `opencti`/`misp` connector may opt into `pull_feed` (+`pull_interval_minutes`/`pull_min_confidence`) to auto-provision a **managed IOC pull feed** (id `int-<id>`, `managed_by` set) that reuses the connector's URL + credential — read-only in `/admin/iocs` ("via Integration" badge), kept in lock-step with the connector (fail-open) — `integrations:write` |
 | PUT | `/admin/integrations/{id}` | Session | Update connector config — `integrations:write` |
 | DELETE | `/admin/integrations/{id}` | Session | Delete connector — `integrations:write` |
 | POST | `/admin/integrations/{id}/toggle` | Session | Enable/disable connector — `integrations:write` |

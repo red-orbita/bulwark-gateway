@@ -28,6 +28,26 @@ every fetch.
 **Event**, look an observable up against `/attributes/restSearch`, and receive
 sightings.
 
+### Managed feed from a CTI connector (auto-provisioned)
+
+An OpenCTI/MISP **integration connector** (Integrations surface) can double as an
+IOC pull feed without configuring the feed twice. Tick **"Also consume as an IOC
+feed"** on the connector — Bulwark provisions a *managed* feed that reuses the
+connector's base URL + credential (plus the modal's poll interval and minimum
+confidence). The managed feed:
+
+- appears in `/admin/iocs` as read-only with a **"via Integration"** badge — its
+  toggle/edit/delete are locked (manage it from the connector; **Run now** is
+  still allowed). Its id is `int-<connectorId>` (`managed_by` set).
+- is kept in lock-step with the connector: toggling the connector off disables the
+  feed (runtime state preserved); disabling the pull option, switching to a
+  non-feed connector type, or deleting the connector tears the feed down. A
+  hand-made feed of the same name is never clobbered.
+- resolves its API key from `BULWARK_INTEGRATION_<ID>_API_KEY` (and its `_FILE`
+  Docker-secret variant) in preference to the connector's inline value, falling
+  back to inline — so the pull credential can live in your secret store. `<ID>` is
+  the connector id upper-cased.
+
 **TAXII 2.1** collections are a vendor-neutral pull feed: add a feed of type
 `taxii`; Bulwark polls the collection's STIX 2.1 envelope, parses `indicator`
 SDOs into IOCs (same pattern parser as OpenCTI), and upserts them into the live
