@@ -680,6 +680,8 @@ class IOCStore:
             return self._fetch_misp(feed)
         elif ft == "opencti":
             return self._fetch_opencti(feed)
+        elif ft == "taxii":
+            return self._fetch_taxii(feed)
         elif ft == "virustotal":
             return self._fetch_virustotal(feed)
         elif ft == "custom":
@@ -950,6 +952,55 @@ class IOCStore:
                 )
                 self.create(ioc, source="opencti")
                 count += 1
+        return count
+
+    def _fetch_taxii(self, feed: FeedConfig) -> int:
+        """Poll a TAXII 2.1 collection and upsert its STIX indicator IOCs.
+
+        A vendor-neutral standards feed: reuses the shared STIX-2 pattern parser and
+        SSRF guard (via :mod:`admin.services.integrations.taxii`). ``feed.url`` is the
+        full collection-objects endpoint; auth is the feed's ``auth_header`` (default
+        ``Authorization``) carrying the stored key. Revoked / sub-confidence /
+        non-``stix``-pattern indicators are dropped; each atom is deduped against the
+        live store. The poll is bounded (pages + object ceiling) inside the client.
+        """
+        from .integrations.taxii import (
+            indicator_meets_confidence,
+            poll_collection,
+            stix_confidence_score,
+            stix_indicator_iocs,
+            stix_labels,
+        )
+
+        if not feed.url:
+            raise RuntimeError("TAXII collection URL required")
+
+        api_key = self._get_feed_api_key(feed)
+        auth_header = feed.auth_header or "Authorization"
+        seen = {e.value for e in self._entries.values()}
+        count = 0
+        for sdo in poll_collection(url=feed.url, api_key=api_key, auth_header=auth_header):
+            if not indicator_meets_confidence(sdo, feed.min_confidence):
+                continue
+            atoms = stix_indicator_iocs(sdo)
+            if not atoms:
+                continue
+            labels = stix_labels(sdo)
+            score = stix_confidence_score(sdo)
+            severity = _severity_from_score(score)
+            confidence = max(0.0, min(1.0, score / 100.0))
+            for ioc_type, value in atoms:
+                if value in seen:
+                    continue
+                seen.add(value)
+                ioc = IOCCreate(
+                    type=ioc_type, value=value, severity=severity,
+                    confidence=confidence, tags=["taxii"] + labels,
+                )
+                self.create(ioc, source="taxii")
+                count += 1
+                if count >= 200:
+                    return count
         return count
 
     def _fetch_virustotal(self, feed: FeedConfig) -> int:

@@ -74,6 +74,7 @@ class FeedType(str, Enum):
     ABUSEIPDB = "abuseipdb"
     MISP = "misp"
     OPENCTI = "opencti"
+    TAXII = "taxii"
     VIRUSTOTAL = "virustotal"
     SHODAN = "shodan"
     CIRCL = "circl"
