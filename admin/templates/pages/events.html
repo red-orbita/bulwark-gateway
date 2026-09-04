@@ -173,6 +173,33 @@
             </div>
         </div>
 
+        <!-- Search: Splunk/Wazuh-lite. 'field:value' scoped filters + free-text
+             terms, parsed server-side (admin/services/event_query.py) and AND-ed
+             with the dropdown filters below. Enter or the button runs the search. -->
+        <div>
+            <label class="sg-label text-xs" for="evt-search">Search</label>
+            <div class="flex gap-2">
+                <input id="evt-search" type="text" x-model="searchQuery"
+                       @keydown.enter="applySearch()"
+                       placeholder="category:jailbreak tool:run_command last:24h exfiltration"
+                       class="sg-input w-full text-sm font-mono"
+                       autocomplete="off" spellcheck="false" />
+                <button type="button" @click="applySearch()" class="sg-btn sg-btn-primary sg-btn-sm shrink-0">
+                    <i data-lucide="search" class="w-4 h-4"></i> Search
+                </button>
+                <button type="button" x-show="searchQuery" x-cloak
+                        @click="searchQuery = ''; applySearch()"
+                        class="sg-btn sg-btn-ghost sg-btn-sm shrink-0" aria-label="Clear search">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <p class="text-[11px] text-gray-500 mt-1">
+                Fields:
+                <span class="font-mono text-gray-400">tenant agent category severity verdict request_id incident_id source pattern tool last:&lt;n&gt;&lt;s|m|h|d|w&gt;</span>
+                — bare words match any field.
+            </p>
+        </div>
+
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
                 <label class="sg-label text-xs" for="evt-filter-tenant">Tenant</label>
@@ -429,6 +456,19 @@
                                                     </dl>
                                                 </div>
                                             </template>
+
+                                            <!-- F1: pivot into the Investigation Center. Both surfaces read the
+                                                 same durable store, so this opens the SOC queue positioned on the
+                                                 originating correlation alert (matched by event_id, incident_id
+                                                 fallback). -->
+                                            <div class="pt-1">
+                                                <a :href="investigateHref(evt)"
+                                                   class="sg-btn sg-btn-sm sg-btn-ghost inline-flex items-center gap-1.5 !text-fuchsia-200 hover:!text-fuchsia-100">
+                                                    <i data-lucide="scan-search" class="w-4 h-4"></i>
+                                                    Investigate in SOC queue
+                                                    <span aria-hidden="true">→</span>
+                                                </a>
+                                            </div>
                                         </div>
 
                                         <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
@@ -533,6 +573,9 @@ function eventsManager() {
         error: false,
         filterTenant: '',
         filterCategory: '',
+        // Splunk/Wazuh-lite search bar: 'field:value' scoped filters + free-text
+        // terms. Parsed server-side and AND-ed with the dropdown filters.
+        searchQuery: '',
         // Verdict feed: '' = security feed (block + warn), 'blocked', 'warned',
         // or 'allowed' (opt-in allowed-event feed, separate Redis list).
         filterVerdict: '',
@@ -811,6 +854,22 @@ function eventsManager() {
         incidentId(evt) { return this._meta(evt).incident_id || ''; },
         correlationInputHash(evt) { return this._meta(evt).input_hash || ''; },
 
+        // F1: deep-link this correlated event into the Investigation Center. The
+        // events viewer and the SOC queue read the SAME durable security_events
+        // store, so the correlation event (source=correlation_engine) appears in
+        // both with an identical event_id — a deterministic pivot. The incident_id
+        // is passed as a fallback the queue can match when the exact event has
+        // aged out of the loaded window.
+        investigateHref(evt) {
+            const params = new URLSearchParams();
+            const eid = (evt && evt.event_id) || '';
+            if (eid) params.set('event', eid);
+            const inc = this.incidentId(evt) || (evt && evt.incident_id) || '';
+            if (inc) params.set('incident', inc);
+            const qs = params.toString();
+            return '/investigation' + (qs ? '?' + qs : '');
+        },
+
         async init() {
             this.compact = localStorage.getItem('sg-events-density') === 'compact';
             await Promise.all([this.loadComplianceMappings(), this.refresh()]);
@@ -881,6 +940,10 @@ function eventsManager() {
             // Verdict selects the feed server-side ('allowed' reads a separate
             // Redis list; 'blocked'/'warned' narrow the security feed).
             if (this.filterVerdict) url += `&verdict=${encodeURIComponent(this.filterVerdict)}`;
+            // Search bar: parsed server-side into scoped filters + free-text terms.
+            if (this.searchQuery && this.searchQuery.trim()) {
+                url += `&q=${encodeURIComponent(this.searchQuery.trim())}`;
+            }
             // Severity is filtered client-side (multi-select) — not sent to the server.
             const resp = await fetch(url);
             if (!resp.ok) throw new Error(`events ${resp.status}`);
@@ -900,11 +963,19 @@ function eventsManager() {
             await this.refresh();
         },
 
+        // Run the search bar. Expanded rows are reset so stale client-side state
+        // never leaks across result sets.
+        async applySearch() {
+            this.expandedKeys = [];
+            await this.refresh();
+        },
+
         clearFilters() {
             this.filterTenant = '';
             this.filterCategory = '';
             this.filterSeverities = [];
             this.filterVerdict = '';
+            this.searchQuery = '';
             this.refresh();
         },
 

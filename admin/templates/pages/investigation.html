@@ -1692,7 +1692,52 @@ function investigationPage() {
                 await this.loadComplianceMappings();
                 await this.loadCaseTemplates();
                 await this.reloadAll();
+                await this.applyDeepLink();
                 this.$watch('autoRefresh', (on) => this._syncAutoRefresh(on));
+            },
+
+            // F1: honour a deep link from the Security Events viewer, which links
+            // to /investigation?event=<event_id>[&incident=<incident_id>]. Both
+            // surfaces read the SAME durable security_events store, so the
+            // correlation alert is locatable in the loaded queue by event_id
+            // (precise) or incident_id (fallback). If it aged out of the default
+            // 24h window, widen the lookback to the 90-day max once and retry, then
+            // strip the params so a manual refresh doesn't re-fire the pivot.
+            async applyDeepLink() {
+                let params;
+                try {
+                    params = new URLSearchParams(window.location.search);
+                } catch (e) {
+                    return;
+                }
+                const wantEvent = params.get('event') || '';
+                const wantIncident = params.get('incident') || '';
+                if (!wantEvent && !wantIncident) return;
+
+                const find = () => this.alerts.find(a =>
+                    (wantEvent && a.event_id === wantEvent) ||
+                    (wantIncident && a.incident_id === wantIncident)
+                );
+
+                let alert = find();
+                if (!alert && this.filters.lookback_hours < 2160) {
+                    // Widen to the maximum retained window and retry once.
+                    this.filters.lookback_hours = 2160;
+                    await this.loadAlerts();
+                    alert = find();
+                }
+
+                // Clean the deep-link params so a refresh doesn't re-trigger.
+                try {
+                    window.history.replaceState({}, '', window.location.pathname);
+                } catch (e) { /* non-fatal */ }
+
+                if (alert) {
+                    await this.investigate(alert);
+                    showToast('Opened the correlated alert from Security Events', 'success');
+                } else {
+                    showToast('That correlated alert is no longer in the queue (aged out or resolved)', 'error');
+                }
             },
 
             async reloadAll() {
