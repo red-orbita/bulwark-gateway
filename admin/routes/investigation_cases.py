@@ -66,6 +66,7 @@ from .investigation import (
     _authorize_subject,
     _can_write,
     _correlation_enabled,
+    _enrich_auto_raise_enabled,
     _raise_origin_risk,
     _scoped_tenant,
 )
@@ -1335,11 +1336,22 @@ async def _auto_raise_case_origins(case: dict, *, case_id: str, actor: str) -> d
     missing/unreachable Redis simply yields ``raised=[]`` with a reason, and the
     enrichment response is unaffected. Successful raises are journalled onto the
     case's append-only action trail.
+
+    Gated by :func:`_enrich_auto_raise_enabled` (off by default): when auto-raise
+    is disabled, the eligible origin tokens are still surfaced (as
+    ``eligible_origins``) so an operator can harden them deliberately, but nothing
+    is written and no request is escalated — a false-positive analyzer verdict
+    never silently blocks a tenant with no human in the loop.
     """
     result: dict = {"raised": [], "correlation_enabled": _correlation_enabled()}
     tokens = _case_origin_tokens(case)
     if not tokens:
         result["skipped_reason"] = "no_origin_subjects"
+        return result
+    if not _enrich_auto_raise_enabled():
+        # Human-gated: surface what *would* be hardened, but do not enforce.
+        result["skipped_reason"] = "auto_raise_disabled"
+        result["eligible_origins"] = tokens
         return result
     r = _redis()
     if r is None:
@@ -1386,11 +1398,14 @@ async def enrich_case_observable(
 
     Runs the requested ``analyzer_ids`` against the observable, folds the reports
     into a compact verdict blob, and stores it under ``enrichment['cortex']``. A
-    ``malicious`` verdict flags the observable ``is_ioc`` *and* auto-hardens every
-    ``origin`` subject linked to the case (best-effort — see
+    ``malicious`` verdict flags the observable ``is_ioc``; when
+    ``BULWARK_INVESTIGATION_ENRICH_AUTO_RAISE`` is enabled it *also* auto-hardens
+    every ``origin`` subject linked to the case (best-effort — see
     :func:`_auto_raise_case_origins`) so the confirmed-bad indicator escalates the
-    origins that produced it. Fail-open: an unreachable/failing Cortex surfaces a
-    ``502`` (audited) and never mutates the observable.
+    origins that produced it. That auto-raise is **off by default** — the response
+    surfaces the eligible origins so an operator can harden them deliberately.
+    Fail-open: an unreachable/failing Cortex surfaces a ``502`` (audited) and never
+    mutates the observable.
     """
     case = await _get_case_scoped(user, case_id)  # tenant gate
 
@@ -1436,9 +1451,10 @@ async def enrich_case_observable(
     if updated is None:  # pragma: no cover — observable existence checked above
         raise HTTPException(status_code=404, detail="Observable not found")
 
-    # A confirmed-malicious verdict auto-hardens the case's linked origins so the
-    # proxy escalates their next request. Best-effort / fail-open — never blocks the
-    # enrichment response, even if Redis is down or no origins are linked.
+    # A confirmed-malicious verdict may auto-harden the case's linked origins so the
+    # proxy escalates their next request — but only when auto-raise is opted in
+    # (off by default). Best-effort / fail-open — never blocks the enrichment
+    # response, even if Redis is down or no origins are linked.
     origin_risk: Optional[dict] = None
     if is_malicious:
         origin_risk = await _auto_raise_case_origins(case, case_id=case_id, actor=user.sub)
@@ -1558,11 +1574,14 @@ async def lookup_case_observable(
     Searches the threat-intel platform for the observable's literal value, folds
     the matching indicators/attributes into a compact verdict blob, and stores it
     under ``enrichment['opencti']`` or ``enrichment['misp']`` (keyed by the
-    connector). A ``malicious`` verdict flags the observable ``is_ioc`` *and*
-    auto-hardens every ``origin`` subject linked to the case (best-effort — see
+    connector). A ``malicious`` verdict flags the observable ``is_ioc``; when
+    ``BULWARK_INVESTIGATION_ENRICH_AUTO_RAISE`` is enabled it *also* auto-hardens
+    every ``origin`` subject linked to the case (best-effort — see
     :func:`_auto_raise_case_origins`) so the confirmed-bad indicator escalates the
-    origins that produced it. Fail-open: an unreachable/failing platform surfaces a
-    ``502`` (audited) and never mutates the observable.
+    origins that produced it. That auto-raise is **off by default** — the response
+    surfaces the eligible origins so an operator can harden them deliberately.
+    Fail-open: an unreachable/failing platform surfaces a ``502`` (audited) and
+    never mutates the observable.
     """
     case = await _get_case_scoped(user, case_id)  # tenant gate
 
@@ -1603,9 +1622,10 @@ async def lookup_case_observable(
     if updated is None:  # pragma: no cover — observable existence checked above
         raise HTTPException(status_code=404, detail="Observable not found")
 
-    # A confirmed-malicious verdict auto-hardens the case's linked origins so the
-    # proxy escalates their next request. Best-effort / fail-open — never blocks the
-    # lookup response, even if Redis is down or no origins are linked.
+    # A confirmed-malicious verdict may auto-harden the case's linked origins so the
+    # proxy escalates their next request — but only when auto-raise is opted in
+    # (off by default). Best-effort / fail-open — never blocks the lookup response,
+    # even if Redis is down or no origins are linked.
     origin_risk: Optional[dict] = None
     if is_malicious:
         origin_risk = await _auto_raise_case_origins(case, case_id=case_id, actor=user.sub)

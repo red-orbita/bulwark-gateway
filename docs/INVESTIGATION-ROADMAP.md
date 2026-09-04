@@ -251,10 +251,16 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
      runs a bounded Cortex **responder** and records the outcome under
      `enrichment['cortex_responder']` (a responder is an action, never a verdict —
      it never flags `is_ioc`; fail-open audited 502). A confirmed-**malicious**
-     enrich verdict now auto-hardens **every `origin` subject linked to the case**
+     enrich verdict can auto-harden **every `origin` subject linked to the case**
      (`_auto_raise_case_origins` → reuses `_raise_origin_risk`, best-effort /
      fail-open: Redis down ⇒ `skipped_reason`, enrich still returns 200; journals an
-     action note; the response carries `origin_risk.raised`). The Investigation UI
+     action note; the response carries `origin_risk.raised`). This auto-raise is
+     **human-gated / off by default** (`BULWARK_INVESTIGATION_ENRICH_AUTO_RAISE`):
+     when off, the malicious verdict still flags `is_ioc` but no origin is hardened —
+     the response surfaces `origin_risk.eligible_origins` +
+     `skipped_reason="auto_raise_disabled"` so an operator hardens them deliberately
+     via the respond action (a single false-positive analyzer verdict never silently
+     starts blocking a tenant with no human in the loop). The Investigation UI
      (`investigation.html` Observables section) gained a per-observable **Enrich**
      panel — pick a Cortex integration, check analyzers, run enrich (shows the
      verdict badge + hardened-origin count), and dispatch a responder. Tests:

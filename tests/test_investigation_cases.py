@@ -2266,6 +2266,7 @@ class TestEnrichAutoRaiseOrigins:
         monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
         monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis())
         monkeypatch.setattr(inv_cases, "_correlation_enabled", lambda: True)
+        monkeypatch.setattr(inv_cases, "_enrich_auto_raise_enabled", lambda: True)
 
         body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
         out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
@@ -2280,6 +2281,37 @@ class TestEnrichAutoRaiseOrigins:
         # The escalation is journalled onto the case's action trail.
         case = await cases.get(cid)
         assert any(
+            n.get("kind") == "action" and "auto-raised" in n.get("text", "")
+            for n in case["notes"]
+        )
+
+    async def test_gate_off_surfaces_eligible_origins_without_raising(
+        self, wired, monkeypatch
+    ):
+        # Default posture: auto-raise is OFF. A malicious verdict must still flag the
+        # observable is_ioc, but must NOT harden any origin — it only surfaces the
+        # eligible tokens for a deliberate operator action. No Redis touch, no note.
+        inv_cases, cases, _, _ = wired
+        cid, oid, registry = await self._seed_case_with_origin(inv_cases, cases)
+        monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
+        # A live Redis would be a bug to touch; make any use blow up loudly.
+        def _boom():
+            raise AssertionError("Redis must not be touched when auto-raise is gated off")
+        monkeypatch.setattr(inv_cases, "_redis", _boom)
+        monkeypatch.setattr(inv_cases, "_enrich_auto_raise_enabled", lambda: False)
+
+        body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
+        out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
+
+        risk = out["origin_risk"]
+        assert risk["raised"] == []
+        assert risk["skipped_reason"] == "auto_raise_disabled"
+        assert risk["eligible_origins"] == [_ORIGIN_TOKEN]
+        # The observable is still marked an IOC (detective fact is preserved)...
+        assert out["observable"]["is_ioc"] is True
+        # ...but nothing is journalled as an enforcement action.
+        case = await cases.get(cid)
+        assert not any(
             n.get("kind") == "action" and "auto-raised" in n.get("text", "")
             for n in case["notes"]
         )
@@ -2311,6 +2343,7 @@ class TestEnrichAutoRaiseOrigins:
         cid, oid, registry = await self._seed_case_with_origin(inv_cases, cases)
         monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
         monkeypatch.setattr(inv_cases, "_redis", lambda: None)
+        monkeypatch.setattr(inv_cases, "_enrich_auto_raise_enabled", lambda: True)
 
         body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
         out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
@@ -2323,6 +2356,7 @@ class TestEnrichAutoRaiseOrigins:
         cid, oid, registry = await self._seed_case_with_origin(inv_cases, cases)
         monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
         monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis(ping_error=True))
+        monkeypatch.setattr(inv_cases, "_enrich_auto_raise_enabled", lambda: True)
 
         body = inv_cases.ObservableEnrichRequest(integration_id="cx1", analyzer_ids=["VT"])
         out = await inv_cases.enrich_case_observable(cid, oid, body=body, user=_admin())
@@ -2575,6 +2609,7 @@ class TestObservableLookupEndpoint:
         monkeypatch.setattr(inv_cases, "get_integration_registry", lambda: registry)
         monkeypatch.setattr(inv_cases, "_redis", lambda: _FakeRedis())
         monkeypatch.setattr(inv_cases, "_correlation_enabled", lambda: True)
+        monkeypatch.setattr(inv_cases, "_enrich_auto_raise_enabled", lambda: True)
 
         body = inv_cases.ObservableLookupRequest(integration_id="oc1")
         out = await inv_cases.lookup_case_observable(cid, oid, body=body, user=_admin())

@@ -3029,6 +3029,10 @@ function investigationPage() {
                 const raised = data.origin_risk && Array.isArray(data.origin_risk.raised) ? data.origin_risk.raised.length : 0;
                 let msg = 'Enriched · verdict: ' + verdict;
                 if (raised > 0) msg += ' · ' + raised + ' origin(s) hardened';
+                else if (data.origin_risk && data.origin_risk.skipped_reason === 'auto_raise_disabled') {
+                    const eligible = (data.origin_risk.eligible_origins || []).length;
+                    if (eligible > 0) msg += ' · ' + eligible + ' origin(s) eligible — harden manually';
+                }
                 showToast(msg, verdict === 'malicious' ? 'error' : 'success');
                 await this.loadCaseObservables();
                 this.loadCaseTimeline();
@@ -3089,6 +3093,10 @@ function investigationPage() {
                 const raised = data.origin_risk && Array.isArray(data.origin_risk.raised) ? data.origin_risk.raised.length : 0;
                 let msg = 'Looked up · verdict: ' + verdict;
                 if (raised > 0) msg += ' · ' + raised + ' origin(s) hardened';
+                else if (data.origin_risk && data.origin_risk.skipped_reason === 'auto_raise_disabled') {
+                    const eligible = (data.origin_risk.eligible_origins || []).length;
+                    if (eligible > 0) msg += ' · ' + eligible + ' origin(s) eligible — harden manually';
+                }
                 showToast(msg, verdict === 'malicious' ? 'error' : 'success');
                 await this.loadCaseObservables();
                 this.loadCaseTimeline();

@@ -292,6 +292,19 @@ class Settings(BaseSettings):
     # block more aggressively; raise it to require stronger content evidence.
     correlation_confidence_block_threshold: float = 0.5
 
+    # === Investigation Center ===
+    # When an analyst enriches/looks-up a case observable and the threat-intel
+    # platform (Cortex/OpenCTI/MISP) returns a *malicious* verdict, the observable is
+    # always flagged is_ioc. Whether that verdict ALSO auto-hardens every origin
+    # linked to the case (pushing each to the correlation block threshold so the
+    # proxy escalates their next request) is gated here. Off by default: a single
+    # false-positive analyzer verdict must not silently start blocking a tenant's
+    # traffic with no human in the loop. When off, the enrich/lookup response still
+    # surfaces the eligible origins so an operator can harden them deliberately via
+    # the existing respond (raise-risk) action. Opt in only when your TI analyzers
+    # are trusted enough to drive live enforcement unattended.
+    investigation_enrich_auto_raise: bool = False
+
     model_config = SettingsConfigDict(
         env_prefix="BULWARK_",
         env_file=".env",

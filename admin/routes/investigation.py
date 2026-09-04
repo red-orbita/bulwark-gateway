@@ -145,6 +145,22 @@ def _correlation_enabled() -> bool:
         return False
 
 
+def _enrich_auto_raise_enabled() -> bool:
+    """True when a malicious enrichment verdict may auto-harden a case's origins.
+
+    Off by default (:data:`src.config.settings.investigation_enrich_auto_raise`): a
+    false-positive analyzer verdict must not silently start blocking a tenant's
+    traffic with no human in the loop. When off, the enrich/lookup response still
+    surfaces the eligible origins so an operator can harden them deliberately.
+    """
+    try:
+        from src.config import settings
+
+        return bool(getattr(settings, "investigation_enrich_auto_raise", False))
+    except Exception:
+        return False
+
+
 def _since_from_hours(hours: Optional[float]) -> Optional[float]:
     """Convert an optional lookback window (hours) into a unix ``since`` bound."""
     if hours is None:
