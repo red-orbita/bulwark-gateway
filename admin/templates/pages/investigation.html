@@ -2545,7 +2545,7 @@ function investigationPage() {
                     const data = await res.json();
                     // Only case-push-capable platforms belong in the push menu —
                     // enrichment/lookup-only targets (Cortex) cannot receive a case.
-                    const pushable = ['thehive', 'dfir_iris', 'opencti', 'misp'];
+                    const pushable = ['thehive', 'dfir_iris', 'opencti', 'misp', 'taxii'];
                     this.pushTargets = (data.integrations || []).filter(
                         i => i.enabled && pushable.includes(i.type)
                     );

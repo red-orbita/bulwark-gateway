@@ -577,8 +577,16 @@ Promote the pull-only `IOCStore._fetch_misp` into a full `Connector`:
   parse `indicator` SDOs (reuse the Phase-2 `_parse_stix_indicator_pattern`), drop
   revoked/sub-confidence, upsert into the live IOC store via `feed_scheduler` — a
   vendor-neutral feed source alongside OpenCTI/MISP.
-- **Publish** (optional, TLP-gated): expose case STIX bundles (Phase 0
-  `export_case --format stix` already builds them) to an outbound TAXII collection.
+- **Publish** (TLP-gated) ✅ DONE: `TaxiiConnector` (`admin/services/integrations/taxii.py`)
+  publishes a case as a STIX 2.1 bundle to a writable outbound collection via the
+  "Add Objects" operation (`POST {collection}/objects/`). Reuses the Phase-0
+  `build_stix_bundle` builder (report + SCOs + indicator SDOs, deterministic ids ⇒
+  server-side upsert on re-push), excludes `TLP:RED` observables (refuses a
+  wholly-restricted case with a `TlpGateError` → `400`, never contacts the remote),
+  stamps the selected sharing level as a standard STIX TLP `marking-definition`, and
+  is registered as a `taxii` `/push/case` target (registry + create validation + UI
+  push menu). SSRF-validated; `test_connection` verifies the collection advertises
+  `can_write`.
 - SSRF-validate every collection URL (parity with the OpenCTI/MISP fetchers).
 
 ### 7.3 Sighting feedback loop (the real bidirectional win) ✅ DONE

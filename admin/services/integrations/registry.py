@@ -35,6 +35,7 @@ from .cortex import CortexConnector
 from .dfir_iris import DfirIrisConnector
 from .misp import MispConnector
 from .opencti import OpenCTIConnector
+from .taxii import TaxiiConnector
 from .thehive import TheHiveConnector
 from .util import iso_now
 
@@ -51,7 +52,9 @@ _CONFIG_FILE = Path(
 # *enrichment* targets (observable analysis / threat-intel lookup), built via
 # :meth:`build_enrichment_connector` / :meth:`build_lookup_connector`. ``misp`` is
 # both a *push* target (case → Event) and a *lookup* target (attribute search).
-INTEGRATION_TYPES = ("thehive", "dfir_iris", "cortex", "opencti", "misp")
+# ``taxii`` is a case *publish* target (case → STIX 2.1 bundle into a writable
+# TAXII 2.1 collection), the standards-based counterpart to the vendor push targets.
+INTEGRATION_TYPES = ("thehive", "dfir_iris", "cortex", "opencti", "misp", "taxii")
 
 # How long a health probe result is cached before a fresh probe is allowed.
 _HEALTH_TTL_SECONDS = 30.0
@@ -257,6 +260,15 @@ class IntegrationRegistry:
             # MISP implements the push protocol (case → Event/Attributes) in
             # addition to lookup, so it is a valid ``/push/case`` target.
             return MispConnector(
+                base_url=config.base_url,
+                api_key=api_key,
+                verify_tls=config.verify_tls,
+                timeout=config.timeout,
+            )
+        if config.type == "taxii":
+            # TAXII publishes a case as a STIX 2.1 bundle into a writable collection
+            # (the "Add Objects" operation), so it is a valid ``/push/case`` target.
+            return TaxiiConnector(
                 base_url=config.base_url,
                 api_key=api_key,
                 verify_tls=config.verify_tls,

@@ -1154,14 +1154,14 @@ both; auditor/viewer are read-only). All mutations are recorded in the admin aud
 | GET | `/sightings/status` | `integrations:read` | Sighting feedback dispatcher snapshot (enabled/running + reported/suppressed/failed) |
 | GET | `` | `integrations:read` | List connectors (secrets masked) |
 | GET | `/{id}` | `integrations:read` | Get one connector config (secret masked) |
-| POST | `` | `integrations:write` | Create a connector (`type` = `thehive`\|`dfir_iris`\|`cortex`\|`opencti`\|`misp`) |
+| POST | `` | `integrations:write` | Create a connector (`type` = `thehive`\|`dfir_iris`\|`cortex`\|`opencti`\|`misp`\|`taxii`) |
 | PUT | `/{id}` | `integrations:write` | Update a connector config |
 | DELETE | `/{id}` | `integrations:write` | Delete a connector |
 | POST | `/{id}/toggle` | `integrations:write` | Enable / disable a connector |
 | POST | `/{id}/test` | `integrations:write` | Live `test_connection` probe against the platform |
 | GET | `/{id}/health` | `integrations:read` | Cached connector health (TTL 30s) |
 | POST | `/reload` | `integrations:write` | Reload the connector registry from disk |
-| POST | `/push/case/{case_id}` | `integrations:write` | Idempotent push of a case to TheHive/IRIS/OpenCTI/MISP (create-or-update; fail-open) |
+| POST | `/push/case/{case_id}` | `integrations:write` | Idempotent push of a case to TheHive/IRIS/OpenCTI/MISP/TAXII (create-or-update; fail-open) |
 | GET | `/push/case/{case_id}/links` | `integrations:read` | List remote links (`remote_id` / `remote_url` / `last_synced_at`) for a case |
 
 ```json

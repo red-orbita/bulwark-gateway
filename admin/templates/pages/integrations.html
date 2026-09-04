@@ -7,7 +7,7 @@
     <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
             <h1 class="text-xl font-semibold text-white">Integrations</h1>
-            <p class="text-sm text-gray-400 mt-0.5 max-w-3xl">Outbound case-management connectors. Push an investigation case to an external SOC platform (TheHive, DFIR-IRIS). Pushes are <em>fail-open</em> — a remote error is retried and audited but never blocks the local case. Re-pushing the same case updates the existing remote record instead of creating a duplicate. Secrets are write-only and masked in every response.</p>
+            <p class="text-sm text-gray-400 mt-0.5 max-w-3xl">Outbound case-management connectors. Push an investigation case to an external SOC platform (TheHive, DFIR-IRIS, OpenCTI, MISP, or a TAXII 2.1 collection as a STIX bundle). Pushes are <em>fail-open</em> — a remote error is retried and audited but never blocks the local case. Re-pushing the same case updates the existing remote record instead of creating a duplicate. Secrets are write-only and masked in every response.</p>
         </div>
         <div class="flex items-center gap-2 shrink-0">
             <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
@@ -167,6 +167,7 @@
                         <optgroup label="Case management / SOAR">
                             <option value="thehive">TheHive 5</option>
                             <option value="dfir_iris">DFIR-IRIS</option>
+                            <option value="taxii">TAXII 2.1 (STIX publish)</option>
                         </optgroup>
                         <optgroup label="Threat intel / enrichment">
                             <option value="opencti">OpenCTI</option>
@@ -350,7 +351,7 @@ function integrationsPage() {
         },
 
         typeLabel(t) {
-            const labels = { thehive: 'TheHive', dfir_iris: 'DFIR-IRIS', opencti: 'OpenCTI', misp: 'MISP', cortex: 'Cortex' };
+            const labels = { thehive: 'TheHive', dfir_iris: 'DFIR-IRIS', opencti: 'OpenCTI', misp: 'MISP', cortex: 'Cortex', taxii: 'TAXII' };
             return labels[t] || t;
         },
 
