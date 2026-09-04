@@ -304,6 +304,14 @@ class Settings(BaseSettings):
     # the existing respond (raise-risk) action. Opt in only when your TI analyzers
     # are trusted enough to drive live enforcement unattended.
     investigation_enrich_auto_raise: bool = False
+    # Per-operator sliding-window budget (requests/minute) for the investigation
+    # endpoints that reach out to an external threat-intel platform on each call —
+    # observable enrich / lookup / respond (Cortex, OpenCTI, MISP). Service-account
+    # keys are already throttled per-key inside ``require_permission_automation``
+    # (Phase 3.2c); this caps *operator sessions*, which otherwise have no automation
+    # budget, so an unattended browser tab or a careless analyst can't hammer a paid
+    # / rate-limited external API. A value <= 0 disables the operator cap.
+    investigation_session_tool_rpm: int = 60
 
     model_config = SettingsConfigDict(
         env_prefix="BULWARK_",

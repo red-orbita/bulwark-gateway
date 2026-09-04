@@ -81,6 +81,72 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _session_tool_rpm() -> int:
+    """Per-operator RPM budget for external-TI endpoints (enrich/lookup/respond).
+
+    Reads :data:`src.config.settings.investigation_session_tool_rpm` (env
+    ``BULWARK_INVESTIGATION_SESSION_TOOL_RPM``). A value ``<= 0`` disables the
+    operator cap. Defaults to 60 on any read error so a config glitch never
+    silently unthrottles the surface.
+    """
+    try:
+        from src.config import settings
+
+        return int(getattr(settings, "investigation_session_tool_rpm", 60))
+    except Exception:
+        return 60
+
+
+def _require_tool_call(permission: str):
+    """Auth + a per-operator sliding-window budget for the external-TI endpoints.
+
+    The observable enrich / lookup / respond endpoints each reach out to a remote
+    threat-intel platform (Cortex, OpenCTI, MISP) on every call, so an unbounded
+    caller could hammer a paid / rate-limited external API. This wraps
+    :func:`require_permission_automation` and, for **operator** sessions/JWTs only,
+    also consumes one token from a per-user sliding window
+    (``BULWARK_INVESTIGATION_SESSION_TOOL_RPM``), returning ``429`` when exceeded.
+
+    Service-account keys are deliberately passed straight through: they are already
+    throttled per-key inside ``require_permission_automation`` (Phase 3.2c), so
+    charging them again here would halve a legitimate playbook's real budget. The
+    limiter reuses the automation limiter (Redis-first, in-memory fallback) under a
+    distinct ``investigation-tool:`` key namespace so it never collides with a
+    service account's per-key window.
+    """
+    _auth = require_permission_automation(permission)
+
+    async def _check(
+        case_id: str,
+        user: TokenPayload = Depends(_auth),
+    ) -> TokenPayload:
+        # Service accounts are already per-key throttled upstream — never double-count.
+        if user.sub.startswith("service-account:"):
+            return user
+        limit = _session_tool_rpm()
+        from ..services.automation_rate_limit import get_automation_rate_limiter
+
+        if not get_automation_rate_limiter().consume(f"investigation-tool:{user.sub}", limit):
+            try:
+                await get_audit_logger().log(
+                    actor=user.sub,
+                    action="investigation.tool_call_rate_limited",
+                    resource_type="investigation_case",
+                    resource_id=case_id,
+                    details=str({"limit_rpm": limit}),
+                )
+            except Exception:  # noqa: BLE001, S110 - audit is best-effort, never fatal
+                pass
+            raise HTTPException(
+                status_code=429,
+                detail="Investigation tool-call rate limit exceeded",
+                headers={"Retry-After": "60"},
+            )
+        return user
+
+    return _check
+
+
 # Severity ordering for detecting an *escalation* (only a raise fires the webhook).
 _SEVERITY_RANK = {sev: rank for rank, sev in enumerate(CASE_SEVERITIES)}
 
@@ -1392,7 +1458,7 @@ async def enrich_case_observable(
     case_id: str,
     observable_id: str,
     body: ObservableEnrichRequest,
-    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
+    user: TokenPayload = Depends(_require_tool_call("investigation:write")),
 ):
     """Enrich an observable via a Cortex integration's analyzers (Phase 2).
 
@@ -1489,7 +1555,7 @@ async def run_observable_responder(
     case_id: str,
     observable_id: str,
     body: ObservableResponderRequest,
-    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
+    user: TokenPayload = Depends(_require_tool_call("investigation:write")),
 ):
     """Run a Cortex responder (response action) against an observable (Phase 2).
 
@@ -1567,7 +1633,7 @@ async def lookup_case_observable(
     case_id: str,
     observable_id: str,
     body: ObservableLookupRequest,
-    user: TokenPayload = Depends(require_permission_automation("investigation:write")),
+    user: TokenPayload = Depends(_require_tool_call("investigation:write")),
 ):
     """Look an observable up against an OpenCTI or MISP integration (Phase 2/5).
 

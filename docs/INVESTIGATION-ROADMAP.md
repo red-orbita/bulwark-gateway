@@ -268,6 +268,16 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
      `tests/test_integrations.py` (responders route ×4),
      `tests/test_investigation_cases.py` (`TestEnrichAutoRaiseOrigins` ×6,
      `TestObservableResponderEndpoint` ×8).
+   - **DONE (per-operator tool-call rate limit)**: the enrich/lookup/respond
+     endpoints each reach an external threat-intel platform (Cortex/OpenCTI/MISP)
+     per call, so a `_require_tool_call` dependency now caps **operator sessions**
+     to `BULWARK_INVESTIGATION_SESSION_TOOL_RPM` (default 60) requests/minute —
+     over-budget ⇒ `429` + `Retry-After: 60` + a `investigation.tool_call_rate_limited`
+     audit record. Service-account keys pass straight through (already throttled
+     per-key inside `require_permission_automation` — no double-count). Reuses the
+     automation limiter (Redis-first, in-memory fallback) under a distinct
+     `investigation-tool:` key namespace; `<= 0` disables the cap. Tests:
+     `tests/test_investigation_cases.py` (`TestSessionToolRateLimit` ×5).
 
 ### 4.2 OpenCTI (`opencti.py`)
 - **Pull** (closes the MISP/OpenCTI feed gap): query indicators via OpenCTI GraphQL

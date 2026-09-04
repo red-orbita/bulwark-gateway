@@ -2944,3 +2944,100 @@ class TestCaseTemplates:
         with pytest.raises(HTTPException) as ei:
             await inv_cases.create_case(body=body, user=_admin())
         assert ei.value.status_code == 400
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Per-operator rate limit on the external-TI endpoints (enrich/lookup/respond)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _sa_token(account_id="abc123"):
+    """A service-account TokenPayload (the shape ``require_permission_automation``
+    mints — ``sub='service-account:<id>'``, lowest role)."""
+    now = datetime.now(timezone.utc)
+    return TokenPayload(
+        sub=f"service-account:{account_id}", role=UserRole.VIEWER,
+        exp=now + timedelta(minutes=1), iat=now,
+    )
+
+
+class TestSessionToolRateLimit:
+    """The enrich/lookup/respond dependency (`_require_tool_call`) caps operator
+    sessions per-minute while letting already-throttled service-account keys pass."""
+
+    async def test_operator_capped_after_budget(self, wired, monkeypatch):
+        inv_cases, _, _, audit = wired
+        from fastapi import HTTPException
+
+        from admin.services import automation_rate_limit as arl
+
+        # Force the in-memory window (no Redis) for a deterministic budget, and use
+        # a fresh limiter so no other test's hits bleed into this one.
+        monkeypatch.setattr(arl, "get_redis_client", lambda *a, **k: None)
+        limiter = arl.AutomationRateLimiter()
+        monkeypatch.setattr(arl, "get_automation_rate_limiter", lambda: limiter)
+        monkeypatch.setattr(inv_cases, "_session_tool_rpm", lambda: 2)
+
+        dep = inv_cases._require_tool_call("investigation:write")
+        # The first two operator calls consume the budget...
+        assert (await dep(case_id="case_1", user=_admin())).sub == "admin-user"
+        assert (await dep(case_id="case_1", user=_admin())).sub == "admin-user"
+        # ...the third is throttled with a 429 + Retry-After + an audit record.
+        with pytest.raises(HTTPException) as ei:
+            await dep(case_id="case_1", user=_admin())
+        assert ei.value.status_code == 429
+        assert ei.value.headers["Retry-After"] == "60"
+        assert audit.entries[-1]["action"] == "investigation.tool_call_rate_limited"
+        assert audit.entries[-1]["resource_id"] == "case_1"
+
+    async def test_operator_budget_is_per_user(self, wired, monkeypatch):
+        inv_cases, _, _, _ = wired
+        from admin.services import automation_rate_limit as arl
+
+        monkeypatch.setattr(arl, "get_redis_client", lambda *a, **k: None)
+        limiter = arl.AutomationRateLimiter()
+        monkeypatch.setattr(arl, "get_automation_rate_limiter", lambda: limiter)
+        monkeypatch.setattr(inv_cases, "_session_tool_rpm", lambda: 1)
+
+        dep = inv_cases._require_tool_call("investigation:write")
+        # Two different operators each get their own window (distinct sub).
+        assert (await dep(case_id="c", user=_token(UserRole.ADMIN))).role == UserRole.ADMIN
+        assert (await dep(case_id="c", user=_token(UserRole.SECURITY))).role == UserRole.SECURITY
+
+    async def test_service_account_bypasses_operator_cap(self, wired, monkeypatch):
+        inv_cases, _, _, _ = wired
+        from admin.services import automation_rate_limit as arl
+
+        class _DenyAll:
+            def consume(self, *a, **k):  # pragma: no cover - must never be reached
+                raise AssertionError("service-account must not hit the operator budget")
+
+        monkeypatch.setattr(arl, "get_automation_rate_limiter", lambda: _DenyAll())
+        monkeypatch.setattr(inv_cases, "_session_tool_rpm", lambda: 1)
+
+        dep = inv_cases._require_tool_call("investigation:write")
+        # A service-account key (already per-key throttled upstream) passes through
+        # without ever consulting the operator budget.
+        out = await dep(case_id="case_1", user=_sa_token())
+        assert out.sub == "service-account:abc123"
+
+    async def test_disabled_budget_allows_all(self, wired, monkeypatch):
+        inv_cases, _, _, _ = wired
+        from admin.services import automation_rate_limit as arl
+
+        monkeypatch.setattr(arl, "get_redis_client", lambda *a, **k: None)
+        limiter = arl.AutomationRateLimiter()
+        monkeypatch.setattr(arl, "get_automation_rate_limiter", lambda: limiter)
+        # rpm <= 0 disables the operator cap entirely.
+        monkeypatch.setattr(inv_cases, "_session_tool_rpm", lambda: 0)
+
+        dep = inv_cases._require_tool_call("investigation:write")
+        for _ in range(5):
+            assert (await dep(case_id="c", user=_admin())).sub == "admin-user"
+
+    def test_session_tool_rpm_reads_setting(self, monkeypatch):
+        import admin.routes.investigation_cases as inv_cases
+        from src.config import settings
+
+        monkeypatch.setattr(settings, "investigation_session_tool_rpm", 42)
+        assert inv_cases._session_tool_rpm() == 42
