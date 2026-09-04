@@ -83,6 +83,88 @@ def _get_db_encryption_key() -> str | None:
     return key if key else None
 
 
+# ─── MFA secret at-rest encryption (PostgreSQL backend) ─────────────────────────
+#
+# The SQLite backend protects `mfa_secret` at rest via full-database SQLCipher
+# encryption (see UserStore.initialize). The PostgreSQL backend stores columns in
+# the clear, so the TOTP shared secret — a *reversible* credential whose leak lets
+# an attacker forge valid MFA codes — is encrypted at the application layer here.
+# Everything else (email/phone/name PII) is delegated to the provider's at-rest
+# encryption (TDE) / volume encryption, documented in docs/DEPLOYMENT.md.
+#
+# The Fernet key is derived (HKDF-style, domain-separated) from the same
+# BULWARK_KEY_ENCRYPTION_KEY that guards virtual keys, so operators manage one
+# key. When neither the key nor `cryptography` is available the secret is stored
+# in plaintext (parity with the SQLCipher "unencrypted fallback") and a warning is
+# emitted — MFA keeps working, at-rest protection is delegated to the provider.
+
+_MFA_CIPHER_PREFIX = "fernet:"
+_mfa_no_key_warned = False
+
+
+def _mfa_cipher():  # type: ignore[no-untyped-def]
+    """Return a Fernet for MFA-secret encryption, or None when unconfigured.
+
+    Derives a 32-byte key from BULWARK_KEY_ENCRYPTION_KEY via HKDF (fixed salt +
+    MFA-specific info for domain separation from the virtual-key cipher). Returns
+    None when the key or the `cryptography` package is absent (caller falls back
+    to plaintext + delegated at-rest encryption).
+    """
+    from .secrets import read_secret
+    key_source = read_secret("BULWARK_KEY_ENCRYPTION_KEY", default="") or read_secret(
+        "KEY_ENCRYPTION_KEY", default=""
+    )
+    if not key_source:
+        return None
+    try:
+        import base64
+        import hmac as _hmac
+
+        from cryptography.fernet import Fernet
+    except ImportError:
+        return None
+    # HKDF-Extract then HKDF-Expand (one block is enough for 32 bytes).
+    prk = _hmac.new(b"bulwark-mfa-secret-v1", key_source.encode(), "sha256").digest()
+    okm = _hmac.new(prk, b"bulwark-mfa-secret-fernet\x01", "sha256").digest()
+    return Fernet(base64.urlsafe_b64encode(okm))
+
+
+def _encrypt_mfa_secret(secret: str) -> str:
+    """Encrypt a TOTP secret for at-rest storage; plaintext fallback if no key."""
+    cipher = _mfa_cipher()
+    if cipher is None:
+        global _mfa_no_key_warned
+        if not _mfa_no_key_warned:
+            import logging
+            logging.getLogger(__name__).warning(
+                "BULWARK_KEY_ENCRYPTION_KEY not set (or cryptography missing) — MFA "
+                "secrets are stored WITHOUT application-layer encryption; relying on "
+                "the database provider's at-rest encryption (TDE)."
+            )
+            _mfa_no_key_warned = True
+        return secret
+    return _MFA_CIPHER_PREFIX + cipher.encrypt(secret.encode()).decode()
+
+
+def _decrypt_mfa_secret(stored: str | None) -> str | None:
+    """Decrypt a stored MFA secret. Fails closed (None) on a bad/absent key.
+
+    Rows written before a key was configured (or on a plaintext-fallback
+    deployment) carry no prefix and are returned as-is for backward compatibility.
+    """
+    if not stored:
+        return None
+    if not stored.startswith(_MFA_CIPHER_PREFIX):
+        return stored  # legacy/plaintext-fallback row
+    cipher = _mfa_cipher()
+    if cipher is None:
+        return None  # key vanished — cannot verify, fail closed
+    try:
+        return cipher.decrypt(stored[len(_MFA_CIPHER_PREFIX):].encode()).decode()
+    except Exception:  # noqa: BLE001 - corrupt/wrong-key ciphertext must fail closed, not crash login
+        return None
+
+
 def _hash_password(password: str) -> str:
     """Hash password using bcrypt (mandatory)."""
     if not _HAS_BCRYPT:
@@ -737,6 +819,51 @@ class PostgreSQLUserStore(UserStore):
             self.update_user(user["id"], last_login=datetime.now(timezone.utc).isoformat())
             return user
         return None
+
+    # --- MFA (PostgreSQL overrides) ---
+    #
+    # The base UserStore MFA methods use `self._cx` (the SQLite/SQLCipher
+    # connection), which the PostgreSQL store does not have — calling them would
+    # raise. These overrides route through the shared engine AND encrypt the TOTP
+    # secret at rest (the SQLite path gets this for free via SQLCipher).
+
+    def setup_mfa(self, user_id: str) -> dict:
+        """Generate a TOTP secret, store it encrypted, return secret + URI."""
+        if not _HAS_PYOTP:
+            raise RuntimeError("pyotp is not installed — MFA unavailable")
+        secret = pyotp.random_base32()
+        db = self._get_db()
+        db.sync_execute(
+            "UPDATE users SET mfa_secret = ?, updated_at = ? WHERE id = ?",
+            (_encrypt_mfa_secret(secret), datetime.now(timezone.utc).isoformat(), user_id),
+        )
+        user = self.get_user_by_id(user_id)
+        if user is None:
+            raise RuntimeError(f"User {user_id} not found after MFA secret update")
+        totp = pyotp.TOTP(secret)
+        uri = totp.provisioning_uri(name=user["username"], issuer_name="BulwarkGateway")
+        return {"secret": secret, "provisioning_uri": uri}
+
+    def verify_mfa(self, user_id: str, code: str) -> bool:
+        """Verify a TOTP code against the decrypted stored secret."""
+        if not _HAS_PYOTP:
+            raise RuntimeError("pyotp is not installed — MFA unavailable")
+        user = self.get_user_by_id(user_id)
+        if not user or not user.get("mfa_secret"):
+            return False
+        secret = _decrypt_mfa_secret(user["mfa_secret"])
+        if not secret:
+            return False
+        return pyotp.TOTP(secret).verify(code)
+
+    def disable_mfa(self, user_id: str) -> bool:
+        """Remove the MFA secret from a user."""
+        db = self._get_db()
+        result = db.sync_execute(
+            "UPDATE users SET mfa_secret = NULL, updated_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), user_id),
+        )
+        return result > 0 if isinstance(result, int) else True
 
     async def _async_get_user(self, username: str) -> Optional[dict]:
         db = self._get_db()

@@ -1184,10 +1184,36 @@ This means **any** secrets provider that can mount a file or create a Kubernetes
 | `redis-password` | Proxy + Admin | Redis authentication | Requires pod restart |
 | `api-keys` | Proxy | API key validation | New keys active immediately on restart |
 | `admin-password` | Admin | Initial admin login | Only used on first boot |
-| `db-encryption-key` | Admin | SQLCipher database encryption | Cannot rotate without re-encrypting DB |
+| `db-encryption-key` | Admin | SQLCipher database encryption (SQLite backend) | Cannot rotate without re-encrypting DB |
+| `key-encryption-key` | Proxy + Admin | Fernet key for virtual keys **and** the PostgreSQL MFA-secret at-rest encryption | Rotation invalidates existing MFA secrets (users re-enroll) + virtual keys |
 
 > **CRITICAL**: `db-encryption-key` MUST be a valid hexadecimal string (e.g., `openssl rand -hex 32`). Non-hex values will cause SQLCipher to fail with `file is not a database` on startup. Do NOT use base64 or arbitrary strings.
 | `grafana-password` | Grafana | Dashboard login | Requires Grafana restart |
+
+#### Admin database at-rest encryption — SQLite vs PostgreSQL
+
+The admin store is dual-backend (default SQLite, or PostgreSQL for multi-replica
+HA via `BULWARK_ADMIN_DB_URL=postgresql://…`). The two backends achieve at-rest
+encryption differently:
+
+- **SQLite backend** — when `DB_ENCRYPTION_KEY` is set, the **entire** `users.db`
+  file is encrypted at rest with SQLCipher (AES-256). Every column, including the
+  MFA TOTP secret and operator PII, is protected transparently.
+- **PostgreSQL backend** — columns are stored in the clear at the SQL layer, so
+  the **reversible** MFA TOTP secret (`mfa_secret` — a leaked seed lets an
+  attacker forge valid MFA codes) is encrypted at the **application layer** with a
+  Fernet key derived from `BULWARK_KEY_ENCRYPTION_KEY` (domain-separated from the
+  virtual-key cipher). `password_hash` is already a one-way bcrypt digest and is
+  not additionally encrypted. Broader at-rest protection for the remaining PII
+  columns (`email`, `phone`, `first_name`, `last_name`) is **delegated to the
+  database provider's Transparent Data Encryption (TDE) / encrypted volume** —
+  managed Postgres on Azure/AWS/GCP encrypts at rest by default; for self-hosted
+  Postgres use LUKS/dm-crypt or filesystem-level encryption.
+
+> If `BULWARK_KEY_ENCRYPTION_KEY` (or the `cryptography` package) is absent on a
+> PostgreSQL deployment, MFA still works but the secret is stored **without**
+> application-layer encryption (a warning is logged) — falling back entirely to
+> provider TDE. Set the key to close that gap.
 
 ### Option 1: Kubernetes Secrets + SealedSecrets (Default)
 

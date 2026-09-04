@@ -40,6 +40,11 @@ admin = [
     # so this is an opt-in performance/concurrency upgrade, not a hard runtime
     # requirement — hence it lives here rather than in the core deps.
     "aiosqlite>=0.20,<1.0",
+    # TOTP (RFC 6238) backend for admin operator MFA (user_store.setup_mfa /
+    # verify_mfa). A hard runtime requirement of the admin auth store (pinned in
+    # requirements-admin.lock); declared here so `.[admin]` installs it rather
+    # than leaving it a lock-only dependency.
+    "pyotp>=2.9,<3.0",
 ]
 # PostgreSQL backend for the admin store (enterprise / HA multi-replica). Select
 # it via BULWARK_ADMIN_DB_URL=postgresql://…; without this extra the admin runs
