@@ -30,7 +30,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from .database import get_database
+from .database import get_database, is_unique_violation
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +225,38 @@ class ObservableStore:
 
     # ─── Writes ──────────────────────────────────────────────────────────────
 
+    async def _refresh_existing(
+        self,
+        *,
+        case_id: str,
+        observable_id: str,
+        is_ioc: bool,
+        tlp: str,
+        pap: str,
+        norm_tags: list[str],
+        source: str,
+        now: str,
+    ) -> dict:
+        """Refresh a repeat sighting's ``last_seen`` + handling markers in place.
+
+        Shared by the pre-check path (a known indicator) and the race-recovery
+        path (a concurrent insert won the ``UNIQUE`` key) so both fold onto the
+        same idempotent update.
+        """
+        await self._db().execute(
+            "UPDATE investigation_observable SET is_ioc = ?, tlp = ?, pap = ?, "
+            "tags = ?, source = ?, last_seen = ? "
+            "WHERE observable_id = ?",
+            [
+                1 if is_ioc else 0, tlp, pap, json.dumps(norm_tags), source, now,
+                observable_id,
+            ],
+        )
+        refreshed = await self.get(case_id, observable_id)
+        if refreshed is None:  # pragma: no cover — write-then-read is authoritative
+            raise RuntimeError("observable update failed")
+        return refreshed
+
     async def add(
         self,
         *,
@@ -243,6 +275,12 @@ class ObservableStore:
         Re-adding a known indicator refreshes ``last_seen`` (and any changed
         flags/handling markers) rather than creating a duplicate. Raises
         ``ValueError`` on invalid input or when the case is at its observable cap.
+
+        The dedupe is a check-then-insert, so two concurrent adds of the same
+        ``(case_id, type, value)`` can race past the pre-check. The loser's INSERT
+        trips the ``UNIQUE`` constraint; rather than surfacing a 500 we catch the
+        violation and fold it onto the same idempotent update path — the upsert is
+        race-safe and always returns the surviving row.
         """
         if not case_id:
             raise ValueError("case_id is required")
@@ -262,36 +300,42 @@ class ObservableStore:
 
         existing = await self._find_by_value(case_id, observable_type, norm_value)
         if existing is not None:
-            # Refresh last_seen + handling markers on a repeat sighting.
-            await self._db().execute(
-                "UPDATE investigation_observable SET is_ioc = ?, tlp = ?, pap = ?, "
-                "tags = ?, source = ?, last_seen = ? "
-                "WHERE observable_id = ?",
-                [
-                    1 if is_ioc else 0, tlp, pap, json.dumps(norm_tags), source, now,
-                    existing["observable_id"],
-                ],
+            return await self._refresh_existing(
+                case_id=case_id, observable_id=existing["observable_id"],
+                is_ioc=is_ioc, tlp=tlp, pap=pap, norm_tags=norm_tags,
+                source=source, now=now,
             )
-            refreshed = await self.get(case_id, existing["observable_id"])
-            if refreshed is None:  # pragma: no cover — write-then-read is authoritative
-                raise RuntimeError("observable update failed")
-            return refreshed
 
         if await self._count_for_case(case_id) >= _MAX_OBSERVABLES_PER_CASE:
             raise ValueError("case has reached its observable limit")
 
         observable_id = _new_observable_id()
-        await self._db().execute(
-            "INSERT INTO investigation_observable "
-            "(observable_id, case_id, type, value, is_ioc, tlp, pap, tags, source, "
-            "enrichment, added_by, first_seen, last_seen) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                observable_id, case_id, observable_type, norm_value,
-                1 if is_ioc else 0, tlp, pap, json.dumps(norm_tags), source,
-                None, (actor or "system")[:_MAX_ACTOR_LEN], now, now,
-            ],
-        )
+        try:
+            await self._db().execute(
+                "INSERT INTO investigation_observable "
+                "(observable_id, case_id, type, value, is_ioc, tlp, pap, tags, "
+                "source, enrichment, added_by, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    observable_id, case_id, observable_type, norm_value,
+                    1 if is_ioc else 0, tlp, pap, json.dumps(norm_tags), source,
+                    None, (actor or "system")[:_MAX_ACTOR_LEN], now, now,
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001 — narrowed immediately below
+            # Only a lost UNIQUE(case_id, type, value) race is recoverable; every
+            # other failure (NOT NULL, FK, transport) must still propagate.
+            if not is_unique_violation(exc):
+                raise
+            raced = await self._find_by_value(case_id, observable_type, norm_value)
+            if raced is None:  # pragma: no cover — the violation implies a row exists
+                raise
+            return await self._refresh_existing(
+                case_id=case_id, observable_id=raced["observable_id"],
+                is_ioc=is_ioc, tlp=tlp, pap=pap, norm_tags=norm_tags,
+                source=source, now=now,
+            )
+
         created = await self.get(case_id, observable_id)
         if created is None:  # pragma: no cover — write-then-read is authoritative
             raise RuntimeError("observable creation failed")

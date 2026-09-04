@@ -1622,6 +1622,34 @@ class TestCaseAnalyticsEndpoint:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def test_is_unique_violation_classifier():
+    """The dialect-neutral UNIQUE-violation predicate: SQLite by message,
+    PostgreSQL/asyncpg by SQLSTATE 23505, and nothing else."""
+    import sqlite3
+
+    from admin.services.database import is_unique_violation
+
+    assert is_unique_violation(
+        sqlite3.IntegrityError("UNIQUE constraint failed: t.a, t.b")
+    )
+    # Other SQLite integrity failures are NOT unique violations.
+    assert not is_unique_violation(
+        sqlite3.IntegrityError("NOT NULL constraint failed: t.a")
+    )
+
+    # asyncpg carries the SQLSTATE on a `sqlstate` attribute (matched by value so
+    # the optional backend is never imported here).
+    class _FakePgUnique(Exception):
+        sqlstate = "23505"
+
+    class _FakePgOther(Exception):
+        sqlstate = "23502"  # not_null_violation
+
+    assert is_unique_violation(_FakePgUnique())
+    assert not is_unique_violation(_FakePgOther())
+    assert not is_unique_violation(ValueError("nope"))
+
+
 class TestObservableStore:
     async def test_add_and_list(self, observable_store):
         made = await observable_store.add(
@@ -1661,6 +1689,55 @@ class TestObservableStore:
         assert second["is_ioc"] is True and second["tlp"] == "red"
         rows = await observable_store.list_for_case("c")
         assert len(rows) == 1
+
+    async def test_add_recovers_from_lost_unique_race(
+        self, observable_store, monkeypatch
+    ):
+        """A concurrent writer that wins the UNIQUE(case_id, type, value) key must
+        not 500 the loser: the loser's INSERT violation folds onto the idempotent
+        update path and returns the surviving row (race-safe upsert)."""
+        first = await observable_store.add(
+            case_id="c", observable_type="ip", value="203.0.113.7", actor="a",
+        )
+        # Simulate the TOCTOU race: blind ONLY the pre-check lookup so `add`
+        # proceeds to INSERT (which then trips the real UNIQUE constraint); the
+        # recovery lookup delegates to the real store and finds the winner's row.
+        real_find = observable_store._find_by_value
+        calls = {"n": 0}
+
+        async def _blind_once(case_id, observable_type, value):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return await real_find(case_id, observable_type, value)
+
+        monkeypatch.setattr(observable_store, "_find_by_value", _blind_once)
+
+        second = await observable_store.add(
+            case_id="c", observable_type="ip", value="203.0.113.7", actor="a",
+            is_ioc=True, tlp="red",
+        )
+        # Recovered onto the surviving row — no duplicate, flags merged.
+        assert second["observable_id"] == first["observable_id"]
+        assert second["is_ioc"] is True and second["tlp"] == "red"
+        assert len(await observable_store.list_for_case("c")) == 1
+        assert calls["n"] == 2  # pre-check (blinded) + recovery lookup (real)
+
+    async def test_add_propagates_non_unique_db_error(
+        self, observable_store, monkeypatch
+    ):
+        """A non-UNIQUE integrity failure (e.g. NOT NULL) is not recoverable and
+        must still propagate — the race recovery is narrow by design."""
+        import sqlite3
+
+        async def _boom(*_a, **_k):
+            raise sqlite3.IntegrityError("NOT NULL constraint failed: x.y")
+
+        monkeypatch.setattr(observable_store._db(), "execute", _boom)
+        with pytest.raises(sqlite3.IntegrityError):
+            await observable_store.add(
+                case_id="c", observable_type="ip", value="198.51.100.4", actor="a",
+            )
 
     async def test_same_value_different_case_is_distinct(self, observable_store):
         await observable_store.add(

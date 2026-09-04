@@ -1062,6 +1062,30 @@ class _PostgreSQLTransaction(Transaction):
         return [Row(_data=dict(r)) for r in rows]
 
 
+# ─── Error Classification ─────────────────────────────────────────────────────
+
+def is_unique_violation(exc: BaseException) -> bool:
+    """Best-effort, dialect-neutral test for a UNIQUE-constraint violation.
+
+    Lets a store recover from a lost check-then-insert race (two writers insert
+    the same unique key concurrently) by folding the failed INSERT into an
+    idempotent update instead of surfacing a 500. Kept narrow — a NOT NULL / FK
+    violation is *not* a unique violation and must still propagate.
+
+    - SQLite (``sqlite3.IntegrityError``, also raised through aiosqlite) reports
+      ``UNIQUE constraint failed: …`` in the message.
+    - PostgreSQL (asyncpg ``UniqueViolationError``) carries SQLSTATE ``23505``;
+      matched via the ``sqlstate`` attribute so the optional backend is never
+      hard-imported here.
+    """
+    import sqlite3
+
+    if isinstance(exc, sqlite3.IntegrityError):
+        return "UNIQUE" in str(exc).upper()
+    sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "code", None)
+    return sqlstate == "23505"
+
+
 # ─── Engine Factory ───────────────────────────────────────────────────────────
 
 def create_engine(url: Optional[str] = None) -> DatabaseEngine:

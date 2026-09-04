@@ -291,6 +291,16 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
       declares the context-manager methods; `__aenter__` returns `Self` so concrete
       connectors stay structural `Connector`s. Tests: `tests/test_integrations.py`
       (`test_request_{non_pooled_uses_one_client_per_call,pooled_reuses_single_client,retry_reuses_single_client}`).
+    - **DONE (race-safe observable upsert)**: `ObservableStore.add` deduped an
+      indicator with a check-then-insert, so two concurrent adds of the same
+      `(case_id, type, value)` could race past the pre-check and the loser's INSERT
+      would trip the `UNIQUE` constraint → a 500. The INSERT is now wrapped: a
+      **UNIQUE** violation (SQLite by message, asyncpg by SQLSTATE `23505`, via a new
+      dialect-neutral `is_unique_violation` in `database.py`) folds onto the same
+      idempotent update path (`_refresh_existing`) instead of surfacing an error;
+      every other integrity failure (NOT NULL, FK) still propagates. Tests:
+      `tests/test_investigation_cases.py` (`test_add_recovers_from_lost_unique_race`,
+      `test_add_propagates_non_unique_db_error`, `test_is_unique_violation_classifier`).
 
 ### 4.2 OpenCTI (`opencti.py`)
 - **Pull** (closes the MISP/OpenCTI feed gap): query indicators via OpenCTI GraphQL
