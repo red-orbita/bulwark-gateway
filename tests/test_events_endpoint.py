@@ -56,6 +56,7 @@ async def _call(**kwargs):
     kwargs.setdefault("category", None)
     kwargs.setdefault("severity", None)
     kwargs.setdefault("verdict", None)
+    kwargs.setdefault("q", None)
     kwargs.setdefault("limit", 50)
     kwargs.setdefault("offset", 0)
     kwargs.setdefault("user", None)
@@ -90,6 +91,39 @@ async def test_verdict_warned_filters_security_feed(seeded_store):
 async def test_limit_is_applied(seeded_store):
     result = await _call(limit=1)
     assert len(result) == 1
+
+
+# ─── search bar (q) ──────────────────────────────────────────────────────────
+
+async def test_q_scoped_field_filters_feed(seeded_store):
+    """A 'category:' token in q narrows the security feed."""
+    result = await _call(q="category:jailbreak")
+    assert [e["category"] for e in result] == ["jailbreak"]
+
+
+async def test_q_free_text_matches_column(seeded_store):
+    """A bare term matches any readable column (here the category text)."""
+    result = await _call(q="prompt_injection")
+    assert [e["verdict"] for e in result] == ["block"]
+
+
+async def test_q_verdict_token_selects_feed(seeded_store):
+    """verdict: in q flows through the feed selector like the dropdown."""
+    result = await _call(q="verdict:allowed")
+    assert [e["verdict"] for e in result] == ["allow"]
+
+
+async def test_dropdown_wins_over_q_for_shared_field(seeded_store):
+    """When both set category, the explicit dropdown value takes precedence."""
+    # Dropdown says prompt_injection; q says jailbreak → dropdown wins → block row.
+    result = await _call(category="prompt_injection", q="category:jailbreak")
+    assert [e["category"] for e in result] == ["prompt_injection"]
+
+
+async def test_q_last_window_bounds_results(seeded_store):
+    """last:<n><unit> excludes events older than the window (all seeds are ancient)."""
+    result = await _call(q="last:1h")
+    assert result == []
 
 
 async def test_summary_counts_full_history(seeded_store):

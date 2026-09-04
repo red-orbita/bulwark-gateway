@@ -39,6 +39,12 @@ async def list_security_events(
         description="Feed selector: 'allowed' reads the opt-in allowed-event feed; "
         "'blocked'/'warned' filter the security feed; default = blocked + warned.",
     ),
+    q: Optional[str] = Query(
+        None,
+        description="Splunk/Wazuh-lite search: 'field:value' scoped filters "
+        "(tenant/agent/category/severity/verdict/request_id/incident_id/source/"
+        "pattern/tool, plus last:<n><unit>) mixed with free-text terms.",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     user: TokenPayload = Depends(require_permission("guardrails:read")),
@@ -48,15 +54,33 @@ async def list_security_events(
     The default feed is the security feed (BLOCK + WARN). ``verdict=allowed`` reads
     the separate, opt-in allowed-event records (``BULWARK_LOG_ALLOWED``) so
     legitimate traffic is browsable without drowning the security-relevant events.
+
+    The optional ``q`` search string is parsed server-side into scoped filters +
+    free-text terms and AND-ed with the structured dropdown filters. Where a field
+    can come from both (tenant/category/severity/verdict), the explicit dropdown
+    wins; the remaining scoped fields and free-text terms come only from ``q``.
     """
     try:
+        from ..services.event_query import parse_event_query
         from ..services.security_events_store import get_security_events_store
+
+        parsed = parse_event_query(q)
         store = get_security_events_store()
         return await store.query(
-            tenant=tenant,
-            category=category,
-            severity=severity,
-            verdict=verdict,
+            # Dropdown wins for shared fields; fall back to the search bar.
+            tenant=tenant or parsed.tenant,
+            category=category or parsed.category,
+            severity=severity or parsed.severity,
+            verdict=verdict or parsed.verdict,
+            # Search-bar-only scoped fields + relative-time lower bound.
+            agent=parsed.agent,
+            request_id=parsed.request_id,
+            incident_id=parsed.incident_id,
+            source=parsed.source,
+            pattern=parsed.pattern,
+            tool_name=parsed.tool_name,
+            since=parsed.since,
+            terms=parsed.terms,
             limit=limit,
             offset=offset,
         )

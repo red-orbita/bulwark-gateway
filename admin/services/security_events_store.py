@@ -65,6 +65,23 @@ def _verdict_condition(verdict: Optional[str]) -> tuple[str, list]:
     return "verdict IN (?, ?)", list(_SECURITY_VERDICTS)
 
 
+# Human-readable columns free-text search terms are matched against (OR per term).
+_FREE_TEXT_COLUMNS = (
+    "tenant", "agent", "verdict", "category", "severity", "description",
+    "source", "pattern", "request_id", "tool_name", "snippet", "incident_id",
+)
+
+
+def _like_condition(column: str, value: str) -> tuple[str, str]:
+    """Return a case-insensitive substring ``LIKE`` fragment + its bound param.
+
+    ``column`` is always a fixed literal chosen from the code (never user input);
+    the searched value is bound. ``LOWER()`` on both sides makes the match
+    case-insensitive on PostgreSQL too (SQLite's default ``LIKE`` already is).
+    """
+    return f"LOWER({column}) LIKE ?", f"%{value.lower()}%"
+
+
 def _build_filters(
     tenant: Optional[str],
     category: Optional[str],
@@ -72,6 +89,14 @@ def _build_filters(
     verdict: Optional[str],
     since: Optional[float] = None,
     until: Optional[float] = None,
+    *,
+    agent: Optional[str] = None,
+    request_id: Optional[str] = None,
+    incident_id: Optional[str] = None,
+    source: Optional[str] = None,
+    pattern: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    terms: Optional[list[str]] = None,
 ) -> tuple[str, list]:
     """Build a WHERE clause (without the ``WHERE`` keyword) + bound params.
 
@@ -79,6 +104,12 @@ def _build_filters(
     half-open ``[since, until)`` window. Both are optional; either may be given
     alone. The ``(tenant, ts DESC)`` / ``ts DESC`` indexes back these range
     scans, so time-window queries stay cheap even over the full retained history.
+
+    The keyword-only ``agent``/``request_id``/``incident_id``/``source``/
+    ``pattern``/``tool_name`` filters and free-text ``terms`` back the viewer's
+    Splunk-lite search bar (see :mod:`admin.services.event_query`). Scoped fields
+    match a case-insensitive substring; each free-text term must match *some*
+    human-readable column (OR across columns), and all terms must match (AND).
     """
     conditions: list[str] = []
     params: list = []
@@ -102,6 +133,32 @@ def _build_filters(
     if until is not None:
         conditions.append("ts < ?")
         params.append(float(until))
+
+    # Scoped substring filters from the search bar (field:value tokens).
+    for column, value in (
+        ("agent", agent),
+        ("request_id", request_id),
+        ("incident_id", incident_id),
+        ("source", source),
+        ("pattern", pattern),
+        ("tool_name", tool_name),
+    ):
+        if value:
+            cond, bound = _like_condition(column, value)
+            conditions.append(cond)
+            params.append(bound)
+
+    # Free-text terms: each term must hit at least one readable column.
+    for term in terms or []:
+        term = (term or "").strip()
+        if not term:
+            continue
+        ors: list[str] = []
+        for column in _FREE_TEXT_COLUMNS:
+            cond, bound = _like_condition(column, term)
+            ors.append(cond)
+            params.append(bound)
+        conditions.append("(" + " OR ".join(ors) + ")")
 
     return " AND ".join(conditions), params
 
@@ -209,6 +266,13 @@ class SecurityEventsStore:
         verdict: Optional[str] = None,
         since: Optional[float] = None,
         until: Optional[float] = None,
+        agent: Optional[str] = None,
+        request_id: Optional[str] = None,
+        incident_id: Optional[str] = None,
+        source: Optional[str] = None,
+        pattern: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        terms: Optional[list[str]] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict]:
@@ -216,9 +280,15 @@ class SecurityEventsStore:
 
         ``since``/``until`` restrict results to the half-open ``[since, until)``
         time window (unix epoch seconds), enabling correlation lookups over a
-        recent slice of history without scanning everything.
+        recent slice of history without scanning everything. The remaining
+        keyword filters + ``terms`` back the viewer's search bar (see
+        :func:`admin.services.event_query.parse_event_query`).
         """
-        where, params = _build_filters(tenant, category, severity, verdict, since, until)
+        where, params = _build_filters(
+            tenant, category, severity, verdict, since, until,
+            agent=agent, request_id=request_id, incident_id=incident_id,
+            source=source, pattern=pattern, tool_name=tool_name, terms=terms,
+        )
         # SQLi-safe (S608): `where` is composed only of fixed "col = ?" / "col IN
         # (?, ?)" fragments built above; every value is a bound param.
         sql = (

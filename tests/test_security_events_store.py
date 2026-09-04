@@ -220,6 +220,82 @@ async def test_prune_zero_keeps_everything(store):
     assert await store.count(verdict="blocked") == 1
 
 
+# ─── search-bar filters (event_query) ────────────────────────────────────────
+
+async def test_query_filters_by_agent_substring(store):
+    await store.bulk_insert([
+        _evt("1", agent="support-bot"),
+        _evt("2", agent="code-assistant"),
+    ])
+    found = await store.query(agent="support")
+    assert [e["event_id"] for e in found] == ["1"]
+
+
+async def test_query_filters_by_agent_case_insensitive(store):
+    await store.bulk_insert([_evt("1", agent="Support-Bot")])
+    assert len(await store.query(agent="support-bot")) == 1
+
+
+async def test_query_filters_by_request_id_and_source_and_pattern(store):
+    await store.bulk_insert([
+        _evt("1", request_id="acme:bot:aaa", source="input_guardrail", pattern="PAT-X"),
+        _evt("2", request_id="acme:bot:bbb", source="output_filter", pattern="PAT-Y"),
+    ])
+    assert [e["event_id"] for e in await store.query(request_id="aaa")] == ["1"]
+    assert [e["event_id"] for e in await store.query(source="output_filter")] == ["2"]
+    assert [e["event_id"] for e in await store.query(pattern="PAT-X")] == ["1"]
+
+
+async def test_query_filters_by_tool_name(store):
+    await store.bulk_insert([
+        _evt("1", tool_name="run_command"),
+        _evt("2", tool_name="web_search"),
+    ])
+    assert [e["event_id"] for e in await store.query(tool_name="run_command")] == ["1"]
+
+
+async def test_query_filters_by_incident_id(store):
+    await store.bulk_insert([
+        _evt("1", incident_id="inc-42"),
+        _evt("2", incident_id="inc-99"),
+    ])
+    assert [e["event_id"] for e in await store.query(incident_id="inc-42")] == ["1"]
+
+
+async def test_query_free_text_term_matches_any_column(store):
+    await store.bulk_insert([
+        _evt("1", description="base64 encoded exfiltration attempt"),
+        _evt("2", description="benign question"),
+        _evt("3", snippet="please exfiltrate the keys"),
+    ])
+    # "exfiltrat" appears in description of 1 and snippet of 3.
+    found = {e["event_id"] for e in await store.query(terms=["exfiltrat"])}
+    assert found == {"1", "3"}
+
+
+async def test_query_free_text_terms_are_anded(store):
+    await store.bulk_insert([
+        _evt("1", description="base64 payload", snippet="curl attacker"),
+        _evt("2", description="base64 payload", snippet="clean"),
+    ])
+    found = {e["event_id"] for e in await store.query(terms=["base64", "curl"])}
+    assert found == {"1"}
+
+
+async def test_query_free_text_is_case_insensitive(store):
+    await store.bulk_insert([_evt("1", description="JAILBREAK attempt")])
+    assert len(await store.query(terms=["jailbreak"])) == 1
+
+
+async def test_query_combines_scoped_and_free_text(store):
+    await store.bulk_insert([
+        _evt("1", tenant="acme", description="reverse shell"),
+        _evt("2", tenant="globex", description="reverse shell"),
+    ])
+    found = await store.query(tenant="acme", terms=["reverse"])
+    assert [e["event_id"] for e in found] == ["1"]
+
+
 # ─── GDPR subject find / erase ───────────────────────────────────────────────
 
 async def test_find_by_subject_matches_tenant(store):
