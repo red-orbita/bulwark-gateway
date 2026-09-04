@@ -329,14 +329,19 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
      observables are excluded and a wholly-restricted (no shareable/mappable
      observable) case is refused with `TlpGateError` → `400` **before** any remote
      call — included objects carry the case's most-restrictive remaining TLP
-     marking-definition. `registry.build_connector` now returns an
-     `OpenCTIConnector` for the `opencti` type; the push menu is filtered to
-     push-capable connectors (thehive/dfir_iris/opencti). Markings are referenced
-     by standard STIX id (no `markingDefinitions` round-trip); labels/tags are not
-     propagated in v1 (`objectLabel` resolves by id, follow-up). Tests:
-     `tests/test_opencti_connector.py` (push helpers + create/exclude-red/gate/
-     sighting-failure/update/no-id flows) + `test_integrations.py` route push
-     (create + TLP-gate 400).
+      marking-definition. `registry.build_connector` now returns an
+      `OpenCTIConnector` for the `opencti` type; the push menu is filtered to
+      push-capable connectors (thehive/dfir_iris/opencti). Markings are referenced
+      by standard STIX id (no `markingDefinitions` round-trip). **Labels/tags**: a
+      case's tags are resolved-or-created to OpenCTI label ids once per push
+      (`labelAdd` upserts by value → idempotent) and attached as `objectLabel` on
+      every materialised SCO, indicator, and the container report; a re-push
+      `replace`-patches the report's label set. Label resolution is best-effort /
+      **fail-open per label** (a failing tag is skipped, never aborts the push) and
+      a tagless case makes zero label calls (behaviour-identical to before). Tests:
+      `tests/test_opencti_connector.py` (push helpers + create/exclude-red/gate/
+      sighting-failure/update/no-id + label-normalise/propagate/fail-open/update
+      flows) + `test_integrations.py` route push (create + TLP-gate 400).
  - **Lookup**: on IOC-check, also query OpenCTI for context (score, labels, related
    campaigns) and attach to the observable.
    - **DONE (interactive lookup)**: `admin/services/integrations/opencti.py`

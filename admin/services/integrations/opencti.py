@@ -139,14 +139,14 @@ query BulwarkSightingLookup($search: String!, $first: Int!) {
 # erroring, which is what our re-push path relies on.
 _OBS_MUTATION = """
 mutation BulwarkObsAdd(
-    $type: String!, $markings: [String],
+    $type: String!, $markings: [String], $labels: [String],
     $IPv4Addr: IPv4AddrAddInput, $IPv6Addr: IPv6AddrAddInput,
     $DomainName: DomainNameAddInput, $Url: UrlAddInput,
     $EmailAddr: EmailAddrAddInput, $StixFile: StixFileAddInput,
     $UserAccount: UserAccountAddInput
 ) {
     stixCyberObservableAdd(
-        type: $type, objectMarking: $markings, update: true,
+        type: $type, objectMarking: $markings, objectLabel: $labels, update: true,
         IPv4Addr: $IPv4Addr, IPv6Addr: $IPv6Addr,
         DomainName: $DomainName, Url: $Url,
         EmailAddr: $EmailAddr, StixFile: $StixFile, UserAccount: $UserAccount
@@ -197,6 +197,19 @@ mutation BulwarkReportRelAdd($id: ID!, $input: StixRefRelationshipAddInput!) {
     reportEdit(id: $id) { relationAdd(input: $input) { id } }
 }
 """
+
+# OpenCTI labels are first-class entities referenced by internal id — an ``AddInput``
+# ``objectLabel`` takes label *ids*, not free strings. ``labelAdd`` upserts by value
+# (its ``standard_id`` is derived from the value), so resolving a case tag to a label
+# id is idempotent: a re-push of the same tag returns the existing label. A fixed
+# colour keeps Bulwark-authored labels visually consistent in the OpenCTI UI.
+_LABEL_UPSERT_MUTATION = """
+mutation BulwarkLabelUpsert($input: LabelAddInput!) {
+    labelAdd(input: $input) { id value }
+}
+"""
+
+_LABEL_COLOR = "#0e7490"
 
 
 def score_verdict(score: int, *, found: bool) -> str:
@@ -351,15 +364,21 @@ def _report_description(case: dict) -> str:
     return body[:5000]
 
 
-def _report_input(case: dict, object_ids: list[str], marking: str) -> dict:
+def _report_input(
+    case: dict,
+    object_ids: list[str],
+    marking: str,
+    label_ids: Optional[list[str]] = None,
+) -> dict:
     """Build the ``ReportAddInput`` for a case (pure).
 
     ``published`` is required by OpenCTI; we use the case's update time, falling
     back to *now* via :func:`iso_now`. ``objects`` may be empty (a report with no
     refs is still valid) but callers only reach here with shareable objects.
+    ``objectLabel`` is only set when the case carried tags (resolved to label ids).
     """
     published = str(case.get("updated_at") or case.get("created_at") or iso_now())
-    return {
+    report: dict = {
         "name": case.get("title") or "(untitled case)",
         "description": _report_description(case),
         "published": published,
@@ -367,6 +386,38 @@ def _report_input(case: dict, object_ids: list[str], marking: str) -> dict:
         "objectMarking": [marking],
         "objects": object_ids,
     }
+    if label_ids:
+        report["objectLabel"] = label_ids
+    return report
+
+
+_MAX_LABELS = 25
+_MAX_LABEL_LEN = 60
+
+
+def _case_label_values(case: dict) -> list[str]:
+    """Extract a case's tags as OpenCTI label values (pure, bounded, deduped).
+
+    Tags are stored already normalised, but this defends against direct callers:
+    trim, drop blanks, order-preserving dedupe, and cap both label length and
+    count so a pathological case can never balloon the per-push label fan-out.
+    """
+    raw = case.get("tags")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in raw:
+        if not isinstance(tag, (str, int, float)):
+            continue
+        val = str(tag).strip()[:_MAX_LABEL_LEN]
+        if not val or val in seen:
+            continue
+        seen.add(val)
+        out.append(val)
+        if len(out) >= _MAX_LABELS:
+            break
+    return out
 
 
 def _match_indicator_id(edges: object, needle: str) -> str:
@@ -642,16 +693,20 @@ class OpenCTIConnector(HttpConnectorBase):
 
         marking = _TLP_MARKING_IDS[select_report_marking(shareable)]
 
+        # Resolve the case's tags to OpenCTI label ids once per push (best-effort,
+        # fail-open) so every materialised SCO/indicator/report carries them.
+        label_ids = await self._resolve_label_ids(_case_label_values(case))
+
         object_ids: list[str] = []
         indicator_count = 0
         sighting_count = 0
         for obs in mappable:
-            obs_id = await self._create_observable(obs, marking)
+            obs_id = await self._create_observable(obs, marking, label_ids)
             if obs_id:
                 object_ids.append(obs_id)
             if not obs.get("is_ioc"):
                 continue
-            ind_id = await self._create_indicator(obs, marking)
+            ind_id = await self._create_indicator(obs, marking, label_ids)
             if not ind_id:
                 continue
             indicator_count += 1
@@ -664,7 +719,7 @@ class OpenCTIConnector(HttpConnectorBase):
             f"{sighting_count} sightings, {excluded} TLP:RED excluded"
         )
         if remote_id:
-            await self._update_report(remote_id, case, object_ids)
+            await self._update_report(remote_id, case, object_ids, label_ids)
             return PushResult(
                 remote_id=remote_id,
                 remote_url=self._report_url(remote_id),
@@ -672,7 +727,7 @@ class OpenCTIConnector(HttpConnectorBase):
                 detail=f"report updated ({detail})",
             )
 
-        report_id = await self._create_report(case, object_ids, marking)
+        report_id = await self._create_report(case, object_ids, marking, label_ids)
         return PushResult(
             remote_id=report_id,
             remote_url=self._report_url(report_id),
@@ -680,18 +735,51 @@ class OpenCTIConnector(HttpConnectorBase):
             detail=f"report created ({detail})",
         )
 
-    async def _create_observable(self, obs: dict, marking: str) -> str:
+    async def _resolve_label_ids(self, values: list[str]) -> list[str]:
+        """Resolve-or-create OpenCTI labels for ``values``; return their ids.
+
+        Best-effort and **fail-open per label**: a label that fails to upsert is
+        skipped (logged) rather than aborting the push — tags are enrichment, not
+        core case data. Empty input makes zero remote calls, so a tagless case is
+        indistinguishable from today's behaviour.
+        """
+        ids: list[str] = []
+        for value in values:
+            try:
+                data = await self._graphql(
+                    _LABEL_UPSERT_MUTATION,
+                    {"input": {"value": value, "color": _LABEL_COLOR}},
+                )
+            except ConnectorError as exc:
+                logger.warning(
+                    "opencti_label_upsert_failed",
+                    extra={"label": value, "error": str(exc)},
+                )
+                continue
+            node = data.get("labelAdd") or {}
+            label_id = str(node.get("id") or "")
+            if label_id:
+                ids.append(label_id)
+        return ids
+
+    async def _create_observable(
+        self, obs: dict, marking: str, label_ids: Optional[list[str]] = None
+    ) -> str:
         """Create/upsert one SCO; return its internal id (``""`` on soft failure)."""
         payload = _observable_payload(obs)
         if payload is None:
             return ""
         octype, var_key, var_val = payload
-        variables = {"type": octype, "markings": [marking], var_key: var_val}
+        variables: dict = {"type": octype, "markings": [marking], var_key: var_val}
+        if label_ids:
+            variables["labels"] = label_ids
         data = await self._graphql(_OBS_MUTATION, variables)
         node = data.get("stixCyberObservableAdd") or {}
         return str(node.get("id") or "")
 
-    async def _create_indicator(self, obs: dict, marking: str) -> str:
+    async def _create_indicator(
+        self, obs: dict, marking: str, label_ids: Optional[list[str]] = None
+    ) -> str:
         """Create an indicator SDO for an IOC observable; return internal id."""
         pattern = _indicator_pattern(obs)
         if pattern is None:
@@ -704,6 +792,8 @@ class OpenCTIConnector(HttpConnectorBase):
             "x_opencti_main_observable_type": _main_observable_type(obs),
             "objectMarking": [marking],
         }
+        if label_ids:
+            input_obj["objectLabel"] = label_ids
         valid_from = obs.get("first_seen")
         if valid_from:
             input_obj["valid_from"] = str(valid_from)
@@ -737,10 +827,14 @@ class OpenCTIConnector(HttpConnectorBase):
         return bool(node.get("id"))
 
     async def _create_report(
-        self, case: dict, object_ids: list[str], marking: str
+        self,
+        case: dict,
+        object_ids: list[str],
+        marking: str,
+        label_ids: Optional[list[str]] = None,
     ) -> str:
         """Create the container report tying the case's objects together."""
-        input_obj = _report_input(case, object_ids, marking)
+        input_obj = _report_input(case, object_ids, marking, label_ids)
         data = await self._graphql(_REPORT_ADD_MUTATION, {"input": input_obj})
         node = data.get("reportAdd") or {}
         report_id = str(node.get("id") or "")
@@ -749,13 +843,23 @@ class OpenCTIConnector(HttpConnectorBase):
         return report_id
 
     async def _update_report(
-        self, report_id: str, case: dict, object_ids: list[str]
+        self,
+        report_id: str,
+        case: dict,
+        object_ids: list[str],
+        label_ids: Optional[list[str]] = None,
     ) -> None:
         """Patch the report envelope + best-effort re-attach object refs."""
         patch = [
             {"key": "name", "value": [case.get("title") or "(untitled case)"]},
             {"key": "description", "value": [_report_description(case)]},
         ]
+        if label_ids:
+            # Replace the label set so a re-push reflects the case's current tags
+            # (added/removed) rather than only ever accreting.
+            patch.append(
+                {"key": "objectLabel", "value": label_ids, "operation": "replace"}
+            )
         await self._graphql(_REPORT_PATCH_MUTATION, {"id": report_id, "input": patch})
         for obj_id in object_ids:
             try:

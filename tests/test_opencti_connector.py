@@ -8,11 +8,14 @@ and the async GraphQL flow against a mocked OpenCTI ``/graphql`` endpoint
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from admin.services.integrations.base import ConnectorError, TlpGateError
 from admin.services.integrations.opencti import (
     OpenCTIConnector,
+    _case_label_values,
     _coerce_score,
     _indicator_pattern,
     _main_observable_type,
@@ -398,6 +401,121 @@ async def test_push_report_no_id_raises(httpx_mock):
         await _connector().push_case(
             _CASE, [_obs("domain", "evil.test")], [],
         )
+
+
+# ─── label propagation (Phase 2 residual) ────────────────────────────────────
+
+def test_case_label_values_normalises():
+    # trim, drop blanks + non-scalar None, order-preserving (case-sensitive) dedupe.
+    case = {"tags": ["  Malware  ", "malware", "", "c2", 7, None, "Malware"]}
+    assert _case_label_values(case) == ["Malware", "malware", "c2", "7"]
+
+
+def test_case_label_values_caps_count_and_length():
+    from admin.services.integrations.opencti import _MAX_LABEL_LEN, _MAX_LABELS
+
+    many = {"tags": [f"tag{i}" for i in range(_MAX_LABELS + 10)]}
+    assert len(_case_label_values(many)) == _MAX_LABELS
+    long = {"tags": ["x" * (_MAX_LABEL_LEN + 50)]}
+    assert len(_case_label_values(long)[0]) == _MAX_LABEL_LEN
+
+
+def test_case_label_values_non_list_is_empty():
+    assert _case_label_values({"tags": "not-a-list"}) == []
+    assert _case_label_values({}) == []
+
+
+def test_report_input_includes_labels_when_present():
+    got = _report_input(_CASE, ["obs1"], "mk", ["lbl1", "lbl2"])
+    assert got["objectLabel"] == ["lbl1", "lbl2"]
+
+
+def test_report_input_omits_labels_when_empty():
+    assert "objectLabel" not in _report_input(_CASE, ["obs1"], "mk", [])
+    assert "objectLabel" not in _report_input(_CASE, ["obs1"], "mk")
+
+
+async def test_push_propagates_case_tags_as_labels(httpx_mock):
+    # two tags → two label upserts first; obs + indicator + report all carry the ids.
+    for lid in ("lbl-m", "lbl-c"):
+        httpx_mock.add_response(method="POST", url=_URL,
+                                json=_gql("labelAdd", {"id": lid, "value": lid}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("indicatorAdd", {"id": "ind1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("identityAdd", {"id": "id-bulwark"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixSightingRelationshipAdd", {"id": "sig1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportAdd", {"id": "rep1"}))
+
+    tagged = {**_CASE, "tags": ["malware", "c2"]}
+    result = await _connector().push_case(
+        tagged, [_obs("ip", "1.2.3.4", is_ioc=True)], [],
+    )
+    assert result.created is True
+
+    bodies = [json.loads(r.content) for r in httpx_mock.get_requests()]
+    label_vals = [
+        b["variables"]["input"]["value"]
+        for b in bodies if "BulwarkLabelUpsert" in b["query"]
+    ]
+    assert label_vals == ["malware", "c2"]
+    obs_body = next(b for b in bodies if "BulwarkObsAdd" in b["query"])
+    assert obs_body["variables"]["labels"] == ["lbl-m", "lbl-c"]
+    ind_body = next(b for b in bodies if "BulwarkIndicatorAdd" in b["query"])
+    assert ind_body["variables"]["input"]["objectLabel"] == ["lbl-m", "lbl-c"]
+    rep_body = next(b for b in bodies if "BulwarkReportAdd" in b["query"])
+    assert rep_body["variables"]["input"]["objectLabel"] == ["lbl-m", "lbl-c"]
+
+
+async def test_push_label_upsert_failure_is_fail_open(httpx_mock):
+    # the label upsert errors → the label is skipped; the push still completes and
+    # no objectLabel is attached anywhere.
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json={"errors": [{"message": "label boom"}]})
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportAdd", {"id": "rep1"}))
+
+    tagged = {**_CASE, "tags": ["malware"]}
+    result = await _connector().push_case(
+        tagged, [_obs("domain", "evil.test")], [],
+    )
+    assert result.created is True
+    bodies = [json.loads(r.content) for r in httpx_mock.get_requests()]
+    obs_body = next(b for b in bodies if "BulwarkObsAdd" in b["query"])
+    assert "labels" not in obs_body["variables"]
+    rep_body = next(b for b in bodies if "BulwarkReportAdd" in b["query"])
+    assert "objectLabel" not in rep_body["variables"]["input"]
+
+
+async def test_push_update_patches_report_labels(httpx_mock):
+    # re-push of a tagged case: label upsert, obs upsert, then the report fieldPatch
+    # carries an objectLabel replace op.
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("labelAdd", {"id": "lbl-m", "value": "malware"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("stixCyberObservableAdd", {"id": "obs1"}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportEdit", {"fieldPatch": {"id": "rep-existing"}}))
+    httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("reportEdit", {"relationAdd": {"id": "rel1"}}))
+
+    tagged = {**_CASE, "tags": ["malware"]}
+    result = await _connector().push_case(
+        tagged, [_obs("domain", "evil.test")], [], remote_id="rep-existing",
+    )
+    assert result.created is False
+    bodies = [json.loads(r.content) for r in httpx_mock.get_requests()]
+    patch_body = next(b for b in bodies if "BulwarkReportPatch" in b["query"])
+    patch_ops = patch_body["variables"]["input"]
+    label_op = next(p for p in patch_ops if p["key"] == "objectLabel")
+    assert label_op["value"] == ["lbl-m"]
+    assert label_op["operation"] == "replace"
 
 
 # ─── _match_indicator_id (pure) ──────────────────────────────────────────────
