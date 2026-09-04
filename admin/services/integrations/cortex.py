@@ -116,10 +116,13 @@ class CortexConnector(HttpConnectorBase):
         max_polls: int = _DEFAULT_MAX_POLLS,
     ) -> None:
         super().__init__(base_url=base_url, verify_tls=verify_tls, timeout=timeout)
-        self._headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        # Only a persistent Authorization header — NOT a static Content-Type.
+        # Cortex runs on Play, whose body parser rejects a GET that carries
+        # ``Content-Type: application/json`` with an empty body ("No content to
+        # map due to end-of-input", HTTP 400). httpx sets Content-Type per-request
+        # automatically whenever a JSON body is actually sent (``json_body``), so a
+        # bodyless GET stays header-free and a POST/run still declares JSON.
+        self._headers = {"Authorization": f"Bearer {api_key}"}
         self._poll_interval = max(0.0, poll_interval)
         self._max_polls = max(1, max_polls)
 

@@ -81,6 +81,42 @@ async def test_test_connection_failure(httpx_mock):
     assert health.ok is False
 
 
+async def test_bodyless_get_omits_content_type_header(httpx_mock):
+    """Regression: Cortex runs on Play, whose body parser rejects a bodyless GET
+    that still carries ``Content-Type: application/json`` ("No content to map due
+    to end-of-input", HTTP 400). The connector must NOT pin a static Content-Type
+    header — httpx adds it per-request only when a JSON body is sent."""
+    httpx_mock.add_response(method="GET", url="http://cortex.test/api/analyzer", json=[])
+    await _connector().test_connection()
+    req = httpx_mock.get_requests()[-1]
+    assert req.method == "GET"
+    assert "content-type" not in req.headers
+    assert req.headers["authorization"] == "Bearer tok"
+
+
+async def test_json_post_sets_content_type_header(httpx_mock):
+    """The counterpart: a real analyzer run (POST + JSON body) must still declare
+    ``Content-Type: application/json`` — httpx sets it automatically per-request."""
+    httpx_mock.add_response(
+        method="POST", url="http://cortex.test/api/analyzer/VT/run",
+        json={"id": "job1"},
+    )
+    httpx_mock.add_response(
+        method="GET", url="http://cortex.test/api/job/job1",
+        json={"status": "Success"},
+    )
+    httpx_mock.add_response(
+        method="GET", url="http://cortex.test/api/job/job1/report",
+        json={"report": {"summary": {"taxonomies": []}}},
+    )
+    await _connector().enrich_observable(
+        observable_type="ip", value="8.8.8.8", analyzer_ids=["VT"],
+    )
+    post = next(r for r in httpx_mock.get_requests() if r.method == "POST")
+    assert post.headers["content-type"] == "application/json"
+
+
+
 # ─── list_analyzers ──────────────────────────────────────────────────────────
 
 async def test_list_analyzers(httpx_mock):
