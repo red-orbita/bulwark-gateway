@@ -321,7 +321,7 @@ history survives Redis flushes/restarts and is not bounded by the per-tenant cap
 
 List security events from the durable store. Requires `guardrails:read`.
 
-Query params: `tenant`, `category`, `severity`, `verdict`, `limit` (1–200,
+Query params: `tenant`, `category`, `severity`, `verdict`, `q`, `limit` (1–200,
 default 50), `offset` (default 0).
 
 - Default feed = **BLOCK + WARN** (the security feed).
@@ -329,6 +329,15 @@ default 50), `offset` (default 0).
 - `verdict=allowed` reads the **separate, opt-in** allowed-event feed (only
   populated when the proxy runs with `BULWARK_LOG_ALLOWED=true`), so legitimate
   traffic is browsable without drowning the security-relevant events.
+- `q` is a Splunk/Wazuh-lite search string, parsed server-side and **AND-ed**
+  with the structured params above. It mixes scoped `field:value` filters
+  (`tenant`, `agent`, `category`, `severity`, `verdict`, `request_id`,
+  `incident_id`, `source`, `pattern`, `tool`/`tool_name`, plus a relative-time
+  `last:<n><unit>` where unit ∈ `s|m|h|d|w`) with bare free-text terms (each term
+  substring-matches any human-readable column; multiple terms are AND-ed). Quoted
+  values are honoured (`tenant:"acme corp"`). Where a field can come from both a
+  dropdown param and `q` (`tenant`/`category`/`severity`/`verdict`), the explicit
+  param wins; the remaining scoped fields and free-text terms come only from `q`.
 
 #### GET /admin/events/summary
 
