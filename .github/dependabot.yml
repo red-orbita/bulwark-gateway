@@ -1,0 +1,87 @@
+# Bulwark Gateway — Dependabot configuration
+#
+# Proactive supply-chain hygiene: keeps GitHub Actions, Python, Node and
+# container base images current so the security.yml scanners (Trivy, pip-audit)
+# have less to flag. Updates are grouped to keep PR volume manageable and are
+# gated by the same Security Scanning workflow before merge.
+#
+# Note on Python pins: the runtime deps are locked in requirements.lock /
+# requirements-admin.lock (non-standard names Dependabot's pip resolver does not
+# auto-detect). Dependabot tracks the declared constraints in the pyproject.toml
+# manifests instead; regenerate the lock files when a bump is accepted.
+version: 2
+
+updates:
+  # ── GitHub Actions (pinned by SHA in .github/workflows/*) ──────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # ── Python (proxy + admin) — root manifest ─────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+    groups:
+      python-runtime:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── Python — SDK package ───────────────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/sdk"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+    groups:
+      sdk-runtime:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── Node (admin UI Tailwind build) ─────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+    groups:
+      npm-dev:
+        patterns: ["*"]
+
+  # ── Container base images (proxy) ──────────────────────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+
+  # ── Container base images (admin — docker/Dockerfile.admin) ────────────────
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"

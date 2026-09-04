@@ -78,6 +78,22 @@ jobs:
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
+      # Blocking gate: only the repo's own curated rules (.semgrep.yml) at
+      # ERROR severity fail the build. These flag hard bans (eval/exec/pickle/
+      # marshal/yaml-unsafe-load/shell=True/os.system/redis-eval/...) that must
+      # never merge. The community rulesets (p/python, p/owasp-top-ten,
+      # p/security-audit) and WARNING-severity custom rules stay advisory above
+      # (they surface in the Security tab but are FP-prone / lower confidence).
+      - name: Semgrep project-rules gate (blocking)
+        run: |
+          semgrep scan \
+            --config .semgrep.yml \
+            --severity ERROR \
+            --error \
+            src/ admin/
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
       - name: Upload Semgrep SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
@@ -281,6 +297,21 @@ jobs:
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_ADMIN }}:scan"
 
+      # Blocking gate: fail the build on FIXABLE CRITICAL/HIGH CVEs in either
+      # image. The table/SARIF steps above stay informational (--exit-code 0,
+      # include MEDIUM) so the Security tab keeps full context; this gate is the
+      # enforcement point. --ignore-unfixed keeps unactionable base-OS CVEs (no
+      # upstream fix) out of the gate — the scheduled weekly rebuild picks those
+      # up as Debian publishes fixes. MEDIUM stays advisory.
+      - name: Trivy fail gate (CRITICAL/HIGH, fixable)
+        run: |
+          trivy image --scanners vuln --ignore-unfixed \
+            --severity CRITICAL,HIGH --exit-code 1 --quiet \
+            "${{ env.IMAGE_PROXY }}:scan"
+          trivy image --scanners vuln --ignore-unfixed \
+            --severity CRITICAL,HIGH --exit-code 1 --quiet \
+            "${{ env.IMAGE_ADMIN }}:scan"
+
       - name: Upload Trivy SARIF (proxy)
         if: always() && hashFiles('trivy-proxy.sarif') != ''
         uses: github/codeql-action/upload-sarif@67ba681cdcbc95ed0371c210ccf82c4d968ae5eb # v3.37.7
@@ -375,12 +406,14 @@ jobs:
         with:
           fetch-depth: 0  # Full history for secret scanning
 
+      # Blocking gate: a committed secret must never reach master. Gitleaks is
+      # low-FP and already runs as a pre-commit hook, so anything it flags in CI
+      # is a real regression. Fails the build (no continue-on-error).
       - name: Gitleaks scan
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-        continue-on-error: true
 
       - name: Install truffleHog
         run: |
