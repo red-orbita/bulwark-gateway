@@ -34,6 +34,9 @@ secrets:
     file: ./secrets/redis_password.txt
   grafana_password:
     file: ./secrets/grafana_password.txt
+  # Opt-in PostgreSQL admin backend (docker compose --profile postgres).
+  postgres_password:
+    file: ./secrets/postgres_password.txt
   db_encryption_key:
     file: ./secrets/db_encryption_key.txt
   key_encryption_key:
@@ -347,6 +350,58 @@ services:
           memory: 128M
           cpus: "0.5"
 
+  # ── PostgreSQL (Opt-in admin backend) ───────────────────
+  # Disabled by default — the default stack runs the admin on SQLite. Enable with
+  #   docker compose --profile postgres up -d postgres
+  # then point the admin at it by setting (in the admin service or an override):
+  #   ADMIN_DATABASE_URL=postgresql://bulwark:$(cat secrets/postgres_password.txt)@postgres:5432/bulwark
+  # This service is NOT wired into `admin` automatically so the default SQLite
+  # path stays the tested, zero-config default.
+  postgres:
+    # Pinned by digest (immutable) per the container-hardening standard.
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bulwark}
+      POSTGRES_DB: ${POSTGRES_DB:-bulwark}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Keep initdb out of the read-only root — PGDATA lives on the named volume.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bulwark} -d ${POSTGRES_DB:-bulwark}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    # --- Security Hardening ---
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+      - /run/postgresql:size=16m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app-net
+    profiles:
+      - postgres
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MEMORY_LIMIT:-256M}
+          cpus: "${POSTGRES_CPU_LIMIT:-1.0}"
+
   # ── Prometheus (Monitoring) ─────────────────────────────
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -426,6 +481,8 @@ volumes:
   policies:
     driver: local
   redis_data:
+    driver: local
+  postgres_data:
     driver: local
   telemetry_data:
     driver: local

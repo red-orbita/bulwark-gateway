@@ -35,6 +35,19 @@ skill-scanner = [
 ]
 admin = [
     "python-multipart>=0.0.9",
+    # Async SQLite driver for the default admin backend. The engine degrades to
+    # the stdlib `sqlite3` in a thread-executor when absent (see SQLiteEngine),
+    # so this is an opt-in performance/concurrency upgrade, not a hard runtime
+    # requirement — hence it lives here rather than in the core deps.
+    "aiosqlite>=0.20,<1.0",
+]
+# PostgreSQL backend for the admin store (enterprise / HA multi-replica). Select
+# it via BULWARK_ADMIN_DB_URL=postgresql://…; without this extra the admin runs
+# on the default SQLite backend. Declared here (mirrors requirements-admin.lock)
+# so the enterprise backend is an explicit, installable extra rather than an
+# undocumented lock-only dependency.
+postgres = [
+    "asyncpg>=0.29,<1.0",
 ]
 ml = [
     "onnxruntime>=1.17",

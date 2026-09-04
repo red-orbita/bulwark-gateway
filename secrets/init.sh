@@ -36,6 +36,9 @@ echo ""
 generate_if_missing "jwt_secret.txt"           "openssl rand -base64 32"
 generate_if_missing "admin_jwt_secret.txt"     "openssl rand -base64 32"
 generate_if_missing "redis_password.txt"       "openssl rand -base64 24"
+# Opt-in PostgreSQL admin backend (docker compose --profile postgres). Only used
+# when the `postgres` profile is enabled; the default stack runs on SQLite.
+generate_if_missing "postgres_password.txt"    "openssl rand -base64 24"
 # db_encryption_key MUST be 64 hex chars (32 bytes) — SQLCipher raw-key mode
 # (PRAGMA key = "x'...'"). Non-hex values fail with "file is not a database".
 generate_if_missing "db_encryption_key.txt"    "openssl rand -hex 32"
