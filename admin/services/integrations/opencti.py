@@ -166,6 +166,20 @@ mutation BulwarkSightingAdd($input: StixSightingRelationshipAddInput!) {
 }
 """
 
+# A sighting's *where-sighted* ``toId`` is a required ``StixRef!`` — a sighting must
+# name the entity that observed the intel. Bulwark sights everything *as itself*, so
+# we resolve-or-create one stable ``System`` identity and reuse its internal id as
+# every sighting's ``toId``. ``update: true`` upserts idempotently (the identity's
+# ``standard_id`` is derived from name + class), so a re-run returns the same node
+# instead of erroring.
+_SIGHTING_IDENTITY_NAME = "Bulwark Gateway"
+
+_IDENTITY_UPSERT_MUTATION = """
+mutation BulwarkIdentityUpsert($input: IdentityAddInput!) {
+    identityAdd(input: $input) { id }
+}
+"""
+
 _REPORT_ADD_MUTATION = """
 mutation BulwarkReportAdd($input: ReportAddInput!) {
     reportAdd(input: $input) { id standard_id }
@@ -391,6 +405,10 @@ class OpenCTIConnector(HttpConnectorBase):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        # Memoised internal id of the System identity Bulwark sights *as* (resolved
+        # lazily on the first sighting; a sighting's ``toId`` is required — see
+        # :meth:`_sighting_identity_id`).
+        self._identity_id: str = ""
 
     @property
     def kind(self) -> str:
@@ -500,6 +518,25 @@ class OpenCTIConnector(HttpConnectorBase):
 
     # ─── Sighting report (proxy IOC match → CTI feedback) ──────────────────────
 
+    async def _sighting_identity_id(self) -> str:
+        """Resolve (and cache) the internal id of the identity Bulwark sights *as*.
+
+        Every OpenCTI sighting requires a *where-sighted* ``toId``. We upsert a
+        single stable ``System`` identity (:data:`_SIGHTING_IDENTITY_NAME`) and
+        memoise its id for the connector's lifetime, so repeated sightings cost one
+        extra round-trip at most. Returns ``""`` only when the platform hands back
+        no id (the caller then skips the sighting rather than sending an invalid one).
+        """
+        if self._identity_id:
+            return self._identity_id
+        data = await self._graphql(
+            _IDENTITY_UPSERT_MUTATION,
+            {"input": {"type": "System", "name": _SIGHTING_IDENTITY_NAME, "update": True}},
+        )
+        node = data.get("identityAdd") or {}
+        self._identity_id = str(node.get("id") or "")
+        return self._identity_id
+
     async def report_sighting(self, *, observable_type: str, value: str) -> dict:
         """Report a sighting of an existing indicator (matched on ``value``).
 
@@ -531,10 +568,18 @@ class OpenCTIConnector(HttpConnectorBase):
                 reported=False, detail="no active indicator matched"
             )
 
+        identity_id = await self._sighting_identity_id()
+        if not identity_id:
+            return self._sighting_result(
+                reported=False, indicator_id=indicator_id,
+                detail="no sighting identity resolved",
+            )
+
         now = iso_now()
         input_obj = {
             "fromId": indicator_id,
-            "count": 1,
+            "toId": identity_id,
+            "attribute_count": 1,
             "first_seen": now,
             "last_seen": now,
         }
@@ -669,7 +714,7 @@ class OpenCTIConnector(HttpConnectorBase):
         input_obj: dict = {
             "fromId": indicator_id,
             "objectMarking": [marking],
-            "count": 1,
+            "attribute_count": 1,
         }
         first_seen = obs.get("first_seen")
         last_seen = obs.get("last_seen")
@@ -678,6 +723,10 @@ class OpenCTIConnector(HttpConnectorBase):
         if last_seen:
             input_obj["last_seen"] = str(last_seen)
         try:
+            identity_id = await self._sighting_identity_id()
+            if not identity_id:
+                return False
+            input_obj["toId"] = identity_id
             data = await self._graphql(_SIGHTING_MUTATION, {"input": input_obj})
         except ConnectorError as exc:
             logger.warning("opencti_sighting_failed", extra={"error": str(exc)})

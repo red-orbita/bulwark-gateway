@@ -298,6 +298,8 @@ async def test_push_creates_report(httpx_mock):
     httpx_mock.add_response(method="POST", url=_URL,
                             json=_gql("indicatorAdd", {"id": "ind1"}))
     httpx_mock.add_response(method="POST", url=_URL,
+                            json=_gql("identityAdd", {"id": "id-bulwark"}))
+    httpx_mock.add_response(method="POST", url=_URL,
                             json=_gql("stixSightingRelationshipAdd", {"id": "sig1"}))
     httpx_mock.add_response(method="POST", url=_URL,
                             json=_gql("stixCyberObservableAdd", {"id": "obs2"}))
@@ -434,6 +436,10 @@ async def test_report_sighting_creates_sighting(httpx_mock):
         method="POST", url=_URL,
         json={"data": {"indicators": {"edges": [
             _sedge("[ipv4-addr:value = '1.2.3.4']", iid="ind-7")]}}},
+    )
+    httpx_mock.add_response(
+        method="POST", url=_URL,
+        json=_gql("identityAdd", {"id": "id-bulwark"}),
     )
     httpx_mock.add_response(
         method="POST", url=_URL,
