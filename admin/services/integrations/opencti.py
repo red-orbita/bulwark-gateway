@@ -218,8 +218,10 @@ def score_verdict(score: int, *, found: bool) -> str:
 
 def _coerce_score(raw: object) -> int:
     """Coerce a raw ``x_opencti_score`` / ``confidence`` value to a 0–100 int."""
+    if not isinstance(raw, (int, float, str)):
+        return 0
     try:
-        val = int(raw)  # type: ignore[arg-type]
+        val = int(raw)
     except (TypeError, ValueError):
         return 0
     return max(0, min(100, val))

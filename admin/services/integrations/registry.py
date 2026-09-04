@@ -101,6 +101,7 @@ class IntegrationConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "IntegrationConfig":
+        pmc = d.get("pull_min_confidence")
         return cls(
             id=str(d.get("id") or ""),
             name=str(d.get("name") or ""),
@@ -115,11 +116,7 @@ class IntegrationConfig:
             source=str(d.get("source") or "config"),
             pull_feed=bool(d.get("pull_feed", False)),
             pull_interval_minutes=int(d.get("pull_interval_minutes") or 1440),
-            pull_min_confidence=float(
-                d.get("pull_min_confidence")
-                if d.get("pull_min_confidence") is not None
-                else 0.7
-            ),
+            pull_min_confidence=float(pmc if pmc is not None else 0.7),
         )
 
 

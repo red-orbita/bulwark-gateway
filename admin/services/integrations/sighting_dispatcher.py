@@ -242,7 +242,7 @@ class SightingDispatcher:
         # advances monotonically and a mid-sweep cap leaves a clean resume point.
         events = sorted(events, key=lambda e: float(e.get("ts") or 0.0))
 
-        stats = {"scanned": 0, "reported": 0, "suppressed": 0, "skipped": 0, "failed": 0}
+        stats: dict[str, float] = {"scanned": 0, "reported": 0, "suppressed": 0, "skipped": 0, "failed": 0}
         high_ts = watermark
         dispatched = 0
         capped = False
@@ -277,9 +277,9 @@ class SightingDispatcher:
         if high_ts > watermark:
             await loop.run_in_executor(None, self._save_watermark, high_ts)
 
-        self.total_reported += stats["reported"]
-        self.total_suppressed += stats["suppressed"]
-        self.total_failed += stats["failed"]
+        self.total_reported += int(stats["reported"])
+        self.total_suppressed += int(stats["suppressed"])
+        self.total_failed += int(stats["failed"])
         stats["watermark"] = high_ts
         self.last_error = None
         return stats

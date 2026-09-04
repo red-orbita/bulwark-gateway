@@ -778,8 +778,8 @@ async def _resolve_case_compliance(case: dict) -> Optional[dict]:
         if mapping is None or mapping.is_empty():
             continue
         contributing.add(cat)
-        for axis, codes in mapping.to_dict().items():
-            axes[axis].update(codes)
+        for axis, axis_codes in mapping.to_dict().items():
+            axes[axis].update(axis_codes)
     if not contributing:
         return None
 

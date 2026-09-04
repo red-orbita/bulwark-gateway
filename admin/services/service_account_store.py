@@ -121,11 +121,13 @@ def _load_permissions(raw: object) -> list[str]:
         return []
     if isinstance(raw, list):
         return [str(p) for p in raw]
-    try:
-        parsed = json.loads(raw)
-        return [str(p) for p in parsed] if isinstance(parsed, list) else []
-    except (json.JSONDecodeError, TypeError):
-        return []
+    if isinstance(raw, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(raw)
+            return [str(p) for p in parsed] if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
 
 
 def _coerce_rate_limit(value: object) -> Optional[int]:
@@ -138,8 +140,10 @@ def _coerce_rate_limit(value: object) -> Optional[int]:
     """
     if value is None or value == "":
         return None
+    if not isinstance(value, (int, float, str)):
+        return None
     try:
-        rpm = int(value)  # type: ignore[arg-type]
+        rpm = int(value)
     except (TypeError, ValueError):
         return None
     return max(0, rpm)

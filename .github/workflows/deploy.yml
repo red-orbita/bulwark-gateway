@@ -45,13 +45,15 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.lock
-          pip install ruff mypy pytest
+          pip install -e ".[admin,dev]"
 
       - name: Lint
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ admin/
 
       - name: Type check
-        run: mypy src/ --ignore-missing-imports
+        run: |
+          mypy src/ --ignore-missing-imports
+          mypy admin/ --ignore-missing-imports
 
       - name: Unit tests
         run: pytest tests/ -q --tb=short --ignore=tests/test_admin_integration.py

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 # OASIS STIX 2.1 namespace UUID — deterministic SCO/SDO ids are derived from it so
 # re-exporting the same case/observable yields stable identifiers (idempotent
@@ -186,7 +186,7 @@ def build_stix_bundle(case: dict, observables: list[dict], tasks: list[dict]) ->
             if pattern is not None:
                 ind_id = _stix_id("indicator", f"{obs.get('type')}:{obs.get('value')}")
                 seen = _stix_ts(obs.get("first_seen"))
-                indicator = {
+                indicator: dict[str, Any] = {
                     "type": "indicator",
                     "spec_version": "2.1",
                     "id": ind_id,
@@ -240,7 +240,7 @@ def build_thehive_case(case: dict, observables: list[dict], tasks: list[dict]) -
     artifacts = []
     for obs in observables:
         artifacts.append({
-            "dataType": _TYPE_TO_THEHIVE.get(obs.get("type"), "other"),
+            "dataType": _TYPE_TO_THEHIVE.get(str(obs.get("type") or ""), "other"),
             "data": obs.get("value") or "",
             "ioc": bool(obs.get("is_ioc")),
             "tlp": _TLP_TO_INT.get(obs.get("tlp") or "amber", 2),
@@ -251,7 +251,7 @@ def build_thehive_case(case: dict, observables: list[dict], tasks: list[dict]) -
     hive_tasks = [
         {
             "title": t.get("title") or "",
-            "status": _TASK_TO_THEHIVE.get(t.get("status"), "Waiting"),
+            "status": _TASK_TO_THEHIVE.get(str(t.get("status") or ""), "Waiting"),
             "owner": t.get("assignee") or "",
         }
         for t in tasks if t.get("title")
@@ -275,7 +275,7 @@ def build_thehive_case(case: dict, observables: list[dict], tasks: list[dict]) -
 
 def _iris_ioc_type(obs: dict) -> str:
     """Map an observable to an IRIS ioc type string."""
-    otype = obs.get("type")
+    otype = str(obs.get("type") or "")
     if otype == "hash":
         algo = _hash_algo(obs.get("value") or "")
         if algo == "MD5":
