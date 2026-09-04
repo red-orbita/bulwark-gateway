@@ -1489,12 +1489,13 @@ async def enrich_case_observable(
     tlp = body.tlp or observable.get("tlp") or "amber"
     audit = get_audit_logger()
     try:
-        enrichment = await connector.enrich_observable(
-            observable_type=observable.get("type") or "other",
-            value=observable.get("value") or "",
-            analyzer_ids=body.analyzer_ids,
-            tlp=tlp,
-        )
+        async with connector:
+            enrichment = await connector.enrich_observable(
+                observable_type=observable.get("type") or "other",
+                value=observable.get("value") or "",
+                analyzer_ids=body.analyzer_ids,
+                tlp=tlp,
+            )
     except ConnectorError as exc:
         await audit.log(
             actor=user.sub,
@@ -1581,12 +1582,13 @@ async def run_observable_responder(
     tlp = body.tlp or observable.get("tlp") or "amber"
     audit = get_audit_logger()
     try:
-        outcome = await connector.run_responder(
-            responder_id=body.responder_id,
-            observable_type=observable.get("type") or "other",
-            value=observable.get("value") or "",
-            tlp=tlp,
-        )
+        async with connector:
+            outcome = await connector.run_responder(
+                responder_id=body.responder_id,
+                observable_type=observable.get("type") or "other",
+                value=observable.get("value") or "",
+                tlp=tlp,
+            )
     except ConnectorError as exc:
         await audit.log(
             actor=user.sub,
@@ -1659,10 +1661,11 @@ async def lookup_case_observable(
 
     audit = get_audit_logger()
     try:
-        enrichment = await connector.lookup_observable(
-            observable_type=observable.get("type") or "other",
-            value=observable.get("value") or "",
-        )
+        async with connector:
+            enrichment = await connector.lookup_observable(
+                observable_type=observable.get("type") or "other",
+                value=observable.get("value") or "",
+            )
     except ConnectorError as exc:
         await audit.log(
             actor=user.sub,

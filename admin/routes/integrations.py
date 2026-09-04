@@ -409,9 +409,10 @@ async def push_case(
 
     audit = get_audit_logger()
     try:
-        result = await connector.push_case(
-            case, observables, tasks, remote_id=remote_id
-        )
+        async with connector:
+            result = await connector.push_case(
+                case, observables, tasks, remote_id=remote_id
+            )
     except TlpGateError as exc:
         # Local data-sharing policy refusal (e.g. everything is TLP:RED) — the
         # remote was never contacted for the restricted data. Audit + 400.

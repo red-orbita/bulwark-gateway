@@ -14,7 +14,7 @@ import asyncio
 import logging
 import sys
 from dataclasses import dataclass, field
-from typing import Optional, Protocol, runtime_checkable
+from typing import Optional, Protocol, Self, runtime_checkable
 
 import httpx
 
@@ -120,6 +120,14 @@ class Connector(Protocol):
         """Stable connector type discriminator (e.g. ``thehive``, ``dfir_iris``)."""
         ...
 
+    async def __aenter__(self) -> "Connector":
+        """Enter pooled mode — reuse one keep-alive HTTP client for the block."""
+        ...
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Close the pooled HTTP client on block exit."""
+        ...
+
     async def test_connection(self) -> ConnectorHealth:
         """Cheap reachability/auth probe. Never raises — returns a health snapshot."""
         ...
@@ -154,10 +162,43 @@ class HttpConnectorBase:
     timeout: float = _DEFAULT_TIMEOUT_SECONDS
     _headers: dict[str, str] = field(default_factory=dict)
     _circuit: CircuitBreaker = field(default_factory=CircuitBreaker)
+    # Opt-in pooled client: set only for the duration of an ``async with connector``
+    # block so a multi-request operation (a push that creates a case + N observables
+    # + tasks, a Cortex enrich that submits then polls) reuses ONE keep-alive
+    # connection instead of a fresh TCP/TLS handshake per call. Outside such a block
+    # it stays ``None`` and each :meth:`_request` uses a short-lived client (still
+    # reused across that call's retry attempts). ``init=False`` keeps it out of the
+    # dataclass constructor; excluded from ``repr``/``compare`` as transient state.
+    _client: Optional[httpx.AsyncClient] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def circuit_state(self) -> str:
         return self._circuit.state.value
+
+    async def __aenter__(self) -> Self:
+        """Enter *pooled* mode — one keep-alive client serves the whole block.
+
+        Idempotent: a nested/re-entered ``async with`` on the same instance keeps
+        the already-open client. The client is created here (inside the running
+        loop) and torn down in :meth:`__aexit__`, so it never outlives the block or
+        crosses event loops. Returns ``Self`` so a concrete connector stays a
+        structural :class:`Connector` (whose ``__aenter__`` yields a ``Connector``)
+        when used as an async context manager.
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout, verify=self.verify_tls)
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close and drop the pooled client (no-op outside pooled mode)."""
+        client, self._client = self._client, None
+        if client is not None:
+            await client.aclose()
 
     async def _request(
         self,
@@ -172,6 +213,13 @@ class HttpConnectorBase:
         Returns the response on an expected status. Raises :class:`ConnectorError`
         when the circuit is open, all attempts fail, or the final status is
         unexpected.
+
+        The HTTP client is the connector's pooled client when inside an
+        ``async with`` block, else a short-lived client created once for this call
+        and reused across its retry attempts (a retry re-uses the open connection
+        rather than re-doing the TCP/TLS handshake). A short-lived client is always
+        closed before returning; the response body is fully buffered by
+        ``client.request`` before then, so callers can still read it.
         """
         if not self._circuit.can_execute():
             raise ConnectorError("circuit open — remote temporarily disabled")
@@ -180,36 +228,43 @@ class HttpConnectorBase:
         last_error = ""
         last_status: Optional[int] = None
 
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=self.timeout, verify=self.verify_tls
-                ) as client:
+        pooled = self._client is not None
+        client = self._client or httpx.AsyncClient(
+            timeout=self.timeout, verify=self.verify_tls
+        )
+        try:
+            for attempt in range(1, _MAX_ATTEMPTS + 1):
+                try:
                     resp = await client.request(
                         method, url, json=json_body, headers=self._headers
                     )
-            except (httpx.HTTPError, OSError) as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                last_status = None
-            else:
-                if resp.status_code in expected:
-                    self._circuit.record_success()
-                    return resp
-                last_status = resp.status_code
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                # 4xx (except 429) is not going to succeed on retry — fail fast.
-                if 400 <= resp.status_code < 500 and resp.status_code != 429:
-                    self._circuit.record_failure()
-                    raise ConnectorError(last_error, status=resp.status_code)
+                except (httpx.HTTPError, OSError) as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"
+                    last_status = None
+                else:
+                    if resp.status_code in expected:
+                        self._circuit.record_success()
+                        return resp
+                    last_status = resp.status_code
+                    last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                    # 4xx (except 429) is not going to succeed on retry — fail fast.
+                    if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                        self._circuit.record_failure()
+                        raise ConnectorError(last_error, status=resp.status_code)
 
-            if attempt < _MAX_ATTEMPTS:
-                backoff = min(
-                    _BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)), _MAX_BACKOFF_SECONDS
-                )
-                await asyncio.sleep(backoff)
+                if attempt < _MAX_ATTEMPTS:
+                    backoff = min(
+                        _BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)), _MAX_BACKOFF_SECONDS
+                    )
+                    await asyncio.sleep(backoff)
 
-        self._circuit.record_failure()
-        raise ConnectorError(
-            f"push failed after {_MAX_ATTEMPTS} attempts: {last_error}",
-            status=last_status,
-        )
+            self._circuit.record_failure()
+            raise ConnectorError(
+                f"push failed after {_MAX_ATTEMPTS} attempts: {last_error}",
+                status=last_status,
+            )
+        finally:
+            # A short-lived (non-pooled) client is closed here; the pooled client
+            # lives on until the ``async with`` block exits.
+            if not pooled:
+                await client.aclose()

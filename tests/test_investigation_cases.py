@@ -2003,6 +2003,15 @@ class _FakeCortexConnector:
         self._responder_error = responder_error
         self.calls: list[dict] = []
         self.responder_calls: list[dict] = []
+        self.entered = 0
+        self.exited = 0
+
+    async def __aenter__(self):
+        self.entered += 1
+        return self
+
+    async def __aexit__(self, *exc):
+        self.exited += 1
 
     async def enrich_observable(self, **kwargs):
         self.calls.append(kwargs)
@@ -2050,6 +2059,15 @@ class _FakeOpenCtiConnector:
         self._error = error
         self.kind = kind
         self.calls: list[dict] = []
+        self.entered = 0
+        self.exited = 0
+
+    async def __aenter__(self):
+        self.entered += 1
+        return self
+
+    async def __aexit__(self, *exc):
+        self.exited += 1
 
     async def lookup_observable(self, **kwargs):
         self.calls.append(kwargs)

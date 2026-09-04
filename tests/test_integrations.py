@@ -586,6 +586,97 @@ async def test_connector_retries_then_raises(httpx_mock, monkeypatch):
     assert conn.circuit_state in ("closed", "open")
 
 
+# ─── HttpConnectorBase HTTP-client pooling (Tier 1 #3) ───────────────────────
+
+
+def _spy_async_client(monkeypatch):
+    """Patch ``httpx.AsyncClient`` with a subclass that records every
+    construction + ``aclose`` so a test can assert connection reuse.
+
+    Returns the shared list of spy clients (append order). pytest-httpx patches
+    the transport, not the class, so a subclass is still intercepted by the mock.
+    """
+    from admin.services.integrations import base as base_mod
+
+    created: list = []
+    real_cls = base_mod.httpx.AsyncClient
+
+    class _SpyClient(real_cls):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._spy_closed = 0
+            created.append(self)
+
+        async def aclose(self) -> None:
+            self._spy_closed += 1
+            await super().aclose()
+
+    monkeypatch.setattr(base_mod.httpx, "AsyncClient", _SpyClient)
+    return created
+
+
+async def test_request_non_pooled_uses_one_client_per_call(httpx_mock, monkeypatch):
+    """Outside an ``async with`` block each ``_request`` uses its own short-lived
+    client, closed before returning."""
+    from admin.services.integrations.base import HttpConnectorBase
+
+    created = _spy_async_client(monkeypatch)
+    httpx_mock.add_response(
+        method="GET", url="http://svc.test/ping", json={"ok": 1}, is_reusable=True
+    )
+    conn = HttpConnectorBase(base_url="http://svc.test")
+
+    for _ in range(3):
+        await conn._request("GET", "/ping")
+
+    assert len(created) == 3
+    assert all(c._spy_closed == 1 for c in created)
+    assert conn._client is None
+
+
+async def test_request_pooled_reuses_single_client(httpx_mock, monkeypatch):
+    """Inside ``async with connector`` every ``_request`` shares ONE keep-alive
+    client, which is closed exactly once on block exit."""
+    from admin.services.integrations.base import HttpConnectorBase
+
+    created = _spy_async_client(monkeypatch)
+    httpx_mock.add_response(
+        method="GET", url="http://svc.test/ping", json={"ok": 1}, is_reusable=True
+    )
+    conn = HttpConnectorBase(base_url="http://svc.test")
+
+    async with conn:
+        for _ in range(3):
+            await conn._request("GET", "/ping")
+        # One client, still open while the block is live.
+        assert len(created) == 1
+        assert created[0]._spy_closed == 0
+
+    assert len(created) == 1
+    assert created[0]._spy_closed == 1
+    assert conn._client is None
+
+
+async def test_request_retry_reuses_single_client(httpx_mock, monkeypatch):
+    """A retrying ``_request`` hoists the client out of the retry loop: one client
+    is created, reused across every attempt, and closed once (no handshake churn)."""
+    from admin.services.integrations import base as base_mod
+    from admin.services.integrations.base import ConnectorError, HttpConnectorBase
+
+    monkeypatch.setattr(base_mod, "_BASE_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(base_mod, "_MAX_BACKOFF_SECONDS", 0.0)
+    created = _spy_async_client(monkeypatch)
+    for _ in range(base_mod._MAX_ATTEMPTS):
+        httpx_mock.add_exception(httpx.ConnectError("boom"))
+
+    conn = HttpConnectorBase(base_url="http://svc.test")
+    with pytest.raises(ConnectorError):
+        await conn._request("GET", "/ping")
+
+    assert len(created) == 1
+    assert created[0]._spy_closed == 1
+
+
 # ─── DFIR-IRIS connector ─────────────────────────────────────────────────────
 
 

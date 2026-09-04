@@ -276,8 +276,21 @@ UI. Tests mock the remote REST (pytest-httpx) with positive + failure + idempote
      audit record. Service-account keys pass straight through (already throttled
      per-key inside `require_permission_automation` — no double-count). Reuses the
      automation limiter (Redis-first, in-memory fallback) under a distinct
-     `investigation-tool:` key namespace; `<= 0` disables the cap. Tests:
-     `tests/test_investigation_cases.py` (`TestSessionToolRateLimit` ×5).
+      `investigation-tool:` key namespace; `<= 0` disables the cap. Tests:
+      `tests/test_investigation_cases.py` (`TestSessionToolRateLimit` ×5).
+    - **DONE (HTTP connection pooling)**: `HttpConnectorBase` grew an opt-in
+      async-context-manager (`__aenter__`/`__aexit__`/`aclose`) that holds one
+      keep-alive `httpx.AsyncClient` for the whole block, and `_request` now hoists
+      the client **out of the retry loop** so a retry reuses the open connection
+      instead of re-doing the TCP/TLS handshake. Call sites that fan out multiple
+      requests over one connector — the `/push/case` route and the Cortex
+      enrich/respond (submit-then-poll) + observable lookup handlers — are wrapped in
+      `async with connector:` so those internal calls share a single connection;
+      outside a block each `_request` still uses a short-lived client. Opt-in, zero
+      new deps, zero behaviour change on the happy path. The `Connector` protocol
+      declares the context-manager methods; `__aenter__` returns `Self` so concrete
+      connectors stay structural `Connector`s. Tests: `tests/test_integrations.py`
+      (`test_request_{non_pooled_uses_one_client_per_call,pooled_reuses_single_client,retry_reuses_single_client}`).
 
 ### 4.2 OpenCTI (`opencti.py`)
 - **Pull** (closes the MISP/OpenCTI feed gap): query indicators via OpenCTI GraphQL
