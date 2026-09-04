@@ -105,3 +105,31 @@ async def test_transaction_commit_and_rollback(pg_engine):
 
     rows = await pg_engine.fetch_all("SELECT id FROM parity_tx ORDER BY id")
     assert [r["id"] for r in rows] == ["committed"]
+
+
+async def test_timestamptz_reads_back_as_iso_string(pg_engine):
+    """A TIMESTAMPTZ column must read back as an ISO-8601 *string*, matching the
+    SQLite (TEXT) contract stores are authored against.
+
+    asyncpg natively returns ``datetime`` for TIMESTAMPTZ; the engine's read-side
+    normalization (``_pg_row``) coerces it to an ISO string so a store's public
+    JSON contract does not silently differ between backends. Regression guard for
+    that symmetric-coercion fix.
+    """
+    from datetime import datetime, timezone
+
+    await pg_engine.execute(
+        "CREATE TABLE parity_ts (id TEXT PRIMARY KEY, seen TIMESTAMPTZ NOT NULL)"
+    )
+    written = datetime(2026, 6, 13, 13, 0, 42, 841174, tzinfo=timezone.utc).isoformat()
+    # The write side coerces the ISO string → datetime for asyncpg.
+    await pg_engine.execute(
+        "INSERT INTO parity_ts (id, seen) VALUES (?, ?)", ("a", written)
+    )
+
+    row = await pg_engine.fetch_one("SELECT id, seen FROM parity_ts WHERE id = ?", ("a",))
+    assert row is not None
+    assert isinstance(row["seen"], str)
+    # Round-trips to the exact instant that was written.
+    assert datetime.fromisoformat(row["seen"]) == datetime.fromisoformat(written)
+

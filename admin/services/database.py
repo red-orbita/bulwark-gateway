@@ -48,7 +48,7 @@ import time
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, Sequence
 
@@ -724,6 +724,41 @@ class _SQLiteTransaction(Transaction):
 
 # ─── PostgreSQL Engine ────────────────────────────────────────────────────────
 
+def _pg_row(record: Any) -> Row:
+    """Build a :class:`Row` from an asyncpg ``Record`` with dialect-normalized
+    values.
+
+    Stores in this codebase are authored in the SQLite dialect, where timestamp
+    columns are ``TEXT`` and read back as ISO-8601 *strings*. On PostgreSQL those
+    same columns are ``TIMESTAMPTZ``/``TIMESTAMP`` and asyncpg hands them back as
+    native ``datetime``/``date`` objects — so without normalization a store's
+    public contract (e.g. the JSON an API returns) would silently differ between
+    backends (a ``datetime`` on PostgreSQL vs a ``str`` on SQLite).
+
+    The QueryTranslator already coerces the *write* side (ISO string → datetime
+    for asyncpg); this is the symmetric *read* side: datetime/date → ISO string,
+    so store code sees the same string contract on both backends. Safe by
+    construction — every consumer already handles the ``str`` form because it is
+    what the SQLite backend has always returned.
+    """
+    return Row(_data={k: _normalize_pg_value(v) for k, v in dict(record).items()})
+
+
+def _normalize_pg_value(value: Any) -> Any:
+    """Coerce an asyncpg-native value back to the SQLite-dialect contract.
+
+    Currently normalizes ``datetime``/``date`` → ISO-8601 string. Note the
+    ``datetime`` isinstance check must precede ``date`` since ``datetime`` is a
+    subclass of ``date``. All other types (int, float, str, bool, bytes, None,
+    ``Decimal``) pass through unchanged.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
 class PostgreSQLEngine(DatabaseEngine):
     """PostgreSQL database engine using asyncpg with connection pooling.
 
@@ -859,7 +894,7 @@ class PostgreSQLEngine(DatabaseEngine):
             conn = await _asyncpg.connect(dsn=dsn, **connect_kwargs)
             try:
                 row = await conn.fetchrow(translated, *(translated_params or ()))
-                return Row(_data=dict(row)) if row else None
+                return _pg_row(row) if row else None
             finally:
                 await conn.close()
 
@@ -879,7 +914,7 @@ class PostgreSQLEngine(DatabaseEngine):
             conn = await _asyncpg.connect(dsn=dsn, **connect_kwargs)
             try:
                 rows = await conn.fetch(translated, *(translated_params or ()))
-                return [Row(_data=dict(r)) for r in rows]
+                return [_pg_row(r) for r in rows]
             finally:
                 await conn.close()
 
@@ -943,7 +978,7 @@ class PostgreSQLEngine(DatabaseEngine):
             row = await conn.fetchrow(translated, *(translated_params or ()))
             if row is None:
                 return None
-            return Row(_data=dict(row))
+            return _pg_row(row)
 
     async def fetch_all(self, query: str, params: Optional[Sequence] = None) -> list[Row]:
         translated, translated_params = self.translator.translate(query, params)
@@ -952,7 +987,7 @@ class PostgreSQLEngine(DatabaseEngine):
 
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(translated, *(translated_params or ()))
-            return [Row(_data=dict(r)) for r in rows]
+            return [_pg_row(r) for r in rows]
 
     async def execute_script(self, script: str) -> None:
         """Execute multi-statement SQL script.
@@ -1052,14 +1087,14 @@ class _PostgreSQLTransaction(Transaction):
         row = await self._conn.fetchrow(translated, *(translated_params or ()))
         if row is None:
             return None
-        return Row(_data=dict(row))
+        return _pg_row(row)
 
     async def fetch_all(self, query: str, params: Optional[Sequence] = None) -> list[Row]:
         translated, translated_params = self._translator.translate(query, params)
         if not translated:
             return []
         rows = await self._conn.fetch(translated, *(translated_params or ()))
-        return [Row(_data=dict(r)) for r in rows]
+        return [_pg_row(r) for r in rows]
 
 
 # ─── Error Classification ─────────────────────────────────────────────────────
