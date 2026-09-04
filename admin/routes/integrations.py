@@ -38,6 +38,7 @@ from ..services.integrations.registry import (
     IntegrationConfig,
     get_integration_registry,
 )
+from ..services.integrations.taxii import TaxiiConnector
 from ..services.investigation_case_store import get_case_store
 from ..services.investigation_observable_store import get_observable_store
 from ..services.investigation_task_store import get_task_store
@@ -355,6 +356,42 @@ async def list_integration_responders(
     except ConnectorError as exc:
         raise HTTPException(status_code=502, detail=f"Responder list failed: {exc}") from None
     return {"responders": responders, "count": len(responders)}
+
+
+@router.get("/{integration_id}/collections")
+async def list_integration_collections(
+    integration_id: str,
+    user: TokenPayload = Depends(require_permission("integrations:read")),
+):
+    """List a TAXII integration's collections (id/title/can_read/can_write).
+
+    TAXII only: other integration types have no collection concept and are
+    rejected 400. Lets an operator discover which collections a server exposes —
+    and which are writable — before wiring up a push. Fail-open — an unreachable
+    TAXII server surfaces a ``502`` without ever touching local state.
+    """
+    registry = get_integration_registry()
+    config = registry.get(integration_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if config.type != "taxii":
+        raise HTTPException(
+            status_code=400,
+            detail="Collections are only available for taxii integrations",
+        )
+    connector = registry.build_connector(config)
+    if not isinstance(connector, TaxiiConnector):
+        raise HTTPException(
+            status_code=400, detail="Integration is not fully configured"
+        )
+    try:
+        async with connector:
+            collections = await connector.list_collections()
+    except ConnectorError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Collection list failed: {exc}"
+        ) from None
+    return {"collections": collections, "count": len(collections)}
 
 
 @router.post("/reload")

@@ -1871,6 +1871,80 @@ async def test_route_responders_unreachable_is_502(wired_routes, httpx_mock, mon
     assert exc.value.status_code == 502
 
 
+# ─── TAXII collections route (Phase 5 discovery) ─────────────────────────────
+
+
+async def test_route_collections_lists_for_taxii(wired_routes, httpx_mock, monkeypatch):
+    from admin.services.integrations import taxii as taxii_mod
+
+    monkeypatch.setattr(taxii_mod, "_validate_url_no_ssrf", lambda url: None)
+    routes = wired_routes
+    await routes.create_integration(
+        data={
+            "name": "TAXII", "type": "taxii",
+            "base_url": "http://taxii.test/root/collections/c1/objects/", "api_key": "k",
+        },
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+    httpx_mock.add_response(
+        method="GET", url="http://taxii.test/root/collections",
+        json={"collections": [
+            {"id": "c1", "title": "Writable", "can_read": True, "can_write": True},
+        ]},
+    )
+    out = await routes.list_integration_collections(integration_id, user=_admin())
+    assert out["count"] == 1
+    assert out["collections"][0]["id"] == "c1"
+    assert out["collections"][0]["can_write"] is True
+
+
+async def test_route_collections_rejects_non_taxii(wired_routes):
+    from fastapi import HTTPException
+
+    routes = wired_routes
+    await routes.create_integration(
+        data={
+            "name": "TheHive", "type": "thehive",
+            "base_url": "http://thehive.test", "api_key": "k",
+        },
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+    with pytest.raises(HTTPException) as exc:
+        await routes.list_integration_collections(integration_id, user=_admin())
+    assert exc.value.status_code == 400
+
+
+async def test_route_collections_unknown_integration_is_404(wired_routes):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await wired_routes.list_integration_collections("nope", user=_admin())
+    assert exc.value.status_code == 404
+
+
+async def test_route_collections_unreachable_is_502(wired_routes, httpx_mock, monkeypatch):
+    from fastapi import HTTPException
+
+    from admin.services.integrations import taxii as taxii_mod
+
+    monkeypatch.setattr(taxii_mod, "_validate_url_no_ssrf", lambda url: None)
+    routes = wired_routes
+    await routes.create_integration(
+        data={
+            "name": "TAXII", "type": "taxii",
+            "base_url": "http://taxii.test/root/collections/c1/objects/", "api_key": "k",
+        },
+        user=_admin(),
+    )
+    integration_id = routes.get_integration_registry().configs[0].id
+    httpx_mock.add_exception(httpx.ConnectError("boom"))
+    with pytest.raises(HTTPException) as exc:
+        await routes.list_integration_collections(integration_id, user=_admin())
+    assert exc.value.status_code == 502
+
+
 # ─── Event webhooks (SOAR trigger seed, Phase 1.3) ───────────────────────────
 
 

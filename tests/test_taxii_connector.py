@@ -29,6 +29,7 @@ from admin.services.integrations.taxii import (
 
 _URL = "http://taxii.test/api/root/collections/c1/objects/"
 _INFO_URL = "http://taxii.test/api/root/collections/c1"
+_COLLECTIONS_URL = "http://taxii.test/api/root/collections"
 
 _CASE = {
     "case_id": "C-1",
@@ -238,3 +239,63 @@ async def test_test_connection_ssrf_blocked():
     health = await conn.test_connection()
     assert health.ok is False
     assert "SSRF" in health.detail
+
+
+# ─── list_collections ────────────────────────────────────────────────────────
+
+async def test_list_collections_ok(httpx_mock, monkeypatch):
+    _no_ssrf(monkeypatch)
+    httpx_mock.add_response(
+        method="GET", url=_COLLECTIONS_URL,
+        json={
+            "collections": [
+                {"id": "c1", "title": "Writable", "can_read": True, "can_write": True},
+                {"id": "c2", "title": "ReadOnly", "can_read": True, "can_write": False},
+            ]
+        },
+    )
+    collections = await _connector().list_collections()
+    assert len(collections) == 2
+    assert collections[0] == {
+        "id": "c1", "title": "Writable", "description": "",
+        "can_read": True, "can_write": True,
+    }
+    assert collections[1]["can_write"] is False
+
+
+async def test_list_collections_derives_root_url(httpx_mock, monkeypatch):
+    """The objects endpoint's ``/{id}/objects`` suffix is stripped to the root."""
+    _no_ssrf(monkeypatch)
+    httpx_mock.add_response(method="GET", url=_COLLECTIONS_URL, json={"collections": []})
+    await _connector().list_collections()
+    assert httpx_mock.get_requests()[0].url == _COLLECTIONS_URL
+
+
+async def test_list_collections_malformed_body_is_empty(httpx_mock, monkeypatch):
+    _no_ssrf(monkeypatch)
+    httpx_mock.add_response(method="GET", url=_COLLECTIONS_URL, json={"unexpected": 1})
+    assert await _connector().list_collections() == []
+
+
+async def test_list_collections_skips_non_dict_entries(httpx_mock, monkeypatch):
+    _no_ssrf(monkeypatch)
+    httpx_mock.add_response(
+        method="GET", url=_COLLECTIONS_URL,
+        json={"collections": ["nope", {"id": "c1", "title": "ok"}]},
+    )
+    collections = await _connector().list_collections()
+    assert len(collections) == 1
+    assert collections[0]["id"] == "c1"
+
+
+async def test_list_collections_http_error(httpx_mock, monkeypatch):
+    _no_ssrf(monkeypatch)
+    httpx_mock.add_response(method="GET", url=_COLLECTIONS_URL, status_code=403, json={})
+    with pytest.raises(ConnectorError):
+        await _connector().list_collections()
+
+
+async def test_list_collections_ssrf_blocked():
+    conn = _connector("http://localhost:9000/collections/c/objects/")
+    with pytest.raises(ConnectorError, match="SSRF"):
+        await conn.list_collections()

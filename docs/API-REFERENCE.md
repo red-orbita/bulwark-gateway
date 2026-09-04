@@ -1160,6 +1160,7 @@ both; auditor/viewer are read-only). All mutations are recorded in the admin aud
 | POST | `/{id}/toggle` | `integrations:write` | Enable / disable a connector |
 | POST | `/{id}/test` | `integrations:write` | Live `test_connection` probe against the platform |
 | GET | `/{id}/health` | `integrations:read` | Cached connector health (TTL 30s) |
+| GET | `/{id}/collections` | `integrations:read` | List a TAXII connector's collections (id/title/`can_read`/`can_write`); taxii-only, fail-open 502 |
 | POST | `/reload` | `integrations:write` | Reload the connector registry from disk |
 | POST | `/push/case/{case_id}` | `integrations:write` | Idempotent push of a case to TheHive/IRIS/OpenCTI/MISP/TAXII (create-or-update; fail-open) |
 | GET | `/push/case/{case_id}/links` | `integrations:read` | List remote links (`remote_id` / `remote_url` / `last_synced_at`) for a case |

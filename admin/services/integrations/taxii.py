@@ -324,6 +324,60 @@ class TaxiiConnector(HttpConnectorBase):
             url = url[: -len("/objects")]
         return url
 
+    def _collections_url(self) -> str:
+        """Derive the API-root collections-listing URL.
+
+        The configured ``base_url`` is one collection's objects endpoint
+        (``{api_root}/collections/{id}/objects``); stripping ``/objects`` and the
+        trailing ``/{id}`` segment yields the API root's ``{api_root}/collections``
+        endpoint that enumerates every collection the server exposes.
+        """
+        return self._collection_info_url().rsplit("/", 1)[0]
+
+    async def list_collections(self) -> list[dict]:
+        """Enumerate the TAXII API root's collections (id/title/read+write flags).
+
+        Lets an operator discover which collections a TAXII server exposes — and
+        which are ``can_write`` — before wiring up a push connector. SSRF-validates
+        the URL and never follows redirects (parity with the poller/push paths).
+        Raises :class:`ConnectorError` on a blocked URL, transport failure, non-200,
+        or a malformed body, so the route surfaces a fail-open ``502``.
+        """
+        ssrf_error = _validate_url_no_ssrf(self.base_url)
+        if ssrf_error:
+            raise ConnectorError(
+                f"TAXII collection URL blocked (SSRF protection): {ssrf_error}"
+            )
+        headers = {"Accept": _TAXII_MEDIA_TYPE}
+        if self._auth_value:
+            headers["Authorization"] = self._auth_value
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, verify=self.verify_tls, follow_redirects=False
+            ) as client:
+                resp = await client.get(self._collections_url(), headers=headers)
+        except (httpx.HTTPError, OSError) as exc:
+            raise ConnectorError(f"TAXII collections request failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise ConnectorError(
+                f"TAXII server returned {resp.status_code}", status=resp.status_code
+            )
+        body = self._safe_json(resp)
+        out: list[dict] = []
+        for coll in body.get("collections") or []:
+            if not isinstance(coll, dict):
+                continue
+            out.append(
+                {
+                    "id": str(coll.get("id") or ""),
+                    "title": str(coll.get("title") or ""),
+                    "description": str(coll.get("description") or ""),
+                    "can_read": bool(coll.get("can_read", False)),
+                    "can_write": bool(coll.get("can_write", False)),
+                }
+            )
+        return out
+
     async def test_connection(self) -> ConnectorHealth:
         """Probe the collection's metadata endpoint (cheap). Never raises.
 
