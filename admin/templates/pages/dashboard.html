@@ -691,17 +691,27 @@
 
         <!-- Spend trend -->
         <div class="sg-card">
-            <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
                 <div class="flex items-center gap-2">
                     <i data-lucide="trending-up" class="w-4 h-4 text-cyan-400"></i>
-                    <h2 class="text-sm font-medium text-white">Spend Trend</h2>
+                    <h2 class="text-sm font-medium text-white" x-text="trendMeta.label + ' Trend'"></h2>
                 </div>
-                <span class="text-[11px] text-gray-500" x-text="'Total ' + trendRangeLabel + ': ' + fmtUsd(trend.totals.cost_usd)"></span>
+                <div class="flex items-center gap-3">
+                    <div class="flex items-center rounded-lg bg-gray-800/60 border border-white/5 p-0.5">
+                        <template x-for="m in trendMetrics" :key="m.key">
+                            <button type="button" @click="setTrendMetric(m.key)"
+                                    class="px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors"
+                                    :class="trendMetric === m.key ? 'bg-brand-500/20 text-brand-200' : 'text-gray-400 hover:text-gray-200'"
+                                    x-text="m.label"></button>
+                        </template>
+                    </div>
+                    <span class="text-[11px] text-gray-500 whitespace-nowrap" x-text="'Total ' + trendRangeLabel + ': ' + fmtMetricTotal()"></span>
+                </div>
             </div>
             <div x-show="loading" class="sg-skeleton h-56"></div>
             <div x-show="!loading && !hasTrend" x-cloak class="sg-empty py-10">
                 <i data-lucide="line-chart" class="sg-empty-icon"></i>
-                <p class="sg-empty-desc">No spend recorded in this window yet. The trend fills in as the proxy forwards billable requests.</p>
+                <p class="sg-empty-desc">No usage recorded in this window yet. The trend fills in as the proxy forwards requests. Spend stays at $0 for self-hosted models — switch to Tokens or Requests to see activity.</p>
             </div>
             <div x-show="!loading && hasTrend" id="mgmt-trend" class="w-full"></div>
         </div>
@@ -1177,6 +1187,12 @@ function managementPage() {
         _chart: null,
         trendDays: 30,
         trendRanges: [{ days: 7, label: '7d' }, { days: 30, label: '30d' }, { days: 90, label: '90d' }],
+        trendMetric: 'cost_usd',
+        trendMetrics: [
+            { key: 'cost_usd', label: 'Spend', color: '#22d3ee', fmt: 'usd' },
+            { key: 'total_tokens', label: 'Tokens', color: '#a855f7', fmt: 'short' },
+            { key: 'total_requests', label: 'Requests', color: '#34d399', fmt: 'short' },
+        ],
         status: { redis_connected: false, tenants_tracked: 0, global: { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0, total_requests: 0, estimated_cost_usd: 0 } },
         tenants: [],
         trend: { points: [], totals: { cost_usd: 0, total_tokens: 0, total_requests: 0 } },
@@ -1211,6 +1227,9 @@ function managementPage() {
         },
         get trendRangeLabel() {
             return this.trendDays + 'd';
+        },
+        get trendMeta() {
+            return this.trendMetrics.find(m => m.key === this.trendMetric) || this.trendMetrics[0];
         },
 
         async reloadAll() {
@@ -1254,24 +1273,40 @@ function managementPage() {
             this.loadTrend().then(() => this.$nextTick(() => this.renderTrend()));
         },
 
+        setTrendMetric(key) {
+            if (this.trendMetric === key) return;
+            this.trendMetric = key;
+            // The trend payload already carries all three metrics per point, so
+            // switching is a pure re-render — no refetch needed.
+            this.$nextTick(() => this.renderTrend());
+        },
+        _fmtMetric(v) {
+            return this.trendMeta.fmt === 'usd' ? this.fmtUsd(v) : this.fmtShort(v);
+        },
+        fmtMetricTotal() {
+            const t = this.trend.totals || {};
+            return this._fmtMetric(Number(t[this.trendMeta.key]) || 0);
+        },
+
         renderTrend() {
             if (typeof ApexCharts === 'undefined') return;
             const el = document.getElementById('mgmt-trend');
             if (this._chart) { try { this._chart.destroy(); } catch (e) {} this._chart = null; }
             if (!el || !this.hasTrend) return;
-            const data = (this.trend.points || []).map(p => [new Date(p.date + 'T00:00:00Z').getTime(), Number(p.cost_usd) || 0]);
+            const meta = this.trendMeta;
+            const data = (this.trend.points || []).map(p => [new Date(p.date + 'T00:00:00Z').getTime(), Number(p[meta.key]) || 0]);
             const opts = {
                 chart: { type: 'area', height: 240, background: 'transparent', foreColor: '#94a3b8', toolbar: { show: false }, animations: { enabled: false }, fontFamily: 'inherit' },
                 theme: { mode: 'dark' },
-                colors: ['#22d3ee'],
-                series: [{ name: 'Spend (USD)', data: data }],
+                colors: [meta.color],
+                series: [{ name: meta.label, data: data }],
                 stroke: { curve: 'smooth', width: 2 },
                 fill: { type: 'gradient', gradient: { opacityFrom: 0.25, opacityTo: 0.02 } },
                 grid: { borderColor: 'rgba(255,255,255,0.06)', strokeDashArray: 3 },
                 dataLabels: { enabled: false },
                 xaxis: { type: 'datetime', labels: { datetimeUTC: true, style: { fontSize: '10px' } } },
-                yaxis: { labels: { formatter: (v) => this.fmtUsd(v), style: { fontSize: '10px' } } },
-                tooltip: { theme: 'dark', x: { format: 'MMM dd' }, y: { formatter: (v) => this.fmtUsd(v) } },
+                yaxis: { labels: { formatter: (v) => this._fmtMetric(v), style: { fontSize: '10px' } } },
+                tooltip: { theme: 'dark', x: { format: 'MMM dd' }, y: { formatter: (v) => this._fmtMetric(v) } },
             };
             try { this._chart = new ApexCharts(el, opts); this._chart.render(); } catch (e) { /* one chart shouldn't break the tab */ }
         },
