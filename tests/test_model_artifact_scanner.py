@@ -238,3 +238,80 @@ class TestSkillScannerIntegration:
         st = get_skill_scanner().status()
         assert st["model_artifact_patterns"] == mas.PATTERN_COUNT
         assert st["total_patterns"] >= mas.PATTERN_COUNT
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Upload endpoint routing (binary artifact vs text skill)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestScanUploadEndpoint:
+    """The admin /skills/scan/upload endpoint must route a binary model
+    artifact through the opcode scanner (not UTF-8-decode it into the text
+    pipeline), while still accepting text skills and rejecting unknown types.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_scanner(self):
+        import admin.services.skill_scanner as ss
+        ss._instance = None
+        yield
+        ss._instance = None
+
+    def _upload(self, filename: str, data: bytes):
+        import io as _io
+
+        from starlette.datastructures import Headers, UploadFile
+        return UploadFile(
+            filename=filename,
+            file=_io.BytesIO(data),
+            headers=Headers({"content-type": "application/octet-stream"}),
+        )
+
+    @pytest.mark.asyncio
+    async def test_upload_malicious_pickle_blocks(self):
+        from admin.routes.skills import scan_upload
+
+        resp = await scan_upload(
+            file=self._upload("resnet50_finetuned.pkl", _malicious_pickle_bytes()),
+            user=object(),
+        )
+        d = resp.model_dump()
+        assert d["verdict"] == "block"
+        assert d["input_path"] == "resnet50_finetuned.pkl"  # not the temp path
+        assert any(f["rule_id"] == "BWK-ART-PICKLE-RCE" for f in d["findings"])
+
+    @pytest.mark.asyncio
+    async def test_upload_benign_pickle_passes(self):
+        from admin.routes.skills import scan_upload
+
+        resp = await scan_upload(
+            file=self._upload("clean_classifier.pkl", _benign_pickle_bytes()),
+            user=object(),
+        )
+        assert resp.model_dump()["verdict"] == "pass"
+
+    @pytest.mark.asyncio
+    async def test_upload_text_skill_still_works(self):
+        from admin.routes.skills import scan_upload
+
+        resp = await scan_upload(
+            file=self._upload("skill.yaml", b"name: demo\ndescription: benign\n"),
+            user=object(),
+        )
+        d = resp.model_dump()
+        assert d["verdict"] in ("pass", "warn")
+        assert d["input_path"].startswith("<inline:")  # went through scan_content
+
+    @pytest.mark.asyncio
+    async def test_upload_unknown_type_rejected(self):
+        from fastapi import HTTPException
+
+        from admin.routes.skills import scan_upload
+
+        with pytest.raises(HTTPException) as exc:
+            await scan_upload(
+                file=self._upload("evil.exe", b"MZ\x90\x00"),
+                user=object(),
+            )
+        assert exc.value.status_code == 400
+

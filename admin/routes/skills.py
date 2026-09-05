@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -14,6 +16,7 @@ from admin.services.skill_scanner import (
     ScanResult,
     get_skill_scanner,
 )
+from src.scanners.artifacts import model_artifact_scanner
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/skills", tags=["skills"])
@@ -179,24 +182,40 @@ async def scan_content(
 
 @router.post("/scan/upload", response_model=ScanResponse)
 async def scan_upload(
-    file: UploadFile = File(..., description="Skill definition file to scan"),
+    file: UploadFile = File(..., description="Skill definition or model artifact to scan"),
     user: TokenPayload = Depends(require_permission("policies:write")),
 ) -> ScanResponse:
-    """Scan an uploaded skill definition file.
+    """Scan an uploaded skill definition OR binary model artifact.
 
-    Supported formats: YAML (.yaml, .yml), JSON (.json)
-    Max file size: 1MB (enforced by body_size_limit middleware)
+    Two input classes are accepted:
+
+    * Text skill definitions — YAML (.yaml, .yml), JSON (.json), TOML (.toml) —
+      run the text SkillSpector pipeline (MCP poisoning / least-privilege /
+      Bulwark overlay / structural checks).
+    * Binary model artifacts — pickle (.pkl/.pickle/.pt/.pth/.ckpt/.bin),
+      numpy (.npy/.npz), joblib, HDF5/Keras (.h5/.hdf5/.keras), .safetensors,
+      etc. — run the stdlib opcode-level supply-chain scan, which detects
+      load-time RCE gadgets WITHOUT ever deserializing the file.
+
+    Max file size: 1MB (enforced by body_size_limit middleware). Larger model
+    files should be scanned server-side via ``POST /admin/skills/scan/path``.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename required")
 
-    # Validate file extension
-    allowed_extensions = {".yaml", ".yml", ".json", ".toml"}
     ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in allowed_extensions:
+    text_extensions = {".yaml", ".yml", ".json", ".toml"}
+    is_artifact = model_artifact_scanner.is_model_artifact(file.filename)
+
+    if ext not in text_extensions and not is_artifact:
+        allowed = sorted(text_extensions | {".pkl", ".pt", ".pth", ".h5", ".safetensors"})
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(allowed_extensions))}",
+            detail=(
+                f"Unsupported file type '{ext}'. Allowed: text skills "
+                f"({', '.join(sorted(text_extensions))}) or model artifacts "
+                f"(e.g. {', '.join(allowed[-5:])})."
+            ),
         )
 
     content = await file.read()
@@ -204,15 +223,36 @@ async def scan_upload(
         raise HTTPException(status_code=413, detail="File too large (max 1MB)")
 
     scanner = get_skill_scanner()
-    result = await scanner.scan_content(
-        content=content.decode("utf-8", errors="replace"),
-        filename=file.filename,
-    )
+
+    if is_artifact:
+        # A binary artifact is not valid UTF-8: never decode it. Persist the raw
+        # bytes to a temp file and route through scan(), whose Stage 0 runs the
+        # opcode-level analysis (pickletools — never executes). Temp lives on the
+        # container's tmpfs (/tmp); always cleaned up.
+        suffix = ext or ".bin"
+        fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="bulwark-artifact-")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(content)
+            result = await scanner.scan(tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        # Show the operator's filename, not the ephemeral temp path.
+        result.input_path = file.filename
+    else:
+        result = await scanner.scan_content(
+            content=content.decode("utf-8", errors="replace"),
+            filename=file.filename,
+        )
+
     _record_scan(result)
 
     logger.info(
-        "skill_scan_upload scan_id=%s file=%s score=%.1f verdict=%s",
-        result.scan_id, file.filename, result.risk_score, result.verdict.value,
+        "skill_scan_upload scan_id=%s file=%s artifact=%s score=%.1f verdict=%s",
+        result.scan_id, file.filename, is_artifact, result.risk_score, result.verdict.value,
     )
 
     return ScanResponse(**result.to_dict())
