@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import contextlib
 import re
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..models.auth import TokenPayload
 from ..services.audit_logger import get_audit_logger
@@ -80,6 +81,26 @@ def _scan(r, match: str) -> list[str]:
         for k in r.scan_iter(match=match, count=200):
             keys.append(k.decode() if isinstance(k, bytes) else k)
     return keys
+
+
+def _decode_hash(raw: dict) -> dict[str, str]:
+    """Decode a possibly-bytes Redis hash into a str→str dict."""
+    out: dict[str, str] = {}
+    for k, v in (raw or {}).items():
+        kk = k.decode() if isinstance(k, bytes) else k
+        vv = v.decode() if isinstance(v, bytes) else v
+        out[str(kk)] = str(vv)
+    return out
+
+
+def _sum_hash(r, key: str) -> int:
+    """Sum all integer values in a Redis hash (0 if absent/unreadable)."""
+    total = 0
+    with contextlib.suppress(Exception):
+        for v in _decode_hash(r.hgetall(key)).values():
+            with contextlib.suppress(TypeError, ValueError):
+                total += int(float(v))
+    return total
 
 
 @router.get("/status")
@@ -184,6 +205,132 @@ async def cost_pricing(
         for m, p in pricing.items()
     ]
     return {"pricing": rows, "currency": "USD", "unit": "per 1M tokens", "editable": False}
+
+
+@router.get("/trend")
+async def cost_trend(
+    days: int = Query(30, ge=1, le=90),
+    _user: TokenPayload = Depends(require_permission("cost:read")),
+):
+    """Daily spend / token / request series for the management trend view.
+
+    Backed by the proxy's ``bulwark:cost:daily:*`` hashes (one field per UTC
+    day). Missing days inside the window are returned as zero so the series is
+    continuous for charting. Requires Redis (per-day history is not held in the
+    proxy's in-memory fallback).
+    """
+    r = _redis()
+    empty = {
+        "days": days,
+        "points": [],
+        "totals": {"cost_usd": 0.0, "total_tokens": 0, "total_requests": 0},
+        "redis_connected": False,
+    }
+    if not r:
+        return empty
+    try:
+        r.ping()
+    except Exception:
+        return empty
+
+    cost_h = _decode_hash(r.hgetall("bulwark:cost:daily:cost_usd"))
+    tokens_h = _decode_hash(r.hgetall("bulwark:cost:daily:total"))
+    reqs_h = _decode_hash(r.hgetall("bulwark:cost:daily:requests"))
+
+    def _f(h: dict[str, str], k: str) -> float:
+        try:
+            return round(float(h.get(k, 0) or 0), 6)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _i(h: dict[str, str], k: str) -> int:
+        try:
+            return int(float(h.get(k, 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    today = datetime.now(timezone.utc).date()
+    points = []
+    sum_cost, sum_tokens, sum_reqs = 0.0, 0, 0
+    for offset in range(days - 1, -1, -1):
+        d: date = today - timedelta(days=offset)
+        key = d.isoformat()
+        c, t, q = _f(cost_h, key), _i(tokens_h, key), _i(reqs_h, key)
+        sum_cost, sum_tokens, sum_reqs = sum_cost + c, sum_tokens + t, sum_reqs + q
+        points.append({"date": key, "cost_usd": c, "total_tokens": t, "total_requests": q})
+
+    return {
+        "days": days,
+        "points": points,
+        "totals": {
+            "cost_usd": round(sum_cost, 6),
+            "total_tokens": sum_tokens,
+            "total_requests": sum_reqs,
+        },
+        "redis_connected": True,
+    }
+
+
+@router.get("/roi")
+async def cost_roi(
+    _user: TokenPayload = Depends(require_permission("cost:read")),
+):
+    """Security ROI summary for the management view.
+
+    Translates the runtime verdict counters into a management/sales narrative:
+    how many threats were stopped, the block rate, and which threat categories
+    drove the blocks. Reads the per-tenant ``bulwark:usage:*`` hashes (summed
+    across tenants) and ``bulwark:detections:category`` — no separate accounting
+    is introduced.
+    """
+    r = _redis()
+    empty = {
+        "redis_connected": False,
+        "total_requests": 0,
+        "blocked": 0,
+        "warned": 0,
+        "allowed": 0,
+        "redacted": 0,
+        "block_rate": 0.0,
+        "top_categories": [],
+    }
+    if not r:
+        return empty
+    try:
+        r.ping()
+    except Exception:
+        return empty
+
+    total = _sum_hash(r, "bulwark:usage:total")
+    blocked = _sum_hash(r, "bulwark:usage:block")
+    allowed = _sum_hash(r, "bulwark:usage:allow")
+    warned = _sum_hash(r, "bulwark:usage:warn")
+    redacted = _sum_hash(r, "bulwark:usage:redact")
+
+    categories: list[tuple[str, int]] = []
+    for cat, raw in _decode_hash(r.hgetall("bulwark:detections:category")).items():
+        try:
+            count = int(float(raw))
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            categories.append((cat, count))
+    categories.sort(key=lambda c: c[1], reverse=True)
+    top_categories = [{"category": c, "count": n} for c, n in categories[:10]]
+
+    denom = total if total > 0 else (blocked + allowed + warned + redacted)
+    block_rate = round(blocked / denom, 4) if denom > 0 else 0.0
+
+    return {
+        "redis_connected": True,
+        "total_requests": total,
+        "blocked": blocked,
+        "warned": warned,
+        "allowed": allowed,
+        "redacted": redacted,
+        "block_rate": block_rate,
+        "top_categories": top_categories,
+    }
 
 
 @router.delete("/tenant/{tenant_id}")

@@ -12,6 +12,11 @@
                     :class="tabClass('live')">
                 <i data-lucide="activity" class="w-3.5 h-3.5"></i> Live
             </button>
+            <button type="button" @click="setTab('management')"
+                    class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-t-lg border-b-2 transition-colors"
+                    :class="tabClass('management')">
+                <i data-lucide="wallet" class="w-3.5 h-3.5"></i> Management
+            </button>
             <template x-for="d in dashboards" :key="d.uid">
                 <button type="button" @click="setTab(d.uid)"
                         class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-t-lg border-b-2 transition-colors"
@@ -571,8 +576,259 @@
     </div>
     </div><!-- /live tab -->
 
+    <!-- ══════════ MANAGEMENT TAB — spend, usage & security ROI ══════════ -->
+    <div x-show="activeTab === 'management'" x-data="managementPage()" x-cloak class="space-y-6">
+
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+                <h1 class="text-xl font-semibold text-white">Management &amp; Cost</h1>
+                <p class="text-sm text-gray-400 mt-0.5">Spend, token consumption and the security value delivered — the business view for management and sales. Costs are <em>estimates</em> from the proxy's reference pricing.</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="flex items-center rounded-lg bg-gray-800/60 border border-white/5 p-0.5">
+                    <template x-for="rp in trendRanges" :key="rp.days">
+                        <button type="button" @click="setTrendRange(rp.days)"
+                                class="px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors"
+                                :class="trendDays === rp.days ? 'bg-brand-500/20 text-brand-200' : 'text-gray-400 hover:text-gray-200'"
+                                x-text="rp.label"></button>
+                    </template>
+                </div>
+                <button @click="reloadAll()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Redis warning -->
+        <div x-show="!status.redis_connected" x-cloak class="sg-card border-amber-900/40 bg-amber-950/10">
+            <div class="flex gap-3">
+                <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"></i>
+                <div class="space-y-1">
+                    <p class="text-sm font-medium text-amber-200">Redis not reachable</p>
+                    <p class="text-xs text-amber-200/80">Spend counters live only inside each proxy process and cannot be aggregated here. Connect Redis for persistent, cluster-wide accounting and the spend trend.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <!-- Est. spend -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(34,211,238,0.4);">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(34,211,238,0.15), rgba(34,211,238,0.05));">
+                        <i data-lucide="dollar-sign" class="w-[18px] h-[18px] text-cyan-400"></i>
+                    </div>
+                    <span class="sg-badge sg-badge-brand"><i data-lucide="wallet" class="w-3 h-3"></i> Spend</span>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Est. Spend</p>
+                <div class="mt-1">
+                    <span class="text-2xl font-semibold font-mono text-cyan-300" x-text="fmtUsd(status.global.estimated_cost_usd)"></span>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-1.5" x-text="trendRangeLabel + ': ' + fmtUsd(trend.totals.cost_usd)"></p>
+            </div>
+
+            <!-- Total tokens -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(168,85,247,0.4);">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(168,85,247,0.05));">
+                        <i data-lucide="coins" class="w-[18px] h-[18px] text-purple-400"></i>
+                    </div>
+                    <span class="sg-badge sg-badge-neutral" x-text="fmtShort(status.global.prompt_tokens) + ' in'"></span>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Total Tokens</p>
+                <div class="flex items-baseline gap-2 mt-1">
+                    <span class="text-2xl font-semibold font-mono text-white" x-text="fmtShort(status.global.total_tokens)"></span>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-1.5" x-text="fmtShort(status.global.completion_tokens) + ' out'"></p>
+            </div>
+
+            <!-- LLM requests -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(59,130,246,0.4);">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05));">
+                        <i data-lucide="send" class="w-[18px] h-[18px] text-blue-400"></i>
+                    </div>
+                    <span class="sg-badge sg-badge-neutral" x-text="status.tenants_tracked + ' tenants'"></span>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">LLM Requests</p>
+                <div class="flex items-baseline gap-2 mt-1">
+                    <span class="text-2xl font-semibold font-mono text-white" x-text="fmtShort(status.global.total_requests)"></span>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-1.5">Billable backend calls</p>
+            </div>
+
+            <!-- Avg cost / request -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(245,158,11,0.4);">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(245,158,11,0.15), rgba(245,158,11,0.05));">
+                        <i data-lucide="calculator" class="w-[18px] h-[18px] text-amber-400"></i>
+                    </div>
+                    <span class="sg-badge sg-badge-neutral">avg</span>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Cost / Request</p>
+                <div class="flex items-baseline gap-2 mt-1">
+                    <span class="text-2xl font-semibold font-mono text-amber-300" x-text="fmtUsd(avgCostPerRequest)"></span>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-1.5" x-text="fmtShort(avgTokensPerRequest) + ' tokens/req'"></p>
+            </div>
+
+            <!-- Threats blocked (ROI) -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(16,185,129,0.4);">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));">
+                        <i data-lucide="shield-check" class="w-[18px] h-[18px] text-emerald-400"></i>
+                    </div>
+                    <span class="sg-badge sg-badge-success"><i data-lucide="trending-up" class="w-3 h-3"></i> ROI</span>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Threats Blocked</p>
+                <div class="flex items-baseline gap-2 mt-1">
+                    <span class="text-2xl font-semibold font-mono text-emerald-300" x-text="fmtShort(roi.blocked)"></span>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-1.5" x-text="(roi.block_rate * 100).toFixed(1) + '% of traffic stopped'"></p>
+            </div>
+        </div>
+
+        <!-- Spend trend -->
+        <div class="sg-card">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="trending-up" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Spend Trend</h2>
+                </div>
+                <span class="text-[11px] text-gray-500" x-text="'Total ' + trendRangeLabel + ': ' + fmtUsd(trend.totals.cost_usd)"></span>
+            </div>
+            <div x-show="loading" class="sg-skeleton h-56"></div>
+            <div x-show="!loading && !hasTrend" x-cloak class="sg-empty py-10">
+                <i data-lucide="line-chart" class="sg-empty-icon"></i>
+                <p class="sg-empty-desc">No spend recorded in this window yet. The trend fills in as the proxy forwards billable requests.</p>
+            </div>
+            <div x-show="!loading && hasTrend" id="mgmt-trend" class="w-full"></div>
+        </div>
+
+        <!-- Two-column: tenant ranking + security ROI -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- Spend by tenant (ranking) -->
+            <div class="sg-card lg:col-span-2">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="building-2" class="w-4 h-4 text-cyan-400"></i>
+                    <h2 class="text-sm font-medium text-white">Spend by Tenant</h2>
+                    <span class="text-[11px] text-gray-500 ml-auto">Top accounts by estimated spend</span>
+                </div>
+                <div x-show="loading" class="py-8 text-center text-sm text-gray-500">Loading…</div>
+                <div x-show="!loading && tenants.length === 0" x-cloak class="sg-empty py-8">
+                    <i data-lucide="building-2" class="sg-empty-icon"></i>
+                    <p class="sg-empty-desc">No tenant usage recorded yet.</p>
+                </div>
+                <div x-show="!loading && tenants.length > 0" class="space-y-3">
+                    <template x-for="t in tenants" :key="t.tenant_id">
+                        <div>
+                            <div class="flex items-center justify-between text-xs mb-1">
+                                <button @click="openDetail(t)" class="font-mono text-cyan-300 hover:text-cyan-200 inline-flex items-center gap-1" title="Per-agent breakdown">
+                                    <i data-lucide="list-tree" class="w-3 h-3"></i> <span x-text="t.tenant_id"></span>
+                                </button>
+                                <span class="font-mono text-white" x-text="fmtUsd(t.estimated_cost_usd)"></span>
+                            </div>
+                            <div class="h-2 rounded-full bg-gray-800/70 overflow-hidden">
+                                <div class="h-full rounded-full sg-meter-fill" :style="`width: ${sharePct(t)}%; background: linear-gradient(90deg, rgba(34,211,238,0.7), rgba(168,85,247,0.5));`"></div>
+                            </div>
+                            <div class="flex items-center justify-between text-[10px] text-gray-500 mt-1">
+                                <span x-text="fmtShort(t.total_requests) + ' requests · ' + fmtShort(t.total_tokens) + ' tokens'"></span>
+                                <span x-text="sharePct(t).toFixed(1) + '% of spend'"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Security ROI -->
+            <div class="sg-card">
+                <div class="flex items-center gap-2 mb-4">
+                    <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i>
+                    <h2 class="text-sm font-medium text-white">Security ROI</h2>
+                </div>
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <div class="rounded-lg bg-gray-800/40 p-3">
+                        <p class="text-[10px] text-gray-500 uppercase tracking-wide">Blocked</p>
+                        <p class="text-lg font-semibold font-mono text-emerald-300" x-text="fmtShort(roi.blocked)"></p>
+                    </div>
+                    <div class="rounded-lg bg-gray-800/40 p-3">
+                        <p class="text-[10px] text-gray-500 uppercase tracking-wide">Warned</p>
+                        <p class="text-lg font-semibold font-mono text-amber-300" x-text="fmtShort(roi.warned)"></p>
+                    </div>
+                    <div class="rounded-lg bg-gray-800/40 p-3">
+                        <p class="text-[10px] text-gray-500 uppercase tracking-wide">Block rate</p>
+                        <p class="text-lg font-semibold font-mono text-white" x-text="(roi.block_rate * 100).toFixed(1) + '%'"></p>
+                    </div>
+                    <div class="rounded-lg bg-gray-800/40 p-3">
+                        <p class="text-[10px] text-gray-500 uppercase tracking-wide">Requests</p>
+                        <p class="text-lg font-semibold font-mono text-white" x-text="fmtShort(roi.total_requests)"></p>
+                    </div>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Top threat categories</p>
+                <div x-show="roi.top_categories.length === 0" x-cloak class="sg-empty py-4">
+                    <p class="sg-empty-desc">No threats detected yet.</p>
+                </div>
+                <div class="space-y-2">
+                    <template x-for="c in roi.top_categories" :key="c.category">
+                        <div>
+                            <div class="flex items-center justify-between text-[11px] mb-0.5">
+                                <span class="text-gray-300" x-text="prettyCategory(c.category)"></span>
+                                <span class="font-mono text-gray-400" x-text="fmtShort(c.count)"></span>
+                            </div>
+                            <div class="h-1.5 rounded-full bg-gray-800/70 overflow-hidden">
+                                <div class="h-full rounded-full sg-meter-fill" :style="`width: ${catPct(c)}%; background: linear-gradient(90deg, rgba(239,68,68,0.7), rgba(245,158,11,0.5));`"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent breakdown modal -->
+        <div x-show="detail.modal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" @keydown.escape.window="detail.modal = false">
+            <div class="sg-card w-full max-w-2xl overflow-y-auto" style="max-height:90vh" @click.away="detail.modal = false">
+                <div class="flex items-center gap-2 pb-3" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+                    <i data-lucide="list-tree" class="w-5 h-5 text-cyan-400"></i>
+                    <h3 class="text-base font-semibold text-white">Agent &amp; Model Breakdown — <span class="font-mono text-cyan-300" x-text="detail.tenant_id"></span></h3>
+                </div>
+                <div class="py-4">
+                    <div x-show="detail.loading" class="py-6 text-center text-sm text-gray-500">Loading…</div>
+                    <div x-show="!detail.loading && detail.agents.length === 0" x-cloak class="py-6 text-center text-sm text-gray-400">No per-agent data recorded.</div>
+                    <div x-show="!detail.loading && detail.agents.length > 0" class="sg-table-scroll">
+                        <table class="sg-table sg-table-compact">
+                            <thead>
+                                <tr>
+                                    <th>Agent</th>
+                                    <th>Model</th>
+                                    <th class="sg-num">Requests</th>
+                                    <th class="sg-num">Total tokens</th>
+                                    <th class="sg-num">Est. cost</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="a in detail.agents" :key="a.agent_id">
+                                    <tr>
+                                        <td class="font-mono text-[12px] text-cyan-300" x-text="a.agent_id"></td>
+                                        <td class="text-xs text-gray-300" x-text="a.model"></td>
+                                        <td class="sg-num" x-text="fmtNum(a.total_requests)"></td>
+                                        <td class="sg-num" x-text="fmtNum(a.total_tokens)"></td>
+                                        <td class="sg-num text-cyan-300" x-text="fmtUsd(a.estimated_cost_usd)"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="pt-3 flex justify-end" style="border-top: 1px solid rgba(255,255,255,0.08);">
+                    <button @click="detail.modal = false" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+                </div>
+            </div>
+        </div>
+    </div><!-- /management tab -->
+
     <!-- ══════════ GRAFANA-PORTED TABS — rendered with ApexCharts ══════════ -->
-    <div x-show="activeTab !== 'live'" x-cloak class="space-y-4">
+    <div x-show="activeTab !== 'live' && activeTab !== 'management'" x-cloak class="space-y-4">
         <style>
             .gdash-grid{display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:1rem}
             @media (max-width:1024px){.gdash-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.gdash-panel{grid-column:span 2 !important}}
@@ -728,7 +984,10 @@ function dashboardShell() {
 
         setTab(tab) {
             this.activeTab = tab;
-            if (tab !== 'live' && (!this.current || this.current.uid !== tab)) {
+            if (tab === 'management') {
+                window.dispatchEvent(new CustomEvent('mgmt-activate'));
+                this.$nextTick(() => window.lucide && lucide.createIcons());
+            } else if (tab !== 'live' && (!this.current || this.current.uid !== tab)) {
                 this.loadDashboard(tab);
             } else {
                 this.$nextTick(() => window.lucide && lucide.createIcons());
@@ -907,6 +1166,157 @@ function dashboardShell() {
                 return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(4);
             }
             return String(v);
+        },
+    };
+}
+
+function managementPage() {
+    return {
+        loading: true,
+        _loaded: false,
+        _chart: null,
+        trendDays: 30,
+        trendRanges: [{ days: 7, label: '7d' }, { days: 30, label: '30d' }, { days: 90, label: '90d' }],
+        status: { redis_connected: false, tenants_tracked: 0, global: { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0, total_requests: 0, estimated_cost_usd: 0 } },
+        tenants: [],
+        trend: { points: [], totals: { cost_usd: 0, total_tokens: 0, total_requests: 0 } },
+        roi: { blocked: 0, warned: 0, allowed: 0, redacted: 0, total_requests: 0, block_rate: 0, top_categories: [] },
+        detail: { modal: false, tenant_id: '', loading: false, agents: [] },
+
+        init() {
+            // Lazy: the tab is hidden at page load. Load + render only once the
+            // shell activates it (a hidden ApexCharts canvas renders at 0 width).
+            window.addEventListener('mgmt-activate', () => this.onActivate());
+        },
+
+        onActivate() {
+            if (!this._loaded) {
+                this._loaded = true;
+                this.reloadAll();
+            } else {
+                this.$nextTick(() => this.renderTrend());
+            }
+        },
+
+        get avgCostPerRequest() {
+            const req = Number(this.status.global.total_requests) || 0;
+            return req > 0 ? (Number(this.status.global.estimated_cost_usd) || 0) / req : 0;
+        },
+        get avgTokensPerRequest() {
+            const req = Number(this.status.global.total_requests) || 0;
+            return req > 0 ? (Number(this.status.global.total_tokens) || 0) / req : 0;
+        },
+        get hasTrend() {
+            return (this.trend.points || []).some(p => (p.cost_usd || 0) > 0 || (p.total_requests || 0) > 0);
+        },
+        get trendRangeLabel() {
+            return this.trendDays + 'd';
+        },
+
+        async reloadAll() {
+            this.loading = true;
+            await Promise.all([this.loadStatus(), this.loadTenants(), this.loadTrend(), this.loadRoi()]);
+            this.loading = false;
+            this.$nextTick(() => {
+                this.renderTrend();
+                window.lucide && window.lucide.createIcons();
+            });
+        },
+
+        async loadStatus() {
+            try {
+                const res = await fetch('/admin/cost/status');
+                if (res.ok) this.status = await res.json();
+            } catch (e) { /* non-critical */ }
+        },
+        async loadTenants() {
+            try {
+                const res = await fetch('/admin/cost/tenants');
+                if (res.ok) { const d = await res.json(); this.tenants = d.tenants || []; }
+            } catch (e) { /* non-critical */ }
+        },
+        async loadTrend() {
+            try {
+                const res = await fetch('/admin/cost/trend?days=' + this.trendDays);
+                if (res.ok) this.trend = await res.json();
+            } catch (e) { /* non-critical */ }
+        },
+        async loadRoi() {
+            try {
+                const res = await fetch('/admin/cost/roi');
+                if (res.ok) this.roi = await res.json();
+            } catch (e) { /* non-critical */ }
+        },
+
+        setTrendRange(days) {
+            if (this.trendDays === days) return;
+            this.trendDays = days;
+            this.loadTrend().then(() => this.$nextTick(() => this.renderTrend()));
+        },
+
+        renderTrend() {
+            if (typeof ApexCharts === 'undefined') return;
+            const el = document.getElementById('mgmt-trend');
+            if (this._chart) { try { this._chart.destroy(); } catch (e) {} this._chart = null; }
+            if (!el || !this.hasTrend) return;
+            const data = (this.trend.points || []).map(p => [new Date(p.date + 'T00:00:00Z').getTime(), Number(p.cost_usd) || 0]);
+            const opts = {
+                chart: { type: 'area', height: 240, background: 'transparent', foreColor: '#94a3b8', toolbar: { show: false }, animations: { enabled: false }, fontFamily: 'inherit' },
+                theme: { mode: 'dark' },
+                colors: ['#22d3ee'],
+                series: [{ name: 'Spend (USD)', data: data }],
+                stroke: { curve: 'smooth', width: 2 },
+                fill: { type: 'gradient', gradient: { opacityFrom: 0.25, opacityTo: 0.02 } },
+                grid: { borderColor: 'rgba(255,255,255,0.06)', strokeDashArray: 3 },
+                dataLabels: { enabled: false },
+                xaxis: { type: 'datetime', labels: { datetimeUTC: true, style: { fontSize: '10px' } } },
+                yaxis: { labels: { formatter: (v) => this.fmtUsd(v), style: { fontSize: '10px' } } },
+                tooltip: { theme: 'dark', x: { format: 'MMM dd' }, y: { formatter: (v) => this.fmtUsd(v) } },
+            };
+            try { this._chart = new ApexCharts(el, opts); this._chart.render(); } catch (e) { /* one chart shouldn't break the tab */ }
+        },
+
+        async openDetail(t) {
+            this.detail = { modal: true, tenant_id: t.tenant_id, loading: true, agents: [] };
+            try {
+                const res = await fetch('/admin/cost/tenant/' + encodeURIComponent(t.tenant_id));
+                if (res.ok) { const d = await res.json(); this.detail.agents = d.agents || []; }
+            } catch (e) { /* non-critical */ }
+            finally {
+                this.detail.loading = false;
+                this.$nextTick(() => window.lucide && window.lucide.createIcons());
+            }
+        },
+
+        sharePct(t) {
+            const totalSpend = (this.tenants || []).reduce((s, x) => s + (Number(x.estimated_cost_usd) || 0), 0);
+            if (totalSpend > 0) return ((Number(t.estimated_cost_usd) || 0) / totalSpend) * 100;
+            // No priced spend yet (self-hosted models) → fall back to token share.
+            const totalTok = (this.tenants || []).reduce((s, x) => s + (Number(x.total_tokens) || 0), 0);
+            return totalTok > 0 ? ((Number(t.total_tokens) || 0) / totalTok) * 100 : 0;
+        },
+        catPct(c) {
+            const max = (this.roi.top_categories || []).reduce((m, x) => Math.max(m, Number(x.count) || 0), 0);
+            return max > 0 ? ((Number(c.count) || 0) / max) * 100 : 0;
+        },
+        prettyCategory(c) {
+            return String(c || '').replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+        },
+
+        fmtNum(n) { return (Number(n) || 0).toLocaleString(); },
+        fmtShort(v) {
+            v = Number(v) || 0;
+            const a = Math.abs(v);
+            if (a >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+            if (a >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+            if (a >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+            return Number.isInteger(v) ? String(v) : v.toFixed(2);
+        },
+        fmtUsd(n) {
+            n = Number(n) || 0;
+            if (n === 0) return '$0.00';
+            if (n < 0.01) return '$' + n.toFixed(6);
+            return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         },
     };
 }

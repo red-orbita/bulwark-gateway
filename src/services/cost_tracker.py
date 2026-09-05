@@ -13,6 +13,9 @@ Redis keys:
   bulwark:cost:{tenant_id}:tokens       — HASH {prompt, completion, total, requests}
   bulwark:cost:{tenant_id}:{agent_id}   — HASH {prompt, completion, total, requests}
   bulwark:cost:global                    — HASH {prompt, completion, total, requests}
+  bulwark:cost:daily:cost_usd            — HASH {YYYY-MM-DD: cumulative USD}   (spend trend)
+  bulwark:cost:daily:total               — HASH {YYYY-MM-DD: cumulative tokens}
+  bulwark:cost:daily:requests            — HASH {YYYY-MM-DD: cumulative requests}
 """
 
 from __future__ import annotations
@@ -248,6 +251,13 @@ class CostTracker:
                 pipe.hincrby("bulwark:cost:global", "total", record.total_tokens)
                 pipe.hincrby("bulwark:cost:global", "requests", 1)
                 pipe.hincrbyfloat("bulwark:cost:global", "cost_usd", record.estimated_cost_usd)
+
+                # Daily buckets for the management spend-trend view. Bounded: one
+                # field per UTC day (a 30-day window is a 30-field hash).
+                day = time.strftime("%Y-%m-%d", time.gmtime(record.timestamp))
+                pipe.hincrby("bulwark:cost:daily:total", day, record.total_tokens)
+                pipe.hincrby("bulwark:cost:daily:requests", day, 1)
+                pipe.hincrbyfloat("bulwark:cost:daily:cost_usd", day, record.estimated_cost_usd)
 
                 pipe.execute()
             except Exception as e:

@@ -110,6 +110,28 @@ def _seed_cost(r: FakeRedis):
     }
 
 
+def _seed_trend(r: FakeRedis):
+    """Daily spend buckets: today and two days ago (a gap on 'yesterday')."""
+    today = datetime.now(timezone.utc).date()
+    d0 = today.isoformat()
+    d2 = (today - timedelta(days=2)).isoformat()
+    r.hashes["bulwark:cost:daily:cost_usd"] = {d0: "0.01", d2: "0.005"}
+    r.hashes["bulwark:cost:daily:total"] = {d0: "1000", d2: "500"}
+    r.hashes["bulwark:cost:daily:requests"] = {d0: "8", d2: "4"}
+
+
+def _seed_roi(r: FakeRedis):
+    """Per-tenant verdict counters + detection categories for the ROI view."""
+    r.hashes["bulwark:usage:total"] = {"acme": "80", "globex": "20"}
+    r.hashes["bulwark:usage:block"] = {"acme": "12", "globex": "3"}
+    r.hashes["bulwark:usage:allow"] = {"acme": "60", "globex": "15"}
+    r.hashes["bulwark:usage:warn"] = {"acme": "8", "globex": "2"}
+    r.hashes["bulwark:usage:redact"] = {"acme": "0"}
+    r.hashes["bulwark:detections:category"] = {
+        "prompt_injection": "10", "jailbreak": "4", "exfiltration": "1",
+    }
+
+
 def _token(role: UserRole) -> TokenPayload:
     now = datetime.now(timezone.utc)
     return TokenPayload(sub=f"{role.value}-user", role=role, exp=now + timedelta(hours=1), iat=now)
@@ -290,6 +312,95 @@ class TestCostEndpoints:
         assert audit.entries[-1]["action"] == "cost.reset_all"
 
 
+class TestCostTrend:
+    @pytest.fixture
+    def wired(self, monkeypatch):
+        import admin.routes.cost as cost
+
+        r = FakeRedis()
+        _seed_trend(r)
+        monkeypatch.setattr(cost, "_redis", lambda: r)
+        return cost, r
+
+    async def test_trend_window_is_continuous(self, wired):
+        cost, _ = wired
+        out = await cost.cost_trend(days=7, _user=_admin())
+        assert out["redis_connected"] is True
+        assert out["days"] == 7
+        # Continuous series: exactly `days` points even though only 2 have data.
+        assert len(out["points"]) == 7
+        # Ascending by date, last point is today.
+        dates = [p["date"] for p in out["points"]]
+        assert dates == sorted(dates)
+        assert dates[-1] == datetime.now(timezone.utc).date().isoformat()
+
+    async def test_trend_totals_sum_only_window(self, wired):
+        cost, _ = wired
+        out = await cost.cost_trend(days=7, _user=_admin())
+        assert out["totals"]["cost_usd"] == pytest.approx(0.015)
+        assert out["totals"]["total_tokens"] == 1500
+        assert out["totals"]["total_requests"] == 12
+
+    async def test_trend_gap_days_are_zero(self, wired):
+        cost, _ = wired
+        out = await cost.cost_trend(days=7, _user=_admin())
+        today = datetime.now(timezone.utc).date().isoformat()
+        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+        by_date = {p["date"]: p for p in out["points"]}
+        assert by_date[today]["cost_usd"] == pytest.approx(0.01)
+        assert by_date[yesterday]["cost_usd"] == 0.0  # gap filled with zero
+        assert by_date[yesterday]["total_requests"] == 0
+
+    async def test_trend_no_redis_returns_empty(self, monkeypatch):
+        import admin.routes.cost as cost
+
+        monkeypatch.setattr(cost, "_redis", lambda: None)
+        out = await cost.cost_trend(days=30, _user=_admin())
+        assert out["redis_connected"] is False
+        assert out["points"] == []
+
+
+class TestCostRoi:
+    @pytest.fixture
+    def wired(self, monkeypatch):
+        import admin.routes.cost as cost
+
+        r = FakeRedis()
+        _seed_roi(r)
+        monkeypatch.setattr(cost, "_redis", lambda: r)
+        return cost, r
+
+    async def test_roi_totals_summed_across_tenants(self, wired):
+        cost, _ = wired
+        out = await cost.cost_roi(_user=_admin())
+        assert out["redis_connected"] is True
+        assert out["total_requests"] == 100  # 80 + 20
+        assert out["blocked"] == 15          # 12 + 3
+        assert out["allowed"] == 75          # 60 + 15
+        assert out["warned"] == 10           # 8 + 2
+
+    async def test_roi_block_rate(self, wired):
+        cost, _ = wired
+        out = await cost.cost_roi(_user=_admin())
+        assert out["block_rate"] == pytest.approx(0.15)  # 15 / 100
+
+    async def test_roi_top_categories_sorted(self, wired):
+        cost, _ = wired
+        out = await cost.cost_roi(_user=_admin())
+        cats = [(c["category"], c["count"]) for c in out["top_categories"]]
+        assert cats[0] == ("prompt_injection", 10)
+        assert cats == sorted(cats, key=lambda c: c[1], reverse=True)
+
+    async def test_roi_no_redis_returns_empty(self, monkeypatch):
+        import admin.routes.cost as cost
+
+        monkeypatch.setattr(cost, "_redis", lambda: None)
+        out = await cost.cost_roi(_user=_admin())
+        assert out["redis_connected"] is False
+        assert out["blocked"] == 0
+        assert out["block_rate"] == 0.0
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Cache route helpers + endpoints
 # ═══════════════════════════════════════════════════════════════════════
@@ -390,6 +501,56 @@ class TestCacheEndpoints:
         await cache.reset_cache_stats(user=_admin())
         assert "bulwark:cache:stats" not in r.hashes
         assert audit.entries[-1]["action"] == "cache.stats_reset"
+
+
+class TestCostTrackerDailyBuckets:
+    """The proxy-side CostTracker must feed the management spend-trend hashes."""
+
+    class _Pipe:
+        def __init__(self, r):
+            self.r = r
+
+        def hincrby(self, key, field, amount=1):
+            h = self.r.hashes.setdefault(key, {})
+            h[field] = int(float(h.get(field, 0))) + amount
+
+        def hincrbyfloat(self, key, field, amount=0.0):
+            h = self.r.hashes.setdefault(key, {})
+            h[field] = float(h.get(field, 0)) + amount
+
+        def hset(self, key, field=None, value=None, mapping=None):
+            h = self.r.hashes.setdefault(key, {})
+            if field is not None:
+                h[field] = value
+
+        def execute(self):
+            return True
+
+    class _PipelineRedis:
+        def __init__(self):
+            self.hashes: dict = {}
+
+        def pipeline(self, transaction=False):
+            return TestCostTrackerDailyBuckets._Pipe(self)
+
+    def test_record_usage_writes_daily_buckets(self):
+        import time
+
+        from src.services.cost_tracker import CostTracker
+
+        t = CostTracker()
+        r = self._PipelineRedis()
+        t._redis = r
+        t.record_usage(
+            "acme", "support-bot", "gpt-4o",
+            {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        )
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        assert r.hashes["bulwark:cost:daily:total"][day] == 150
+        assert r.hashes["bulwark:cost:daily:requests"][day] == 1
+        assert r.hashes["bulwark:cost:daily:cost_usd"][day] > 0
+        # Existing global/tenant accounting must still be intact.
+        assert r.hashes["bulwark:cost:global"]["total"] == 150
 
 
 class TestRbacWiring:
