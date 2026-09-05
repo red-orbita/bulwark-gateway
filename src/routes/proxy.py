@@ -2097,6 +2097,13 @@ def _record_tenant_usage(tenant_id: str, verdict: str):
         # Global counters (persist across pod restarts)
         r.incrby("bulwark:global:requests_total", 1)
         r.incrby(f"bulwark:global:{verdict}", 1)
+        # Daily verdict buckets (one field per UTC day) — feed the admin
+        # "Management" trend so security volume (threats blocked/warned) is
+        # visible over time, not just as a running total. Bounded: a single
+        # field per day per verdict; best effort inside the surrounding guard.
+        _day = time.strftime("%Y-%m-%d", time.gmtime())
+        r.hincrby("bulwark:usage:daily:total", _day, 1)
+        r.hincrby(f"bulwark:usage:daily:{verdict}", _day, 1)
     except Exception as exc:
         logger.warning("tenant_usage_counter_failed", error=str(exc), tenant_id=tenant_id)
 

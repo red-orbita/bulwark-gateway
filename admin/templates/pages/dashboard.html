@@ -583,7 +583,7 @@
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
                 <h1 class="text-xl font-semibold text-white">Management &amp; Cost</h1>
-                <p class="text-sm text-gray-400 mt-0.5">Spend, token consumption and the security value delivered — the business view for management and sales. Costs are <em>estimates</em> from the proxy's reference pricing.</p>
+                <p class="text-sm text-gray-400 mt-0.5">The security value delivered — threats blocked and sensitive data kept from leaking — alongside usage and spend. The business view for management and sales. Costs are <em>estimates</em> from the proxy's reference pricing.</p>
             </div>
             <div class="flex items-center gap-3">
                 <div class="flex items-center rounded-lg bg-gray-800/60 border border-white/5 p-0.5">
@@ -611,21 +611,51 @@
             </div>
         </div>
 
-        <!-- KPI Cards -->
+        <!-- KPI Cards — led by security value (threats stopped), cost last -->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            <!-- Est. spend -->
-            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(34,211,238,0.4);">
+            <!-- Threats blocked (hero) -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(16,185,129,0.4);">
                 <div class="flex items-center justify-between mb-3">
-                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(34,211,238,0.15), rgba(34,211,238,0.05));">
-                        <i data-lucide="dollar-sign" class="w-[18px] h-[18px] text-cyan-400"></i>
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));">
+                        <i data-lucide="shield-check" class="w-[18px] h-[18px] text-emerald-400"></i>
                     </div>
-                    <span class="sg-badge sg-badge-brand"><i data-lucide="wallet" class="w-3 h-3"></i> Spend</span>
+                    <span class="sg-badge sg-badge-success"><i data-lucide="trending-up" class="w-3 h-3"></i> ROI</span>
                 </div>
-                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Est. Spend</p>
-                <div class="mt-1">
-                    <span class="text-2xl font-semibold font-mono text-cyan-300" x-text="fmtUsd(status.global.estimated_cost_usd)"></span>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Threats Blocked</p>
+                <div class="flex items-baseline gap-2 mt-1">
+                    <span class="text-2xl font-semibold font-mono text-emerald-300" x-text="fmtShort(roi.blocked)"></span>
                 </div>
-                <p class="text-[10px] text-gray-600 mt-1.5" x-text="trendRangeLabel + ': ' + fmtUsd(trend.totals.cost_usd)"></p>
+                <p class="text-[10px] text-gray-600 mt-1.5" x-text="(roi.block_rate * 100).toFixed(1) + '% of traffic stopped'"></p>
+            </div>
+
+            <!-- Sensitive data redacted -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(244,63,94,0.4);">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(244,63,94,0.15), rgba(244,63,94,0.05));">
+                        <i data-lucide="eye-off" class="w-[18px] h-[18px] text-rose-400"></i>
+                    </div>
+                    <span class="sg-badge sg-badge-danger">DLP</span>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Sensitive Data Redacted</p>
+                <div class="flex items-baseline gap-2 mt-1">
+                    <span class="text-2xl font-semibold font-mono text-rose-300" x-text="fmtShort(roi.redacted)"></span>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-1.5">Secrets &amp; PII kept from leaking</p>
+            </div>
+
+            <!-- Requests inspected -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(59,130,246,0.4);">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05));">
+                        <i data-lucide="activity" class="w-[18px] h-[18px] text-blue-400"></i>
+                    </div>
+                    <span class="sg-badge sg-badge-neutral" x-text="status.tenants_tracked + ' tenants'"></span>
+                </div>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Requests Inspected</p>
+                <div class="flex items-baseline gap-2 mt-1">
+                    <span class="text-2xl font-semibold font-mono text-white" x-text="fmtShort(roi.total_requests || status.global.total_requests)"></span>
+                </div>
+                <p class="text-[10px] text-gray-600 mt-1.5" x-text="fmtShort(roi.warned) + ' flagged as suspicious'"></p>
             </div>
 
             <!-- Total tokens -->
@@ -643,53 +673,23 @@
                 <p class="text-[10px] text-gray-600 mt-1.5" x-text="fmtShort(status.global.completion_tokens) + ' out'"></p>
             </div>
 
-            <!-- LLM requests -->
-            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(59,130,246,0.4);">
+            <!-- Est. spend (secondary) -->
+            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(34,211,238,0.4);">
                 <div class="flex items-center justify-between mb-3">
-                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05));">
-                        <i data-lucide="send" class="w-[18px] h-[18px] text-blue-400"></i>
+                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(34,211,238,0.15), rgba(34,211,238,0.05));">
+                        <i data-lucide="dollar-sign" class="w-[18px] h-[18px] text-cyan-400"></i>
                     </div>
-                    <span class="sg-badge sg-badge-neutral" x-text="status.tenants_tracked + ' tenants'"></span>
+                    <span class="sg-badge sg-badge-brand"><i data-lucide="wallet" class="w-3 h-3"></i> Spend</span>
                 </div>
-                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">LLM Requests</p>
-                <div class="flex items-baseline gap-2 mt-1">
-                    <span class="text-2xl font-semibold font-mono text-white" x-text="fmtShort(status.global.total_requests)"></span>
+                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Est. Spend</p>
+                <div class="mt-1">
+                    <span class="text-2xl font-semibold font-mono text-cyan-300" x-text="fmtUsd(status.global.estimated_cost_usd)"></span>
                 </div>
-                <p class="text-[10px] text-gray-600 mt-1.5">Billable backend calls</p>
-            </div>
-
-            <!-- Avg cost / request -->
-            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(245,158,11,0.4);">
-                <div class="flex items-center justify-between mb-3">
-                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(245,158,11,0.15), rgba(245,158,11,0.05));">
-                        <i data-lucide="calculator" class="w-[18px] h-[18px] text-amber-400"></i>
-                    </div>
-                    <span class="sg-badge sg-badge-neutral">avg</span>
-                </div>
-                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Cost / Request</p>
-                <div class="flex items-baseline gap-2 mt-1">
-                    <span class="text-2xl font-semibold font-mono text-amber-300" x-text="fmtUsd(avgCostPerRequest)"></span>
-                </div>
-                <p class="text-[10px] text-gray-600 mt-1.5" x-text="fmtShort(avgTokensPerRequest) + ' tokens/req'"></p>
-            </div>
-
-            <!-- Threats blocked (ROI) -->
-            <div class="sg-card sg-kpi-accent" style="--accent-color: rgba(16,185,129,0.4);">
-                <div class="flex items-center justify-between mb-3">
-                    <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));">
-                        <i data-lucide="shield-check" class="w-[18px] h-[18px] text-emerald-400"></i>
-                    </div>
-                    <span class="sg-badge sg-badge-success"><i data-lucide="trending-up" class="w-3 h-3"></i> ROI</span>
-                </div>
-                <p class="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Threats Blocked</p>
-                <div class="flex items-baseline gap-2 mt-1">
-                    <span class="text-2xl font-semibold font-mono text-emerald-300" x-text="fmtShort(roi.blocked)"></span>
-                </div>
-                <p class="text-[10px] text-gray-600 mt-1.5" x-text="(roi.block_rate * 100).toFixed(1) + '% of traffic stopped'"></p>
+                <p class="text-[10px] text-gray-600 mt-1.5" x-text="trendRangeLabel + ': ' + fmtUsd(trend.totals.cost_usd)"></p>
             </div>
         </div>
 
-        <!-- Spend trend -->
+        <!-- Trend (security-led, metric-switchable: threats / requests / tokens / spend) -->
         <div class="sg-card">
             <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
                 <div class="flex items-center gap-2">
@@ -711,7 +711,7 @@
             <div x-show="loading" class="sg-skeleton h-56"></div>
             <div x-show="!loading && !hasTrend" x-cloak class="sg-empty py-10">
                 <i data-lucide="line-chart" class="sg-empty-icon"></i>
-                <p class="sg-empty-desc">No usage recorded in this window yet. The trend fills in as the proxy forwards requests. Spend stays at $0 for self-hosted models — switch to Tokens or Requests to see activity.</p>
+                <p class="sg-empty-desc">No activity recorded in this window yet. The trend fills in as the proxy inspects traffic — threats blocked, requests, tokens and spend. Spend stays $0 for self-hosted models; switch metric to see security volume.</p>
             </div>
             <div x-show="!loading && hasTrend" id="mgmt-trend" class="w-full"></div>
         </div>
@@ -1187,15 +1187,16 @@ function managementPage() {
         _chart: null,
         trendDays: 30,
         trendRanges: [{ days: 7, label: '7d' }, { days: 30, label: '30d' }, { days: 90, label: '90d' }],
-        trendMetric: 'cost_usd',
+        trendMetric: 'blocked',
         trendMetrics: [
-            { key: 'cost_usd', label: 'Spend', color: '#22d3ee', fmt: 'usd' },
+            { key: 'blocked', label: 'Threats Blocked', color: '#34d399', fmt: 'short' },
+            { key: 'total_requests', label: 'Requests', color: '#3b82f6', fmt: 'short' },
             { key: 'total_tokens', label: 'Tokens', color: '#a855f7', fmt: 'short' },
-            { key: 'total_requests', label: 'Requests', color: '#34d399', fmt: 'short' },
+            { key: 'cost_usd', label: 'Spend', color: '#22d3ee', fmt: 'usd' },
         ],
         status: { redis_connected: false, tenants_tracked: 0, global: { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0, total_requests: 0, estimated_cost_usd: 0 } },
         tenants: [],
-        trend: { points: [], totals: { cost_usd: 0, total_tokens: 0, total_requests: 0 } },
+        trend: { points: [], totals: { cost_usd: 0, total_tokens: 0, total_requests: 0, blocked: 0, warned: 0 } },
         roi: { blocked: 0, warned: 0, allowed: 0, redacted: 0, total_requests: 0, block_rate: 0, top_categories: [] },
         detail: { modal: false, tenant_id: '', loading: false, agents: [] },
 
@@ -1223,7 +1224,7 @@ function managementPage() {
             return req > 0 ? (Number(this.status.global.total_tokens) || 0) / req : 0;
         },
         get hasTrend() {
-            return (this.trend.points || []).some(p => (p.cost_usd || 0) > 0 || (p.total_requests || 0) > 0);
+            return (this.trend.points || []).some(p => (p.cost_usd || 0) > 0 || (p.total_requests || 0) > 0 || (p.blocked || 0) > 0);
         },
         get trendRangeLabel() {
             return this.trendDays + 'd';

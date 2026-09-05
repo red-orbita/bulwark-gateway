@@ -212,10 +212,11 @@ async def cost_trend(
     days: int = Query(30, ge=1, le=90),
     _user: TokenPayload = Depends(require_permission("cost:read")),
 ):
-    """Daily spend / token / request series for the management trend view.
+    """Daily spend / token / request / security series for the management trend.
 
-    Backed by the proxy's ``bulwark:cost:daily:*`` hashes (one field per UTC
-    day). Missing days inside the window are returned as zero so the series is
+    Backed by the proxy's ``bulwark:cost:daily:*`` hashes (spend/tokens/requests)
+    and ``bulwark:usage:daily:*`` hashes (blocked/warned verdicts), one field per
+    UTC day. Missing days inside the window are returned as zero so the series is
     continuous for charting. Requires Redis (per-day history is not held in the
     proxy's in-memory fallback).
     """
@@ -223,7 +224,13 @@ async def cost_trend(
     empty = {
         "days": days,
         "points": [],
-        "totals": {"cost_usd": 0.0, "total_tokens": 0, "total_requests": 0},
+        "totals": {
+            "cost_usd": 0.0,
+            "total_tokens": 0,
+            "total_requests": 0,
+            "blocked": 0,
+            "warned": 0,
+        },
         "redis_connected": False,
     }
     if not r:
@@ -236,6 +243,11 @@ async def cost_trend(
     cost_h = _decode_hash(r.hgetall("bulwark:cost:daily:cost_usd"))
     tokens_h = _decode_hash(r.hgetall("bulwark:cost:daily:total"))
     reqs_h = _decode_hash(r.hgetall("bulwark:cost:daily:requests"))
+    # Security volume (verdict) daily buckets — surfaced alongside cost so the
+    # management trend can plot "threats blocked over time", the headline metric
+    # for a security product (spend is $0 for self-hosted models).
+    blocked_h = _decode_hash(r.hgetall("bulwark:usage:daily:block"))
+    warned_h = _decode_hash(r.hgetall("bulwark:usage:daily:warn"))
 
     def _f(h: dict[str, str], k: str) -> float:
         try:
@@ -252,12 +264,24 @@ async def cost_trend(
     today = datetime.now(timezone.utc).date()
     points = []
     sum_cost, sum_tokens, sum_reqs = 0.0, 0, 0
+    sum_blocked, sum_warned = 0, 0
     for offset in range(days - 1, -1, -1):
         d: date = today - timedelta(days=offset)
         key = d.isoformat()
         c, t, q = _f(cost_h, key), _i(tokens_h, key), _i(reqs_h, key)
+        b, w = _i(blocked_h, key), _i(warned_h, key)
         sum_cost, sum_tokens, sum_reqs = sum_cost + c, sum_tokens + t, sum_reqs + q
-        points.append({"date": key, "cost_usd": c, "total_tokens": t, "total_requests": q})
+        sum_blocked, sum_warned = sum_blocked + b, sum_warned + w
+        points.append(
+            {
+                "date": key,
+                "cost_usd": c,
+                "total_tokens": t,
+                "total_requests": q,
+                "blocked": b,
+                "warned": w,
+            }
+        )
 
     return {
         "days": days,
@@ -266,6 +290,8 @@ async def cost_trend(
             "cost_usd": round(sum_cost, 6),
             "total_tokens": sum_tokens,
             "total_requests": sum_reqs,
+            "blocked": sum_blocked,
+            "warned": sum_warned,
         },
         "redis_connected": True,
     }

@@ -57,6 +57,11 @@ class FakeRedis:
         h = self.hashes.setdefault(key, {})
         h[field] = str(float(h.get(field, 0)) + amount)
 
+    # --- strings ---
+    def incrby(self, key, amount=1):
+        self.strings[key] = str(int(float(self.strings.get(key, 0))) + amount)
+        return int(self.strings[key])
+
     # --- keys / scan ---
     def _all_keys(self):
         return set(self.hashes) | set(self.strings)
@@ -111,13 +116,18 @@ def _seed_cost(r: FakeRedis):
 
 
 def _seed_trend(r: FakeRedis):
-    """Daily spend buckets: today and two days ago (a gap on 'yesterday')."""
+    """Daily spend + security buckets: today and two days ago (a gap on 'yesterday')."""
     today = datetime.now(timezone.utc).date()
     d0 = today.isoformat()
     d2 = (today - timedelta(days=2)).isoformat()
     r.hashes["bulwark:cost:daily:cost_usd"] = {d0: "0.01", d2: "0.005"}
     r.hashes["bulwark:cost:daily:total"] = {d0: "1000", d2: "500"}
     r.hashes["bulwark:cost:daily:requests"] = {d0: "8", d2: "4"}
+    # Verdict volume buckets — the management headline metric. A blocked request
+    # never reaches the backend, so these are seeded independently of the spend
+    # buckets above (and 'today' carries blocks with no matching spend day).
+    r.hashes["bulwark:usage:daily:block"] = {d0: "3", d2: "2"}
+    r.hashes["bulwark:usage:daily:warn"] = {d0: "1", d2: "1"}
 
 
 def _seed_roi(r: FakeRedis):
@@ -341,6 +351,22 @@ class TestCostTrend:
         assert out["totals"]["total_tokens"] == 1500
         assert out["totals"]["total_requests"] == 12
 
+    async def test_trend_totals_include_verdict_volume(self, wired):
+        cost, _ = wired
+        out = await cost.cost_trend(days=7, _user=_admin())
+        # Threats blocked is the management headline metric; it must be summed
+        # over the window alongside spend.
+        assert out["totals"]["blocked"] == 5  # 3 (today) + 2 (two days ago)
+        assert out["totals"]["warned"] == 2   # 1 + 1
+
+    async def test_trend_points_carry_verdict_volume(self, wired):
+        cost, _ = wired
+        out = await cost.cost_trend(days=7, _user=_admin())
+        today = datetime.now(timezone.utc).date().isoformat()
+        by_date = {p["date"]: p for p in out["points"]}
+        assert by_date[today]["blocked"] == 3
+        assert by_date[today]["warned"] == 1
+
     async def test_trend_gap_days_are_zero(self, wired):
         cost, _ = wired
         out = await cost.cost_trend(days=7, _user=_admin())
@@ -350,6 +376,8 @@ class TestCostTrend:
         assert by_date[today]["cost_usd"] == pytest.approx(0.01)
         assert by_date[yesterday]["cost_usd"] == 0.0  # gap filled with zero
         assert by_date[yesterday]["total_requests"] == 0
+        assert by_date[yesterday]["blocked"] == 0  # verdict gap filled too
+        assert by_date[yesterday]["warned"] == 0
 
     async def test_trend_no_redis_returns_empty(self, monkeypatch):
         import admin.routes.cost as cost
@@ -358,6 +386,8 @@ class TestCostTrend:
         out = await cost.cost_trend(days=30, _user=_admin())
         assert out["redis_connected"] is False
         assert out["points"] == []
+        assert out["totals"]["blocked"] == 0
+        assert out["totals"]["warned"] == 0
 
 
 class TestCostRoi:
@@ -551,6 +581,55 @@ class TestCostTrackerDailyBuckets:
         assert r.hashes["bulwark:cost:daily:cost_usd"][day] > 0
         # Existing global/tenant accounting must still be intact.
         assert r.hashes["bulwark:cost:global"]["total"] == 150
+
+
+class TestProxyVerdictDailyBuckets:
+    """The proxy's _record_tenant_usage must feed the daily verdict trend hashes."""
+
+    def _wire(self, monkeypatch, r):
+        import src.routes.proxy as proxy
+
+        class _Reg:
+            _redis = r
+
+        monkeypatch.setattr(
+            "src.guardrails.dynamic_registry.get_pattern_registry", lambda: _Reg()
+        )
+        return proxy
+
+    def test_block_writes_daily_bucket(self, monkeypatch):
+        import time
+
+        r = FakeRedis()
+        proxy = self._wire(monkeypatch, r)
+        proxy._record_tenant_usage("acme", "block")
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        # Per-day verdict buckets the admin /trend reads.
+        assert r.hashes["bulwark:usage:daily:total"][day] == "1"
+        assert r.hashes["bulwark:usage:daily:block"][day] == "1"
+        # Running per-tenant + global accounting must still be intact.
+        assert r.hashes["bulwark:usage:total"]["acme"] == "1"
+        assert r.hashes["bulwark:usage:block"]["acme"] == "1"
+        assert r.strings["bulwark:global:requests_total"] == "1"
+        assert r.strings["bulwark:global:block"] == "1"
+
+    def test_daily_buckets_accumulate_across_verdicts(self, monkeypatch):
+        import time
+
+        r = FakeRedis()
+        proxy = self._wire(monkeypatch, r)
+        proxy._record_tenant_usage("acme", "block")
+        proxy._record_tenant_usage("acme", "block")
+        proxy._record_tenant_usage("globex", "warn")
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        assert r.hashes["bulwark:usage:daily:total"][day] == "3"
+        assert r.hashes["bulwark:usage:daily:block"][day] == "2"
+        assert r.hashes["bulwark:usage:daily:warn"][day] == "1"
+
+    def test_no_redis_is_noop(self, monkeypatch):
+        proxy = self._wire(monkeypatch, None)
+        # Must not raise when Redis is unavailable (best-effort accounting).
+        proxy._record_tenant_usage("acme", "block")
 
 
 class TestRbacWiring:
