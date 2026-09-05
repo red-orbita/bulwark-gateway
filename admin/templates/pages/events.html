@@ -179,16 +179,49 @@
         <div>
             <label class="sg-label text-xs" for="evt-search">Search</label>
             <div class="flex gap-2">
-                <input id="evt-search" type="text" x-model="searchQuery"
-                       @keydown.enter="applySearch()"
-                       placeholder="category:jailbreak tool:run_command last:24h exfiltration"
-                       class="sg-input w-full text-sm font-mono"
-                       autocomplete="off" spellcheck="false" />
-                <button type="button" @click="applySearch()" class="sg-btn sg-btn-primary sg-btn-sm shrink-0">
+                <!-- Autocomplete wrapper: relative so the suggestion list anchors
+                     to the input width (not the buttons). VS Code-style: fields
+                     then, after ':', valid values. Grammar comes from
+                     GET /admin/events/search-schema (single source of truth =
+                     admin/services/event_query.py). -->
+                <div class="relative flex-1">
+                    <input id="evt-search" type="text" x-model="searchQuery"
+                           x-ref="searchInput"
+                           @input="onSearchInput()"
+                           @click="onSearchInput()"
+                           @keydown.arrow-down.prevent="moveSuggestion(1)"
+                           @keydown.arrow-up.prevent="moveSuggestion(-1)"
+                           @keydown.enter="onSearchEnter($event)"
+                           @keydown.tab="onSearchTab($event)"
+                           @keydown.escape.stop="closeSuggestions()"
+                           @blur="scheduleCloseSuggestions()"
+                           placeholder="category:jailbreak tool:run_command last:24h exfiltration"
+                           class="sg-input w-full text-sm font-mono"
+                           autocomplete="off" spellcheck="false"
+                           role="combobox" aria-autocomplete="list"
+                           aria-controls="evt-search-ac" :aria-expanded="acOpen" />
+                    <ul id="evt-search-ac" x-show="acOpen && acSuggestions.length" x-cloak
+                        role="listbox"
+                        class="absolute z-30 left-0 right-0 mt-1 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-gray-900/95 backdrop-blur py-1 shadow-xl">
+                        <template x-for="(s, i) in acSuggestions" :key="s.insert + '|' + i">
+                            <li role="option" :aria-selected="i === acIndex">
+                                <button type="button"
+                                        @mousedown.prevent="acceptSuggestion(i)"
+                                        @mouseenter="acIndex = i"
+                                        class="w-full flex items-baseline gap-2 px-3 py-1.5 text-left text-sm"
+                                        :class="i === acIndex ? 'bg-cyan-500/15 text-cyan-100' : 'text-gray-200 hover:bg-white/5'">
+                                    <span class="font-mono shrink-0" x-text="s.label"></span>
+                                    <span class="text-[11px] text-gray-500 truncate ml-auto" x-text="s.hint"></span>
+                                </button>
+                            </li>
+                        </template>
+                    </ul>
+                </div>
+                <button type="button" @click="closeSuggestions(); applySearch()" class="sg-btn sg-btn-primary sg-btn-sm shrink-0">
                     <i data-lucide="search" class="w-4 h-4"></i> Search
                 </button>
                 <button type="button" x-show="searchQuery" x-cloak
-                        @click="searchQuery = ''; applySearch()"
+                        @click="searchQuery = ''; closeSuggestions(); applySearch()"
                         class="sg-btn sg-btn-ghost sg-btn-sm shrink-0" aria-label="Clear search">
                     <i data-lucide="x" class="w-4 h-4"></i>
                 </button>
@@ -196,7 +229,7 @@
             <p class="text-[11px] text-gray-500 mt-1">
                 Fields:
                 <span class="font-mono text-gray-400">tenant agent category severity verdict request_id incident_id source pattern tool last:&lt;n&gt;&lt;s|m|h|d|w&gt;</span>
-                — bare words match any field.
+                — type a field then ':' for value hints; bare words match any field.
             </p>
         </div>
 
@@ -576,6 +609,16 @@ function eventsManager() {
         // Splunk/Wazuh-lite search bar: 'field:value' scoped filters + free-text
         // terms. Parsed server-side and AND-ed with the dropdown filters.
         searchQuery: '',
+        // ─── Autocomplete (VS Code-style) ───────────────────────────────────
+        // Grammar fetched once from GET /admin/events/search-schema (single
+        // source of truth = admin/services/event_query.py). searchSchema is the
+        // list of {field, type, description, values, example, aliases?}. The
+        // dropdown suggests field names, then valid values after a ':'.
+        searchSchema: [],
+        acOpen: false,        // is the suggestion list visible
+        acSuggestions: [],    // [{ insert, label, hint, keepOpen }]
+        acIndex: -1,          // highlighted suggestion (-1 = none)
+        acBlurTimer: null,
         // Verdict feed: '' = security feed (block + warn), 'blocked', 'warned',
         // or 'allowed' (opt-in allowed-event feed, separate Redis list).
         filterVerdict: '',
@@ -872,7 +915,7 @@ function eventsManager() {
 
         async init() {
             this.compact = localStorage.getItem('sg-events-density') === 'compact';
-            await Promise.all([this.loadComplianceMappings(), this.refresh()]);
+            await Promise.all([this.loadComplianceMappings(), this.loadSearchSchema(), this.refresh()]);
         },
 
         toggleDensity() {
@@ -968,6 +1011,148 @@ function eventsManager() {
         async applySearch() {
             this.expandedKeys = [];
             await this.refresh();
+        },
+
+        // ─── Search autocomplete ────────────────────────────────────────────
+        // Fetch the grammar once. Non-fatal on failure: the box still works as a
+        // plain text search, the autocomplete just stays inert.
+        async loadSearchSchema() {
+            try {
+                const resp = await fetch('/admin/events/search-schema');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                this.searchSchema = data.fields || [];
+            } catch (_) { /* non-fatal */ }
+        },
+
+        // The token currently under the caret: the run of non-space characters
+        // ending at the cursor. Returns its text + start offset so we can splice a
+        // completion back in without disturbing the rest of the query.
+        _currentToken() {
+            const el = this.$refs.searchInput;
+            const q = this.searchQuery || '';
+            const cursor = el ? (el.selectionStart ?? q.length) : q.length;
+            const left = q.slice(0, cursor);
+            const m = left.match(/(\S*)$/);
+            const token = m ? m[1] : '';
+            return { token, start: cursor - token.length, cursor };
+        },
+
+        // Recompute suggestions for the token under the caret. Two modes: before a
+        // ':' → field names; after → that field's values (enum values from the
+        // schema, plus live tenants merged in for the dynamic 'tenant' field).
+        computeSuggestions() {
+            const { token } = this._currentToken();
+            const schema = this.searchSchema || [];
+            const colon = token.indexOf(':');
+            let out = [];
+
+            if (colon === -1) {
+                const prefix = token.toLowerCase();
+                out = schema
+                    .filter(f => !prefix
+                        || f.field.startsWith(prefix)
+                        || (f.aliases || []).some(a => a.startsWith(prefix)))
+                    .map(f => ({
+                        insert: f.field + ':',
+                        label: f.field + ':',
+                        hint: f.description || '',
+                        keepOpen: true,   // reopen to offer values for the field
+                    }));
+            } else {
+                const fieldName = token.slice(0, colon).toLowerCase();
+                const valPrefix = token.slice(colon + 1).toLowerCase();
+                const f = schema.find(x =>
+                    x.field === fieldName || (x.aliases || []).includes(fieldName));
+                if (f) {
+                    let values = (f.values || []).slice();
+                    // Merge live values for dynamic fields not enumerable server-side.
+                    if (f.field === 'tenant') values = values.concat(this.availableTenants || []);
+                    values = [...new Set(values)];
+                    out = values
+                        .filter(v => v.toLowerCase().includes(valPrefix))
+                        .map(v => ({
+                            insert: fieldName + ':' + v + ' ',
+                            label: v,
+                            hint: f.field,
+                            keepOpen: false,
+                        }));
+                }
+            }
+
+            this.acSuggestions = out.slice(0, 12);
+            this.acIndex = this.acSuggestions.length ? 0 : -1;
+            this.acOpen = this.acSuggestions.length > 0;
+        },
+
+        onSearchInput() {
+            if (this.acBlurTimer) { clearTimeout(this.acBlurTimer); this.acBlurTimer = null; }
+            this.computeSuggestions();
+        },
+
+        // Splice the chosen completion over the token under the caret, keeping any
+        // text to the right intact, and re-place the caret after the insertion.
+        acceptSuggestion(i) {
+            const s = this.acSuggestions[i];
+            if (!s) return;
+            const el = this.$refs.searchInput;
+            const q = this.searchQuery || '';
+            const cursor = el ? (el.selectionStart ?? q.length) : q.length;
+            const left = q.slice(0, cursor);
+            const right = q.slice(cursor);
+            const m = left.match(/(\S*)$/);
+            const tokenStart = cursor - (m ? m[1].length : 0);
+            const newLeft = q.slice(0, tokenStart) + s.insert;
+            this.searchQuery = newLeft + right;
+            this.$nextTick(() => {
+                if (el) {
+                    const pos = newLeft.length;
+                    el.focus();
+                    el.setSelectionRange(pos, pos);
+                }
+                if (s.keepOpen) this.computeSuggestions();
+                else this.closeSuggestions();
+            });
+        },
+
+        moveSuggestion(d) {
+            if (!this.acOpen || !this.acSuggestions.length) {
+                if (d > 0) this.computeSuggestions();   // ArrowDown opens the list
+                return;
+            }
+            const n = this.acSuggestions.length;
+            this.acIndex = (this.acIndex + d + n) % n;
+        },
+
+        // Enter accepts the highlighted suggestion when the list is open; otherwise
+        // it runs the search (the box's primary action).
+        onSearchEnter(e) {
+            if (this.acOpen && this.acIndex >= 0) {
+                e.preventDefault();
+                this.acceptSuggestion(this.acIndex);
+            } else {
+                this.closeSuggestions();
+                this.applySearch();
+            }
+        },
+
+        // Tab accepts the highlighted suggestion (VS Code); if none is open it
+        // falls through to normal focus traversal.
+        onSearchTab(e) {
+            if (this.acOpen && this.acIndex >= 0) {
+                e.preventDefault();
+                this.acceptSuggestion(this.acIndex);
+            }
+        },
+
+        closeSuggestions() {
+            this.acOpen = false;
+            this.acIndex = -1;
+        },
+
+        // Delay close on blur so a mousedown on an option still registers.
+        scheduleCloseSuggestions() {
+            this.acBlurTimer = setTimeout(() => this.closeSuggestions(), 150);
         },
 
         clearFilters() {

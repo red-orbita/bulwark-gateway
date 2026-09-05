@@ -163,3 +163,16 @@ async def test_compliance_mappings_matches_module_source():
     assert set(data["catalog"]) == set(reference_catalog())
     assert set(data["category_refs"]) == set(all_mappings())
 
+
+# ─── search-schema endpoint (autocomplete grammar) ───────────────────────────
+
+async def test_search_schema_endpoint_serves_grammar():
+    """The endpoint projects admin.services.event_query.search_schema()."""
+    from admin.services.event_query import search_schema as build
+
+    data = await events_mod.search_schema(user=None)
+    assert data == build()
+    fields = {f["field"] for f in data["fields"]}
+    # A representative spread of the parser's fields is present.
+    assert {"category", "severity", "verdict", "tool", "last"} <= fields
+

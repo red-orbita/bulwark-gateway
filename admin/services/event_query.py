@@ -58,6 +58,16 @@ _DURATION_UNITS = {
 
 _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)([smhdw])$", re.IGNORECASE)
 
+# Canonical severity ladder. Severity is a free-text column (no enum in
+# ``src.models``), so the accepted values are enumerated here as the single
+# source of truth for both the parser's suggestions and the store. ``info`` is
+# the severity carried by allowed-feed events.
+_SEVERITY_VALUES = ("critical", "high", "medium", "low", "info")
+
+# Relative-time presets surfaced by the search-schema autocomplete. Each is a
+# valid ``last:<n><unit>`` value per ``_DURATION_UNITS``.
+_DURATION_PRESETS = ("15m", "1h", "6h", "24h", "7d", "30d")
+
 
 @dataclass
 class ParsedEventQuery:
@@ -155,3 +165,78 @@ def parse_event_query(raw: Optional[str], *, now: Optional[float] = None) -> Par
         parsed.terms.append(token)
 
     return parsed
+
+
+# ─── Search schema (autocomplete single source of truth) ────────────────────
+#
+# The events viewer's search box offers a VS Code-style autocomplete. Rather
+# than re-declaring the grammar in the browser (which is exactly how the CSS SRI
+# hash drifted out of sync), the field/value catalogue is derived here — next to
+# the parser that consumes it — and served to the front end via
+# ``GET /admin/events/search-schema``. A unit test pins the schema's field set to
+# the parser's ``_SCALAR_FIELDS`` so the two can never desync silently.
+
+# Per-field human descriptions + value semantics. ``value_type`` drives the
+# autocomplete: ``enum`` offers ``values`` verbatim, ``dynamic`` is filled from
+# the live event summary in the browser (tenants/categories actually seen),
+# ``duration`` offers ``values`` presets, ``text`` takes free input.
+_FIELD_META: dict[str, dict[str, str]] = {
+    "tenant": {"type": "dynamic", "desc": "Tenant that produced the event"},
+    "agent": {"type": "dynamic", "desc": "Agent id within the tenant"},
+    "category": {"type": "enum", "desc": "Threat category"},
+    "severity": {"type": "enum", "desc": "Severity level"},
+    "verdict": {"type": "enum", "desc": "Guardrail decision"},
+    "source": {"type": "text", "desc": "Guardrail/source that raised the event"},
+    "pattern": {"type": "text", "desc": "Matched pattern id"},
+    "tool": {"type": "text", "desc": "Tool name involved in a tool-call event"},
+    "request_id": {"type": "text", "desc": "Correlated request id"},
+    "incident_id": {"type": "text", "desc": "Correlation incident id"},
+}
+
+
+def search_schema() -> dict:
+    """Return the JSON-serialisable search grammar for the autocomplete UI.
+
+    Fields mirror the parser's ``_SCALAR_FIELDS`` (canonical names, ``tool_name``
+    folded into its ``tool`` alias) plus the relative-time ``last`` field. Enum
+    values are derived from ``src.models`` (verdict/category) and the local
+    severity ladder so the catalogue is a single source of truth — never a
+    hand-maintained copy that can drift from the parser.
+    """
+    # Import lazily: keeps module import cheap and avoids any import-time coupling
+    # to the proxy package for callers that only ever parse queries.
+    from src.models import ThreatCategory, Verdict
+
+    enum_values = {
+        "category": [c.value for c in ThreatCategory],
+        "severity": list(_SEVERITY_VALUES),
+        "verdict": [v.value for v in Verdict],
+    }
+
+    fields = []
+    for name, meta in _FIELD_META.items():
+        entry: dict = {
+            "field": name,
+            "type": meta["type"],
+            "description": meta["desc"],
+            "values": enum_values.get(name, []),
+            "example": f"{name}:{(enum_values.get(name) or [''])[0]}"
+            if meta["type"] == "enum"
+            else f"{name}:",
+        }
+        if name == "tool":
+            entry["aliases"] = ["tool_name"]
+        fields.append(entry)
+
+    # Relative-time field is parsed specially (not a scalar column).
+    fields.append(
+        {
+            "field": "last",
+            "type": "duration",
+            "description": "Relative time window (n + s|m|h|d|w)",
+            "values": list(_DURATION_PRESETS),
+            "example": "last:24h",
+        }
+    )
+
+    return {"fields": fields}

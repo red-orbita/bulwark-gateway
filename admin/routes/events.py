@@ -121,6 +121,23 @@ async def compliance_mappings(
     }
 
 
+@router.get("/search-schema")
+async def search_schema(
+    user: TokenPayload = Depends(require_permission("guardrails:read")),
+):
+    """Serve the search-bar grammar that drives the autocomplete.
+
+    Single source of truth is ``admin/services/event_query.py`` (the same module
+    that parses the ``q`` string), so the field names + enum values the UI
+    suggests can never drift from what the parser actually understands. Enum
+    values are derived from ``src.models`` (verdict/category). Returns
+    ``{"fields": [{field, type, description, values, example, aliases?}, ...]}``.
+    """
+    from ..services.event_query import search_schema as build_search_schema
+
+    return build_search_schema()
+
+
 @router.get("/summary")
 async def event_summary(
     user: TokenPayload = Depends(require_permission("guardrails:read")),

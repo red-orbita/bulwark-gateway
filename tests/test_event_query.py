@@ -127,3 +127,65 @@ def test_field_is_case_insensitive():
 
 def test_returns_parsed_event_query_instance():
     assert isinstance(parse_event_query("x"), ParsedEventQuery)
+
+
+# ─── search_schema (autocomplete single source of truth) ─────────────────────
+
+def test_search_schema_shape():
+    from admin.services.event_query import search_schema
+
+    schema = search_schema()
+    assert "fields" in schema
+    fields = {f["field"]: f for f in schema["fields"]}
+    # Every scalar field the parser understands (canonical names, tool_name folded
+    # into 'tool') plus the relative-time 'last' field is offered.
+    from admin.services.event_query import _SCALAR_FIELDS
+
+    expected = {v if v != "tool_name" else "tool" for v in _SCALAR_FIELDS.values()}
+    expected.add("last")
+    assert set(fields) == expected
+
+
+def test_search_schema_does_not_desync_from_parser():
+    """The autocomplete catalogue MUST cover exactly the parser's known fields.
+
+    This pins the schema to ``_SCALAR_FIELDS`` so a new field added to the parser
+    without a schema entry (or vice versa) fails loudly instead of silently
+    shipping an autocomplete that misleads operators.
+    """
+    from admin.services.event_query import _SCALAR_FIELDS, search_schema
+
+    schema_fields = {f["field"] for f in search_schema()["fields"]}
+    # tool_name is an alias surfaced under 'tool'.
+    parser_fields = {v if v != "tool_name" else "tool" for v in _SCALAR_FIELDS.values()}
+    parser_fields.add("last")
+    assert schema_fields == parser_fields
+
+
+def test_search_schema_enum_values_derive_from_models():
+    """Enum values come from src.models — not a hand-kept copy."""
+    from admin.services.event_query import search_schema
+    from src.models import ThreatCategory, Verdict
+
+    fields = {f["field"]: f for f in search_schema()["fields"]}
+    assert set(fields["verdict"]["values"]) == {v.value for v in Verdict}
+    assert set(fields["category"]["values"]) == {c.value for c in ThreatCategory}
+    assert fields["verdict"]["type"] == "enum"
+    assert fields["severity"]["values"]  # non-empty severity ladder
+
+
+def test_search_schema_last_field_offers_duration_presets():
+    from admin.services.event_query import search_schema
+
+    last = next(f for f in search_schema()["fields"] if f["field"] == "last")
+    assert last["type"] == "duration"
+    # Presets must all be parseable by the same grammar.
+    for preset in last["values"]:
+        assert parse_event_query(f"last:{preset}").since is not None
+
+
+def test_search_schema_tool_carries_alias():
+    from admin.services.event_query import search_schema
+
+    tool = next(f for f in search_schema()["fields"] if f["field"] == "tool")
+    assert "tool_name" in tool.get("aliases", [])
