@@ -21,7 +21,16 @@ generate_if_missing() {
 
     if [ "$FORCE" = "--force" ] || [ ! -f "$path" ]; then
         eval "$generator" > "$path"
-        chmod 600 "$path"
+        # 0644, not 0600: the distroless proxy/admin containers run as the
+        # non-root UID 65532 and read these files as Docker Compose secrets via
+        # a read-only bind mount that preserves the host owner (the developer's
+        # UID). A 0600 file owned by the host user is therefore unreadable by
+        # UID 65532 inside the container, which crash-loops the admin on boot
+        # (PermissionError on /run/secrets/*). Group/other read keeps the files
+        # loadable regardless of the container UID. These are local deployment
+        # secrets in a git-ignored dir; in Kubernetes real secrets are Secret
+        # objects, not this file.
+        chmod 644 "$path"
         echo "  [GENERATED] $file"
     else
         echo "  [EXISTS]    $file"
