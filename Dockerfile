@@ -68,7 +68,7 @@ COPY docker/proxy_launcher.py docker/proxy_launcher.py
 RUN mkdir -p data reports models shared/enrichment shared/siem
 
 # ============================================================
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:eff0a6050f5ea9e8154c3d137d468901864803ce3c7f4657d419e64f3f1f8b40 AS runtime
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:f3d5ddc6c64a019fe520e7f005f2880be21e6afc461b10a3c15ef2e4edc71e33 AS runtime
 
 LABEL org.opencontainers.image.title="bulwark-gateway"
 LABEL org.opencontainers.image.description="Security guardrail proxy for AI agents"
