@@ -21,7 +21,7 @@
 # The builder MUST be the same 3.13/Debian 13 (trixie) toolchain so compiled
 # wheels and the venv are ABI-compatible.
 # ============================================================
-FROM python:3.13-slim-trixie@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS builder
+FROM python:3.14-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS builder
 
 WORKDIR /build
 
