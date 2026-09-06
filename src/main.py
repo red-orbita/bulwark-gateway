@@ -219,6 +219,19 @@ async def lifespan(app: FastAPI):
             url=settings.ga_guard_url,
         )
 
+    # Register MCP tool-definition scanner (opt-in, default off). Pure regex
+    # (stdlib), so no model/sidecar provisioning — always available when enabled.
+    # INPUT_ASYNC (WARN-only) unless BULWARK_MCP_SCANNING_BLOCKING=true promotes it
+    # to INPUT_BLOCKING (a poisoned tool definition then 403s before forwarding).
+    # A request carrying no `tools` array is a zero-cost ALLOW.
+    if settings.mcp_scanning_enabled:
+        from src.scanners.mcp import McpToolScanner
+        pipeline.register(McpToolScanner())
+        await logger.ainfo(
+            "mcp_tool_scanner_registered",
+            blocking=settings.mcp_scanning_blocking,
+        )
+
     # Register RAG Guard scanners (memory manipulation + retrieval poisoning)
     if settings.rag_enabled:
         from src.scanners.rag.memory_guard import MemoryGuard

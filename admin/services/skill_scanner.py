@@ -51,22 +51,26 @@ from typing import Any, Optional
 
 import yaml
 
-from admin.services.mcp_poisoning import (
+# MCP detection cores live in src/ (stdlib-only, zero admin coupling) so they are
+# the single source of truth shared by BOTH this admin SkillSpector pipeline and
+# the proxy's runtime McpToolScanner — src never imports admin (mirrors the
+# model_artifact_scanner precedent below).
+from src.scanners.artifacts import model_artifact_scanner
+from src.scanners.mcp.mcp_poisoning import (
     PATTERN_COUNT as MCP_POISONING_PATTERNS,
 )
-from admin.services.mcp_poisoning import (
+from src.scanners.mcp.mcp_poisoning import (
     analyze_content as mcp_poisoning_analyze,
 )
-from admin.services.mcp_privilege import (
+from src.scanners.mcp.mcp_privilege import (
     PATTERN_COUNT as MCP_PRIVILEGE_PATTERNS,
 )
-from admin.services.mcp_privilege import (
+from src.scanners.mcp.mcp_privilege import (
     analyze_content as mcp_privilege_analyze,
 )
-from admin.services.mcp_privilege import (
+from src.scanners.mcp.mcp_privilege import (
     analyze_directory as mcp_privilege_analyze_dir,
 )
-from src.scanners.artifacts import model_artifact_scanner
 
 logger = logging.getLogger(__name__)
 

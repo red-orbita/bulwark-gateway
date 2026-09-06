@@ -592,6 +592,13 @@ async def chat_completions(request: Request):
             messages=messages,
             source_ip=source_ip,
         )
+        # Stash the inbound tool DEFINITIONS (MCP/OpenAI `tools` array) so the
+        # opt-in McpToolScanner can inspect them for tool poisoning. The message
+        # guardrail only scans prose; without this the tool array reaches the
+        # backend unscanned. Absent/empty ⇒ the scanner is a zero-cost ALLOW.
+        _tool_defs = body.get("tools")
+        if isinstance(_tool_defs, list) and _tool_defs:
+            _scan_ctx.metadata["tool_definitions"] = _tool_defs
         # Pre-extract structured vision-API image payloads (data URIs + remote
         # URLs) so the multimodal scanners read them from metadata instead of
         # only recovering inline data URIs from flattened text. Mark the request
