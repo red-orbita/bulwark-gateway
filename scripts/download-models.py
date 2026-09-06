@@ -3,7 +3,9 @@
 
 Usage:
     python scripts/download-models.py [--all | --injection | --toxicity
-                                       | --embeddings | --nli | --fasttext]
+                                       | --embeddings | --nli | --fasttext
+                                       | --prompt-guard]
+    python scripts/download-models.py --prompt-guard --prompt-guard-size 22M
     python scripts/download-models.py --verify   # integrity-check on-disk models
 
 Models:
@@ -12,6 +14,8 @@ Models:
     sentence-embeddings: all-MiniLM-L6-v2 embeddings for RelevanceScanner (~90MB)
     nli-classifier: DeBERTa-v3 NLI for Hallucination/Grounding scanners (~540MB)
     fasttext: lid.176.ftz language-ID model for LanguageDetector (~917KB)
+    prompt-guard-2: Meta Prompt Guard 2 injection/jailbreak classifier
+                    (86M ~330MB default, or 22M ~90MB via --prompt-guard-size)
 
 Requirements:
     pip install '.[ml-provision]'   # only for the ONNX models (HF Hub client)
@@ -342,6 +346,48 @@ def download_fasttext(model_dir: Path) -> bool:
     return ok
 
 
+# Prompt Guard 2 ONNX exports. Meta's own repos (meta-llama/Llama-Prompt-Guard-2-*)
+# are gated and ship safetensors, not ONNX, so we pull the code-free ONNX exports
+# published by gravitee-io (an AI-gateway vendor) which are derived from the same
+# Meta weights and carry the same Llama 4 Community License. Both sizes share the
+# binary id2label {0: BENIGN, 1: MALICIOUS} and land in the same on-disk subdir
+# (prompt-guard-2/) so the scanner + manifest key stay size-agnostic — the
+# operator picks accuracy (86M) vs latency (22M).
+_PROMPT_GUARD_REPOS = {
+    "86M": "gravitee-io/Llama-Prompt-Guard-2-86M-onnx",
+    "22M": "gravitee-io/Llama-Prompt-Guard-2-22M-onnx",
+}
+
+
+def download_prompt_guard(model_dir: Path, size: str = "86M") -> bool:
+    """Download Meta Prompt Guard 2 injection/jailbreak classifier (ONNX).
+
+    ``size`` selects the accuracy/latency trade-off: ``86M`` (DeBERTa-base, more
+    accurate, default) or ``22M`` (DeBERTa-xsmall, ~4x faster — better for
+    blocking mode). Both export to ``models/prompt-guard-2/`` so the scanner and
+    the integrity-manifest key are identical regardless of which size is
+    provisioned. The artifact files live at the repo root (not under ``onnx/``).
+    """
+    repo_id = _PROMPT_GUARD_REPOS.get(size)
+    if repo_id is None:
+        print(f"  ERROR: unknown Prompt Guard 2 size '{size}' (choose 86M or 22M)")
+        return False
+
+    dest = model_dir / "prompt-guard-2"
+    ok = download_model(
+        repo_id=repo_id,
+        files=[
+            ("model.onnx", "model.onnx"),
+            ("tokenizer.json", "tokenizer.json"),
+            ("config.json", "config.json"),
+        ],
+        dest=dest,
+    )
+    if ok:
+        ok = _pin_model_files(dest, "prompt-guard-2")
+    return ok
+
+
 def verify_models(model_dir: Path) -> bool:
     """Integrity-check every pinned model on disk against the manifest.
 
@@ -406,6 +452,17 @@ def main():
     parser.add_argument("--nli", action="store_true", help="Download NLI classifier (hallucination/grounding)")
     parser.add_argument("--fasttext", action="store_true", help="Download fastText language-ID model (lid.176.ftz)")
     parser.add_argument(
+        "--prompt-guard",
+        action="store_true",
+        help="Download Meta Prompt Guard 2 injection/jailbreak classifier (ONNX)",
+    )
+    parser.add_argument(
+        "--prompt-guard-size",
+        choices=["86M", "22M"],
+        default="86M",
+        help="Prompt Guard 2 size: 86M (accurate, default) or 22M (~4x faster, for blocking mode)",
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="Verify on-disk models against the integrity manifest (no download)",
@@ -427,7 +484,7 @@ def main():
             sys.exit(1)
         return
 
-    if not any([args.all, args.injection, args.toxicity, args.embeddings, args.nli, args.fasttext]):
+    if not any([args.all, args.injection, args.toxicity, args.embeddings, args.nli, args.fasttext, args.prompt_guard]):
         args.all = True
 
     model_dir = args.model_dir
@@ -451,6 +508,10 @@ def main():
 
     if args.all or args.fasttext:
         if not download_fasttext(model_dir):
+            success = False
+
+    if args.all or args.prompt_guard:
+        if not download_prompt_guard(model_dir, size=args.prompt_guard_size):
             success = False
 
     if success:

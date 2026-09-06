@@ -51,6 +51,7 @@ _SCANNER_REGISTRY: dict[str, tuple[str, str]] = {
     "tool_policy": ("src.scanners.builtin.tool_policy_scanner", "ToolPolicyScanner"),
     # ML scanners
     "ml_injection": ("src.scanners.ml.injection_classifier", "InjectionClassifier"),
+    "ml_prompt_guard": ("src.scanners.ml.prompt_guard", "PromptGuard2Classifier"),
     "ml_toxicity": ("src.scanners.ml.toxicity_scanner", "ToxicityScanner"),
     # Output scanners
     "hallucination": ("src.scanners.output.hallucination_scanner", "HallucinationScanner"),
