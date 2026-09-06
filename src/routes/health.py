@@ -345,6 +345,94 @@ async def internal_evaluation_corpus(request: Request):
     return JSONResponse(content=result)
 
 
+@router.post("/internal/evaluation/adaptive")
+async def internal_evaluation_adaptive(request: Request):
+    """Internal endpoint: run the ADAPTIVE red-team (replay before/after) against
+    the REAL scanner pipeline.
+
+    Same trust model as /internal/evaluation/run — no auth, network-isolated by
+    K8s NetworkPolicies; only admin pods reach it via the ClusterIP service.
+
+    Unlike /internal/evaluation/run (which scores a static corpus once), this
+    models an adaptive attacker: it takes the seeds the pipeline blocked and
+    evolves them with intent-preserving evasion mutations over a few generations,
+    reporting how much the attack success rate rises (baseline vs adapted ASR).
+    A robust pipeline keeps ``asr_uplift`` near zero.
+
+    Body (all optional):
+      {
+        "categories": ["prompt_injection", ...] | null,   # null = default set
+        "count_per_category": 5,
+        "generations": 3,
+        "variants_per_attack": 4
+      }
+
+    Returns the serialized AdaptiveReport, stamped with
+    pipeline_source="proxy-full-pipeline".
+    """
+    from src.evaluation.attacks import SUPPORTED_CATEGORIES
+    from src.evaluation.harness import run_adaptive_report
+    from src.models import ThreatCategory
+    from src.scanners.pipeline import get_scanner_pipeline
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    # Resolve requested categories; unknown/untemplated names are rejected
+    # explicitly so a typo does not silently shrink the tested surface.
+    raw_categories = body.get("categories")
+    categories: list[ThreatCategory] | None
+    if raw_categories is None:
+        categories = None
+    else:
+        if not isinstance(raw_categories, list):
+            raise HTTPException(status_code=400, detail="categories must be a list or null")
+        categories = []
+        for name in raw_categories:
+            try:
+                category = ThreatCategory(name)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown category: '{name}'"
+                ) from None
+            if category not in SUPPORTED_CATEGORIES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Category '{name}' has no attack templates",
+                ) from None
+            categories.append(category)
+
+    # Bound every knob so a caller cannot request an unbounded workload; the
+    # red team applies its own hard ceilings on top of these.
+    try:
+        count = int(body.get("count_per_category", 5))
+        generations = int(body.get("generations", 3))
+        variants = int(body.get("variants_per_attack", 4))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="count_per_category, generations, variants_per_attack must be integers",
+        ) from None
+    count = max(1, min(count, 100))
+    generations = max(1, min(generations, 10))
+    variants = max(1, min(variants, 16))
+
+    pipeline = get_scanner_pipeline()
+    result = await run_adaptive_report(
+        pipeline,
+        categories=categories,
+        count_per_category=count,
+        generations=generations,
+        variants_per_attack=variants,
+    )
+    result["pipeline_source"] = "proxy-full-pipeline"
+    return JSONResponse(content=result)
+
+
 @router.post("/health/redteam")
 async def redteam_test(request: Request):
     """

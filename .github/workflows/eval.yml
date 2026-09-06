@@ -76,3 +76,64 @@ jobs:
           name: evaluation-report
           path: evaluation-report.json
           retention-days: 90
+
+  corpus-benchmark:
+    name: "External Corpus Benchmark"
+    runs-on: ubuntu-latest
+    # Independent, externally-labeled ground truth (AdvBench / HarmBench /
+    # in-the-wild jailbreaks + benign). Unlike the self-generated red-team gate
+    # above, the labels were NOT authored by Bulwark, so precision/recall/F1 are
+    # defensible. Produces the shareable benchmark artifact and gates on the
+    # "block" (enforced) decision policy. Floors are absolute — deliberately
+    # below the current bundled-floor score (block recall ~0.13, FPR ~0.19) so
+    # legitimate pattern tuning has headroom but a real collapse (recall→0 or a
+    # runaway FPR) fails the build.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install proxy dependencies (pinned)
+        run: pip install -r requirements.lock
+
+      - name: Run external corpus benchmark (regression gate)
+        run: |
+          python -m src.evaluation.cli corpus \
+            --bundled-only \
+            --policy block \
+            --min-recall 0.10 \
+            --max-fpr 0.25 \
+            --report json \
+            --output corpus-benchmark.json
+          echo "## External Corpus Benchmark (independent ground truth)" >> "$GITHUB_STEP_SUMMARY"
+          python -c "
+          import json
+          d = json.load(open('corpus-benchmark.json'))
+          cb = d['confusion_block']; cs = d['corpus_stats']
+          print(f\"- Corpus: {cs['total']} samples ({cs['malicious']} malicious / {cs['benign']} benign)\")
+          print(f\"- Block precision/recall/F1: {cb['precision']:.3f} / {cb['recall']:.3f} / {cb['f1']:.3f}\")
+          print(f\"- Block FPR: {cb['fpr']:.3f}\")
+          print(f\"- Attack Success Rate: {d['attack_success_rate']:.1%}\")
+          print(f\"- Latency P95: {d['latency_p95']:.1f} ms\")
+          print('')
+          print('| Source | N | Block Recall |')
+          print('|--------|---|--------------|')
+          for r in d['per_source']:
+              print(f\"| {r['source']} | {r['total']} | {r['recall_block']:.3f} |\")
+          " >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Human-readable report (logs)
+        if: always()
+        run: |
+          python -m src.evaluation.cli corpus \
+            --bundled-only --report text || true
+
+      - name: Upload corpus benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: corpus-benchmark
+          path: corpus-benchmark.json
+          retention-days: 90

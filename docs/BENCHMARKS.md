@@ -5,6 +5,13 @@ Performance and detection benchmarks for the Bulwark Gateway security guardrail 
 All results are deterministic and reproducible (seeded random generators).
 Only the regex-based input scanner is benchmarked here — ML scanners are additive and async.
 
+> **Two benchmarks live in this document.** The
+> [External Corpus Benchmark](#external-corpus-benchmark-independent-ground-truth)
+> (below) is the **defensible** one: it scores the pipeline against independent,
+> externally-labeled ground truth via `bulwark evaluate corpus`. The
+> self-generated benchmark further down is a **pattern-regression signal only** —
+> read its disclaimer before quoting any number from it.
+
 > **Read this before quoting any number below.** These are **self-reported
 > results from an internal benchmark harness**, not an independent third-party
 > evaluation. The attack corpus is produced by our own `AttackGenerator`, so
@@ -15,6 +22,76 @@ Only the regex-based input scanner is benchmarked here — ML scanners are addit
 > observed ⇒ roughly **0–4%** at 95% confidence, *not* a literal "zero"). Treat
 > these figures as a **regression signal** for our own patterns over time, not
 > as a competitive benchmark or a security guarantee.
+
+---
+
+## External Corpus Benchmark (independent ground truth)
+
+Because the self-generated numbers below are circular, the **defensible**
+benchmark scores the pipeline against static, externally-sourced labeled samples
+the gateway did **not** author — malicious prompts from AdvBench and HarmBench,
+real in-the-wild jailbreaks, and benign in-the-wild prompts. Labels come from the
+upstream datasets (see `src/evaluation/data/manifest.json` for per-source
+license + attribution), so precision/recall are measured against ground truth we
+did not write.
+
+Run it yourself (fully offline, hermetic, deterministic):
+
+```bash
+source .venv/bin/activate
+
+# Score the builtin regex pipeline against the bundled external corpus,
+# emit a shareable JSON artifact (F1/precision/recall/FPR + per-source recall).
+python -m src.evaluation.cli corpus --bundled-only \
+  --report json --output reports/corpus-benchmark.json
+
+# Human-readable table
+python -m src.evaluation.cli corpus --bundled-only --report text
+
+# CI gate: fail the build if enforced recall drops or benign FPR spikes.
+python -m src.evaluation.cli corpus --bundled-only \
+  --policy block --min-recall 0.35 --max-fpr 0.25
+```
+
+To benchmark at scale without any code change, point
+`BULWARK_EVAL_DATASET_DIR` at a directory of additional JSONL shards (a full
+AdvBench / HarmBench / JailbreakBench / garak / PINT download) and drop
+`--bundled-only`; the loader merges those shards with the bundled floor.
+
+### Results — bundled floor (regex_input only, 610 samples: 360 malicious / 250 benign)
+
+Scored under two explicit decision policies: **block** counts only BLOCK/REDACT
+(enforced) as a positive; **flag** also counts WARN (surfaced). This prevents
+WARN-inflation of the headline number.
+
+| Policy | Precision | Recall | F1 | FPR |
+|--------|-----------|--------|-----|-----|
+| block | 0.505 | **0.133** | 0.211 | 0.188 |
+| flag | 0.505 | 0.136 | 0.214 | 0.192 |
+
+Latency (regex only): P50 6.6 ms · P95 403 ms · P99 697 ms.
+Attack Success Rate (malicious reaching the backend) = **86.7%** = `1 − recall_block`.
+
+### Per-source recall — the honest breakdown
+
+| Source | Type | N | Block Recall |
+|--------|------|---|--------------|
+| advbench | harmful **content** behaviors | 120 | 0.000 |
+| harmbench | harmful **content** behaviors | 120 | 0.017 |
+| jailbreak_inthewild | real jailbreaks / prompt injection | 120 | **0.383** |
+
+**What this shows (and why it's the point):** the regex input guardrail is a
+**prompt-injection / jailbreak** matcher, not a harmful-**content** classifier.
+It catches ~38% of real in-the-wild jailbreaks by exact/near-exact structure, but
+AdvBench/HarmBench are content-harm datasets ("write a threatening email") whose
+semantics regex cannot reach — hence ~0% there. That gap is precisely the job of
+the additive ML / GA-Guard semantic lane (async by default; see
+`BULWARK_ML_ENABLED`), not the hot-path regex. The 18.8% benign FPR is also real:
+the in-the-wild "regular" prompts include elaborate roleplay/game framings that
+trip jailbreak patterns — a standing signal for pattern tuning, and exactly the
+kind of regression this benchmark exists to catch. **Do not read a low regex
+recall here as "the gateway misses 87% of attacks"** — it means regex alone is
+not a content-safety model, which is why Bulwark is a layered platform.
 
 ---
 
@@ -175,6 +252,26 @@ Note: Throughput is measured single-threaded. In production with 4 uvicorn worke
 
 ## Reproducing Results
 
+### External corpus benchmark (independent ground truth — preferred)
+
+```bash
+source .venv/bin/activate
+
+# JSON artifact (share this): F1/precision/recall/FPR + per-source recall + provenance
+python -m src.evaluation.cli corpus --bundled-only \
+  --report json --output reports/corpus-benchmark.json
+
+# CI gate (exit 1 on regression). --policy selects block (enforced) or flag (surfaced).
+python -m src.evaluation.cli corpus --bundled-only \
+  --policy block --min-recall 0.35 --max-fpr 0.25
+
+# At scale: merge a full external download, no code change.
+BULWARK_EVAL_DATASET_DIR=/data/harmbench python -m src.evaluation.cli corpus \
+  --report json --output reports/corpus-full.json
+```
+
+### Self-generated pattern-regression benchmark (circular — see disclaimer)
+
 ```bash
 # Activate virtualenv
 source .venv/bin/activate
@@ -194,9 +291,15 @@ ls reports/benchmarks/
 
 ### CI Integration
 
-The benchmark script exits with code 1 if detection rate drops below 90%:
+The corpus benchmark exits with code 1 when a threshold gate is violated:
 ```bash
-# In CI pipeline
+# In CI pipeline — enforce recall floor + FPR ceiling against external ground truth
+python -m src.evaluation.cli corpus --bundled-only \
+  --policy block --min-recall 0.35 --max-fpr 0.25 || exit 1
+```
+
+The self-generated script exits 1 if detection rate drops below 90%:
+```bash
 python scripts/run-benchmarks.py || exit 1
 ```
 

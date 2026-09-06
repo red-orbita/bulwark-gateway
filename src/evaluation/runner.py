@@ -141,6 +141,14 @@ class EvaluationReport:
     # by _compute_metrics; optional so legacy constructors keep working).
     confusion_block: ConfusionMatrix | None = None
     confusion_flag: ConfusionMatrix | None = None
+    # Attack Success Rate: fraction of malicious attacks that reached the backend
+    # (verdict NOT block/redact — a WARN still forwards, so it counts as a
+    # success for the attacker). This is the adversary's-eye view and the honest
+    # complement of confusion_block.recall: asr == 1 - recall_block. Reported as
+    # a first-class field because "how often does an attack get through" is the
+    # headline number a red-team/benchmark audience asks for. Default 0.0 keeps
+    # legacy constructors valid.
+    attack_success_rate: float = 0.0
     # Verdict distribution (allow/warn/block/redact counts) per sample class, so
     # a reviewer can see *how* the pipeline decided, not just the rolled-up rate.
     malicious_verdict_dist: dict[str, int] = field(default_factory=dict)
@@ -337,6 +345,11 @@ class EvaluationRunner:
         confusion_block = ConfusionMatrix.from_counts("block", tp_block, fp_block, tn_block, fn_block)
         confusion_flag = ConfusionMatrix.from_counts("flag", tp_flag, fp_flag, tn_flag, fn_flag)
 
+        # Attack Success Rate — fraction of malicious attacks NOT enforced
+        # (anything other than BLOCK/REDACT reached the backend). This is the
+        # attacker's success probability; == 1 - recall_block by construction.
+        attack_success_rate = round(fn_block / total, 4) if total > 0 else 0.0
+
         # --- Verdict distributions ----------------------------------------
         malicious_verdict_dist: dict[str, int] = {}
         for r in results:
@@ -361,6 +374,7 @@ class EvaluationRunner:
                 latency_p99=0.0,
                 confusion_block=confusion_block,
                 confusion_flag=confusion_flag,
+                attack_success_rate=attack_success_rate,
                 malicious_verdict_dist=malicious_verdict_dist,
                 benign_verdict_dist=benign_verdict_dist,
                 benign_total=benign_count,
@@ -465,6 +479,7 @@ class EvaluationRunner:
             attack_log=attack_log,
             confusion_block=confusion_block,
             confusion_flag=confusion_flag,
+            attack_success_rate=attack_success_rate,
             malicious_verdict_dist=malicious_verdict_dist,
             benign_verdict_dist=benign_verdict_dist,
             benign_total=benign_count,
@@ -506,6 +521,8 @@ class EvaluationRunner:
         lines.append(f"  Detection Rate:     {report.detection_rate:.1%}")
         lines.append(f"  False Positive Rate:{report.false_positive_rate:.1%}")
         lines.append(f"  Bypass Rate:        {report.bypass_rate:.1%}")
+        lines.append(f"  Attack Success Rate:{report.attack_success_rate:.1%}"
+                     "  (reached backend — not blocked)")
         lines.append("")
 
         # Detection quality under both decision policies. The "flag" policy counts
@@ -590,6 +607,7 @@ class EvaluationRunner:
             "detection_rate": round(report.detection_rate, 4),
             "false_positive_rate": round(report.false_positive_rate, 4),
             "bypass_rate": round(report.bypass_rate, 4),
+            "attack_success_rate": round(report.attack_success_rate, 4),
             "benign_total": report.benign_total,
             "confusion_block": (
                 asdict(report.confusion_block)

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 
+from src.evaluation.adaptive import AdaptiveRedTeam, serialize_adaptive_report
 from src.evaluation.attacks import AttackGenerator
 from src.evaluation.corpora import CorpusStats, load_corpus, split_samples
 from src.evaluation.datasets import STANDARD_BENIGN
@@ -189,4 +190,51 @@ async def run_corpus_report(
     result = _serialize_report(report, pipeline)
     result["corpus_stats"] = stats.as_dict() if isinstance(stats, CorpusStats) else stats
     result["per_source"] = _per_source_recall(report)
+    return result
+
+
+async def run_adaptive_report(
+    pipeline: ScannerPipeline,
+    categories: list[ThreatCategory] | None = None,
+    count_per_category: int = 5,
+    generations: int = 3,
+    variants_per_attack: int = 4,
+) -> dict:
+    """Run the adaptive red-team (replay before/after) against ``pipeline``.
+
+    Generates a deterministic seed corpus, then measures how far an *adaptive*
+    attacker — one who mutates payloads the pipeline blocked — can raise their
+    attack success rate. The headline signal is ``asr_uplift`` (adapted −
+    baseline): a robust pipeline keeps it near zero, a brittle exact-string
+    matcher shows a large jump.
+
+    Args:
+        pipeline: the scanner pipeline to attack. The caller decides whether this
+            is the real proxy singleton or a regex-only fallback.
+        categories: threat categories to seed; defaults to ``DEFAULT_CATEGORIES``.
+        count_per_category: seed attacks generated per category.
+        generations: number of mutation rounds (bounded 1..10 by the red team).
+        variants_per_attack: children spawned per blocked lineage per round.
+
+    Returns:
+        A serialized ``AdaptiveReport`` dict plus a ``scanners_evaluated``
+        provenance list. The caller stamps a ``pipeline_source`` label.
+    """
+    resolved = list(categories) if categories else list(DEFAULT_CATEGORIES)
+
+    generator = AttackGenerator(seed=_ATTACK_SEED)
+    seeds = generator.generate_attacks(
+        categories=resolved,
+        count_per_category=count_per_category,
+    )
+
+    red_team = AdaptiveRedTeam(pipeline=pipeline, generator=generator)
+    report = await red_team.run(
+        seeds,
+        generations=generations,
+        variants_per_attack=variants_per_attack,
+    )
+
+    result = serialize_adaptive_report(report)
+    result["scanners_evaluated"] = input_scanner_names(pipeline)
     return result

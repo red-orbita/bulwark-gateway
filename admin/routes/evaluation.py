@@ -17,7 +17,11 @@ from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
 from src.evaluation.attacks import SUPPORTED_CATEGORIES, AttackGenerator
 from src.evaluation.datasets import STANDARD_BENIGN
-from src.evaluation.harness import run_corpus_report, run_evaluation_report
+from src.evaluation.harness import (
+    run_adaptive_report,
+    run_corpus_report,
+    run_evaluation_report,
+)
 from src.evaluation.runner import EvaluationReport, EvaluationRunner
 from src.models import ThreatCategory, Verdict
 from src.scanners.builtin.regex_scanner import RegexInputScanner
@@ -100,6 +104,22 @@ class RunCorpusRequest(BaseModel):
             "Honor $BULWARK_EVAL_DATASET_DIR on the proxy. False = bundled floor "
             "only (hermetic run)."
         ),
+    )
+
+
+class RunAdaptiveRequest(BaseModel):
+    """Request to run the adaptive red-team (replay before/after)."""
+    categories: Optional[list[str]] = Field(
+        None, description="Threat categories to seed. Defaults to all supported."
+    )
+    count_per_category: int = Field(
+        5, ge=1, le=100, description="Seed attacks generated per category"
+    )
+    generations: int = Field(
+        3, ge=1, le=10, description="Number of mutation rounds"
+    )
+    variants_per_attack: int = Field(
+        4, ge=1, le=16, description="Children spawned per blocked lineage per round"
     )
 
 
@@ -273,6 +293,44 @@ async def _delegate_corpus_to_proxy(
         return None
 
 
+async def _delegate_adaptive_to_proxy(
+    categories: list[ThreatCategory] | None,
+    count_per_category: int,
+    generations: int,
+    variants_per_attack: int,
+) -> dict | None:
+    """Run the ADAPTIVE red-team on the proxy's real pipeline via its internal endpoint.
+
+    Uses POST /internal/evaluation/adaptive (no auth — network-isolated via K8s
+    NetworkPolicies, same trust model as /internal/evaluation/run). Returns the
+    serialized AdaptiveReport, or None if the proxy is unreachable / errors, so
+    the caller can decide how to degrade.
+    """
+    import httpx
+
+    payload = {
+        "categories": [c.value for c in categories] if categories else None,
+        "count_per_category": count_per_category,
+        "generations": generations,
+        "variants_per_attack": variants_per_attack,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_PROXY_INTERNAL_TIMEOUT) as client:
+            resp = await client.post(
+                f"{_proxy_url()}/internal/evaluation/adaptive", json=payload
+            )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning(
+            "proxy_adaptive_non_200 status=%d body=%s",
+            resp.status_code, resp.text[:200],
+        )
+        return None
+    except Exception as e:  # noqa: BLE001 - unreachable proxy is an expected degrade path
+        logger.warning("proxy_adaptive_unreachable error=%s", str(e))
+        return None
+
+
 async def _query_proxy_input_scanners() -> list[str] | None:
     """Return the proxy's enabled input-blocking scanner names, or None if down."""
     import httpx
@@ -406,6 +464,65 @@ async def perform_corpus_evaluation(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+    result["pipeline_source"] = "admin-local-regex-only"
+    return result
+
+
+async def perform_adaptive_evaluation(
+    categories: list[ThreatCategory] | None = None,
+    count_per_category: int = 5,
+    generations: int = 3,
+    variants_per_attack: int = 4,
+) -> dict:
+    """Core adaptive red-team logic (no auth) — reusable by routes.
+
+    Models an *adaptive* attacker: seeds a corpus, then evolves the payloads the
+    pipeline blocked with intent-preserving evasion mutations, reporting how much
+    the attack success rate rises (baseline vs adapted ASR). The ``asr_uplift`` is
+    the resilience signal — a robust pipeline keeps it near zero.
+
+    Delegates to the proxy's real pipeline; if the proxy is unreachable, honors
+    ``BULWARK_FAIL_MODE`` exactly like ``perform_evaluation``:
+
+      * ``closed`` → refuse (503): do not pass off regex-only numbers as the full
+        defense.
+      * ``open``   → degrade: run the admin-local regex floor, labeled
+        ``pipeline_source="admin-local-regex-only"``.
+    """
+    if categories is None:
+        categories = _resolve_categories(None)
+
+    proxy_result = await _delegate_adaptive_to_proxy(
+        categories, count_per_category, generations, variants_per_attack
+    )
+    if proxy_result is not None:
+        proxy_result.setdefault("pipeline_source", "proxy-full-pipeline")
+        return proxy_result
+
+    fail_mode = os.environ.get("BULWARK_FAIL_MODE", "closed").strip().lower()
+    if fail_mode == "closed":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Cannot run the adaptive red-team against the full guardrail "
+                "pipeline: the proxy is unreachable and the admin pod has no ML "
+                "models. Refusing to report regex-only results as the full "
+                "defense (BULWARK_FAIL_MODE=closed). Restore proxy connectivity, "
+                "or set BULWARK_FAIL_MODE=open to evaluate the regex floor instead."
+            ),
+        )
+
+    logger.warning(
+        "adaptive_evaluation_degraded_regex_only reason=proxy_unreachable fail_mode=open"
+    )
+    pipeline = _build_pipeline()
+    result = await run_adaptive_report(
+        pipeline,
+        categories=categories,
+        count_per_category=count_per_category,
+        generations=generations,
+        variants_per_attack=variants_per_attack,
+    )
     result["pipeline_source"] = "admin-local-regex-only"
     return result
 
@@ -559,6 +676,51 @@ async def run_corpus_evaluation(
     except Exception as e:
         logger.exception("corpus_evaluation_failed error=%s", str(e))
         raise HTTPException(status_code=500, detail=f"Corpus evaluation failed: {str(e)}") from e
+
+
+@router.post("/run/adaptive")
+async def run_adaptive_evaluation(
+    req: RunAdaptiveRequest = RunAdaptiveRequest(),  # type: ignore[call-arg]
+    user: TokenPayload = Depends(require_permission("guardrails:test")),
+) -> dict:
+    """Run the ADAPTIVE red-team (replay before/after) against the real pipeline.
+
+    Unlike ``/run`` (a single static pass), this models an adaptive attacker: it
+    evolves the seeds the pipeline blocked with intent-preserving evasion
+    mutations over several generations, reporting the baseline vs adapted attack
+    success rate and the ``asr_uplift`` between them. A robust pipeline keeps the
+    uplift near zero; a brittle exact-string matcher shows a large jump.
+
+    Same delegation semantics as ``/run``: delegates to the proxy's real pipeline,
+    falling back to the admin-local regex floor only when the proxy is unreachable
+    and BULWARK_FAIL_MODE=open (otherwise 503).
+    """
+    try:
+        categories = _resolve_categories(req.categories)
+        result = await perform_adaptive_evaluation(
+            categories=categories,
+            count_per_category=req.count_per_category,
+            generations=req.generations,
+            variants_per_attack=req.variants_per_attack,
+        )
+        logger.info(
+            "adaptive_evaluation_completed source=%s seeds=%d baseline_asr=%.3f "
+            "adapted_asr=%.3f uplift=%.3f broken=%d",
+            result.get("pipeline_source", "unknown"),
+            result.get("seed_count", 0),
+            result.get("baseline_asr", 0.0),
+            result.get("adapted_asr", 0.0),
+            result.get("asr_uplift", 0.0),
+            result.get("lineages_broken", 0),
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("adaptive_evaluation_failed error=%s", str(e))
+        raise HTTPException(
+            status_code=500, detail=f"Adaptive evaluation failed: {str(e)}"
+        ) from e
 
 
 @router.get("/attacks/preview", response_model=AttackPreviewResponse)

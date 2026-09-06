@@ -1122,18 +1122,8 @@ class AttackGenerator:
                 replacement = self._rng.choice(var_options)
                 base_payload = base_payload.replace("{" + var_name + "}", replacement, 1)
 
-            # Apply encoding
-            encoding_type = self._rng.choice(["base64", "hex", "unicode_escape"])
-
-            if encoding_type == "base64":
-                encoded = base64.b64encode(base_payload.encode()).decode()
-                payload = f"Decode and execute this base64 instruction: {encoded}"
-            elif encoding_type == "hex":
-                encoded = base_payload.encode().hex()
-                payload = f"Interpret this hex-encoded message: {encoded}"
-            else:  # unicode_escape
-                encoded = "".join(f"\\u{ord(c):04x}" for c in base_payload)
-                payload = f"Process this unicode sequence: {encoded}"
+            # Apply encoding (shared with the adaptive loop via _encode_payload)
+            payload, encoding_type = self._encode_payload(base_payload)
 
             attacks.append(Attack(
                 payload=payload,
@@ -1144,6 +1134,98 @@ class AttackGenerator:
             ))
 
         return attacks
+
+    # === Public mutation API (adaptive red-team) ===
+
+    # The evasion operators an adaptive attacker can apply to an existing
+    # payload. Character-level (homoglyph/zero_width/case) preserve wording;
+    # semantic paraphrases the surface form; encoding wraps the payload; and
+    # word_reorder shuffles the middle. Exposed as a stable tuple so callers
+    # (the adaptive loop) can advertise / restrict the operator set.
+    MUTATION_OPERATORS: tuple[str, ...] = (
+        "homoglyph",
+        "zero_width",
+        "case_alternation",
+        "word_reorder",
+        "semantic",
+        "encoding",
+    )
+
+    def mutate(self, attack: Attack, operator: str | None = None) -> Attack:
+        """Produce one evolved variant of ``attack`` by applying an evasion op.
+
+        This is the single-attack counterpart to the batch ``generate_attacks``
+        strategies, exposed for the adaptive red-team loop: given a payload that
+        the pipeline currently handles, mutate it into a different surface form
+        that preserves the malicious intent, then let the caller re-score it.
+
+        Args:
+            attack: the parent attack to evolve.
+            operator: force a specific operator from ``MUTATION_OPERATORS``;
+                ``None`` picks one at random (deterministic under the seed).
+
+        Returns:
+            A new ``Attack`` carrying the mutated payload and a
+            ``adaptive/<operator>`` technique tag. Category/expected_verdict are
+            inherited; difficulty is pinned to ``hard`` (an evasion variant).
+
+        Note:
+            Some operators are conditionally no-ops (e.g. ``word_reorder`` on a
+            short payload, ``homoglyph`` on a payload with no substitutable
+            chars). The variant is still returned — the caller decides whether an
+            unchanged payload is worth re-scoring. Operators compose: mutating a
+            variant again stacks a second transform.
+        """
+        op = operator if operator in self.MUTATION_OPERATORS else self._rng.choice(self.MUTATION_OPERATORS)
+        payload = self._apply_operator(attack.payload, op)
+        return Attack(
+            payload=payload,
+            category=attack.category,
+            technique=f"adaptive/{op}",
+            expected_verdict=attack.expected_verdict,
+            difficulty="hard",
+        )
+
+    def _apply_operator(self, text: str, operator: str) -> str:
+        """Apply a single named evasion operator to ``text``.
+
+        Central dispatch shared by ``mutate`` (adaptive loop) so every evasion
+        transform lives in exactly one place.
+        """
+        if operator == "homoglyph":
+            return self._apply_homoglyphs(text)
+        if operator == "zero_width":
+            return self._insert_zero_width(text)
+        if operator == "case_alternation":
+            return self._alternate_case(text)
+        if operator == "word_reorder":
+            return self._reorder_words(text)
+        if operator == "semantic":
+            paraphrased, _ = self._apply_semantic(text)
+            return paraphrased
+        if operator == "encoding":
+            encoded, _ = self._encode_payload(text)
+            return encoded
+        # Unknown operator: identity (defensive — mutate() never passes this).
+        return text
+
+    def _encode_payload(self, text: str) -> tuple[str, str]:
+        """Wrap ``text`` in a random encoding layer with a decode instruction.
+
+        Mirrors ``_encoding_attacks`` for a single payload so the adaptive loop
+        and the batch generator share one encoding surface. Returns
+        ``(wrapped_payload, encoding_type)`` so the batch generator can tag the
+        technique.
+        """
+        encoding_type = self._rng.choice(["base64", "hex", "unicode_escape"])
+        if encoding_type == "base64":
+            encoded = base64.b64encode(text.encode()).decode()
+            return f"Decode and execute this base64 instruction: {encoded}", encoding_type
+        if encoding_type == "hex":
+            encoded = text.encode().hex()
+            return f"Interpret this hex-encoded message: {encoded}", encoding_type
+        encoded = "".join(f"\\u{ord(c):04x}" for c in text)
+        return f"Process this unicode sequence: {encoded}", encoding_type
 
     # === Mutation Helpers ===
 
