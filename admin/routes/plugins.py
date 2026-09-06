@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from admin.models.auth import TokenPayload
 from admin.services.auth_service import require_permission
+from admin.services.plugin_catalog import CatalogResult, get_entry, load_catalog
 from src.plugins.manager import PluginManager
 from src.plugins.sandbox import (
     analyze_plugin_directory,
@@ -59,6 +60,11 @@ class GitInstallRequest(BaseModel):
     """Request to install a plugin from a Git URL."""
     url: str = Field(..., description="Git repository URL (https://...)")
     branch: str = Field("main", description="Branch to clone")
+
+
+class CatalogInstallRequest(BaseModel):
+    """Request to install a curated plugin from the signed catalog by name."""
+    name: str = Field(..., description="Catalog entry name to install")
 
 
 # --- Response models ---
@@ -237,6 +243,83 @@ def list_plugins(
     manager = _get_plugin_manager()
     plugins = manager.list_installed()
     return [_spec_to_response(spec, manager) for spec in plugins]
+
+
+# --- Signed plugin catalog (operator-owned / BYO) ---
+# NOTE: These routes are declared BEFORE the `/{name}` path-param route so that
+# `GET /admin/plugins/catalog/` is not swallowed by `GET /admin/plugins/{name}`.
+
+
+@router.get("/catalog/", response_model=CatalogResult)
+def get_plugin_catalog(
+    user: TokenPayload = Depends(require_permission("admin:read")),
+) -> CatalogResult:
+    """Return the operator's signed plugin catalog (verified entries only).
+
+    The catalog is fail-closed: if the operator has not configured a public key
+    (``BULWARK_PLUGIN_CATALOG_PUBKEY``), or the catalog file / detached signature
+    is missing or tampered, ``entries`` is empty and ``verified`` is False. The
+    UI uses ``pubkey_configured`` / ``verified`` / ``error`` to explain why.
+    """
+    return load_catalog()
+
+
+@router.post("/catalog/install", response_model=dict)
+def install_from_catalog(
+    req: CatalogInstallRequest,
+    user: TokenPayload = Depends(require_permission("guardrails:write")),
+) -> dict:
+    """Install a curated plugin from the signed catalog by entry name.
+
+    Fail-closed: the entry is resolved ONLY from a fully-verified catalog
+    (``get_entry`` returns None for any unverified/tampered/unconfigured
+    catalog), so a one-click install can never target an unvetted plugin. The
+    actual install reuses ``PluginManager.install(source='git')``, which applies
+    the same URL validation, shallow clone, and AST + regex security gate as a
+    manual Git install.
+    """
+    entry = get_entry(req.name)
+    if entry is None:
+        # Distinguish "catalog unusable" from "no such entry" without leaking detail.
+        catalog = load_catalog()
+        if not catalog.verified:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Plugin catalog is not verified — refusing install. "
+                    + (catalog.error or "Configure BULWARK_PLUGIN_CATALOG_PUBKEY and sign the catalog.")
+                ),
+            )
+        raise HTTPException(status_code=404, detail=f"Catalog entry '{req.name}' not found")
+
+    manager = _get_plugin_manager()
+    success = manager.install(name=entry.git_url, source="git", branch=entry.branch)
+    if not success:
+        # manager.install fail-closes on URL/branch validation, clone, spec, or the
+        # AST + regex security gate. Do not surface raw internals to the client.
+        logger.warning(
+            "plugin_catalog_install_failed",
+            extra={"name": entry.name, "url": entry.git_url, "user": user.sub},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Installation of catalog plugin '{entry.name}' failed "
+                "(security gate, validation, or clone). Check the admin logs."
+            ),
+        )
+
+    logger.info(
+        "plugin_installed_catalog",
+        extra={"name": entry.name, "url": entry.git_url, "user": user.sub},
+    )
+    return {
+        "status": "installed",
+        "name": entry.name,
+        "version": entry.version,
+        "source": "catalog",
+        "url": entry.git_url,
+    }
 
 
 @router.get("/{name}", response_model=PluginResponse)

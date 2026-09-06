@@ -128,6 +128,83 @@
         </div>
     </div>
 
+    <!-- ======== Signed Plugin Catalog (operator-owned / BYO) ======== -->
+    <div class="sg-card !p-0">
+        <div class="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <i data-lucide="book-lock" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Curated Catalog</h2>
+                <template x-if="catalog && catalog.verified">
+                    <span class="sg-badge sg-badge-success text-[10px]">Signed &amp; verified</span>
+                </template>
+                <template x-if="catalog && !catalog.verified">
+                    <span class="sg-badge sg-badge-warning text-[10px]">Not verified</span>
+                </template>
+            </div>
+            <button @click="loadCatalog()" class="sg-btn sg-btn-ghost sg-btn-sm text-xs">Refresh</button>
+        </div>
+
+        <!-- Loading -->
+        <div x-show="catalogLoading" class="p-4 space-y-3">
+            <div class="sg-skeleton h-12 w-full rounded"></div>
+        </div>
+
+        <!-- Verified entries -->
+        <div x-show="!catalogLoading && catalog && catalog.verified" x-cloak class="p-4">
+            <p class="text-xs text-gray-500 mb-3">
+                Vetted plugins signed by your operator key
+                <span class="font-mono text-gray-400" x-text="catalog && catalog.signer_fingerprint ? '(' + catalog.signer_fingerprint + ')' : ''"></span>.
+                One-click install runs the same Git clone + AST security gate as a manual install.
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <template x-for="entry in (catalog ? catalog.entries : [])" :key="entry.name">
+                    <div class="border border-gray-700/60 rounded-lg p-3 flex flex-col gap-2">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold text-white truncate" x-text="entry.name"></p>
+                                <p class="text-xs text-gray-500 truncate" x-text="(entry.author || 'Unknown') + (entry.version ? ' · v' + entry.version : '')"></p>
+                            </div>
+                            <template x-if="entry.category">
+                                <span class="sg-badge sg-badge-info text-[10px] shrink-0" x-text="entry.category"></span>
+                            </template>
+                        </div>
+                        <p class="text-xs text-gray-400 truncate" x-text="entry.description"></p>
+                        <div class="flex items-center justify-between gap-2 mt-1">
+                            <span class="text-[10px] font-mono text-gray-600 truncate" x-text="entry.git_url"></span>
+                            <button @click="installFromCatalog(entry.name)"
+                                    :disabled="catalogInstalling === entry.name"
+                                    class="sg-btn sg-btn-success sg-btn-sm shrink-0">
+                                <span x-show="catalogInstalling !== entry.name">Install</span>
+                                <span x-show="catalogInstalling === entry.name">Installing...</span>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            <div x-show="catalog && catalog.entries.length === 0" class="sg-empty py-8">
+                <p class="text-gray-400 text-sm">Catalog is verified but lists no plugins.</p>
+            </div>
+        </div>
+
+        <!-- Not configured / not verified -->
+        <div x-show="!catalogLoading && (!catalog || !catalog.verified)" x-cloak class="p-6">
+            <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
+                    <i data-lucide="shield-off" class="w-4 h-4 text-amber-400"></i>
+                </div>
+                <div>
+                    <p class="text-gray-300 font-medium text-sm">No verified catalog available</p>
+                    <p class="text-xs text-gray-500 mt-1"
+                       x-text="(catalog && catalog.error) ? catalog.error : 'Configure BULWARK_PLUGIN_CATALOG_PUBKEY and sign your catalog to enable curated one-click installs.'"></p>
+                    <p class="text-xs text-gray-600 mt-2">
+                        Bulwark ships no public marketplace — see
+                        <span class="font-mono">config/examples/PLUGIN-CATALOG-README.md</span>.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ======== MODAL: Install Plugin ======== -->
     <div x-show="showInstall" x-cloak class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" style="z-index:9999">
         <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-2xl overflow-y-auto" style="max-height:90vh" @click.stop>
@@ -418,8 +495,14 @@ function pluginsPage() {
         testResult: null,
         testing: false,
 
+        // Signed catalog (operator-owned / BYO)
+        catalog: null,
+        catalogLoading: true,
+        catalogInstalling: '',
+
         async init() {
             await this.loadPlugins();
+            await this.loadCatalog();
         },
 
         async loadPlugins() {
@@ -652,6 +735,47 @@ function pluginsPage() {
                 this.testResult = { verdict: 'error', execution_time_ms: 0, error: e.message, events: [] };
             } finally {
                 this.testing = false;
+            }
+        },
+
+        // --- Signed catalog (operator-owned / BYO) ---
+        async loadCatalog() {
+            this.catalogLoading = true;
+            try {
+                const resp = await fetch('/admin/plugins/catalog/', { credentials: 'include' });
+                if (resp.ok) {
+                    this.catalog = await resp.json();
+                } else {
+                    this.catalog = null;
+                }
+            } catch (e) {
+                this.catalog = null;
+            } finally {
+                this.catalogLoading = false;
+            }
+        },
+
+        async installFromCatalog(name) {
+            if (!name || this.catalogInstalling) return;
+            this.catalogInstalling = name;
+            try {
+                const resp = await fetch('/admin/plugins/catalog/install', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name }),
+                    credentials: 'include',
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok) {
+                    showToast(`Installed "${name}" from catalog`, 'success');
+                    await this.loadPlugins();
+                } else {
+                    showToast(data.detail || `Install of "${name}" failed`, 'error');
+                }
+            } catch (e) {
+                showToast('Network error during catalog install', 'error');
+            } finally {
+                this.catalogInstalling = '';
             }
         },
     };
