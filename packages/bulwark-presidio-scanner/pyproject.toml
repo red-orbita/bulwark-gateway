@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bulwark-presidio-scanner"
+version = "0.1.0"
+description = "Optional Microsoft Presidio (NER) PII scanner plugin for Bulwark Gateway"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+authors = [
+    {name = "rokitoh"}
+]
+readme = "README.md"
+
+# The thin plugin itself carries NO heavy runtime dependency: it imports
+# Bulwark's scanner protocol from the host application (in-repo `src/`) and
+# imports Presidio LAZILY. Install the `presidio` extra to actually activate
+# detection — without it the scanners are inert (fail-open).
+dependencies = []
+
+[project.optional-dependencies]
+# The heavy stack. `presidio-analyzer` pulls spaCy; a spaCy model
+# (e.g. `python -m spacy download en_core_web_lg`) must also be provisioned.
+presidio = [
+    "presidio-analyzer>=2.2,<3.0",
+    "spacy>=3.7,<4.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+# Bulwark discovers scanners registered under this entry-point group
+# (see src/scanners/discovery.py :: discover_entry_point_scanners).
+[project.entry-points."bulwark.scanners"]
+presidio_pii_output = "bulwark_presidio_scanner.scanner:PresidioOutputScanner"
+presidio_pii_input = "bulwark_presidio_scanner.scanner:PresidioInputScanner"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
