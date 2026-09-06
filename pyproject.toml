@@ -151,6 +151,9 @@ select = ["E", "F", "W", "I", "S", "B"]
 # S104 (bind-all in deployment-manifest assertions), S108/S306 (throwaway /tmp
 # test paths) are all test-only constructs, never shipped.
 "tests/*" = ["E501", "S101", "S104", "S105", "S106", "S108", "S306"]
+# In-repo optional plugin packages ship their own test suites; same pytest
+# idioms apply (assert, throwaway fixtures) as the top-level tests/ tree.
+"packages/*/tests/*" = ["E501", "S101", "S104", "S105", "S106", "S108", "S306"]
 "examples/*" = ["S101"]
 
 [tool.pytest.ini_options]
