@@ -59,6 +59,8 @@ _SCANNER_REGISTRY: dict[str, tuple[str, str]] = {
     "schema_validator": ("src.scanners.output.schema_validator", "SchemaValidator"),
     # Multilingual
     "language_detector": ("src.scanners.multilingual.language_detector", "LanguageDetector"),
+    # MCP tool-definition poisoning
+    "mcp_tool_scanner": ("src.scanners.mcp.scanner", "McpToolScanner"),
 }
 
 # Default scanner set if none specified

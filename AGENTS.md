@@ -116,6 +116,7 @@ bulwark-gateway/
 │   │   ├── artifacts/            # Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*) — shared by admin SkillSpector + proxy output lane
 │   │   ├── multilingual/         # Language detection + 10-language patterns
 │   │   ├── multimodal/           # OCR + vision scanner
+│   │   ├── mcp/                  # MCP tool-definition scanner (poisoning TP1-TP4 + least-privilege LP1-LP4; stdlib, BWK-MCP-*) — SSOT shared by admin SkillSpector + proxy input lane
 │   │   ├── output/               # Hallucination, schema, grounding, relevance, artifact (insecure-output)
 │   │   └── rag/                  # RAG chunk scanner + memory guard
 │   ├── dialog/                    # Dialog flow engine (YAML-based state machine)
@@ -163,9 +164,7 @@ bulwark-gateway/
 │   │   ├── redis_sync.py         # get_redis_client(), pattern sync, version tracking
 │   │   ├── auth_service.py       # Password hashing, JWT, sessions
 │   │   ├── guardrails_store.py   # Pattern CRUD operations
-│   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (5-stage pipeline; default ~77 text patterns + 63-entry artifact catalog, stage 1 optional)
-│   │   ├── mcp_poisoning.py      # MCP Tool Poisoning detection (TP1-TP4, 20 patterns)
-│   │   ├── mcp_privilege.py      # MCP Least Privilege analysis (LP1-LP4, 29 patterns)
+│   │   ├── skill_scanner.py      # SkillSpector hybrid scanner (5-stage pipeline; default ~77 text patterns + 63-entry artifact catalog, stage 1 optional). MCP cores now imported from src.scanners.mcp (SSOT)
 │   │   ├── tenant_manager.py     # Tenant CRUD + agent assignment
 │   │   ├── user_store.py         # User persistence
 │   │   ├── config_manager.py     # Persistent config store
@@ -472,7 +471,7 @@ and the proxy's opt-in output-path `ArtifactOutputScanner`
 (`src/scanners/output/artifact_scanner.py`) without `src` ever importing `admin`.
 
 
-**MCP Tool Poisoning** (`admin/services/mcp_poisoning.py`):
+**MCP Tool Poisoning** (`src/scanners/mcp/mcp_poisoning.py` — SSOT; admin imports it):
 | Rule | Severity | Description |
 |------|----------|-------------|
 | BWK-MCP-TP1 | high/critical | Hidden instructions (HTML comments, zero-width chars, base64, Unicode Tags encoding) |
@@ -480,7 +479,7 @@ and the proxy's opt-in output-path `ArtifactOutputScanner`
 | BWK-MCP-TP3 | medium/high | Parameter description injection (system prompt overrides, token injection) |
 | BWK-MCP-TP4 | medium | Description-behavior mismatch (deceptive naming vs actual capabilities) |
 
-**MCP Least Privilege** (`admin/services/mcp_privilege.py`):
+**MCP Least Privilege** (`src/scanners/mcp/mcp_privilege.py` — SSOT; admin imports it):
 | Rule | Severity | Description |
 |------|----------|-------------|
 | BWK-MCP-LP1 | high | Underdeclared capability — code uses capabilities not in permissions |
@@ -653,6 +652,8 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_ML_BLOCKING` | bool | `false` | When on, ML scanner verdicts BLOCK; otherwise WARN/async-only |
 | `BULWARK_MULTILINGUAL_ENABLED` | bool | `false` | Master switch for language detector + 10-language attack patterns |
 | `BULWARK_RAG_ENABLED` | bool | `false` | Master switch for RAG retrieval scanner + memory guard |
+| `BULWARK_MCP_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `McpToolScanner` (INPUT_ASYNC, BETA). Scans the request's `tools` array (MCP/OpenAI tool definitions) with the shared stdlib MCP poisoning + least-privilege cores (`BWK-MCP-*`); inert/not registered when off |
+| `BULWARK_MCP_SCANNING_BLOCKING` | bool | `false` | When on, high/critical MCP tool-definition findings BLOCK (scanner becomes INPUT_BLOCKING); otherwise findings surface as WARN and the request proceeds |
 | `BULWARK_SCHEMA_VALIDATION_ENABLED` | bool | `false` | Opt-in: wire the model-free `SchemaValidator` (BETA) into the output pipeline |
 | `BULWARK_RELEVANCE_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `RelevanceScanner` (BETA, OUTPUT_ASYNC). Requires `sentence-embeddings` model (`download-models.py --embeddings`) |
 | `BULWARK_HALLUCINATION_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `HallucinationScanner` (BETA, OUTPUT_ASYNC). Requires `nli-classifier` model (`download-models.py --nli`) |
@@ -1115,8 +1116,9 @@ Security-critical files — review carefully before modifying:
 | `src/routes/proxy.py` | Main request pipeline, SSRF protection |
 | `admin/services/skill_scanner.py` | SkillSpector hybrid engine (5-stage pipeline; default ~77 text patterns / 4 active stages + binary-artifact stage, stage 1 optional) |
 | `src/scanners/artifacts/model_artifact_scanner.py` | Binary model-artifact opcode scanner (stdlib pickletools, never deserializes; BWK-ART-*) |
-| `admin/services/mcp_poisoning.py` | MCP tool poisoning detection (20 patterns) |
-| `admin/services/mcp_privilege.py` | MCP least privilege analysis (29 patterns) |
+| `src/scanners/mcp/mcp_poisoning.py` | MCP tool poisoning detection (20 patterns; SSOT — admin imports it) |
+| `src/scanners/mcp/mcp_privilege.py` | MCP least privilege analysis (29 patterns; SSOT — admin imports it) |
+| `src/scanners/mcp/scanner.py` | Runtime MCP tool-definition enforcement lane (opt-in, inert-by-default) |
 | `helm/bulwark-gateway/templates/secrets.yaml` | Secret generation |
 | `helm/bulwark-gateway/templates/network-policies.yaml` | Network isolation |
 
