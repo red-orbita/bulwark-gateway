@@ -668,11 +668,11 @@ class TestApplyMlConfigAllowlist:
         pipeline.apply_ml_config({"ml_toxicity": {"enabled": False}})
         assert pipeline._all_scanners["ml_toxicity"].enabled is False
 
-    def test_all_six_tunables_are_allowlisted(self):
+    def test_all_tunables_are_allowlisted(self):
         from src.scanners.pipeline import RUNTIME_TUNABLE_SCANNERS
 
         expected = {
-            "ml_injection_classifier", "ml_toxicity", "memory_guard",
+            "ml_injection_classifier", "ml_prompt_guard", "ml_toxicity", "memory_guard",
             "retrieval_scanner", "language_detector", "multilingual_patterns",
         }
         assert expected == set(RUNTIME_TUNABLE_SCANNERS)

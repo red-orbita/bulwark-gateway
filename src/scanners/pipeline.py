@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 # scanners — see ``ScannerPipeline.apply_ml_config`` (security control H-09).
 RUNTIME_TUNABLE_SCANNERS: frozenset[str] = frozenset({
     "ml_injection_classifier",
+    "ml_prompt_guard",
     "ml_toxicity",
     "memory_guard",
     "retrieval_scanner",
