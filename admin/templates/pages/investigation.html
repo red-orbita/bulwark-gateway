@@ -1335,7 +1335,7 @@
                     <i data-lucide="radar" class="w-4 h-4 text-cyan-400"></i>
                     <h2 class="text-sm font-medium text-white">At-Risk Origins</h2>
                 </div>
-                <p class="text-[11px] text-gray-500 mb-3">This request touched the origins below. Open one to see its current decayed risk score and the durable ledger of events that drove it up.</p>
+                <p class="text-[11px] text-gray-500 mb-3">This request touched the origins below. Open one to see its current decayed risk score and the durable ledger of events that drove it up. Click any event row for its full detail (ID, description, matched pattern, request ID, metadata).</p>
                 <div class="flex flex-wrap gap-2 mb-4">
                     <template x-for="tok in originDigests()" :key="tok">
                         <button @click="loadOrigin(tok)" class="sg-badge text-[10px] inline-flex items-center gap-1 hover:opacity-80"
@@ -1365,18 +1365,68 @@
                     <div x-show="origin && origin.timeline.length === 0" class="text-[11px] text-gray-500 py-2">No durable events attributed to this origin in range.</div>
                     <div x-show="origin && origin.timeline.length > 0" class="sg-table-scroll" style="max-height: 20rem;">
                         <table class="sg-table sg-table-compact">
-                            <thead><tr><th>Time</th><th>Verdict</th><th>Category</th><th>Severity</th></tr></thead>
+                            <thead><tr><th>Event ID</th><th>Time</th><th>Verdict</th><th>Category</th><th>Severity</th><th class="text-right">Details</th></tr></thead>
                             <tbody>
-                                <template x-for="(e, i) in (origin ? origin.timeline : [])" :key="'tl-' + i">
-                                    <tr>
+                                <template x-for="(e, i) in (origin ? origin.timeline : [])" :key="e.event_id || ('tl-' + i)">
+                                    <tr class="cursor-pointer transition-colors hover:bg-cyan-400/5"
+                                        :class="ledgerEvent && ledgerEvent.event_id && ledgerEvent.event_id === e.event_id ? 'bg-cyan-500/10' : ''"
+                                        @click="selectLedgerEvent(e)"
+                                        role="button" tabindex="0"
+                                        @keydown.enter.prevent="selectLedgerEvent(e)" @keydown.space.prevent="selectLedgerEvent(e)"
+                                        :aria-expanded="(ledgerEvent && ledgerEvent.event_id === e.event_id) ? 'true' : 'false'"
+                                        :title="'Event ' + (e.event_id || '—') + ' — click for full detail'">
+                                        <td class="whitespace-nowrap font-mono text-[11px] text-cyan-300" x-text="shortEventId(e.event_id)"></td>
                                         <td class="whitespace-nowrap text-xs text-gray-400" x-text="fmtTime(e.ts)"></td>
                                         <td><span class="sg-badge text-[9px]" :class="verdictClass(e.verdict)" x-text="(e.verdict || '—').toUpperCase()"></span></td>
                                         <td class="text-xs font-mono text-gray-300" x-text="e.category || '—'"></td>
                                         <td class="text-xs text-gray-500" x-text="e.severity || '—'"></td>
+                                        <td class="text-right">
+                                            <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-gray-500 inline-block transition-transform"
+                                               :class="ledgerEvent && ledgerEvent.event_id === e.event_id ? 'rotate-90 text-cyan-300' : ''"></i>
+                                        </td>
                                     </tr>
                                 </template>
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- Ledger event detail (engineer drill-in). Every field below is
+                         already carried on the origin.timeline row, so opening this is a
+                         pure client-side selection — no extra request. Mirrors the Alert
+                         Evidence layout so the two read consistently. -->
+                    <div x-show="ledgerEvent" x-cloak class="mt-4 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
+                        <div class="flex items-start justify-between gap-3 mb-3">
+                            <div class="flex items-center gap-2">
+                                <i data-lucide="file-search" class="w-4 h-4 text-cyan-300"></i>
+                                <h3 class="text-xs font-medium text-white">Event Detail</h3>
+                                <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700/40 text-gray-300 border border-gray-600/40 font-mono break-all" x-text="(ledgerEvent && ledgerEvent.event_id) || '—'"></span>
+                            </div>
+                            <button @click="ledgerEvent = null" class="sg-btn sg-btn-ghost sg-btn-sm">Close</button>
+                        </div>
+                        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                            <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Event ID</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="(ledgerEvent && ledgerEvent.event_id) || '—'"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Time</dt><dd class="text-gray-300 mt-0.5" x-text="fmtTime(ledgerEvent && ledgerEvent.ts)"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Verdict</dt><dd class="mt-0.5"><span class="sg-badge text-[10px]" :class="verdictClass(ledgerEvent && ledgerEvent.verdict)" x-text="((ledgerEvent && ledgerEvent.verdict) || '—').toUpperCase()"></span></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Category</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(ledgerEvent && ledgerEvent.category) || '—'"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Severity</dt><dd class="text-gray-300 mt-0.5" x-text="(ledgerEvent && ledgerEvent.severity) || '—'"></dd></div>
+                            <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Description</dt><dd class="text-gray-300 mt-0.5" x-text="(ledgerEvent && ledgerEvent.description) || '—'"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Source</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="(ledgerEvent && ledgerEvent.source) || '—'"></dd></div>
+                            <div><dt class="text-gray-500 uppercase tracking-wider">Tenant / Agent</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="((ledgerEvent && ledgerEvent.tenant) || '—') + ' / ' + ((ledgerEvent && ledgerEvent.agent) || '—')"></dd></div>
+                            <div x-show="ledgerEvent && ledgerEvent.pattern" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Matched Pattern</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="ledgerEvent && ledgerEvent.pattern"></dd></div>
+                            <div x-show="ledgerEvent && ledgerEvent.tool_name" ><dt class="text-gray-500 uppercase tracking-wider">Tool</dt><dd class="text-gray-300 mt-0.5 font-mono" x-text="ledgerEvent && ledgerEvent.tool_name"></dd></div>
+                            <div class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Request ID</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="(ledgerEvent && ledgerEvent.request_id) || '—'"></dd></div>
+                            <div x-show="ledgerEvent && ledgerEvent.incident_id" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Incident ID</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="ledgerEvent && ledgerEvent.incident_id"></dd></div>
+                            <div x-show="ledgerEvent && ledgerEvent.input_hash" class="sm:col-span-2"><dt class="text-gray-500 uppercase tracking-wider">Input Hash (SHA-256)</dt><dd class="text-gray-300 mt-0.5 font-mono break-all" x-text="ledgerEvent && ledgerEvent.input_hash"></dd></div>
+                        </dl>
+                        <div x-show="ledgerEvent && ledgerEvent.snippet" class="mt-3">
+                            <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Redacted Snippet</p>
+                            <p class="text-[11px] text-gray-500 mb-1">Secrets/PII removed, truncated. Raw input is never stored.</p>
+                            <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="ledgerEvent && ledgerEvent.snippet"></pre>
+                        </div>
+                        <div x-show="ledgerEvent && prettyMeta(ledgerEvent.metadata)" class="mt-3">
+                            <p class="text-gray-500 uppercase tracking-wider text-xs mb-1">Metadata</p>
+                            <pre class="bg-gray-950 border border-gray-800 rounded p-3 text-[11px] text-gray-300 whitespace-pre-wrap break-all" x-text="ledgerEvent && prettyMeta(ledgerEvent.metadata)"></pre>
+                        </div>
                     </div>
 
                     <!-- Response actions (Fase 5B): bounded, auditable remediation
@@ -1568,6 +1618,10 @@ function investigationPage() {
             selected: null,
             incident: null,
             origin: null,
+            // Currently-inspected row from the origin Event Ledger. The full
+            // event dict already arrives in origin.timeline, so drilling in is
+            // a pure client-side selection (no extra fetch).
+            ledgerEvent: null,
             triage: null,
             assigneeInput: '',
             noteInput: '',
@@ -2003,6 +2057,7 @@ function investigationPage() {
                 this.selected = null;
                 this.incident = null;
                 this.origin = null;
+                this.ledgerEvent = null;
                 this.session = null;
                 this.sessionSummary = null;
                 this.subject = null;
@@ -2183,6 +2238,7 @@ function investigationPage() {
                 const res = await fetch('/admin/investigation/origin/' + encodeURIComponent(parts[0]) + '/' + encodeURIComponent(parts[1]) + '?lookback_hours=' + this.filters.lookback_hours);
                 if (res.ok) {
                     this.origin = await res.json();
+                    this.ledgerEvent = null;
                     this.$nextTick(() => window.lucide && window.lucide.createIcons());
                 } else {
                     showToast('Failed to load origin timeline', 'error');
@@ -2190,6 +2246,29 @@ function investigationPage() {
             } catch (e) {
                 showToast('Network error loading origin', 'error');
             }
+        },
+
+        // Select (or toggle off) a single Event Ledger row for full-detail
+        // inspection. The event dict is already present in origin.timeline;
+        // clicking simply surfaces every field an engineer needs to analyse it.
+        selectLedgerEvent(e) {
+            if (!e) return;
+            const key = e.event_id || null;
+            const cur = this.ledgerEvent && (this.ledgerEvent.event_id || null);
+            this.ledgerEvent = (key && key === cur) ? null : e;
+            this.$nextTick(() => window.lucide && window.lucide.createIcons());
+        },
+
+        // Compact, copy-safe short form of an event_id for the ledger table.
+        shortEventId(id) {
+            if (!id) return '—';
+            return id.length > 12 ? id.slice(0, 12) + '…' : id;
+        },
+
+        // Pretty-print an event's metadata dict for the detail drawer.
+        prettyMeta(meta) {
+            if (!meta || (typeof meta === 'object' && Object.keys(meta).length === 0)) return '';
+            try { return JSON.stringify(meta, null, 2); } catch (e) { return String(meta); }
         },
 
         // ─── Response actions (Fase 5B) ──────────────────────────────────────
