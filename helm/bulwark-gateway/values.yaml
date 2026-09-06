@@ -190,6 +190,59 @@ proxy:
     riskBlockThreshold: "7.0"
     # -- Origin risk score at/above which requests are flagged WARN
     riskWarnThreshold: "4.0"
+  # -- GA Guard Lite — third-party injection classifier consumed as an out-of-tree
+  # sidecar over HTTP (pfSense-style "bring an engine"). The proxy ships only a
+  # thin, fail-OPEN httpx client (src/scanners/ml/ga_guard.py): when the sidecar
+  # is unreachable or errors the request is ALLOWED past this lane (the regex
+  # floor still blocks) — a sidecar hiccup never self-DoSes the gateway. Fully
+  # inert unless enabled (the scanner is not even registered). Off by default.
+  gaGuard:
+    # -- Master switch: register the GA Guard input scanner
+    enabled: false
+    # -- When true the lane is INPUT_BLOCKING and BLOCKs at/above blockThreshold;
+    # otherwise it is INPUT_ASYNC and only WARNs (advisory, never blocks)
+    blocking: false
+    # -- Sidecar classify endpoint. Leave empty to auto-derive the in-cluster URL
+    # of the bundled sidecar (see gaGuard.sidecar). Set explicitly to point at an
+    # externally-managed GA Guard deployment.
+    url: ""
+    # -- Sidecar score (0–1) at/above which to BLOCK (only when blocking=true)
+    blockThreshold: "0.85"
+    # -- Sidecar score (0–1) at/above which to WARN
+    warnThreshold: "0.6"
+    # -- Per-request budget (ms) for the sidecar call (must stay < the 5000ms
+    # scanner safe_scan ceiling so a slow sidecar degrades to fail-open, not a
+    # pipeline-wide timeout)
+    timeoutMs: "4000"
+    # -- Verify the sidecar's TLS certificate (only relevant for an https:// url)
+    verifyTls: true
+    # -- Optional bearer token for the sidecar. When set it is persisted on the
+    # proxy secret and mounted at /run/secrets/ga-guard-api-key (BULWARK_
+    # GA_GUARD_API_KEY_FILE). Leave empty for an unauthenticated in-cluster sidecar.
+    apiKey: ""
+    # -- Bundled sidecar Deployment. The GA Guard model image is NOT distributed
+    # with this chart (licensing / size) — the operator MUST supply sidecar.image.
+    sidecar:
+      # -- Deploy the in-cluster GA Guard sidecar (Deployment + Service). When
+      # false, set gaGuard.url to an externally-managed endpoint instead.
+      enabled: false
+      # -- GA Guard sidecar container image (REQUIRED when sidecar.enabled=true;
+      # no default — operator supplies their licensed/built image)
+      image: ""
+      # -- Image pull policy
+      pullPolicy: IfNotPresent
+      # -- Sidecar replica count
+      replicas: 1
+      # -- Container port the sidecar's classify HTTP server listens on
+      port: 8000
+      # -- Sidecar resource requests/limits (a small transformer classifier)
+      resources:
+        limits:
+          memory: 1536Mi
+          cpu: "2"
+        requests:
+          memory: 512Mi
+          cpu: 500m
   # NOTE: Cost / token-usage accounting (per tenant) is ALWAYS ON in the proxy
   # (src/services/cost_tracker.py, wired unconditionally in src/routes/proxy.py).
   # There is intentionally no enable/disable toggle — a flag here would be a

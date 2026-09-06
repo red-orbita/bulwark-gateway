@@ -89,6 +89,35 @@ app.kubernetes.io/name: redis
 {{- end }}
 
 {{/*
+GA Guard sidecar labels
+*/}}
+{{- define "bulwark-gateway.gaGuard.labels" -}}
+{{ include "bulwark-gateway.labels" . }}
+app.kubernetes.io/name: ga-guard
+app.kubernetes.io/component: scanner-sidecar
+{{- end }}
+
+{{/*
+GA Guard sidecar selector labels
+*/}}
+{{- define "bulwark-gateway.gaGuard.selectorLabels" -}}
+app.kubernetes.io/name: ga-guard
+{{- end }}
+
+{{/*
+GA Guard classify URL — explicit override wins; otherwise auto-derive the
+in-cluster sidecar Service DNS when the bundled sidecar is enabled. Empty when
+neither is set (the scanner then boots disabled/inert).
+*/}}
+{{- define "bulwark-gateway.gaGuard.url" -}}
+{{- if .Values.proxy.gaGuard.url }}
+{{- .Values.proxy.gaGuard.url }}
+{{- else if .Values.proxy.gaGuard.sidecar.enabled }}
+{{- printf "http://ga-guard.%s.svc.cluster.local:%d/classify" (include "bulwark-gateway.namespace" .) (int .Values.proxy.gaGuard.sidecar.port) }}
+{{- end }}
+{{- end }}
+
+{{/*
 Namespace
 */}}
 {{- define "bulwark-gateway.namespace" -}}

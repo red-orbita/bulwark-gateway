@@ -142,6 +142,47 @@ spec:
         - port: 8080
           protocol: TCP
     {{- end }}
+    {{- if and .Values.proxy.gaGuard.enabled .Values.proxy.gaGuard.sidecar.enabled }}
+    # GA Guard sidecar — the proxy's input scanner posts to the in-cluster
+    # classifier. Scoped to the sidecar pod + its port (fail-open client).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ga-guard
+      ports:
+        - port: {{ .Values.proxy.gaGuard.sidecar.port }}
+          protocol: TCP
+    {{- end }}
+{{- if and .Values.proxy.gaGuard.enabled .Values.proxy.gaGuard.sidecar.enabled }}
+---
+# NetworkPolicy: GA Guard sidecar — ingress from the proxy ONLY, no egress.
+# The classifier is a sealed leaf: it serves the proxy's scan requests and makes
+# no outbound calls (model is baked into the image), so egress stays empty under
+# the zero-trust default-deny.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ga-guard-access
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.gaGuard.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ga-guard
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+      ports:
+        - port: {{ .Values.proxy.gaGuard.sidecar.port }}
+          protocol: TCP
+  egress: []  # Sealed leaf classifier — no outbound
+{{- end }}
 ---
 # NetworkPolicy: Admin — ingress from Ingress controller ONLY, egress to Redis + Wazuh
 apiVersion: networking.k8s.io/v1

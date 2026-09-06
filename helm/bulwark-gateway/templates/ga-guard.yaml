@@ -1,0 +1,102 @@
+{{- if and .Values.proxy.gaGuard.enabled .Values.proxy.gaGuard.sidecar.enabled }}
+{{- if empty .Values.proxy.gaGuard.sidecar.image }}
+{{- fail "proxy.gaGuard.sidecar.image is REQUIRED when proxy.gaGuard.sidecar.enabled=true. The GA Guard model image is not distributed with this chart — supply your licensed/built classifier image." }}
+{{- end }}
+---
+# GA Guard sidecar Deployment — third-party injection classifier consumed by the
+# proxy over HTTP. Runs as an isolated leaf pod: no inbound except the proxy, no
+# outbound (default-deny egress). The proxy client is fail-OPEN, so a sidecar
+# outage degrades gracefully to the regex floor rather than blocking traffic.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ga-guard
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.gaGuard.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.proxy.gaGuard.sidecar.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "bulwark-gateway.gaGuard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bulwark-gateway.gaGuard.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: bulwark-gateway
+        app.kubernetes.io/component: scanner-sidecar
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ga-guard
+          image: {{ .Values.proxy.gaGuard.sidecar.image | quote }}
+          imagePullPolicy: {{ .Values.proxy.gaGuard.sidecar.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.proxy.gaGuard.sidecar.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.proxy.gaGuard.sidecar.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          # TCP probes only — the sidecar's HTTP health path is vendor-specific
+          # and not assumed here. A listening socket is a sufficient readiness
+          # signal; the proxy client fails open regardless.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+---
+# GA Guard sidecar Service — in-cluster classify endpoint the proxy resolves via
+# bulwark-gateway.gaGuard.url (http://ga-guard.<ns>.svc.cluster.local:<port>).
+apiVersion: v1
+kind: Service
+metadata:
+  name: ga-guard
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.gaGuard.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.proxy.gaGuard.sidecar.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "bulwark-gateway.gaGuard.selectorLabels" . | nindent 4 }}
+{{- end }}

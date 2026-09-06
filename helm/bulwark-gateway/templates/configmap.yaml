@@ -71,6 +71,22 @@ data:
   BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD: {{ .Values.proxy.correlation.riskBlockThreshold | quote }}
   BULWARK_CORRELATION_RISK_WARN_THRESHOLD: {{ .Values.proxy.correlation.riskWarnThreshold | quote }}
   {{- end }}
+  # GA Guard Lite third-party injection classifier (opt-in sidecar client).
+  # Rendered unconditionally so a helm upgrade never silently drops the master
+  # switch; the scanner is inert (not registered) when enabled=false.
+  BULWARK_GA_GUARD_ENABLED: {{ .Values.proxy.gaGuard.enabled | quote }}
+  {{- if .Values.proxy.gaGuard.enabled }}
+  BULWARK_GA_GUARD_URL: {{ include "bulwark-gateway.gaGuard.url" . | quote }}
+  BULWARK_GA_GUARD_BLOCKING: {{ .Values.proxy.gaGuard.blocking | quote }}
+  BULWARK_GA_GUARD_BLOCK_THRESHOLD: {{ .Values.proxy.gaGuard.blockThreshold | quote }}
+  BULWARK_GA_GUARD_WARN_THRESHOLD: {{ .Values.proxy.gaGuard.warnThreshold | quote }}
+  BULWARK_GA_GUARD_TIMEOUT_MS: {{ .Values.proxy.gaGuard.timeoutMs | quote }}
+  BULWARK_GA_GUARD_VERIFY_TLS: {{ .Values.proxy.gaGuard.verifyTls | quote }}
+  {{- if .Values.proxy.gaGuard.apiKey }}
+  # Bearer token mounted from the proxy secret (see secrets.yaml).
+  BULWARK_GA_GUARD_API_KEY_FILE: "/run/secrets/ga-guard-api-key"
+  {{- end }}
+  {{- end }}
   {{- if and .Values.dedicatedTenants.enabled .Values.dedicatedTenants.tenants }}
   # Tier 2 Multi-Tenancy: list of tenants with dedicated proxy pods
   # The shared proxy pool uses this to route requests to dedicated services
