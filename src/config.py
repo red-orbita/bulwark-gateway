@@ -167,6 +167,31 @@ class Settings(BaseSettings):
     # is still covered by the capped concatenated split-attack scan.
     guardrail_messages_budget_seconds: float = 2.0
 
+    # GA Guard Lite — remote classifier sidecar (opt-in, default off).
+    # A dependency-light INPUT scanner that delegates prompt-injection / jailbreak
+    # classification to an operator-provisioned sidecar HTTP service (e.g. a vLLM
+    # or HF text-classification server running General Analysis' "GA Guard" model,
+    # or any compatible classifier). Bulwark ships NO weights for this — it POSTs
+    # the input to the sidecar and folds the returned score into a verdict.
+    #
+    # INERT unless ga_guard_enabled (the scanner is not even registered otherwise —
+    # zero hot-path cost). ASYNC/WARN by default: ga_guard_blocking=False runs it as
+    # INPUT_ASYNC enrichment so a sidecar hiccup can never gate traffic. Even in
+    # blocking mode, a request-time network/parse error fails-OPEN (ALLOW) — the
+    # builtin regex floor already runs BLOCKING, so a transient sidecar outage must
+    # not 403 every request (or be weaponised as a DoS to fail the gateway closed).
+    # A blocking scanner whose sidecar is unreachable at BOOT reports health()=False
+    # so resolve_blocking_readiness makes the BULWARK_FAIL_MODE decision. httpx is a
+    # core runtime dependency, so no extra install is required.
+    ga_guard_enabled: bool = False
+    ga_guard_url: str = ""  # Sidecar POST endpoint (e.g. http://ga-guard:8000/classify)
+    ga_guard_blocking: bool = False  # If True, run INPUT_BLOCKING and BLOCK (else WARN-only)
+    ga_guard_block_threshold: float = 0.85  # Sidecar score at/above which to BLOCK
+    ga_guard_warn_threshold: float = 0.6  # Sidecar score at/above which to WARN
+    ga_guard_timeout_ms: int = 4000  # Per-request budget for the sidecar call
+    ga_guard_api_key: str = ""  # Optional bearer for the sidecar (supports *_FILE)
+    ga_guard_verify_tls: bool = True  # Verify the sidecar's TLS certificate
+
     # RAG Guard (Phase 5)
     rag_enabled: bool = False  # Master switch for RAG scanners (retrieval + memory guard)
 
@@ -344,6 +369,11 @@ def _build_settings() -> "Settings":
         val = _read_secret_file(key_name)
         if val:
             setattr(s, key_name.lower(), val)
+
+    # GA Guard sidecar API key
+    ga_guard_key = _read_secret_file("GA_GUARD_API_KEY")
+    if ga_guard_key:
+        s.ga_guard_api_key = ga_guard_key
 
     # Redis password → inject into URL (supports redis:// and rediss:// schemes)
     redis_pw = _read_secret_file("REDIS_PASSWORD")

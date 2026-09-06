@@ -204,6 +204,21 @@ async def lifespan(app: FastAPI):
                     blocking=settings.ml_blocking,
                 )
 
+    # Register GA Guard Lite sidecar scanner (opt-in, default off). Independent of
+    # BULWARK_ML_ENABLED — it ships no local weights, delegating classification to
+    # an operator-provisioned sidecar over HTTP (httpx, a core dep). INPUT_ASYNC
+    # (WARN-only) unless BULWARK_GA_GUARD_BLOCKING=true. A request-time sidecar
+    # error fails-OPEN (ALLOW); a blocking scanner whose sidecar is unreachable at
+    # boot is caught by the readiness backstop below via health()=False.
+    if settings.ga_guard_enabled:
+        from src.scanners.ml import GaGuardScanner
+        pipeline.register(GaGuardScanner())
+        await logger.ainfo(
+            "ga_guard_scanner_registered",
+            blocking=settings.ga_guard_blocking,
+            url=settings.ga_guard_url,
+        )
+
     # Register RAG Guard scanners (memory manipulation + retrieval poisoning)
     if settings.rag_enabled:
         from src.scanners.rag.memory_guard import MemoryGuard
