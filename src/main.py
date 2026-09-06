@@ -168,12 +168,13 @@ async def lifespan(app: FastAPI):
     # download path while ml_blocking=True would brick the gateway. Missing-model
     # scanners are skipped (with a loud warning) instead.
     if settings.ml_enabled:
-        from src.scanners.ml import InjectionClassifier, ToxicityScanner
+        from src.scanners.ml import InjectionClassifier, PromptGuard2Classifier, ToxicityScanner
         from src.scanners.ml.model_manager import ml_dependencies_available, model_files_present
 
         # (model subdir, scanner class) — subdir matches each scanner's MODEL_NAME
         ml_specs = [
             ("injection-classifier", InjectionClassifier),
+            ("prompt-guard-2", PromptGuard2Classifier),
             ("toxicity", ToxicityScanner),
         ]
 
