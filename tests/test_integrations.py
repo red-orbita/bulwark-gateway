@@ -2225,6 +2225,91 @@ async def test_emitter_test_ping(webhook_env, httpx_mock):
     assert "unknown" in missing.detail
 
 
+# ─── delivery observability (Phase 4B) ───────────────────────────────────────
+
+
+async def test_status_records_successful_delivery(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(id="w1", url="http://soar.test/hook", events=[]))
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+
+    # A fresh emitter starts with a clean snapshot.
+    before = emitter.status()
+    assert before["total_delivered"] == 0
+    assert before["total_failed"] == 0
+    assert before["last_error"] is None
+    assert before["subscriptions"][0]["last_delivery"] is None
+
+    await emitter.emit("case.opened", tenant="acme", data={"case_id": "c1"})
+
+    snap = emitter.status()
+    assert snap["total_delivered"] == 1
+    assert snap["total_failed"] == 0
+    assert snap["last_error"] is None
+    health = snap["subscriptions"][0]
+    assert health["id"] == "w1"
+    assert health["last_delivery"]["ok"] is True
+    assert health["last_delivery"]["detail"] == "HTTP 200"
+    assert health["last_delivery"]["event"] == "case.opened"
+    assert health["last_delivery"]["at"]  # timestamped
+
+
+async def test_status_records_failed_delivery_and_last_error(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(id="w1", url="http://soar.test/hook", events=[]))
+    httpx_mock.add_exception(httpx.ConnectError("endpoint down"))
+
+    # A swallowed failure still lands in the observability snapshot.
+    await emitter.emit("case.resolved")
+
+    snap = emitter.status()
+    assert snap["total_delivered"] == 0
+    assert snap["total_failed"] == 1
+    assert "ConnectError" in snap["last_error"]
+    health = snap["subscriptions"][0]["last_delivery"]
+    assert health["ok"] is False
+    assert health["event"] == "case.resolved"
+    assert "ConnectError" in health["detail"]
+
+
+async def test_status_partial_failure_tracks_each_subscriber(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(id="good", url="http://soar.test/good", events=[]))
+    emitter.add(_sub(id="bad", url="http://soar.test/bad", events=[]))
+    httpx_mock.add_response(url="http://soar.test/good", status_code=200)
+    httpx_mock.add_response(url="http://soar.test/bad", status_code=500)
+
+    # One subscriber succeeds, the other returns a 5xx — each outcome is tracked.
+    await emitter.emit("case.opened")
+
+    snap = emitter.status()
+    assert snap["total_delivered"] == 1
+    assert snap["total_failed"] == 1
+    assert snap["last_error"] == "HTTP 500"
+    by_id = {s["id"]: s["last_delivery"] for s in snap["subscriptions"]}
+    assert by_id["good"]["ok"] is True
+    assert by_id["bad"]["ok"] is False
+    assert by_id["bad"]["detail"] == "HTTP 500"
+
+
+async def test_status_counts_test_ping_and_drops_removed_health(webhook_env, httpx_mock):
+    emitter = webhook_env.get_event_webhook_emitter()
+    emitter.add(_sub(id="w1", url="http://soar.test/hook", events=[]))
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=204)
+
+    # The synthetic test ping is a real delivery attempt — it counts too.
+    await emitter.test("w1")
+    snap = emitter.status()
+    assert snap["total_delivered"] == 1
+    assert snap["subscriptions"][0]["last_delivery"]["event"] == "test.ping"
+
+    # Removing a subscription prunes its stale last-delivery health.
+    assert emitter.remove("w1") is True
+    snap = emitter.status()
+    assert snap["subscriptions"] == []
+    assert "w1" not in emitter._last_delivery
+
+
 # ─── HMAC signing + versioned envelope (Phase 3.1) ───────────────────────────
 
 
@@ -2390,6 +2475,28 @@ async def test_wh_route_rbac_viewer_is_read_only():
     with pytest.raises(HTTPException) as exc:
         await dep(user=_viewer())
     assert exc.value.status_code == 403
+
+
+async def test_wh_route_status_snapshot(webhook_env, httpx_mock):
+    from admin.routes import integration_webhooks as wr
+
+    created = await wr.create_webhook(
+        data={"name": "SOAR", "url": "http://soar.test/hook"}, user=_admin()
+    )
+    wid = created["webhook"]["id"]
+
+    # Drive one real delivery through the emitter so the snapshot is populated.
+    httpx_mock.add_response(url="http://soar.test/hook", status_code=200)
+    await webhook_env.get_event_webhook_emitter().emit("case.opened", tenant="acme")
+
+    snap = (await wr.webhook_delivery_status(user=_admin()))["emitter"]
+    assert snap["total_delivered"] == 1
+    assert snap["total_failed"] == 0
+    health = snap["subscriptions"][0]
+    assert health["id"] == wid
+    assert health["last_delivery"]["ok"] is True
+    # The status surface never leaks a secret field.
+    assert "secret" not in health
 
 
 # ─── case-lifecycle emission ─────────────────────────────────────────────────
