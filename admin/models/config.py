@@ -90,10 +90,14 @@ class GuardrailPattern(BaseModel):
 
 
 class GuardrailTestRequest(BaseModel):
-    payload: str
+    payload: str = ""
     tenant_id: str = "test-tenant"
     agent_id: str = "test-agent"
     layer: str = "input"  # input, output
+    # Optional multi-turn conversation. When provided (input layer only), the
+    # sandbox runs the cross-turn engine (inspect_messages) so multi-turn
+    # detections — e.g. Crescendo escalation — can be exercised from the UI.
+    messages: Optional[list[dict[str, Any]]] = None
 
 
 class GuardrailTestResult(BaseModel):

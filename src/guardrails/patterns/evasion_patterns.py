@@ -1661,4 +1661,106 @@ HARDENING_PATTERNS: list[Pattern] = [
         ThreatCategory.CROSS_AGENT_INJECTION, "high",
         "Cross-agent injection: targeting downstream agent safety bypass",
     ),
+    # ------------------------------------------------------------------
+    # Policy Puppetry (HiddenLayer). The attack smuggles a fake structured
+    # "policy"/config document (pseudo-XML/JSON/INI) that PRESCRIBES the model's
+    # allowed roles/responses and forbids refusals — exploiting models trained to
+    # treat config-like text as authoritative. Distinct from the prose "fake
+    # policy update" patterns above: these match the characteristic document
+    # MARKUP, which is deterministic and FP-safe (real users don't send
+    # <interaction-config>/<blocked-modes> blocks).
+    # ------------------------------------------------------------------
+    Pattern(
+        re.compile(r"<\s*/?\s*interaction[-_ ]?config\s*/?\s*>", re.I),
+        ThreatCategory.JAILBREAK, "critical",
+        "Policy puppetry: fake interaction-config policy block",
+    ),
+    Pattern(
+        re.compile(
+            r"<\s*/?\s*(blocked|allowed)[-_ ]?(modes?|strings?|responses?|requests?)\s*>",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Policy puppetry: fake response-policy directive tags",
+    ),
+    Pattern(
+        re.compile(
+            r"(blocked[-_ ]?(modes?|strings?|responses?))\s*[:=>][\s\S]{0,80}"
+            r"(refus\w*|apolog\w*|deny|declin\w*|sorry|i\s+can.?t|cannot|as\s+an\s+ai)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Policy puppetry: policy directive blocking refusals/apologies",
+    ),
+    Pattern(
+        re.compile(
+            r"<\s*rules?\s*>[\s\S]{0,120}"
+            r"(?:never|not|forbidden|must\s+not|do\s+not|cannot|can.?t)\s+"
+            r"(?:(?:be\s+)?allowed\s+to\s+|permitted\s+to\s+)?"
+            r"(refus\w*|deny|declin\w*|apolog\w*)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Policy puppetry: rule block forbidding refusal",
+    ),
+    Pattern(
+        re.compile(
+            r"[\"']?(response[-_]?policy|content[-_]?policy|ai[-_]?config|"
+            r"assistant[-_]?config|interaction[-_]?config|system[-_]?override)[\"']?\s*[:=]",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Policy puppetry: fake config/policy key dictating behavior",
+    ),
+    # ------------------------------------------------------------------
+    # Skeleton Key (Microsoft). A multi-part jailbreak that asks the model to
+    # AUGMENT its behavior guidelines — instead of refusing disallowed content,
+    # comply but prepend a warning/disclaimer — usually wrapped in a "safe
+    # educational/research context, uncensored outputs" framing. The signature is
+    # the "warn-instead-of-refuse" behavior-update directive, not any single
+    # keyword.
+    # ------------------------------------------------------------------
+    Pattern(
+        re.compile(
+            r"update\s+your\s+(behaviou?r|guidelines?|rules?|instructions?|policy|"
+            r"protocols?|response\s+protocol)\s+[\s\S]{0,80}"
+            r"(prefix|preface|prepend|precede|begin\s+.{0,10}with|add)\s+"
+            r"[\s\S]{0,25}(warning|disclaimer|caveat|note|advisory)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "critical",
+        "Skeleton Key: update guidelines to warn instead of refuse",
+    ),
+    Pattern(
+        re.compile(
+            r"(instead\s+of|rather\s+than)\s+(refus\w+|declin\w+|reject\w+|saying\s+no)\s*,?\s*"
+            r"[\s\S]{0,50}(prefix|prepend|preface|add|include|provide|give)\s+"
+            r"[\s\S]{0,25}(warning|disclaimer|caveat|the\s+(info\w*|content|answer|response))",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "critical",
+        "Skeleton Key: warn-instead-of-refuse compliance directive",
+    ),
+    Pattern(
+        re.compile(
+            r"safe\s+educational\s+context[\s\S]{0,100}"
+            r"(uncensored|unfiltered|unrestricted|no\s+restrictions?|"
+            r"without\s+(censorship|filters?|restrictions?))",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Skeleton Key: safe-educational-context uncensored framing",
+    ),
+    Pattern(
+        re.compile(
+            r"if\s+(the\s+)?(content|response|answer|information|output)\s+"
+            r"(might\s+be|is|could\s+be|would\s+be|seems)\s+[\s\S]{0,50}"
+            r"(harmful|offensive|illegal|dangerous|hateful|unsafe|inappropriate)"
+            r"[\s\S]{0,50}(prefix|prepend|preface|add|begin|mark|flag)\s+"
+            r"[\s\S]{0,25}(with\s+)?(a\s+)?(warning|disclaimer|caveat)",
+            re.I,
+        ),
+        ThreatCategory.JAILBREAK, "high",
+        "Skeleton Key: conditional-warning compliance directive",
+    ),
 ]

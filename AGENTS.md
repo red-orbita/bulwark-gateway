@@ -413,6 +413,22 @@ class Pattern:
 
 **Detection categories** (input layer): prompt injection, jailbreak, SSTI, XXE, command injection, reverse shell, encoded payloads, exfiltration attempts.
 
+**Named jailbreak coverage** (parity with commercial guardrails): the
+`HARDENING_PATTERNS` set (`src/guardrails/patterns/evasion_patterns.py`) carries
+deterministic, FP-safe signatures for two published structured jailbreaks —
+**Policy Puppetry** (HiddenLayer: fake `<interaction-config>` /
+`<blocked-modes>` / `response-policy:` documents that prescribe the model's
+responses and forbid refusals) and **Skeleton Key** (Microsoft: a behavior-update
+directive that warns/disclaims *instead of* refusing, usually behind a
+"safe educational / uncensored" framing). Both emit `ThreatCategory.JAILBREAK`.
+**Crescendo** (Microsoft multi-turn jailbreak) is handled where it actually lives
+— in the multi-turn path (`InputGuardrail._check_cross_turn_escalation`): it fires
+(`source=input_guardrail_crescendo`, BLOCK) only when the latest turn BOTH
+back-references the model's own prior output AND strongly escalates toward
+actionable/uncensored specifics (remove caveats / give the actual working
+payload), gated on an earlier turn having established attack context — so ordinary
+"expand on that / more detail" security-education follow-ups are not flagged.
+
 > **Scope honesty**: classic SQL injection (`'; DROP TABLE …`, `admin' OR 1=1 --`), XSS, and bare path traversal (`../../../etc/passwd`) are **not** reliably matched on free-form chat input, and by design. Those threats are enforced where the payload actually reaches a database / filesystem: the **tool-argument layer** (`tool_policy.py` — path-traversal detection, `denied_arguments`, argument allow/deny) and the **output filter**. Some `UNION SELECT`-style SQLi is caught incidentally by exfiltration / tool-abuse patterns. Do not rely on the input guardrail as a SQLi/XSS WAF.
 
 ### Tool Policy Engine (src/guardrails/tool_policy.py)

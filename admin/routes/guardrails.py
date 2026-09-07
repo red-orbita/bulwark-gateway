@@ -805,7 +805,19 @@ async def test_guardrail(
     if req.layer == "input":
         from src.guardrails.input_guardrail import InputGuardrail
         ig = InputGuardrail()
-        result = ig.inspect(req.payload, req.tenant_id, req.agent_id)
+        if req.messages:
+            # Multi-turn conversation: run the cross-turn engine so multi-turn
+            # detections (e.g. Crescendo escalation) can be exercised from the UI.
+            turns = [
+                {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+                for m in req.messages
+                if str(m.get("content", "")).strip()
+            ]
+            if not turns:
+                raise HTTPException(status_code=400, detail="No non-empty conversation turns provided")
+            result = ig.inspect_messages(turns, req.tenant_id, req.agent_id)
+        else:
+            result = ig.inspect(req.payload, req.tenant_id, req.agent_id)
     elif req.layer == "output":
         from src.guardrails.output_filter import OutputFilter
         of = OutputFilter()
@@ -822,6 +834,7 @@ async def test_guardrail(
             "category": e.category.value if e.category else None,
             "severity": getattr(e, "severity", None),
             "matched_pattern": getattr(e, "matched_pattern", None),
+            "source": getattr(e, "source", None),
         })
 
     matched_patterns_info = []

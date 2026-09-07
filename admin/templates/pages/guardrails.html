@@ -214,15 +214,56 @@
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div>
-                <label for="guardrails-test-payload" class="sg-label">Test Payload</label>
-                <textarea id="guardrails-test-payload" x-model="sandboxPayload" class="sg-input font-mono text-xs h-32" placeholder="Enter payload to test against all active patterns..."></textarea>
-                <div class="flex gap-2 mt-3">
-                    <button @click="runSandbox('input')" :disabled="!sandboxPayload.trim()" class="sg-btn sg-btn-primary sg-btn-sm flex-1">
-                        <i data-lucide="shield" class="w-3.5 h-3.5"></i> Test Input
-                    </button>
-                    <button @click="runSandbox('output')" :disabled="!sandboxPayload.trim()" class="sg-btn sg-btn-secondary sg-btn-sm flex-1">
-                        <i data-lucide="filter" class="w-3.5 h-3.5"></i> Test Output
-                    </button>
+                <!-- Mode switch: single payload vs. multi-turn conversation -->
+                <div class="flex items-center gap-1 mb-2">
+                    <button @click="sandboxMode='single'"
+                            :class="sandboxMode==='single' ? 'sg-btn-primary' : 'sg-btn-ghost'"
+                            class="sg-btn sg-btn-sm">Single payload</button>
+                    <button @click="sandboxMode='conversation'"
+                            :class="sandboxMode==='conversation' ? 'sg-btn-primary' : 'sg-btn-ghost'"
+                            class="sg-btn sg-btn-sm">Conversation (multi-turn)</button>
+                </div>
+
+                <!-- Single payload mode -->
+                <div x-show="sandboxMode==='single'">
+                    <label for="guardrails-test-payload" class="sg-label">Test Payload</label>
+                    <textarea id="guardrails-test-payload" x-model="sandboxPayload" class="sg-input font-mono text-xs h-32" placeholder="Enter payload to test against all active patterns..."></textarea>
+                    <div class="flex gap-2 mt-3">
+                        <button @click="runSandbox('input')" :disabled="!sandboxPayload.trim()" class="sg-btn sg-btn-primary sg-btn-sm flex-1">
+                            <i data-lucide="shield" class="w-3.5 h-3.5"></i> Test Input
+                        </button>
+                        <button @click="runSandbox('output')" :disabled="!sandboxPayload.trim()" class="sg-btn sg-btn-secondary sg-btn-sm flex-1">
+                            <i data-lucide="filter" class="w-3.5 h-3.5"></i> Test Output
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Multi-turn conversation mode (runs the cross-turn engine, e.g. Crescendo) -->
+                <div x-show="sandboxMode==='conversation'">
+                    <label class="sg-label">Conversation turns (oldest first)</label>
+                    <div class="space-y-2 max-h-40 overflow-auto pr-1">
+                        <template x-for="(turn, idx) in sandboxTurns" :key="idx">
+                            <div class="flex gap-2 items-start">
+                                <select x-model="turn.role" aria-label="Turn role" class="sg-input text-xs w-24 shrink-0">
+                                    <option value="user">user</option>
+                                    <option value="assistant">assistant</option>
+                                    <option value="system">system</option>
+                                    <option value="tool">tool</option>
+                                </select>
+                                <textarea x-model="turn.content" rows="1" class="sg-input font-mono text-[11px] flex-1" placeholder="Turn content…"></textarea>
+                                <button @click="removeTurn(idx)" :disabled="sandboxTurns.length<=1" aria-label="Remove turn" class="sg-icon-btn text-gray-400 hover:text-red-400 shrink-0"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                            </div>
+                        </template>
+                    </div>
+                    <div class="flex gap-2 mt-3">
+                        <button @click="addTurn()" class="sg-btn sg-btn-ghost sg-btn-sm">
+                            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add turn
+                        </button>
+                        <button @click="runConversation()" :disabled="!sandboxTurns.some(t=>t.content.trim())" class="sg-btn sg-btn-primary sg-btn-sm flex-1">
+                            <i data-lucide="messages-square" class="w-3.5 h-3.5"></i> Test Conversation
+                        </button>
+                    </div>
+                    <p class="text-[10px] text-gray-500 mt-1.5">Cross-turn detections (e.g. Crescendo escalation) need an earlier attack-context turn plus a follow-up that back-references the model's prior output.</p>
                 </div>
             </div>
             <div>
@@ -254,8 +295,13 @@
                                 </div>
                             </template>
                             <template x-if="sandboxResult.events?.length && !sandboxResult.matched_patterns?.length">
-                                <ul class="space-y-1">
-                                    <template x-for="e in sandboxResult.events"><li class="text-[11px] text-gray-300" x-text="e.description || e"></li></template>
+                                <ul class="space-y-1.5">
+                                    <template x-for="(e, i) in sandboxResult.events" :key="i">
+                                        <li class="text-[11px] text-gray-300">
+                                            <span x-show="e.source" class="sg-badge sg-badge-info text-[9px] mr-1" x-text="e.source"></span>
+                                            <span x-text="e.description || e"></span>
+                                        </li>
+                                    </template>
                                 </ul>
                             </template>
                         </div>
@@ -416,6 +462,12 @@ function guardrailsManager() {
         newForm: { layer: 'input', description: '', regex: '', severity: 'high', category: 'prompt_injection' },
         regexValidation: null, editTestPayload: '', editTestResult: null,
         sandboxPayload: '', sandboxResult: null,
+        sandboxMode: 'single',
+        sandboxTurns: [
+            { role: 'user', content: '' },
+            { role: 'assistant', content: '' },
+            { role: 'user', content: '' },
+        ],
         // Inline per-pattern regex tester (real client-side match, no fake seeding)
         patternTest: { id: null, input: '', matched: null, error: null },
 
@@ -494,6 +546,28 @@ function guardrailsManager() {
             if (!this.sandboxPayload.trim()) return;
             try {
                 const resp = await fetch('/admin/guardrails/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ payload: this.sandboxPayload, layer }) });
+                this.sandboxResult = resp.ok ? await resp.json() : { verdict: 'error', events: [{ description: `Error ${resp.status}` }], latency_ms: 0 };
+            } catch(e) { this.sandboxResult = { verdict: 'error', events: [{ description: e.message }], latency_ms: 0 }; }
+            this.$nextTick(() => lucide.createIcons());
+        },
+        addTurn() {
+            const last = this.sandboxTurns[this.sandboxTurns.length - 1];
+            this.sandboxTurns.push({ role: last && last.role === 'user' ? 'assistant' : 'user', content: '' });
+            this.$nextTick(() => lucide.createIcons());
+        },
+        removeTurn(idx) {
+            if (this.sandboxTurns.length <= 1) return;
+            this.sandboxTurns.splice(idx, 1);
+            this.$nextTick(() => lucide.createIcons());
+        },
+        async runConversation() {
+            this.sandboxResult = null;
+            const messages = this.sandboxTurns
+                .filter(t => t.content.trim())
+                .map(t => ({ role: t.role, content: t.content }));
+            if (!messages.length) return;
+            try {
+                const resp = await fetch('/admin/guardrails/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ layer: 'input', messages }) });
                 this.sandboxResult = resp.ok ? await resp.json() : { verdict: 'error', events: [{ description: `Error ${resp.status}` }], latency_ms: 0 };
             } catch(e) { this.sandboxResult = { verdict: 'error', events: [{ description: e.message }], latency_ms: 0 }; }
             this.$nextTick(() => lucide.createIcons());
