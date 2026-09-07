@@ -13,9 +13,12 @@ scheduler is IOC-feed-specific — this is the integrations domain. Everything i
 fail-open: a dead remote, an unbuildable connector, or a sweep error degrades to
 "nothing reconciled this cycle" and never stops the loop.
 
-Lifespan wiring (starting/stopping this task with the admin app) is deferred to a
-later slice; the class stands alone and its :meth:`poll_once` is directly callable
-+ unit-testable without the loop.
+The poller is started/stopped with the admin app in :func:`admin.main.lifespan`.
+For observability it keeps cumulative counters (cycles run, cases reconciled,
+conflicts surfaced, errors) plus the last-run timestamp and last error, surfaced
+via :meth:`status` and the ``GET /admin/integrations/reconcile/status`` endpoint —
+mirroring the sighting dispatcher. :meth:`poll_once` is also directly callable +
+unit-testable without the loop.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 from .reconcile import get_reconcile_engine
 from .registry import get_integration_registry
@@ -71,6 +75,15 @@ class ReconcilePoller:
         self._startup_delay = max(0.0, float(startup_delay_seconds))
         self._task: asyncio.Task | None = None
         self._running = False
+        # Observability counters for the admin status endpoint (cumulative since
+        # process start). Best-effort — never gate a sweep on a counter update.
+        self.total_cycles = 0
+        self.total_reconciled = 0
+        self.total_conflicts = 0
+        self.total_errors = 0
+        self.last_run_at: float | None = None
+        self.last_reconciled = 0
+        self.last_error: str | None = None
 
     async def start(self) -> None:
         """Start the poll loop (idempotent)."""
@@ -103,6 +116,8 @@ class ReconcilePoller:
             try:
                 await self.poll_once()
             except Exception as exc:  # noqa: BLE001 — fail-open: never break the loop
+                self.total_errors += 1
+                self.last_error = str(exc)
                 logger.warning("reconcile_poll_cycle_failed: %s", exc)
             await asyncio.sleep(max(1.0, self._interval))
 
@@ -115,12 +130,15 @@ class ReconcilePoller:
         registry = get_integration_registry()
         engine = get_reconcile_engine()
         reconciled = 0
+        conflicts = 0
         for config in registry.configs:
             if not config.enabled or config.type not in _SYNC_CAPABLE_TYPES:
                 continue
             try:
                 connector = registry.build_connector(config)
             except Exception:  # noqa: BLE001 — fail-open: an unbuildable connector is skipped
+                self.total_errors += 1
+                self.last_error = f"build_failed:{config.id}"
                 logger.warning("reconcile_poll_build_failed", exc_info=True)
                 continue
             if connector is None or not callable(getattr(connector, "sync_status", None)):
@@ -133,10 +151,34 @@ class ReconcilePoller:
                     limit=self._sweep_limit,
                 )
             except Exception:  # noqa: BLE001 — fail-open: a sweep error is one bad cycle
+                self.total_errors += 1
+                self.last_error = f"sweep_failed:{config.id}"
                 logger.warning("reconcile_poll_sweep_failed", exc_info=True)
                 continue
             reconciled += sum(1 for r in results if r.ok)
+            conflicts += sum(1 for r in results if getattr(r, "conflict", False))
+        self.total_cycles += 1
+        self.total_reconciled += reconciled
+        self.total_conflicts += conflicts
+        self.last_reconciled = reconciled
+        self.last_run_at = time.time()
         return reconciled
+
+    def status(self) -> dict:
+        """Return an observability snapshot for the admin status endpoint."""
+        return {
+            "running": self._running,
+            "interval_seconds": self._interval,
+            "sweep_limit": self._sweep_limit,
+            "sync_capable_types": list(_SYNC_CAPABLE_TYPES),
+            "total_cycles": self.total_cycles,
+            "total_reconciled": self.total_reconciled,
+            "total_conflicts": self.total_conflicts,
+            "total_errors": self.total_errors,
+            "last_reconciled": self.last_reconciled,
+            "last_run_at": self.last_run_at,
+            "last_error": self.last_error,
+        }
 
 
 _poller: ReconcilePoller | None = None

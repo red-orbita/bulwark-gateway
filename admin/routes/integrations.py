@@ -130,6 +130,16 @@ async def sightings_status(
     return {"dispatcher": get_sighting_dispatcher().status()}
 
 
+@router.get("/reconcile/status")
+async def reconcile_status(
+    user: TokenPayload = Depends(require_permission("integrations:read")),
+):
+    """Observability snapshot for the inbound reconcile poller."""
+    from ..services.integrations.reconcile_poller import get_reconcile_poller
+
+    return {"poller": get_reconcile_poller().status()}
+
+
 @router.get("")
 async def list_integrations(
     user: TokenPayload = Depends(require_permission("integrations:read")),
