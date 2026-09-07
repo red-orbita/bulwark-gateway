@@ -2073,6 +2073,32 @@ class InputGuardrail:
         re.I,
     )
 
+    # Crescendo (multi-turn jailbreak, Microsoft): the attacker primes a
+    # sensitive topic over benign-looking turns, then references the model's OWN
+    # prior answer to push it toward actionable/uncensored specifics. Two signals
+    # must co-occur in the latest turn — a back-reference to the model's previous
+    # output AND a "strong escalation" (remove caveats / give the actual working
+    # payload) — so ordinary "expand on that / more detail" follow-ups (incl.
+    # legit security education) are NOT flagged. Gated, like the escalation check,
+    # on an earlier turn having established attack context.
+    _CRESCENDO_REF_RE = re.compile(
+        r"(you\s+(just\s+)?(mentioned|said|described|listed|started|gave|outlined|explained)|"
+        r"(based\s+on|building\s+on|expand(ing)?\s+on|continu(ing|e)\s+from|from)\s+(your|the)\s+"
+        r"(?:last\s+|previous\s+|prior\s+|earlier\s+|first\s+)?(answer|response|reply|point|step|list|explanation)|"
+        r"(that|the)\s+(last|previous|first|earlier)\s+(step|point|part|answer|one)|"
+        r"you\s+(were|had)\s+(explaining|describing|listing))",
+        re.I,
+    )
+    _CRESCENDO_ESCALATE_RE = re.compile(
+        r"(more\s+(explicit|graphic|actionable|dangerous)|"
+        r"the\s+(?:(?:actual|real|full|complete|exact|working|precise|uncensored|raw)\s+){1,3}"
+        r"(code|version|method|steps?|commands?|payload|instructions?|recipe|process|script|exploit)|"
+        r"without\s+(the\s+)?(caveats?|disclaimers?|warnings?|ethics?|safety|hedging|filler|the\s+lecture)|"
+        r"(remove|drop|skip|omit|cut)\s+(the\s+)?(caveats?|disclaimers?|warnings?|ethics|safety|moralizing)|"
+        r"now\s+(show|give|provide|write|list)\s+(me\s+)?.{0,25}(actual|real|working|complete|full|exact|uncensored))",
+        re.I,
+    )
+
     def _check_cross_turn_escalation(
         self, turns: list[str], tenant_id: str, agent_id: str
     ) -> list[SecurityEvent]:
@@ -2082,8 +2108,9 @@ class InputGuardrail:
         if not has_attack_context:
             return []
 
-        # Check if the last turn is an action confirmation
         last_turn = turns[-1]
+
+        # Direct action-confirmation escalation (attack topic + "now do it for real").
         if self._ESCALATION_CONFIRM_RE.search(last_turn):
             return [
                 SecurityEvent(
@@ -2093,6 +2120,26 @@ class InputGuardrail:
                     category=ThreatCategory.PROMPT_INJECTION,
                     description="Multi-turn escalation: attack topic + action confirmation",
                     source="input_guardrail_multiturn",
+                    severity="high",
+                )
+            ]
+
+        # Crescendo: back-reference to the model's prior answer + strong escalation
+        # toward actionable/uncensored specifics on the primed sensitive topic.
+        if self._CRESCENDO_REF_RE.search(last_turn) and self._CRESCENDO_ESCALATE_RE.search(
+            last_turn
+        ):
+            return [
+                SecurityEvent(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    verdict=Verdict.BLOCK,
+                    category=ThreatCategory.JAILBREAK,
+                    description=(
+                        "Multi-turn crescendo escalation: back-reference to prior "
+                        "output + push for actionable/uncensored specifics"
+                    ),
+                    source="input_guardrail_crescendo",
                     severity="high",
                 )
             ]
