@@ -192,6 +192,33 @@ class Settings(BaseSettings):
     ga_guard_api_key: str = ""  # Optional bearer for the sidecar (supports *_FILE)
     ga_guard_verify_tls: bool = True  # Verify the sidecar's TLS certificate
 
+    # LLM-as-Judge — general chat model used as a security classifier (opt-in, off).
+    # Unlike GA Guard (a dedicated classifier sidecar), this drives a general
+    # instruction-tuned chat model (e.g. a local Gemma/Llama/Qwen served by Ollama,
+    # vLLM, or llama.cpp) over an OpenAI-compatible /v1/chat/completions endpoint,
+    # via a judge prompt that asks it to answer with a small JSON verdict. Bulwark
+    # ships NO weights — an operator reuses an LLM they already run as a second
+    # opinion behind the deterministic regex floor.
+    #
+    # INERT unless llm_judge_enabled (the scanner is not even registered otherwise —
+    # zero hot-path cost). ASYNC/WARN by default: llm_judge_blocking=False runs it as
+    # INPUT_ASYNC enrichment so a judge hiccup can never gate traffic. Even in
+    # blocking mode, a request-time network/parse error fails-OPEN (ALLOW) — the
+    # builtin regex floor already runs BLOCKING, so a transient judge outage must not
+    # 403 every request (or be weaponised as a DoS to fail the gateway closed). A
+    # blocking scanner whose endpoint is unreachable at BOOT reports health()=False
+    # so resolve_blocking_readiness makes the BULWARK_FAIL_MODE decision. httpx is a
+    # core runtime dependency, so no extra install is required.
+    llm_judge_enabled: bool = False
+    llm_judge_url: str = ""  # Chat-completions endpoint (e.g. http://ollama:11434/v1/chat/completions)
+    llm_judge_model: str = "gemma2:2b"  # Model name sent in the request body
+    llm_judge_blocking: bool = False  # If True, run INPUT_BLOCKING and BLOCK (else WARN-only)
+    llm_judge_block_threshold: float = 0.85  # Judge score at/above which to BLOCK
+    llm_judge_warn_threshold: float = 0.6  # Judge score at/above which to WARN
+    llm_judge_timeout_ms: int = 8000  # Per-request budget for the judge call
+    llm_judge_api_key: str = ""  # Optional bearer for the endpoint (supports *_FILE)
+    llm_judge_verify_tls: bool = True  # Verify the endpoint's TLS certificate
+
     # RAG Guard (Phase 5)
     rag_enabled: bool = False  # Master switch for RAG scanners (retrieval + memory guard)
 
@@ -391,6 +418,11 @@ def _build_settings() -> "Settings":
     ga_guard_key = _read_secret_file("GA_GUARD_API_KEY")
     if ga_guard_key:
         s.ga_guard_api_key = ga_guard_key
+
+    # LLM-as-Judge endpoint API key
+    llm_judge_key = _read_secret_file("LLM_JUDGE_API_KEY")
+    if llm_judge_key:
+        s.llm_judge_api_key = llm_judge_key
 
     # Redis password → inject into URL (supports redis:// and rediss:// schemes)
     redis_pw = _read_secret_file("REDIS_PASSWORD")
