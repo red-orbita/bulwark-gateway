@@ -42,8 +42,9 @@ async def list_security_events(
     q: Optional[str] = Query(
         None,
         description="Splunk/Wazuh-lite search: 'field:value' scoped filters "
-        "(tenant/agent/category/severity/verdict/request_id/incident_id/source/"
-        "pattern/tool, plus last:<n><unit>) mixed with free-text terms.",
+        "(tenant/agent/category/severity/verdict/event_id/request_id/incident_id/"
+        "input_hash/source/pattern/tool, plus last:<n><unit>) mixed with free-text "
+        "terms.",
     ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -74,8 +75,10 @@ async def list_security_events(
             verdict=verdict or parsed.verdict,
             # Search-bar-only scoped fields + relative-time lower bound.
             agent=parsed.agent,
+            event_id=parsed.event_id,
             request_id=parsed.request_id,
             incident_id=parsed.incident_id,
+            input_hash=parsed.input_hash,
             source=parsed.source,
             pattern=parsed.pattern,
             tool_name=parsed.tool_name,

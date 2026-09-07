@@ -68,7 +68,8 @@ def _verdict_condition(verdict: Optional[str]) -> tuple[str, list]:
 # Human-readable columns free-text search terms are matched against (OR per term).
 _FREE_TEXT_COLUMNS = (
     "tenant", "agent", "verdict", "category", "severity", "description",
-    "source", "pattern", "request_id", "tool_name", "snippet", "incident_id",
+    "source", "pattern", "event_id", "request_id", "tool_name", "snippet",
+    "incident_id", "input_hash",
 )
 
 
@@ -91,8 +92,10 @@ def _build_filters(
     until: Optional[float] = None,
     *,
     agent: Optional[str] = None,
+    event_id: Optional[str] = None,
     request_id: Optional[str] = None,
     incident_id: Optional[str] = None,
+    input_hash: Optional[str] = None,
     source: Optional[str] = None,
     pattern: Optional[str] = None,
     tool_name: Optional[str] = None,
@@ -105,11 +108,12 @@ def _build_filters(
     alone. The ``(tenant, ts DESC)`` / ``ts DESC`` indexes back these range
     scans, so time-window queries stay cheap even over the full retained history.
 
-    The keyword-only ``agent``/``request_id``/``incident_id``/``source``/
-    ``pattern``/``tool_name`` filters and free-text ``terms`` back the viewer's
-    Splunk-lite search bar (see :mod:`admin.services.event_query`). Scoped fields
-    match a case-insensitive substring; each free-text term must match *some*
-    human-readable column (OR across columns), and all terms must match (AND).
+    The keyword-only ``agent``/``event_id``/``request_id``/``incident_id``/
+    ``input_hash``/``source``/``pattern``/``tool_name`` filters and free-text
+    ``terms`` back the viewer's Splunk-lite search bar (see
+    :mod:`admin.services.event_query`). Scoped fields match a case-insensitive
+    substring; each free-text term must match *some* human-readable column (OR
+    across columns), and all terms must match (AND).
     """
     conditions: list[str] = []
     params: list = []
@@ -137,8 +141,10 @@ def _build_filters(
     # Scoped substring filters from the search bar (field:value tokens).
     for column, value in (
         ("agent", agent),
+        ("event_id", event_id),
         ("request_id", request_id),
         ("incident_id", incident_id),
+        ("input_hash", input_hash),
         ("source", source),
         ("pattern", pattern),
         ("tool_name", tool_name),
@@ -267,8 +273,10 @@ class SecurityEventsStore:
         since: Optional[float] = None,
         until: Optional[float] = None,
         agent: Optional[str] = None,
+        event_id: Optional[str] = None,
         request_id: Optional[str] = None,
         incident_id: Optional[str] = None,
+        input_hash: Optional[str] = None,
         source: Optional[str] = None,
         pattern: Optional[str] = None,
         tool_name: Optional[str] = None,
@@ -286,7 +294,8 @@ class SecurityEventsStore:
         """
         where, params = _build_filters(
             tenant, category, severity, verdict, since, until,
-            agent=agent, request_id=request_id, incident_id=incident_id,
+            agent=agent, event_id=event_id, request_id=request_id,
+            incident_id=incident_id, input_hash=input_hash,
             source=source, pattern=pattern, tool_name=tool_name, terms=terms,
         )
         # SQLi-safe (S608): `where` is composed only of fixed "col = ?" / "col IN

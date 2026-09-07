@@ -11,7 +11,8 @@ Two token shapes are recognised:
 * ``field:value`` — a scoped filter on a known column. Quoted values are honoured
   (``tenant:"acme corp"``). The supported fields mirror the columns exposed by the
   store: ``tenant``, ``agent``, ``category``, ``severity``, ``verdict``,
-  ``request_id``, ``incident_id``, ``source``, ``pattern``, ``tool``/``tool_name``.
+  ``event_id``, ``request_id``, ``incident_id``, ``input_hash``, ``source``,
+  ``pattern``, ``tool``/``tool_name``.
   A relative-time field ``last:<n><unit>`` (``30m``/``24h``/``7d``/``2w``) yields a
   ``since`` epoch lower bound.
 * bare tokens — free-text *terms* matched (case-insensitively, substring) across
@@ -39,8 +40,10 @@ _SCALAR_FIELDS = {
     "category": "category",
     "severity": "severity",
     "verdict": "verdict",
+    "event_id": "event_id",
     "request_id": "request_id",
     "incident_id": "incident_id",
+    "input_hash": "input_hash",
     "source": "source",
     "pattern": "pattern",
     "tool": "tool_name",
@@ -83,8 +86,10 @@ class ParsedEventQuery:
     category: Optional[str] = None
     severity: Optional[str] = None
     verdict: Optional[str] = None
+    event_id: Optional[str] = None
     request_id: Optional[str] = None
     incident_id: Optional[str] = None
+    input_hash: Optional[str] = None
     source: Optional[str] = None
     pattern: Optional[str] = None
     tool_name: Optional[str] = None
@@ -189,8 +194,10 @@ _FIELD_META: dict[str, dict[str, str]] = {
     "source": {"type": "text", "desc": "Guardrail/source that raised the event"},
     "pattern": {"type": "text", "desc": "Matched pattern id"},
     "tool": {"type": "text", "desc": "Tool name involved in a tool-call event"},
+    "event_id": {"type": "text", "desc": "Unique event id (row identity / dedup key)"},
     "request_id": {"type": "text", "desc": "Correlated request id"},
     "incident_id": {"type": "text", "desc": "Correlation incident id"},
+    "input_hash": {"type": "text", "desc": "Hash of the scanned input (pivot on repeat payloads)"},
 }
 
 

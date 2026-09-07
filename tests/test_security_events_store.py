@@ -262,6 +262,41 @@ async def test_query_filters_by_incident_id(store):
     assert [e["event_id"] for e in await store.query(incident_id="inc-42")] == ["1"]
 
 
+async def test_query_filters_by_event_id(store):
+    # Regression: searching by the unique event_id must return that exact row.
+    await store.bulk_insert([
+        _evt("evt-alpha"),
+        _evt("evt-beta"),
+    ])
+    found = await store.query(event_id="evt-alpha")
+    assert [e["event_id"] for e in found] == ["evt-alpha"]
+
+
+async def test_query_filters_by_event_id_substring_and_case_insensitive(store):
+    await store.bulk_insert([_evt("EVT-CAFE-01"), _evt("EVT-BEEF-02")])
+    assert [e["event_id"] for e in await store.query(event_id="cafe")] == ["EVT-CAFE-01"]
+
+
+async def test_query_filters_by_input_hash(store):
+    await store.bulk_insert([
+        _evt("1", input_hash="aaaa1111"),
+        _evt("2", input_hash="bbbb2222"),
+    ])
+    assert [e["event_id"] for e in await store.query(input_hash="aaaa1111")] == ["1"]
+
+
+async def test_query_free_text_term_matches_event_id_and_input_hash(store):
+    # A bare token pasted into the search box must also hit event_id / input_hash.
+    await store.bulk_insert([
+        _evt("evt-needle", input_hash="ffff9999"),
+        _evt("evt-other", input_hash="0000aaaa"),
+    ])
+    by_id = {e["event_id"] for e in await store.query(terms=["needle"])}
+    assert by_id == {"evt-needle"}
+    by_hash = {e["event_id"] for e in await store.query(terms=["ffff9999"])}
+    assert by_hash == {"evt-needle"}
+
+
 async def test_query_free_text_term_matches_any_column(store):
     await store.bulk_insert([
         _evt("1", description="base64 encoded exfiltration attempt"),
