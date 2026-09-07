@@ -1,0 +1,127 @@
+# Bulwark Gateway — Dependabot Auto-Merge
+#
+# Hands-off supply-chain hygiene. Complements the on-demand `dependabot-triage`
+# OpenCode skill (`.opencode/skills/engineering/dependabot-triage/`): this
+# workflow auto-merges only the *trivially safe* updates, the skill handles the
+# deep remediation (hashed-lock regeneration, base-image digest verification,
+# major-bump / security-alert triage).
+#
+# ── Auto-merge policy (project decision) ──────────────────────────────────────
+#   AUTO-MERGE : patch/minor updates + github-actions digest bumps.
+#   MANUAL     : majors, docker/base-image changes, and anything touching the
+#                hashed lock files (pip ecosystem) — left for a human + the
+#                `dependabot-triage` skill.
+# Ecosystem gate:
+#   github_actions → eligible for any semver (SHA-pinned + gated by security.yml)
+#   npm_and_yarn   → eligible only for patch/minor (admin Tailwind dev build)
+#   pip / docker   → never auto-merged here (lock regen / base-image verification)
+#
+# The merge itself only completes once ALL required status checks pass
+# (Trivy / Semgrep / pytest gates in security.yml + deploy.yml), so even a
+# breaking bump that reaches the auto-merge step still cannot land on red CI.
+#
+# ── Repository prerequisites (one-time, Settings) ─────────────────────────────
+#   1. Settings → General → "Allow auto-merge"                     : ENABLED
+#   2. Settings → Actions → General → "Allow GitHub Actions to
+#      create and approve pull requests"                           : ENABLED
+#   3. Branch protection on `master` with the security.yml + deploy.yml
+#      required checks (so `--auto` waits for green CI before merging).
+# Without (1)/(3) `gh pr merge --auto` is a no-op guarded by `|| true`; the PR
+# simply stays open for manual handling — fail-open, never blocks the queue.
+
+name: Dependabot Auto-Merge
+
+on:
+  pull_request:
+    branches: [master]
+  # Weekly sweep of the open backlog — Monday 07:00 UTC, one hour after
+  # Dependabot's own weekly run (see .github/dependabot.yml). This is the
+  # "review every X time" safety net for PRs opened before this workflow
+  # existed or missed by the event trigger.
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Event-driven — authoritative classification via Dependabot metadata
+  # ═══════════════════════════════════════════════════════════════════════════
+  auto-merge:
+    name: "Auto-merge safe update"
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Approve + enable auto-merge (eligible)
+        if: >
+          steps.meta.outputs.package-ecosystem == 'github_actions' ||
+          (steps.meta.outputs.package-ecosystem == 'npm_and_yarn' &&
+           (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+            steps.meta.outputs.update-type == 'version-update:semver-minor'))
+        run: |
+          gh pr review --approve "$PR_URL" || true
+          gh pr merge --auto --squash "$PR_URL" || true
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Flag for manual triage (majors / pip / docker)
+        if: >
+          steps.meta.outputs.package-ecosystem == 'pip' ||
+          steps.meta.outputs.package-ecosystem == 'docker' ||
+          steps.meta.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr edit "$PR_URL" --add-label "needs-manual-triage" || true
+          gh pr comment "$PR_URL" --body "This update requires manual triage per the auto-merge policy (major bump, base-image, or hashed-lock change). Run the \`dependabot-triage\` OpenCode skill to regenerate locks / verify the digest / assess breaking changes before merge." || true
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Scheduled sweep — clears the safe backlog ("review every X time")
+  # ═══════════════════════════════════════════════════════════════════════════
+  sweep:
+    name: "Weekly backlog sweep"
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Enable auto-merge on github-actions-only PRs
+        # fetch-metadata needs the PR event context, so the sweep classifies by
+        # changed-file paths instead: a Dependabot PR whose files ALL live under
+        # .github/ is a github-actions update (SHA-pinned, CI-gated) → safe to
+        # auto-merge. Anything touching a Dockerfile / requirements* / package*
+        # is left for the dependabot-triage skill. Conservative by design.
+        run: |
+          set -euo pipefail
+          prs=$(gh pr list --author "app/dependabot" --state open \
+                  --json number --jq '.[].number')
+          if [ -z "$prs" ]; then
+            echo "No open Dependabot PRs."
+            exit 0
+          fi
+          for pr in $prs; do
+            files=$(gh pr view "$pr" --json files --jq '.files[].path')
+            if [ -z "$files" ]; then
+              echo "PR #$pr: no files reported — skip"
+              continue
+            fi
+            if echo "$files" | grep -qvE '^\.github/'; then
+              echo "PR #$pr: touches non-actions files — skip (manual triage)"
+              gh pr edit "$pr" --add-label "needs-manual-triage" || true
+              continue
+            fi
+            echo "PR #$pr: github-actions-only — enabling auto-merge"
+            gh pr review --approve "$pr" || true
+            gh pr merge --auto --squash "$pr" || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
