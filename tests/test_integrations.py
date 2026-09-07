@@ -1399,6 +1399,125 @@ async def test_reconcile_poller_poll_once_sweeps_enabled(reconcile_env, monkeypa
     assert stored["status"] == "investigating"
 
 
+async def test_reconcile_poller_poll_once_updates_counters(reconcile_env, monkeypatch):
+    env = reconcile_env
+    from admin.services.integrations import reconcile_poller as rp_mod
+    from admin.services.integrations.registry import IntegrationConfig
+
+    await env["linked_case"]()
+
+    class _FakeRegistry:
+        configs = [
+            IntegrationConfig(
+                id="th1", name="TH", type="thehive",
+                base_url="http://th.test", api_key="k",
+            ),
+        ]
+
+        def build_connector(self, config):
+            return _FakeSyncConn(_remote_state(status="in_progress"))
+
+    monkeypatch.setattr(rp_mod, "get_integration_registry", lambda: _FakeRegistry())
+    monkeypatch.setattr(rp_mod, "get_reconcile_engine", lambda: env["engine"])
+
+    poller = rp_mod.ReconcilePoller()
+    # Fresh poller: counters zeroed, no run yet.
+    assert poller.total_cycles == 0
+    assert poller.last_run_at is None
+
+    await poller.poll_once()
+    assert poller.total_cycles == 1
+    assert poller.total_reconciled == 1
+    assert poller.total_errors == 0
+    assert poller.last_reconciled == 1
+    assert poller.last_run_at is not None
+
+    # A second cycle accumulates (idempotent reconcile → 0 new this time, but the
+    # cycle still counts).
+    await poller.poll_once()
+    assert poller.total_cycles == 2
+
+
+async def test_reconcile_poller_status_shape():
+    from admin.services.integrations import reconcile_poller as rp_mod
+
+    poller = rp_mod.ReconcilePoller(interval_seconds=42.0, sweep_limit=7)
+    snap = poller.status()
+    assert snap["enabled"] is True
+    assert snap["running"] is False
+    assert snap["interval_seconds"] == 42.0
+    assert snap["sweep_limit"] == 7
+    assert "thehive" in snap["sync_capable_types"]
+    assert snap["total_cycles"] == 0
+    assert snap["total_reconciled"] == 0
+    assert snap["total_conflicts"] == 0
+    assert snap["total_errors"] == 0
+    assert snap["last_run_at"] is None
+    assert snap["last_error"] is None
+
+
+async def test_reconcile_poller_disabled_start_is_inert():
+    from admin.services.integrations import reconcile_poller as rp_mod
+
+    poller = rp_mod.ReconcilePoller(enabled=False)
+    assert poller.status()["enabled"] is False
+    await poller.start()
+    # start() returns early: no loop task, not running.
+    assert poller._running is False
+    assert poller._task is None
+    # stop() on a never-started poller is a safe no-op.
+    await poller.stop()
+
+
+async def test_reconcile_poller_gate_from_env_default_and_off(monkeypatch):
+    from admin.services.integrations import reconcile_poller as rp_mod
+
+    # Unset → defaults ON (preserves already-wired behaviour).
+    monkeypatch.delenv("BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED", raising=False)
+    assert rp_mod.ReconcilePoller().status()["enabled"] is True
+
+    # Explicit falsey values disable it.
+    for val in ("false", "0", "no", "off"):
+        monkeypatch.setenv("BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED", val)
+        assert rp_mod.ReconcilePoller().status()["enabled"] is False
+
+    # Explicit truthy value enables it.
+    monkeypatch.setenv("BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED", "true")
+    assert rp_mod.ReconcilePoller().status()["enabled"] is True
+
+
+async def test_reconcile_poller_poll_once_fail_open_on_sweep_error(reconcile_env, monkeypatch):
+    from admin.services.integrations import reconcile_poller as rp_mod
+    from admin.services.integrations.registry import IntegrationConfig
+
+    class _BoomEngine:
+        async def sweep(self, **kwargs):
+            raise RuntimeError("remote exploded")
+
+    class _FakeRegistry:
+        configs = [
+            IntegrationConfig(
+                id="th1", name="TH", type="thehive",
+                base_url="http://th.test", api_key="k",
+            ),
+        ]
+
+        def build_connector(self, config):
+            return _FakeSyncConn(_remote_state(status="in_progress"))
+
+    monkeypatch.setattr(rp_mod, "get_integration_registry", lambda: _FakeRegistry())
+    monkeypatch.setattr(rp_mod, "get_reconcile_engine", lambda: _BoomEngine())
+
+    poller = rp_mod.ReconcilePoller()
+    # A sweep error is swallowed: poll_once returns 0, records the error, still
+    # counts the cycle — never raises.
+    reconciled = await poller.poll_once()
+    assert reconciled == 0
+    assert poller.total_errors == 1
+    assert poller.last_error is not None
+    assert poller.total_cycles == 1
+
+
 # ─── routes ──────────────────────────────────────────────────────────────────
 
 

@@ -692,6 +692,9 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_SIGHTING_POLL_INTERVAL_SECONDS` | float | `300.0` | **Admin-side**. Interval between sighting-dispatch sweeps of the durable IOC-block feed |
 | `BULWARK_SIGHTING_SWEEP_LIMIT` | int | `200` | **Admin-side**. Max IOC-block events read from the store per sweep |
 | `BULWARK_SIGHTING_MAX_PER_SWEEP` | int | `50` | **Admin-side**. Max events actually dispatched per sweep; on hitting the cap the Redis watermark parks on the last fully-processed event so the remainder is picked up next cycle |
+| `BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED` | bool | `true` | **Admin-side**. Opt-out gate for the inbound reconcile poller (poll-fallback that folds remote workflow state — status/severity/assignee — from enabled sync-capable connectors (TheHive/DFIR-IRIS) back into locally-linked cases). Defaults ON (preserves already-wired behaviour); set `false` to make `start()` inert without deleting the connector, for connectors used outbound-push only. Fail-open; observability via `GET /admin/integrations/reconcile/status` |
+| `BULWARK_INTEGRATION_RECONCILE_POLL_INTERVAL_SECONDS` | float | `300.0` | **Admin-side**. Interval between reconcile-poller sweeps of sync-capable connectors' active linked cases |
+| `BULWARK_INTEGRATION_RECONCILE_SWEEP_LIMIT` | int | `200` | **Admin-side**. Max active linked cases the reconcile poller sweeps per connector per cycle |
 
 ### Docker Secrets Support
 
@@ -901,6 +904,7 @@ python scripts/security-smoke-test.py --host http://localhost:8080
 | GET | `/admin/integrations` | Session | List outbound connectors (secrets masked) — `integrations:read` |
 | GET | `/admin/integrations/status` | Session | Registry status + `can_write` flag — `integrations:read` |
 | GET | `/admin/integrations/sightings/status` | Session | Sighting feedback dispatcher observability snapshot (enabled/running + reported/suppressed/failed counters) — `integrations:read` |
+| GET | `/admin/integrations/reconcile/status` | Session | Inbound reconcile poller observability snapshot (running/interval + cycles/reconciled/conflicts/errors counters + last_run_at/last_error) — `integrations:read` |
 | GET | `/admin/integrations/{id}` | Session | Get one connector config (secret masked) — `integrations:read` |
 | POST | `/admin/integrations` | Session | Create connector (`thehive`\|`dfir_iris`\|`cortex`\|`opencti`\|`misp`\|`taxii`). An `opencti`/`misp` connector may opt into `pull_feed` (+`pull_interval_minutes`/`pull_min_confidence`) to auto-provision a **managed IOC pull feed** (id `int-<id>`, `managed_by` set) that reuses the connector's URL + credential — read-only in `/admin/iocs` ("via Integration" badge), kept in lock-step with the connector (fail-open) — `integrations:write` |
 | PUT | `/admin/integrations/{id}` | Session | Update connector config — `integrations:write` |
