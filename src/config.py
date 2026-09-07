@@ -228,6 +228,8 @@ class Settings(BaseSettings):
     # unicode deception and parameter-injection (BWK-MCP-TP1..TP4) BEFORE the
     # request is forwarded — the one channel the message-prose input guardrail
     # never sees. Pure regex (stdlib), so no model provisioning is required.
+    # Maturity GA: deterministic detection, measured at 100% detection / 0 FP over
+    # the TP1..TP4 corpus (tests/test_mcp_scanner.py); still opt-in + WARN-by-default.
     #
     # INERT unless mcp_scanning_enabled (the scanner is not registered otherwise —
     # zero hot-path cost, and requests with no `tools` array are a zero-cost ALLOW).
