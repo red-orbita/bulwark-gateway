@@ -655,6 +655,15 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_RAG_ENABLED` | bool | `false` | Master switch for RAG retrieval scanner + memory guard |
 | `BULWARK_MCP_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `McpToolScanner` (INPUT_ASYNC, BETA). Scans the request's `tools` array (MCP/OpenAI tool definitions) with the shared stdlib MCP poisoning + least-privilege cores (`BWK-MCP-*`); inert/not registered when off |
 | `BULWARK_MCP_SCANNING_BLOCKING` | bool | `false` | When on, high/critical MCP tool-definition findings BLOCK (scanner becomes INPUT_BLOCKING); otherwise findings surface as WARN and the request proceeds |
+| `BULWARK_LLM_JUDGE_ENABLED` | bool | `false` | Opt-in: register the `LlmJudgeScanner` (INPUT_ASYNC, BETA). Drives an operator-provisioned general chat model over an OpenAI-compatible `/v1/chat/completions` endpoint (e.g. local Gemma via Ollama/vLLM) with a judge prompt and folds the model's JSON verdict into a Bulwark verdict. Ships NO weights; httpx (core dep) so no extra install. Inert/not registered when off; fail-OPEN (ALLOW) on any request-time judge error even in blocking mode |
+| `BULWARK_LLM_JUDGE_BLOCKING` | bool | `false` | When on, a judge score ≥ block threshold BLOCKs (scanner becomes INPUT_BLOCKING); otherwise the finding surfaces as WARN and the request proceeds. A blocking judge unreachable at BOOT reports `health()=False` so `resolve_blocking_readiness` makes the `BULWARK_FAIL_MODE` decision |
+| `BULWARK_LLM_JUDGE_URL` | str | `""` | Chat-completions endpoint POST target (e.g. `http://ollama:11434/v1/chat/completions`). Unset ⇒ scanner inert |
+| `BULWARK_LLM_JUDGE_MODEL` | str | `gemma2:2b` | Model name sent in the judge request body |
+| `BULWARK_LLM_JUDGE_BLOCK_THRESHOLD` | float | `0.85` | Judge attack-confidence score (0–1) at/above which to BLOCK (WARN if non-blocking) |
+| `BULWARK_LLM_JUDGE_WARN_THRESHOLD` | float | `0.6` | Judge score at/above which to WARN |
+| `BULWARK_LLM_JUDGE_TIMEOUT_MS` | int | `8000` | Per-request budget for the judge call |
+| `BULWARK_LLM_JUDGE_API_KEY` | str | `""` | Optional bearer for the endpoint (supports `*_FILE`) |
+| `BULWARK_LLM_JUDGE_VERIFY_TLS` | bool | `true` | Verify the endpoint's TLS certificate |
 | `BULWARK_SCHEMA_VALIDATION_ENABLED` | bool | `false` | Opt-in: wire the model-free `SchemaValidator` (BETA) into the output pipeline |
 | `BULWARK_RELEVANCE_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `RelevanceScanner` (BETA, OUTPUT_ASYNC). Requires `sentence-embeddings` model (`download-models.py --embeddings`) |
 | `BULWARK_HALLUCINATION_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `HallucinationScanner` (BETA, OUTPUT_ASYNC). Requires `nli-classifier` model (`download-models.py --nli`) |

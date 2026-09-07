@@ -220,6 +220,23 @@ async def lifespan(app: FastAPI):
             url=settings.ga_guard_url,
         )
 
+    # Register LLM-as-Judge scanner (opt-in, default off). Independent of
+    # BULWARK_ML_ENABLED — it ships no local weights, delegating judgement to a
+    # general chat model over an OpenAI-compatible /v1/chat/completions endpoint
+    # (httpx, a core dep). INPUT_ASYNC (WARN-only) unless BULWARK_LLM_JUDGE_BLOCKING
+    # =true. A request-time judge error fails-OPEN (ALLOW); a blocking scanner whose
+    # endpoint is unreachable at boot is caught by the readiness backstop below via
+    # health()=False.
+    if settings.llm_judge_enabled:
+        from src.scanners.ml import LlmJudgeScanner
+        pipeline.register(LlmJudgeScanner())
+        await logger.ainfo(
+            "llm_judge_scanner_registered",
+            blocking=settings.llm_judge_blocking,
+            url=settings.llm_judge_url,
+            model=settings.llm_judge_model,
+        )
+
     # Register MCP tool-definition scanner (opt-in, default off). Pure regex
     # (stdlib), so no model/sidecar provisioning — always available when enabled.
     # INPUT_ASYNC (WARN-only) unless BULWARK_MCP_SCANNING_BLOCKING=true promotes it
