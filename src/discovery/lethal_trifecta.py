@@ -122,6 +122,54 @@ def _canonicalize(capability: str) -> str:
     return _CAPABILITY_SYNONYMS.get(key, key)
 
 
+def pillars_for_capabilities(capabilities: list[str]) -> set[TrifectaPillar]:
+    """Map a raw capability list to the set of trifecta pillars it satisfies.
+
+    Pure, deterministic, side-effect-free. Unknown/benign capabilities (e.g.
+    ``text_generation``) contribute no pillar. This is the SSOT capability→pillar
+    projection reused by both the config-time :class:`LethalTrifectaAnalyzer` and
+    the runtime accumulator (:mod:`src.correlation.trifecta_runtime`), so the two
+    surfaces can never diverge on what a capability means.
+
+    Args:
+        capabilities: Capability strings in any supported spelling.
+
+    Returns:
+        The set of :class:`TrifectaPillar` the capabilities collectively light up.
+    """
+    pillars: set[TrifectaPillar] = set()
+    for raw in capabilities:
+        mapped = _CAPABILITY_PILLARS.get(_canonicalize(raw))
+        if mapped:
+            pillars.update(mapped)
+    return pillars
+
+
+def pillars_for_tools(tool_names: list[str]) -> set[TrifectaPillar]:
+    """Map a list of *tool names* to the trifecta pillars they collectively satisfy.
+
+    Capabilities are inferred from each tool name via the established
+    :meth:`MCPInventory._infer_capabilities` name heuristic (name only — no
+    description/schema at runtime), then projected onto pillars. Pure and
+    deterministic; performs no I/O and emits no events.
+
+    Args:
+        tool_names: Names of the tools invoked/available.
+
+    Returns:
+        The union of pillars across every tool's inferred capabilities.
+    """
+    if not tool_names:
+        return set()
+    inventory = MCPInventory()
+    caps: list[str] = []
+    for name in tool_names:
+        if not name:
+            continue
+        caps.extend(inventory._infer_capabilities(name, "", {}))
+    return pillars_for_capabilities(caps)
+
+
 @dataclass
 class TrifectaAssessment:
     """Result of a lethal-trifecta analysis over a capability set."""

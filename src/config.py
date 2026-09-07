@@ -381,6 +381,25 @@ class Settings(BaseSettings):
     # block more aggressively; raise it to require stronger content evidence.
     correlation_confidence_block_threshold: float = 0.5
 
+    # === Runtime Lethal-Trifecta Accumulator ===
+    # Complements the config-time lethal-trifecta analyzer (declared toolset) with
+    # a runtime signal: accumulate, per origin (authenticated subject when known,
+    # else tenant+agent session) over a sliding window, which of the three breach-
+    # enabling pillars the origin has actually *exercised* — data access +
+    # untrusted-content exposure + an outbound exfiltration channel — from the tools
+    # it invokes plus a suspicious INPUT / sensitive OUTPUT in the same request. On
+    # first completion of all three pillars, emit an EXCESSIVE_AGENCY event and
+    # elevate the origin's risk state so adaptive enforcement hardens the next
+    # requests. Off by default — fully inert (no state, no I/O) when disabled.
+    trifecta_runtime_enabled: bool = False
+    # When True, the completing request is BLOCKed (its content is scrubbed);
+    # otherwise it only WARNs + records the event and elevates risk (observe-first).
+    trifecta_runtime_blocking: bool = False
+    # Sliding-window (seconds) over which pillars accumulate for an origin. A pillar
+    # not re-exercised within the window decays out, so the trifecta reflects
+    # *recent* behaviour rather than lifetime activity. Default 30 minutes.
+    trifecta_runtime_window_seconds: float = 1800.0
+
     # === Investigation Center ===
     # When an analyst enriches/looks-up a case observable and the threat-intel
     # platform (Cortex/OpenCTI/MISP) returns a *malicious* verdict, the observable is

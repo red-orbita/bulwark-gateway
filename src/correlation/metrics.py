@@ -51,6 +51,8 @@ FIELDS: tuple[str, ...] = (
     "tap_published",            # events accepted into the event-tap queue
     "tap_processed",            # events folded into risk state by the consumer
     "tap_dropped",              # events dropped on a full queue (risk telemetry loss)
+    "trifecta_completed_total", # runtime lethal-trifecta first-completions
+    "trifecta_blocked",         # of those, verdict == BLOCK (blocking mode on)
 )
 
 # --- Inline-evaluation latency histogram -------------------------------------

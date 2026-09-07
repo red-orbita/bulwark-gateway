@@ -36,6 +36,7 @@ from src.config import settings
 from src.correlation.event_tap import get_event_tap
 from src.correlation.incident import get_correlator
 from src.correlation.metrics import observe_correlation_latency, record_correlation_metric
+from src.correlation.trifecta_runtime import get_trifecta_tracker
 from src.enrichment.manager import get_enrichment_manager
 from src.guardrails.input_guardrail import InputGuardrail
 from src.guardrails.output_filter import OutputFilter
@@ -1311,6 +1312,49 @@ async def chat_completions(request: Request):
                         )
                     _msg.pop("tool_calls", None)
                 record_correlation_metric("incidents_blocked")
+                _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+                _record_tenant_usage(tenant_id, "block")
+                return JSONResponse(content=response_data)
+
+    # === PHASE 5d: Runtime Lethal-Trifecta Accumulator ===
+    # Complements the config-time trifecta analyzer (declared toolset) with runtime
+    # behaviour: track, per origin over a sliding window, whether the tools actually
+    # invoked — plus a suspicious INPUT / sensitive OUTPUT in this request — have now
+    # exercised all three breach-enabling pillars (data access + untrusted-content
+    # exposure + an outbound exfiltration channel). On the request that first
+    # completes the trifecta, emit an EXCESSIVE_AGENCY event and elevate the origin's
+    # risk state; BLOCK the completing response when trifecta_runtime_blocking is on.
+    # Fully inert (no state, no I/O) when disabled.
+    if settings.trifecta_runtime_enabled:
+        _tri_tool_names: list[str] = []
+        for choice in choices:
+            for _tc in choice.get("message", {}).get("tool_calls", []):
+                _tc_name = _tc.get("function", {}).get("name", "")
+                if _tc_name:
+                    _tri_tool_names.append(_tc_name)
+        _tri_event = get_trifecta_tracker().observe_request(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            tool_names=_tri_tool_names,
+            input_categories=[e.category for e in input_result.events if e.category],
+            output_categories=[e.category for e in _output_events_corr if e.category],
+            request_id=request_id,
+            subject_id=subject_id,
+        )
+        if _tri_event is not None:
+            await _log_events([_tri_event], source_ip)
+            asyncio.create_task(_fire_webhook_alert([_tri_event], tenant_id, agent_id))
+            _push_recent_block([_tri_event], tenant_id, agent_id, snippet_source=None)
+            if _tri_event.verdict == Verdict.BLOCK:
+                # Confirmed runtime trifecta — scrub the response before it ships.
+                for choice in choices:
+                    _msg = choice.get("message", {})
+                    if _msg.get("content"):
+                        _msg["content"] = (
+                            "[Content blocked by security policy — "
+                            "runtime lethal trifecta detected]"
+                        )
+                    _msg.pop("tool_calls", None)
                 _counters.record("block", (time.perf_counter() - _req_start) * 1000)
                 _record_tenant_usage(tenant_id, "block")
                 return JSONResponse(content=response_data)
