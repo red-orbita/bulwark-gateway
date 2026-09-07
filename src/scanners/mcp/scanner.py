@@ -20,6 +20,15 @@ high/critical finding then returns 403 before the request is forwarded).
 
 Zero third-party dependencies (pure regex), so it is always available — no model
 provisioning required.
+
+Maturity: **GA**. The detection is deterministic (regex over a bounded ``tools``
+array, not a probabilistic model), and its efficacy is measured — the corpus in
+``tests/test_mcp_scanner.py`` asserts 100% detection across the TP1..TP4 rules and
+0 false positives on a benign toolset, and the pipeline-lane / readiness tests
+prove a blocking MCP scanner is boot-safe (never fails closed). GA scopes an
+honest claim: "the implemented TP1..TP4 tool-poisoning rules are production-proven",
+not "all conceivable MCP abuse is caught". It stays opt-in and defaults to
+WARN/async; blocking is the recommended production posture, not the default.
 """
 
 from __future__ import annotations
@@ -90,13 +99,13 @@ class McpToolScanner(InputScanner):
         )
         return ScannerInfo(
             name="mcp_tool_scanner",
-            version="1.0.0",
+            version="1.1.0",
             scanner_type=scanner_type,
             description=(
                 "MCP tool-definition poisoning detection "
                 "(hidden instructions, unicode deception, param injection)"
             ),
-            maturity=MaturityTier.BETA,
+            maturity=MaturityTier.GA,
             author="bulwark",
             priority=30,
         )
