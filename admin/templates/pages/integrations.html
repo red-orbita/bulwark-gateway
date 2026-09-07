@@ -147,6 +147,82 @@
         </div>
     </div>
 
+    <!-- Background worker observability (read-only) -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="activity" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Background Worker Observability</h2>
+            </div>
+            <span class="text-[10px] text-gray-500">read-only — fire-and-forget workers, fail-open</span>
+        </div>
+        <p class="text-xs text-gray-500 mb-4 max-w-3xl">Live health of the three fail-open background workers that feed the threat-intel and SOAR loop. Governed by <code class="text-gray-400">BULWARK_*</code> env at boot — not tunable from this page.</p>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- Sighting feedback dispatcher -->
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-1.5">
+                        <i data-lucide="radar" class="w-3.5 h-3.5 text-gray-400"></i>
+                        <span class="text-xs font-medium text-gray-200">Sighting Dispatcher</span>
+                    </div>
+                    <span class="sg-badge text-[10px]" :class="workerBadge(sightingsStatus)" x-text="workerLabel(sightingsStatus)"></span>
+                </div>
+                <p class="text-[11px] text-gray-500 mb-2">Reports proxy IOC-match blocks back to the source threat-intel platform.</p>
+                <template x-if="sightingsStatus">
+                    <div class="space-y-1 text-[11px]">
+                        <div class="flex justify-between"><span class="text-gray-500">Reported</span><span class="text-emerald-300 font-mono" x-text="sightingsStatus.total_reported ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Suppressed</span><span class="text-gray-300 font-mono" x-text="sightingsStatus.total_suppressed ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Failed</span><span class="font-mono" :class="(sightingsStatus.total_failed ?? 0) > 0 ? 'text-red-400' : 'text-gray-300'" x-text="sightingsStatus.total_failed ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Interval</span><span class="text-gray-400 font-mono" x-text="(sightingsStatus.interval_seconds ?? 0) + 's'"></span></div>
+                        <div x-show="sightingsStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="sightingsStatus.last_error" x-text="'⚠ ' + sightingsStatus.last_error"></div>
+                    </div>
+                </template>
+                <div x-show="!sightingsStatus" x-cloak class="text-[11px] text-gray-600">No data.</div>
+            </div>
+            <!-- Inbound reconcile poller -->
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-1.5">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-gray-400"></i>
+                        <span class="text-xs font-medium text-gray-200">Reconcile Poller</span>
+                    </div>
+                    <span class="sg-badge text-[10px]" :class="workerBadge(reconcileStatus)" x-text="workerLabel(reconcileStatus)"></span>
+                </div>
+                <p class="text-[11px] text-gray-500 mb-2">Folds remote workflow state (status/severity/assignee) back into linked cases.</p>
+                <template x-if="reconcileStatus">
+                    <div class="space-y-1 text-[11px]">
+                        <div class="flex justify-between"><span class="text-gray-500">Cycles</span><span class="text-gray-300 font-mono" x-text="reconcileStatus.total_cycles ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Reconciled</span><span class="text-emerald-300 font-mono" x-text="reconcileStatus.total_reconciled ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Conflicts</span><span class="font-mono" :class="(reconcileStatus.total_conflicts ?? 0) > 0 ? 'text-amber-400' : 'text-gray-300'" x-text="reconcileStatus.total_conflicts ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Errors</span><span class="font-mono" :class="(reconcileStatus.total_errors ?? 0) > 0 ? 'text-red-400' : 'text-gray-300'" x-text="reconcileStatus.total_errors ?? 0"></span></div>
+                        <div x-show="reconcileStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="reconcileStatus.last_error" x-text="'⚠ ' + reconcileStatus.last_error"></div>
+                    </div>
+                </template>
+                <div x-show="!reconcileStatus" x-cloak class="text-[11px] text-gray-600">No data.</div>
+            </div>
+            <!-- Event webhook delivery -->
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-1.5">
+                        <i data-lucide="send" class="w-3.5 h-3.5 text-gray-400"></i>
+                        <span class="text-xs font-medium text-gray-200">Webhook Delivery</span>
+                    </div>
+                    <span class="sg-badge text-[10px] sg-badge-neutral" x-text="webhookDeliveryStatus ? 'process-local' : 'no data'"></span>
+                </div>
+                <p class="text-[11px] text-gray-500 mb-2">Fire-and-forget fan-out of case lifecycle events to subscribed SOAR endpoints.</p>
+                <template x-if="webhookDeliveryStatus">
+                    <div class="space-y-1 text-[11px]">
+                        <div class="flex justify-between"><span class="text-gray-500">Delivered</span><span class="text-emerald-300 font-mono" x-text="webhookDeliveryStatus.total_delivered ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Failed</span><span class="font-mono" :class="(webhookDeliveryStatus.total_failed ?? 0) > 0 ? 'text-red-400' : 'text-gray-300'" x-text="webhookDeliveryStatus.total_failed ?? 0"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-500">Subscriptions</span><span class="text-gray-300 font-mono" x-text="(webhookDeliveryStatus.subscriptions || []).length"></span></div>
+                        <div x-show="webhookDeliveryStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="webhookDeliveryStatus.last_error" x-text="'⚠ ' + webhookDeliveryStatus.last_error"></div>
+                    </div>
+                </template>
+                <div x-show="!webhookDeliveryStatus" x-cloak class="text-[11px] text-gray-600">No data.</div>
+            </div>
+        </div>
+    </div>
+
     <!-- Create/Edit modal -->
     <div x-show="modal.open" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0,0,0,0.6);">
         <div class="sg-card w-full max-w-lg" @click.outside="modal.open = false">
@@ -314,6 +390,9 @@ function integrationsPage() {
         webhooks: [],
         eventTypes: [],
         whModal: { open: false, editing: false, saving: false, form: {} },
+        sightingsStatus: null,
+        reconcileStatus: null,
+        webhookDeliveryStatus: null,
 
         get enabledCount() { return this.integrations.filter(i => i.enabled).length; },
 
@@ -322,6 +401,7 @@ function integrationsPage() {
         async reloadAll() {
             await this.loadStatus();
             await this.loadWebhooks();
+            await this.loadWorkerObservability();
             this.$nextTick(() => window.lucide && window.lucide.createIcons());
         },
 
@@ -348,6 +428,34 @@ function integrationsPage() {
                 const res = await fetch('/admin/integrations/' + encodeURIComponent(id) + '/health');
                 if (res.ok) { this.health[id] = await res.json(); }
             } catch (e) { /* non-fatal */ }
+        },
+
+        async loadWorkerObservability() {
+            // Read-only, fail-open: a worker snapshot that 403s (insufficient
+            // permission) or errors simply leaves its card in the "no data" state.
+            try {
+                const res = await fetch('/admin/integrations/sightings/status');
+                if (res.ok) { this.sightingsStatus = (await res.json()).dispatcher || null; }
+            } catch (e) { /* non-fatal */ }
+            try {
+                const res = await fetch('/admin/integrations/reconcile/status');
+                if (res.ok) { this.reconcileStatus = (await res.json()).poller || null; }
+            } catch (e) { /* non-fatal */ }
+            try {
+                const res = await fetch('/admin/integrations/webhooks/status');
+                if (res.ok) { this.webhookDeliveryStatus = (await res.json()).emitter || null; }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        workerBadge(s) {
+            if (!s || !s.enabled) return 'sg-badge-neutral';
+            return s.running ? 'sg-badge-success' : 'sg-badge-warning';
+        },
+
+        workerLabel(s) {
+            if (!s) return 'no data';
+            if (!s.enabled) return 'disabled';
+            return s.running ? 'running' : 'stopped';
         },
 
         typeLabel(t) {
