@@ -297,6 +297,7 @@ async def ml_scanner_status(
             "grounding_scanning_enabled",
             "image_hygiene_scanning_enabled",
             "vision_scanning_enabled",
+            "long_context_scanning_enabled",
         )
     }
 

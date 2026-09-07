@@ -716,6 +716,7 @@ def _summarize_scanners(raw: dict) -> dict:
             "grounding_scanning_enabled",
             "image_hygiene_scanning_enabled",
             "vision_scanning_enabled",
+            "long_context_scanning_enabled",
         )
     }
     return {

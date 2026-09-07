@@ -233,6 +233,22 @@ async def lifespan(app: FastAPI):
             blocking=settings.mcp_scanning_blocking,
         )
 
+    # Register long-context moderation scanner (opt-in, default off). Pure regex
+    # via the SHARED InputGuardrail (SSOT), so no model provisioning — always
+    # available when enabled. It re-scans only the content PAST the guardrail's
+    # 16 KB boundary (the long-context blind spot) plus a many-shot-jailbreak
+    # density heuristic. INPUT_ASYNC (WARN-only) unless
+    # BULWARK_LONG_CONTEXT_SCANNING_BLOCKING=true promotes it to INPUT_BLOCKING
+    # (a deep finding then 403s before forwarding). Short prompts are a zero-cost
+    # ALLOW; total regex work is hard-capped by BULWARK_LONG_CONTEXT_MAX_SCAN_BYTES.
+    if settings.long_context_scanning_enabled:
+        from src.scanners.longcontext import LongContextScanner
+        pipeline.register(LongContextScanner())
+        await logger.ainfo(
+            "long_context_scanner_registered",
+            blocking=settings.long_context_scanning_blocking,
+        )
+
     # Register RAG Guard scanners (memory manipulation + retrieval poisoning)
     if settings.rag_enabled:
         from src.scanners.rag.memory_guard import MemoryGuard

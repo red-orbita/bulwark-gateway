@@ -212,6 +212,26 @@ class Settings(BaseSettings):
     mcp_scanning_enabled: bool = False
     mcp_scanning_blocking: bool = False  # If True, run INPUT_BLOCKING and BLOCK on high/critical (else WARN-only)
 
+    # Long-context moderation (opt-in, default off). The classic input guardrail
+    # caps its regex work with a head-first sliding window at max_scan_bytes
+    # (16 KB) — a DoS control that leaves a blind spot: an injection buried PAST
+    # that boundary in a very long prompt (pasted document, huge retrieved chunk,
+    # many-shot transcript) is never regex-scanned. The LongContextScanner closes
+    # it additively by re-running the SHARED InputGuardrail (SSOT — no forked
+    # patterns, no new deps) only over the content beyond the boundary, chunked so
+    # each window is scanned in full, plus a many-shot-jailbreak density heuristic.
+    #
+    # INERT unless long_context_scanning_enabled (not registered otherwise — zero
+    # hot-path cost; short prompts are a zero-cost ALLOW). ASYNC/WARN by default:
+    # long_context_scanning_blocking=False runs it INPUT_ASYNC (findings
+    # logged/alerted, request proceeds). When blocking=True it runs INPUT_BLOCKING
+    # and a deep BLOCK-worthy finding returns 403 before forwarding. Total regex
+    # work is hard-capped by long_context_max_scan_bytes so it can never amplify a
+    # large prompt into unbounded work.
+    long_context_scanning_enabled: bool = False
+    long_context_scanning_blocking: bool = False  # If True, INPUT_BLOCKING + BLOCK on deep findings (else WARN-only)
+    long_context_max_scan_bytes: int = 262_144  # Hard cap on bytes examined (deep windows + many-shot count)
+
     # Multilingual Detection (Phase 3)
     multilingual_enabled: bool = False  # Master switch for language detection + multilingual patterns
 
