@@ -174,6 +174,8 @@ async def internal_scanner_status(request: Request):
         "image_hygiene_scanning_enabled": settings.image_hygiene_scanning_enabled,
         "vision_scanning_enabled": settings.vision_scanning_enabled,
         "long_context_scanning_enabled": settings.long_context_scanning_enabled,
+        "llm_judge_enabled": settings.llm_judge_enabled,
+        "mcp_scanning_enabled": settings.mcp_scanning_enabled,
         "lanes": {
             "input_blocking": pipeline.input_blocking_count,
             "input_async": pipeline.input_async_count,
