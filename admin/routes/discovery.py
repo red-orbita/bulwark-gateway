@@ -15,6 +15,7 @@ from src.discovery.agent_discovery import (
     KNOWN_PORTS,
     AgentDiscovery,
 )
+from src.discovery.lethal_trifecta import LethalTrifectaAnalyzer
 from src.discovery.mcp_inventory import (
     MCPInventory,
     MCPTool,
@@ -156,6 +157,35 @@ class MCPSuggestPolicyResponse(BaseModel):
     policy: dict = Field(..., description="Suggested policy in policy-file shape (incl. _rationale)")
     policy_yaml: str = Field(..., description="Loadable YAML (no _rationale) for config/policies/")
     rationale: list[dict] = Field(default_factory=list, description="Per-tool allow/deny reasoning")
+
+
+class MCPTrifectaRequest(BaseModel):
+    """Request to assess a toolset/capability set for the lethal trifecta.
+
+    Provide ``tools`` (capabilities pooled across the toolset — the usual
+    config-time input) and/or a raw ``capabilities`` list. At least one must be
+    non-empty.
+    """
+    tools: list[MCPToolSpec] = Field(
+        default_factory=list, description="Enumerated MCP tools to pool"
+    )
+    capabilities: list[str] = Field(
+        default_factory=list, description="Raw capability strings to assess"
+    )
+
+
+class MCPTrifectaResponse(BaseModel):
+    """Lethal-trifecta assessment result."""
+    score: float = Field(..., description="0-10 risk score")
+    verdict: str = Field(..., description="critical | warn | safe")
+    complete: bool = Field(..., description="All three pillars present")
+    pillars_present: list[str] = Field(default_factory=list)
+    pillar_evidence: dict[str, list[str]] = Field(default_factory=dict)
+    findings: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    break_recommendation: str | None = Field(
+        None, description="Cheapest pillar to remove to break the trifecta"
+    )
 
 
 class MCPEnumerateRequest(BaseModel):
@@ -348,6 +378,33 @@ def mcp_suggest_policy(
         policy_yaml=policy_yaml,
         rationale=rationale,
     )
+
+
+@router.post("/mcp/trifecta", response_model=MCPTrifectaResponse)
+def mcp_trifecta(
+    req: MCPTrifectaRequest,
+    user: TokenPayload = Depends(require_permission("admin:read")),
+) -> MCPTrifectaResponse:
+    """Assess a toolset/capability set for the lethal trifecta.
+
+    Pools capabilities across every supplied tool plus any raw capabilities and
+    reports whether the agent simultaneously holds all three breach-enabling
+    pillars (private-data access, untrusted-content exposure, and an outbound
+    exfiltration channel). Config-time only — no events emitted.
+    """
+    if not req.tools and not req.capabilities:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one of 'tools' or 'capabilities'.",
+        )
+
+    analyzer = LethalTrifectaAnalyzer()
+    pooled: list[str] = list(req.capabilities)
+    for spec in req.tools:
+        pooled.extend(spec.capabilities)
+
+    assessment = analyzer.analyze_capabilities(pooled)
+    return MCPTrifectaResponse(**asdict(assessment))
 
 
 @router.post("/mcp/enumerate", response_model=MCPEnumerateResponse)
