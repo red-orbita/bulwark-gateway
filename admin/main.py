@@ -150,7 +150,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # the two inbound-sync trigger paths. On a configurable interval it sweeps every
     # enabled, sync-capable (TheHive / DFIR-IRIS) connector's active linked cases
     # and folds any remote workflow change back into the local case. Fail-open: a
-    # dead remote or a sweep error is one skipped cycle, never a crash.
+    # dead remote or a sweep error is one skipped cycle, never a crash. Defaults ON;
+    # disable with BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED=false (start() is then
+    # inert) for connectors used outbound-push only.
     from .services.integrations.reconcile_poller import get_reconcile_poller
     reconcile_poller = get_reconcile_poller()
     await reconcile_poller.start()

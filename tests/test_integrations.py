@@ -1443,6 +1443,7 @@ async def test_reconcile_poller_status_shape():
 
     poller = rp_mod.ReconcilePoller(interval_seconds=42.0, sweep_limit=7)
     snap = poller.status()
+    assert snap["enabled"] is True
     assert snap["running"] is False
     assert snap["interval_seconds"] == 42.0
     assert snap["sweep_limit"] == 7
@@ -1453,6 +1454,36 @@ async def test_reconcile_poller_status_shape():
     assert snap["total_errors"] == 0
     assert snap["last_run_at"] is None
     assert snap["last_error"] is None
+
+
+async def test_reconcile_poller_disabled_start_is_inert():
+    from admin.services.integrations import reconcile_poller as rp_mod
+
+    poller = rp_mod.ReconcilePoller(enabled=False)
+    assert poller.status()["enabled"] is False
+    await poller.start()
+    # start() returns early: no loop task, not running.
+    assert poller._running is False
+    assert poller._task is None
+    # stop() on a never-started poller is a safe no-op.
+    await poller.stop()
+
+
+async def test_reconcile_poller_gate_from_env_default_and_off(monkeypatch):
+    from admin.services.integrations import reconcile_poller as rp_mod
+
+    # Unset → defaults ON (preserves already-wired behaviour).
+    monkeypatch.delenv("BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED", raising=False)
+    assert rp_mod.ReconcilePoller().status()["enabled"] is True
+
+    # Explicit falsey values disable it.
+    for val in ("false", "0", "no", "off"):
+        monkeypatch.setenv("BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED", val)
+        assert rp_mod.ReconcilePoller().status()["enabled"] is False
+
+    # Explicit truthy value enables it.
+    monkeypatch.setenv("BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED", "true")
+    assert rp_mod.ReconcilePoller().status()["enabled"] is True
 
 
 async def test_reconcile_poller_poll_once_fail_open_on_sweep_error(reconcile_env, monkeypatch):

@@ -14,11 +14,15 @@ fail-open: a dead remote, an unbuildable connector, or a sweep error degrades to
 "nothing reconciled this cycle" and never stops the loop.
 
 The poller is started/stopped with the admin app in :func:`admin.main.lifespan`.
-For observability it keeps cumulative counters (cycles run, cases reconciled,
-conflicts surfaced, errors) plus the last-run timestamp and last error, surfaced
-via :meth:`status` and the ``GET /admin/integrations/reconcile/status`` endpoint —
-mirroring the sighting dispatcher. :meth:`poll_once` is also directly callable +
-unit-testable without the loop.
+It defaults ON (preserving the already-wired behaviour) but can be turned off with
+``BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED=false`` — inbound reconcile mutates
+local case workflow state from the remote, so an operator running a connector for
+outbound push only can opt out without deleting it. For observability it keeps
+cumulative counters (cycles run, cases reconciled, conflicts surfaced, errors)
+plus the last-run timestamp and last error, surfaced via :meth:`status` and the
+``GET /admin/integrations/reconcile/status`` endpoint — mirroring the sighting
+dispatcher. :meth:`poll_once` is also directly callable + unit-testable without
+the loop.
 """
 
 from __future__ import annotations
@@ -52,16 +56,34 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 class ReconcilePoller:
     """Periodically sweeps sync-capable connectors' active cases for remote changes."""
 
     def __init__(
         self,
         *,
+        enabled: bool | None = None,
         interval_seconds: float | None = None,
         sweep_limit: int | None = None,
         startup_delay_seconds: float = 15.0,
     ) -> None:
+        # Opt-out gate. Inbound reconcile mutates local case workflow state
+        # (status/severity/assignee) from the remote, so an operator may want to
+        # run a connector for outbound push only. Defaults ON to preserve the
+        # already-wired behaviour — set BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED
+        # =false to disable the background loop without deleting the connector.
+        self._enabled = (
+            enabled
+            if enabled is not None
+            else _env_bool("BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED", True)
+        )
         self._interval = (
             interval_seconds
             if interval_seconds is not None
@@ -86,7 +108,12 @@ class ReconcilePoller:
         self.last_error: str | None = None
 
     async def start(self) -> None:
-        """Start the poll loop (idempotent)."""
+        """Start the poll loop (idempotent). Inert when disabled."""
+        if not self._enabled:
+            logger.info(
+                "Reconcile poller disabled (BULWARK_INTEGRATION_RECONCILE_POLL_ENABLED)"
+            )
+            return
         if self._running:
             return
         self._running = True
@@ -167,6 +194,7 @@ class ReconcilePoller:
     def status(self) -> dict:
         """Return an observability snapshot for the admin status endpoint."""
         return {
+            "enabled": self._enabled,
             "running": self._running,
             "interval_seconds": self._interval,
             "sweep_limit": self._sweep_limit,
