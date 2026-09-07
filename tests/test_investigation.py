@@ -1335,3 +1335,194 @@ class TestInvestigationRespond:
             await inv.investigation_respond(body, user=_admin(tenant="acme"))
         assert ei.value.status_code == 404
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# SOAR pipeline end-to-end (proxy correlation ⇄ admin investigation)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _BridgePipeline:
+    """Records ``hgetall`` calls and replays them on ``execute`` (redis-py-style).
+
+    Only the surface :meth:`RiskStateStore._get_many_redis` touches — a batch of
+    ``hgetall`` reads collapsed into one round-trip.
+    """
+
+    def __init__(self, backend: "_BridgeRedis") -> None:
+        self._backend = backend
+        self._keys: list[str] = []
+
+    def hgetall(self, key: str) -> "_BridgePipeline":
+        self._keys.append(key)
+        return self
+
+    def execute(self) -> list:
+        rows = [self._backend.hgetall(k) for k in self._keys]
+        self._keys = []
+        return rows
+
+
+class _BridgeRedis(_FakeRedis):
+    """A single fake Redis that satisfies BOTH services at once.
+
+    The proxy's :class:`~src.correlation.risk_state.RiskStateStore` (atomic
+    ``register_script`` bump + pipelined ``hgetall``) and the admin response path
+    (``ping``/``hgetall``/``hset``/``expire``, inherited from :class:`_FakeRedis`)
+    read and write the one shared ``_h`` hash map — exactly how real Redis is the
+    only shared state between the two independently-deployed services. So a proxy
+    ``bump`` and an admin ``raise_risk`` on the same origin key are mutually
+    observable, which is what makes the cross-service handoff testable in-process.
+    """
+
+    def register_script(self, _src: str):
+        from src.correlation.risk_state import _apply_bump
+
+        def _script(keys, args):
+            key = keys[0]
+            now = float(args[0])
+            amount = float(args[1])
+            half_life = float(args[2])
+            max_score = float(args[3])
+            ttl = int(args[4])
+            cur = self._h.get(key, {})
+            prev_score = float(cur.get("score", 0.0) or 0.0)
+            prev_ts = float(cur.get("ts", now) or now)
+            new_score = _apply_bump(prev_score, prev_ts, now, amount, half_life, max_score)
+            self.hset(key, mapping={"score": new_score, "ts": now})
+            self.expire(key, ttl)
+            return str(new_score)
+
+        return _script
+
+    def pipeline(self) -> _BridgePipeline:
+        return _BridgePipeline(self)
+
+
+class TestSoarPipelineE2E:
+    """The full SOAR loop across both services, meeting only at a shared Redis.
+
+    This is the first test that spans the whole detection → investigation →
+    response → enforcement cycle end-to-end (minus HTTP transport): the proxy's
+    correlation engine accrues origin risk from suspicious traffic, an analyst
+    opens a case and hardens the at-risk origin via the admin response verb, and
+    the proxy — reading the same Redis — hardens that origin's *next* request to
+    BLOCK. The two services never import one another; their only contact is the
+    ``bulwark:risk:{scope}:{digest}`` key, so a shared fake Redis stands in for it.
+    """
+
+    async def test_response_action_hardens_proxy_enforcement(self, case_wired, monkeypatch):
+        inv, _events, _triage, _audit, case_store = case_wired
+
+        from src.config import settings
+        from src.correlation.event_tap import CorrelationEventTap
+        from src.correlation.incident import InputOutputCorrelator
+        from src.correlation.risk_state import RiskStateStore
+        from src.correlation.runtime import CorrelationRuntimeConfig
+        from src.models import SecurityEvent, ThreatCategory, Verdict
+
+        # Correlation enforcement ON + blocking, standard thresholds (warn 4 / block 7).
+        monkeypatch.setattr(settings, "correlation_enabled", True, raising=False)
+        monkeypatch.setattr(settings, "correlation_blocking", True, raising=False)
+        monkeypatch.setattr(settings, "correlation_risk_block_threshold", 7.0, raising=False)
+        monkeypatch.setattr(settings, "correlation_risk_warn_threshold", 4.0, raising=False)
+
+        # The single meeting point between the proxy and admin services.
+        bridge = _BridgeRedis()
+
+        # ── Proxy side: risk store + event tap + correlator, all sharing the bridge.
+        store = RiskStateStore(decay_seconds=900.0)
+        store._redis = bridge  # type: ignore[assignment]
+        store._initialized = True
+        tap = CorrelationEventTap()
+        tap._risk = store
+        tap._runtime = CorrelationRuntimeConfig()  # static defaults, reads settings live
+        correlator = InputOutputCorrelator()
+        correlator._risk = store
+
+        # ── Admin side: the response route writes to the SAME bridge Redis.
+        monkeypatch.setattr(inv, "_redis", lambda: bridge)
+
+        def _suspicious() -> SecurityEvent:
+            # WARN × critical = 0.5 × 2.0 = 1.0 accrued per event on the subject scope.
+            return SecurityEvent(
+                tenant_id="acme", agent_id="bot", verdict=Verdict.WARN,
+                category=ThreatCategory.PROMPT_INJECTION, description="suspicious",
+                source="input_guardrail", severity="critical",
+            )
+
+        # 1. DETECTION — five suspicious requests from one authenticated actor accrue
+        #    origin risk through the real async event tap → shared Redis.
+        tap.start()
+        try:
+            for _ in range(5):
+                tap.publish(_suspicious(), subject_id="alice")
+            assert tap._queue is not None
+            await tap._queue.join()  # deterministic: wait for the consumer to drain
+        finally:
+            await tap.stop()
+
+        # Pre-response the origin is elevated (WARN) but NOT yet hard-blocked.
+        pre = correlator.evaluate_origin_risk(
+            tenant_id="acme", agent_id="bot", subject_id="alice"
+        )
+        assert pre is not None
+        assert pre.verdict == Verdict.WARN
+        assert 4.0 <= pre.score < 7.0
+
+        # 2. INVESTIGATION — an analyst opens a case and links the at-risk origin.
+        #    The origin token is the SAME irreversible scope:digest the proxy keys on.
+        digest = RiskStateStore.scope_digest("subject", "acme:alice")
+        token = f"subject:{digest}"
+        case = await case_store.create_case(title="actor alice abuse", actor="analyst")
+        cid = case["case_id"]
+        await case_store.add_subject(
+            case_id=cid, subject_type="origin", subject_key=token, actor="analyst"
+        )
+
+        # 3. RESPONSE — the analyst hardens the origin via the response verb; the
+        #    action writes the risk key to the shared Redis and is journalled on the case.
+        result = await inv.investigation_respond(
+            inv.RespondRequest(
+                action="raise_risk", scope_type="subject", digest=digest,
+                amount=1.0, case_id=cid,
+            ),
+            user=_admin(),
+        )
+        assert result["new_score"] >= 7.0
+        assert result["correlation_enabled"] is True
+        assert "warning" not in result  # enforcement is live — the operator is not misled
+        assert result.get("case_note_added") is True
+
+        # 4. ENFORCEMENT — reading the SAME Redis, the proxy hardens the origin's very
+        #    next request to BLOCK. The loop is closed across both services.
+        post = correlator.evaluate_origin_risk(
+            tenant_id="acme", agent_id="bot", subject_id="alice"
+        )
+        assert post is not None
+        assert post.verdict == Verdict.BLOCK
+        assert post.score >= 7.0
+
+    async def test_response_without_enforcement_warns_operator(self, case_wired, monkeypatch):
+        """A ``raise_risk`` with correlation OFF still writes, but flags the proxy
+        will not act on it — so an operator is never misled into a false sense of
+        containment (the honesty guarantee of the response verb)."""
+        inv, _events, _triage, _audit, _case_store = case_wired
+
+        from src.config import settings
+
+        monkeypatch.setattr(settings, "correlation_enabled", False, raising=False)
+        bridge = _BridgeRedis()
+        monkeypatch.setattr(inv, "_redis", lambda: bridge)
+
+        digest = "0123456789abcdef"
+        result = await inv.investigation_respond(
+            inv.RespondRequest(
+                action="raise_risk", scope_type="subject", digest=digest, amount=1.0
+            ),
+            user=_admin(),
+        )
+        assert result["correlation_enabled"] is False
+        assert "warning" in result
+        # The score was still written to Redis (reversible, auditable) despite the warning.
+        assert f"{inv._RISK_PREFIX}subject:{digest}" in bridge._h
+
