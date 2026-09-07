@@ -96,7 +96,7 @@ jobs:
 
       - name: Upload Semgrep SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
@@ -143,7 +143,7 @@ jobs:
 
       - name: Upload Bandit SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: bandit-results.sarif
           category: bandit
@@ -314,14 +314,14 @@ jobs:
 
       - name: Upload Trivy SARIF (proxy)
         if: always() && hashFiles('trivy-proxy.sarif') != ''
-        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: trivy-proxy.sarif
           category: trivy-proxy
 
       - name: Upload Trivy SARIF (admin)
         if: always() && hashFiles('trivy-admin.sarif') != ''
-        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: trivy-admin.sarif
           category: trivy-admin
