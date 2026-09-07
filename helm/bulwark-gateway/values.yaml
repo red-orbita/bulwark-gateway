@@ -191,7 +191,7 @@ proxy:
     # -- Origin risk score at/above which requests are flagged WARN
     riskWarnThreshold: "4.0"
   # -- GA Guard Lite — third-party injection classifier consumed as an out-of-tree
-  # sidecar over HTTP (pfSense-style "bring an engine"). The proxy ships only a
+  # sidecar over HTTP ("bring an engine"). The proxy ships only a
   # thin, fail-OPEN httpx client (src/scanners/ml/ga_guard.py): when the sidecar
   # is unreachable or errors the request is ALLOWED past this lane (the regex
   # floor still blocks) — a sidecar hiccup never self-DoSes the gateway. Fully
