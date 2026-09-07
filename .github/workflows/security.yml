@@ -265,34 +265,56 @@ jobs:
           sudo tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy
           trivy --version
 
+      # Download the vulnerability DB ONCE, up front, with retries and mirror
+      # fallbacks. The default registry (mirror.gcr.io) intermittently times out
+      # ("context deadline exceeded"), which previously failed the whole job on a
+      # transient network hiccup. Try GHCR and public ECR first, then the gcr
+      # mirror; every scan step below runs with --skip-db-update so it reuses this
+      # cached DB instead of re-downloading (and re-racing the same timeout) N times.
+      - name: Download Trivy vulnerability DB (retry + mirrors)
+        env:
+          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2,mirror.gcr.io/aquasecurity/trivy-db:2"
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if trivy image --download-db-only --timeout 15m; then
+              echo "Trivy DB ready (attempt ${attempt})."
+              exit 0
+            fi
+            echo "::warning::Trivy DB download attempt ${attempt} failed; retrying in 20s..."
+            sleep 20
+          done
+          echo "::error::Trivy DB download failed after 5 attempts across all mirrors." >&2
+          exit 1
+
       - name: Trivy proxy image (table)
         run: |
           # --ignore-unfixed: only report vulnerabilities that have a fixed
           # package version available. Debian base-image CVEs without an
           # upstream fix are not actionable (apt upgrade cannot resolve them);
           # rebuilding on a schedule picks up fixes as Debian publishes them.
-          trivy image --scanners vuln --ignore-unfixed \
+          # --skip-db-update: reuse the DB fetched by the dedicated step above.
+          trivy image --scanners vuln --ignore-unfixed --skip-db-update \
             --format table --output trivy-proxy-table.txt \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_PROXY }}:scan"
 
       - name: Trivy proxy image (SARIF)
         run: |
-          trivy image --scanners vuln --ignore-unfixed \
+          trivy image --scanners vuln --ignore-unfixed --skip-db-update \
             --format sarif --output trivy-proxy.sarif \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_PROXY }}:scan"
 
       - name: Trivy admin image (table)
         run: |
-          trivy image --scanners vuln --ignore-unfixed \
+          trivy image --scanners vuln --ignore-unfixed --skip-db-update \
             --format table --output trivy-admin-table.txt \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_ADMIN }}:scan"
 
       - name: Trivy admin image (SARIF)
         run: |
-          trivy image --scanners vuln --ignore-unfixed \
+          trivy image --scanners vuln --ignore-unfixed --skip-db-update \
             --format sarif --output trivy-admin.sarif \
             --severity CRITICAL,HIGH,MEDIUM --exit-code 0 \
             "${{ env.IMAGE_ADMIN }}:scan"
@@ -305,10 +327,10 @@ jobs:
       # up as Debian publishes fixes. MEDIUM stays advisory.
       - name: Trivy fail gate (CRITICAL/HIGH, fixable)
         run: |
-          trivy image --scanners vuln --ignore-unfixed \
+          trivy image --scanners vuln --ignore-unfixed --skip-db-update \
             --severity CRITICAL,HIGH --exit-code 1 --quiet \
             "${{ env.IMAGE_PROXY }}:scan"
-          trivy image --scanners vuln --ignore-unfixed \
+          trivy image --scanners vuln --ignore-unfixed --skip-db-update \
             --severity CRITICAL,HIGH --exit-code 1 --quiet \
             "${{ env.IMAGE_ADMIN }}:scan"
 
@@ -379,9 +401,26 @@ jobs:
           sudo tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy
           trivy --version
 
+      # See sca-trivy job: fetch the DB once with retries + mirror fallbacks so a
+      # transient mirror.gcr.io timeout does not fail SBOM generation.
+      - name: Download Trivy vulnerability DB (retry + mirrors)
+        env:
+          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2,mirror.gcr.io/aquasecurity/trivy-db:2"
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if trivy image --download-db-only --timeout 15m; then
+              echo "Trivy DB ready (attempt ${attempt})."
+              exit 0
+            fi
+            echo "::warning::Trivy DB download attempt ${attempt} failed; retrying in 20s..."
+            sleep 20
+          done
+          echo "::error::Trivy DB download failed after 5 attempts across all mirrors." >&2
+          exit 1
+
       - name: Generate container SBOM with Trivy
         run: |
-          trivy image --format cyclonedx \
+          trivy image --format cyclonedx --skip-db-update \
             --output sbom-container-cyclonedx.json \
             "${{ env.IMAGE_PROXY }}:sbom"
 
