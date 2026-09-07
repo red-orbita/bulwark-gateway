@@ -11,9 +11,10 @@ Detection categories:
   TP3: Parameter Description Injection — override tokens, system prompts in params
   TP4: Description-Behavior Mismatch — contradictory claims indicating deception
 
-Adapted from opencode-security-agent for use within Bulwark Gateway's
-SkillSpector hybrid scanner. No additional dependencies beyond PyYAML (already
-present in admin service).
+Adapted from opencode-security-agent. Stdlib-only (zero third-party deps and zero
+first-party coupling) so it is the single source of truth shared by BOTH the admin
+SkillSpector pipeline and the proxy's runtime McpToolScanner — src never imports
+admin.
 """
 
 from __future__ import annotations

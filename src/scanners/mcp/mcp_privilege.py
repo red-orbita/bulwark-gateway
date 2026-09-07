@@ -11,8 +11,9 @@ Detection categories:
   LP3: Missing Permission Declaration — no permissions but code has capabilities
   LP4: Overdeclared Permission — permission declared but no matching code
 
-Adapted from opencode-security-agent for use within Bulwark Gateway's
-SkillSpector hybrid scanner. Works on both source code and manifest metadata.
+Adapted from opencode-security-agent. Stdlib-only (zero coupling) so it is shared
+by the admin SkillSpector pipeline and the proxy scanner package — src never
+imports admin. Works on both source code and manifest metadata.
 """
 
 from __future__ import annotations

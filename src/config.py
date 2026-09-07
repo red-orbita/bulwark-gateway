@@ -195,6 +195,23 @@ class Settings(BaseSettings):
     # RAG Guard (Phase 5)
     rag_enabled: bool = False  # Master switch for RAG scanners (retrieval + memory guard)
 
+    # MCP tool-definition scanning (runtime tool-poisoning enforcement).
+    # Scans the inbound request's `tools` array (MCP/OpenAI tool DEFINITIONS —
+    # names, descriptions, parameter-schema descriptions) for hidden instructions,
+    # unicode deception and parameter-injection (BWK-MCP-TP1..TP4) BEFORE the
+    # request is forwarded — the one channel the message-prose input guardrail
+    # never sees. Pure regex (stdlib), so no model provisioning is required.
+    #
+    # INERT unless mcp_scanning_enabled (the scanner is not registered otherwise —
+    # zero hot-path cost, and requests with no `tools` array are a zero-cost ALLOW).
+    # ASYNC/WARN by default: mcp_scanning_blocking=False runs it as INPUT_ASYNC
+    # enrichment (findings logged/alerted, request proceeds). When blocking=True it
+    # runs INPUT_BLOCKING and a high/critical finding returns 403 before forwarding;
+    # an unexpected detector error always fails-OPEN (the builtin regex floor still
+    # runs BLOCKING).
+    mcp_scanning_enabled: bool = False
+    mcp_scanning_blocking: bool = False  # If True, run INPUT_BLOCKING and BLOCK on high/critical (else WARN-only)
+
     # Multilingual Detection (Phase 3)
     multilingual_enabled: bool = False  # Master switch for language detection + multilingual patterns
 
