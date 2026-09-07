@@ -29,6 +29,14 @@ Deliberately *not* here: retry/circuit breaking (this is best-effort fan-out, no
 durable queue) and the inbound action API (a separate concern — the scoped
 service-account action surface delivered in Phase 3.2, wired via
 ``require_permission_automation`` onto the ``/admin/investigation`` mutating routes).
+
+**Delivery observability (Phase 4B)** — every delivery attempt (lifecycle fan-out
+and the synthetic test ping alike) is recorded at the single ``_deliver`` chokepoint
+into a process-local snapshot: ``total_delivered``/``total_failed`` counters, the
+``last_error`` detail, and a per-subscription last-delivery outcome. Exposed via
+:meth:`EventWebhookEmitter.status` (``GET /admin/integrations/webhooks/status``),
+mirroring the sighting dispatcher's status convention. In-memory only — the admin
+service is single-replica, so no Redis is needed and counters reset on restart.
 """
 
 from __future__ import annotations
@@ -143,6 +151,17 @@ class EventWebhookEmitter:
 
     def __init__(self) -> None:
         self._subs: list[WebhookSubscription] = []
+        # ─── Delivery observability (in-memory) ───────────────────────────────
+        # Process-local counters + per-subscription last-delivery health, reset on
+        # restart. The admin service is single-replica, so this stays accurate
+        # without Redis — the same convention as the sighting dispatcher's status
+        # snapshot. Totals count every delivery *attempt* (lifecycle fan-out and
+        # the synthetic test ping alike), recorded at the single ``_deliver``
+        # chokepoint so no dispatch path is a blind spot.
+        self.total_delivered = 0
+        self.total_failed = 0
+        self.last_error: Optional[str] = None
+        self._last_delivery: dict[str, dict] = {}
         self.reload()
 
     # ─── Config persistence ───────────────────────────────────────────────────
@@ -214,6 +233,7 @@ class EventWebhookEmitter:
         if self.get(subscription_id) is None:
             return False
         self._subs = [s for s in self._subs if s.id != subscription_id]
+        self._last_delivery.pop(subscription_id, None)
         self._save()
         return True
 
@@ -250,18 +270,40 @@ class EventWebhookEmitter:
         env_name = f"BULWARK_INTEGRATION_WEBHOOK_{sub.id.upper()}_SECRET"
         return read_secret(env_name, default="") or sub.secret
 
+    def _record(self, subscription_id: str, result: DeliveryResult, event: str) -> None:
+        """Fold one delivery outcome into the in-memory observability snapshot.
+
+        Called at the single ``_deliver`` chokepoint so both lifecycle fan-out and
+        the synthetic test ping update the same counters + per-subscription health.
+        asyncio is single-threaded and there is no ``await`` between the read and
+        write here, so the concurrent ``gather`` fan-out cannot race these updates.
+        """
+        if result.ok:
+            self.total_delivered += 1
+        else:
+            self.total_failed += 1
+            self.last_error = result.detail
+        self._last_delivery[subscription_id] = {
+            "ok": result.ok,
+            "detail": result.detail,
+            "event": event,
+            "at": iso_now(),
+        }
+
     async def _deliver(
         self, sub: WebhookSubscription, envelope: dict
     ) -> DeliveryResult:
         """POST one envelope to one subscriber. Never raises (fail-open).
 
         The envelope is serialized to bytes here (not via httpx's ``json=``) so the
-        HMAC signature is computed over the exact bytes transmitted.
+        HMAC signature is computed over the exact bytes transmitted. Every outcome
+        (success or swallowed failure) is recorded for delivery observability.
         """
+        event = str(envelope.get("event", ""))
         body = json.dumps(envelope).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
-            "X-Bulwark-Event": str(envelope.get("event", "")),
+            "X-Bulwark-Event": event,
             "X-Bulwark-Delivery": str(envelope.get("event_id", "")),
         }
         secret = self._resolve_secret(sub)
@@ -281,11 +323,15 @@ class EventWebhookEmitter:
                 "event_webhook_delivery_failed",
                 extra={"subscription": sub.id, "error": detail},
             )
-            return DeliveryResult(subscription_id=sub.id, ok=False, detail=detail)
+            result = DeliveryResult(subscription_id=sub.id, ok=False, detail=detail)
+            self._record(sub.id, result, event)
+            return result
         ok = 200 <= resp.status_code < 300
-        return DeliveryResult(
+        result = DeliveryResult(
             subscription_id=sub.id, ok=ok, detail=f"HTTP {resp.status_code}"
         )
+        self._record(sub.id, result, event)
+        return result
 
     async def emit(
         self, event_type: str, *, tenant: Optional[str] = None, data: Optional[dict] = None
@@ -315,6 +361,34 @@ class EventWebhookEmitter:
             )
         envelope = self._envelope("test.ping", None, {"message": "bulwark test event"})
         return await self._deliver(sub, envelope)
+
+    # ─── Status ───────────────────────────────────────────────────────────────
+
+    def status(self) -> dict:
+        """Return a delivery-observability snapshot for the admin status endpoint.
+
+        Counters are process-local (in-memory) and reset on restart — the admin
+        service is single-replica, matching the sighting dispatcher's convention.
+        ``total_delivered``/``total_failed`` count every delivery attempt (lifecycle
+        fan-out and test pings alike); ``last_delivery`` is the most recent outcome
+        per current subscription (stale entries for removed subscriptions are
+        dropped). No secret is ever exposed.
+        """
+        subscriptions = [
+            {
+                "id": s.id,
+                "name": s.name,
+                "enabled": s.enabled,
+                "last_delivery": self._last_delivery.get(s.id),
+            }
+            for s in self._subs
+        ]
+        return {
+            "total_delivered": self.total_delivered,
+            "total_failed": self.total_failed,
+            "last_error": self.last_error,
+            "subscriptions": subscriptions,
+        }
 
 
 _emitter: Optional[EventWebhookEmitter] = None

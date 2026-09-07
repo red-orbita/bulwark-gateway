@@ -52,6 +52,19 @@ async def list_event_types(
     return {"event_types": list(EVENT_TYPES)}
 
 
+@router.get("/status")
+async def webhook_delivery_status(
+    user: TokenPayload = Depends(require_permission("integrations:read")),
+):
+    """Delivery-observability snapshot for event webhooks.
+
+    Returns process-local delivery counters (``total_delivered``/``total_failed``),
+    the ``last_error`` detail, and each current subscription's last-delivery outcome
+    — the fire-and-forget fan-out's only health surface (no secret is exposed).
+    """
+    return {"emitter": get_event_webhook_emitter().status()}
+
+
 @router.post("")
 async def create_webhook(
     data: dict = Body(...),
