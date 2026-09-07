@@ -520,3 +520,85 @@ class TestPrometheusMetricsRendering:
         # No duplicate TYPE lines introduced by the histogram.
         type_lines = [ln for ln in body.splitlines() if ln.startswith("# TYPE ")]
         assert len(type_lines) == len(set(type_lines))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# runtime lethal-trifecta observability endpoint
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCorrelationTrifecta:
+    @pytest.fixture
+    def wired(self, monkeypatch):
+        import admin.routes.correlation as correlation
+
+        r = FakeRedis()
+        monkeypatch.setattr(correlation, "_redis", lambda: r)
+        # Clear any trifecta env so config defaults are deterministic.
+        for name in (
+            "BULWARK_TRIFECTA_RUNTIME_ENABLED",
+            "BULWARK_TRIFECTA_RUNTIME_BLOCKING",
+            "BULWARK_TRIFECTA_RUNTIME_WINDOW_SECONDS",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        return correlation, r
+
+    async def test_defaults_when_env_unset(self, wired):
+        correlation, _ = wired
+        out = await correlation.correlation_trifecta(user=_admin())
+        assert out["config"] == {
+            "enabled": False,
+            "blocking": False,
+            "window_seconds": 1800.0,
+        }
+        assert out["redis_connected"] is True
+        assert out["counters"] == {"completed_total": 0, "blocked_total": 0}
+        assert out["accumulating_origins"] == 0
+        assert out["note"] is None
+
+    async def test_config_reflects_env(self, wired, monkeypatch):
+        correlation, _ = wired
+        monkeypatch.setenv("BULWARK_TRIFECTA_RUNTIME_ENABLED", "true")
+        monkeypatch.setenv("BULWARK_TRIFECTA_RUNTIME_BLOCKING", "1")
+        monkeypatch.setenv("BULWARK_TRIFECTA_RUNTIME_WINDOW_SECONDS", "600")
+        out = await correlation.correlation_trifecta(user=_admin())
+        assert out["config"] == {
+            "enabled": True,
+            "blocking": True,
+            "window_seconds": 600.0,
+        }
+
+    async def test_bad_window_env_falls_back(self, wired, monkeypatch):
+        correlation, _ = wired
+        monkeypatch.setenv("BULWARK_TRIFECTA_RUNTIME_WINDOW_SECONDS", "not-a-number")
+        out = await correlation.correlation_trifecta(user=_admin())
+        assert out["config"]["window_seconds"] == 1800.0
+
+    async def test_counters_and_accumulating_origins(self, wired):
+        correlation, r = wired
+        r.hashes["bulwark:correlation:counters"] = {
+            "trifecta_completed_total": "5",
+            "trifecta_blocked": "2",
+        }
+        r.hashes[f"bulwark:trifecta:session:{_DIGEST_A}"] = {"data_access": "1"}
+        r.hashes[f"bulwark:trifecta:tenant:{_DIGEST_B}"] = {"exfiltration": "1"}
+        out = await correlation.correlation_trifecta(user=_admin())
+        assert out["counters"] == {"completed_total": 5, "blocked_total": 2}
+        assert out["accumulating_origins"] == 2
+
+    async def test_redis_down_is_fail_open(self, wired):
+        correlation, r = wired
+        r.fail_ping = True
+        out = await correlation.correlation_trifecta(user=_admin())
+        assert out["redis_connected"] is False
+        assert out["counters"] == {"completed_total": 0, "blocked_total": 0}
+        assert out["accumulating_origins"] == 0
+        assert "Redis not reachable" in out["note"]
+
+    async def test_no_redis_client(self, monkeypatch):
+        import admin.routes.correlation as correlation
+
+        monkeypatch.setattr(correlation, "_redis", lambda: None)
+        out = await correlation.correlation_trifecta(user=_admin())
+        assert out["redis_connected"] is False
+        assert out["note"] is not None

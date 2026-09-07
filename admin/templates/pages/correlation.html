@@ -167,6 +167,44 @@
         </div>
     </div>
 
+    <!-- Runtime lethal trifecta (read-only) -->
+    <div class="sg-card">
+        <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+                <i data-lucide="triangle-alert" class="w-4 h-4 text-cyan-400"></i>
+                <h2 class="text-sm font-medium text-white">Runtime Lethal Trifecta</h2>
+                <span class="sg-badge text-[10px]" :class="trifecta.config && trifecta.config.enabled ? (trifecta.config.blocking ? 'sg-badge-danger' : 'sg-badge-warning') : 'sg-badge-neutral'"
+                      x-text="!trifecta.config ? 'unknown' : (!trifecta.config.enabled ? 'disabled' : (trifecta.config.blocking ? 'blocking' : 'observe'))"></span>
+            </div>
+            <span class="text-[10px] text-gray-500">read-only — set via BULWARK_TRIFECTA_RUNTIME_* at boot</span>
+        </div>
+        <p class="text-xs text-gray-500 mb-4 max-w-3xl">Per-origin accumulator that fires an <span class="font-mono text-gray-400">EXCESSIVE_AGENCY</span> event the first time one origin exercises all three breach pillars (data access · untrusted exposure · exfiltration) within the sliding window, elevating its risk so adaptive enforcement hardens the next requests.</p>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <p class="text-[11px] text-gray-500 mb-1">Enforcement</p>
+                <p class="text-sm font-mono" :class="trifecta.config && trifecta.config.enabled ? (trifecta.config.blocking ? 'text-red-300' : 'text-amber-300') : 'text-gray-500'"
+                   x-text="!trifecta.config ? '—' : (!trifecta.config.enabled ? 'off' : (trifecta.config.blocking ? 'block' : 'warn'))"></p>
+            </div>
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <p class="text-[11px] text-gray-500 mb-1">Window</p>
+                <p class="text-sm font-mono text-gray-300" x-text="trifecta.config ? (trifecta.config.window_seconds + 's') : '—'"></p>
+            </div>
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <p class="text-[11px] text-gray-500 mb-1">Completed</p>
+                <p class="text-sm font-mono text-emerald-300" x-text="trifecta.counters ? trifecta.counters.completed_total : 0"></p>
+            </div>
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <p class="text-[11px] text-gray-500 mb-1">Blocked</p>
+                <p class="text-sm font-mono" :class="(trifecta.counters && trifecta.counters.blocked_total > 0) ? 'text-red-400' : 'text-gray-300'" x-text="trifecta.counters ? trifecta.counters.blocked_total : 0"></p>
+            </div>
+            <div class="rounded-lg border border-gray-700/60 bg-gray-800/30 p-3">
+                <p class="text-[11px] text-gray-500 mb-1">Accumulating</p>
+                <p class="text-sm font-mono text-gray-300" x-text="trifecta.accumulating_origins ?? 0"></p>
+            </div>
+        </div>
+        <div x-show="trifecta.note" x-cloak class="mt-3 text-[11px] text-amber-400/80" x-text="trifecta.note"></div>
+    </div>
+
     <!-- Active origins -->
     <div class="sg-card">
         <div class="flex items-center justify-between mb-4">
@@ -229,6 +267,7 @@ function correlationPage() {
         },
         origins: [],
         form: {},
+        trifecta: { config: null, counters: { completed_total: 0, blocked_total: 0 }, accumulating_origins: 0, note: null },
         thresholdFields: [
             { key: 'risk_block_threshold', label: 'BLOCK', step: '0.1' },
             { key: 'risk_warn_threshold', label: 'WARN', step: '0.1' },
@@ -252,6 +291,7 @@ function correlationPage() {
         async reloadAll() {
             await this.loadStatus();
             await this.loadOrigins();
+            await this.loadTrifecta();
             this.$nextTick(() => window.lucide && window.lucide.createIcons());
         },
 
@@ -278,6 +318,14 @@ function correlationPage() {
                     const data = await res.json();
                     this.origins = data.origins || [];
                 }
+            } catch (e) { /* non-fatal */ }
+        },
+
+        async loadTrifecta() {
+            // Read-only, fail-open: a 403/error leaves the card in its default state.
+            try {
+                const res = await fetch('/admin/correlation/trifecta');
+                if (res.ok) { this.trifecta = await res.json(); }
             } catch (e) { /* non-fatal */ }
         },
 
