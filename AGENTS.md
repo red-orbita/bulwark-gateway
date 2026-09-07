@@ -117,6 +117,7 @@ bulwark-gateway/
 │   │   ├── multilingual/         # Language detection + 10-language patterns
 │   │   ├── multimodal/           # OCR + vision scanner
 │   │   ├── mcp/                  # MCP tool-definition scanner (poisoning TP1-TP4 + least-privilege LP1-LP4; stdlib, BWK-MCP-*) — SSOT shared by admin SkillSpector + proxy input lane
+│   │   ├── longcontext/         # Long-context moderation scanner (re-runs shared InputGuardrail past the 16 KB blind spot + many-shot heuristic; stdlib, opt-in)
 │   │   ├── output/               # Hallucination, schema, grounding, relevance, artifact (insecure-output)
 │   │   └── rag/                  # RAG chunk scanner + memory guard
 │   ├── dialog/                    # Dialog flow engine (YAML-based state machine)
@@ -660,6 +661,9 @@ All settings via `BULWARK_` env prefix (Pydantic BaseSettings, 162 lines):
 | `BULWARK_GROUNDING_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `GroundingScanner` (BETA, OUTPUT_ASYNC). Shares the `nli-classifier` model |
 | `BULWARK_VISION_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `VisionScanner` (INPUT_ASYNC). Gated solely on this flag (no longer coupled to `BULWARK_ML_ENABLED`). OCR layer stays inert/EXPERIMENTAL without pillow + an OCR backend; when a backend is installed, OCR-extracted text is judged by the **full input-guardrail engine** (same 4600-pattern regex SSOT as text input — an image is not a detection blind spot). For zero-dep deterministic image hygiene without OCR, use `BULWARK_IMAGE_HYGIENE_SCANNING_ENABLED` |
 | `BULWARK_ARTIFACT_OUTPUT_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `ArtifactOutputScanner` (OUTPUT_ASYNC, BETA, **detective**). Decodes inline base64/`data:` URIs in LLM output and runs the shared stdlib pickle-opcode engine (never deserializes) to WARN on serialized-artifact RCE gadgets (OWASP LLM02). Never blocks/rewrites the response; zero deps |
+| `BULWARK_LONG_CONTEXT_SCANNING_ENABLED` | bool | `false` | Opt-in: register the `LongContextScanner` (INPUT_ASYNC, BETA). Closes the input-guardrail long-context blind spot: the classic `inspect()` caps regex work at `max_scan_bytes` (16 KB), so an injection buried PAST that boundary in a very long prompt is never scanned. This scanner re-runs the SHARED `InputGuardrail` (SSOT, zero deps) only over the content beyond the boundary, chunked so each window is scanned in full, plus a many-shot-jailbreak density heuristic. Inert/not registered when off; short prompts are a zero-cost ALLOW |
+| `BULWARK_LONG_CONTEXT_SCANNING_BLOCKING` | bool | `false` | When on, deep BLOCK-worthy long-context findings BLOCK (scanner becomes INPUT_BLOCKING); otherwise findings surface as WARN and the request proceeds |
+| `BULWARK_LONG_CONTEXT_MAX_SCAN_BYTES` | int | `262144` | Hard cap on total bytes the long-context scanner examines (deep windows + many-shot count), so the feature can never amplify a large prompt into unbounded regex work |
 | `BULWARK_CORRELATION_ENABLED` | bool | `false` | Master switch for the inline correlation engine (starts event tap at boot) |
 | `BULWARK_CORRELATION_BLOCKING` | bool | `false` | When on, correlated exfiltration / origin-risk decisions BLOCK; otherwise WARN. Runtime-tunable |
 | `BULWARK_CORRELATION_RISK_BLOCK_THRESHOLD` | float | `7.0` | Origin risk score (0–10) at/above which requests are hardened to BLOCK. Runtime-tunable |
