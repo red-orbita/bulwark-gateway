@@ -28,10 +28,10 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import re
 from concurrent.futures import ThreadPoolExecutor
 
 from src.config import settings
+from src.guardrails.input_guardrail import InputGuardrail
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, Verdict
 from src.scanners.multimodal import _image_utils
 from src.scanners.protocol import InputScanner, MaturityTier, ScanContext, ScannerInfo, ScannerType
@@ -76,7 +76,8 @@ class VisionScanner(InputScanner):
     1. Gather images (pre-extracted metadata or inline data URIs)
     2. Pre-OCR safety: policy gate + size limit
     3. OCR text extraction (EasyOCR or Tesseract)
-    4. Run extracted text through injection detection patterns
+    4. Run extracted text through the full input-guardrail engine (same regex
+       SSOT as ordinary text input — an image is not a detection blind spot)
 
     The scanner is INERT (returns ALLOW) unless ``self._available`` was set at
     startup. For deterministic image hygiene without OCR, use the
@@ -95,6 +96,10 @@ class VisionScanner(InputScanner):
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vision")
         self._ocr_reader = None
         self._available = False
+        # Full input-guardrail engine, reused on OCR-extracted text (see
+        # _check_injection_in_text). Instantiated lazily — the pattern set is
+        # heavy, so we only pay for it when an OCR backend is actually active.
+        self._input_guardrail: InputGuardrail | None = None
 
     @property
     def info(self) -> ScannerInfo:
@@ -117,8 +122,10 @@ class VisionScanner(InputScanner):
             logger.info("vision_scanner_skipped", extra={"reason": "pillow not installed"})
             return
 
-        if not settings.ml_enabled:
-            logger.info("vision_scanner_skipped", extra={"reason": "ML disabled"})
+        if not settings.vision_scanning_enabled:
+            logger.info(
+                "vision_scanner_skipped", extra={"reason": "vision scanning disabled"}
+            )
             return
 
         if _ocr_available():
@@ -147,6 +154,12 @@ class VisionScanner(InputScanner):
                     logger.info("vision_scanner_skipped", extra={"reason": "no OCR backend"})
         else:
             logger.info("vision_scanner_skipped", extra={"reason": "no OCR library"})
+
+        # Warm the shared input-guardrail engine only when OCR is genuinely
+        # active, so the heavy pattern compilation is paid at startup (not on the
+        # first request) and never at all when the scanner is inert.
+        if self._available and self._input_guardrail is None:
+            self._input_guardrail = InputGuardrail()
 
     async def scan(self, content: str, context: ScanContext) -> GuardrailResult:
         """OCR-scan images for embedded injection.
@@ -312,47 +325,39 @@ class VisionScanner(InputScanner):
         context: ScanContext,
         image_index: int,
     ) -> list[SecurityEvent]:
-        """Check OCR-extracted text for injection patterns.
+        """Run OCR-extracted text through the full input-guardrail engine.
 
-        Uses a subset of critical patterns (not the full 4600-line guardrail)
-        to detect obvious injection attempts embedded in images.
+        Text smuggled inside an image is judged by the *same* 4600-pattern regex
+        SSOT (Unicode normalization + entropy + multi-layer decoding) that vets
+        ordinary text input, rather than a hand-picked subset — so an image is
+        not a detection blind spot. The engine is pure regex with no extra
+        dependency, keeping this distroless-safe. Each detection is
+        re-contextualized as image-borne (source + metadata) for SIEM clarity.
         """
+        guardrail = self._input_guardrail
+        if guardrail is None:
+            # Lazy fallback (e.g. self._available set without startup()).
+            guardrail = self._input_guardrail = InputGuardrail()
+
+        result = guardrail.inspect(text, context.tenant_id, context.agent_id)
+
         events: list[SecurityEvent] = []
-
-        # Critical injection patterns (subset for OCR text)
-        injection_patterns = [
-            (r"(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|rules?|prompts?)",
-             "Ignore instructions pattern in image"),
-            (r"(?i)you\s+are\s+now\s+(a|an|my|free|unrestricted|DAN|jailbr)",
-             "Role override pattern in image"),
-            (r"(?i)system\s*:\s*(you\s+are|override|new\s+instructions?)",
-             "System prompt injection in image"),
-            (r"(?i)(forget|disregard|override)\s+(everything|all|your\s+instructions)",
-             "Instruction override in image"),
-            (r"(?i)developer\s+mode|god\s+mode|jailbreak\s+mode",
-             "Jailbreak mode request in image"),
-        ]
-
-        for pattern_str, description in injection_patterns:
-            match = re.search(pattern_str, text)
-            if match:
-                events.append(
-                    SecurityEvent(
-                        tenant_id=context.tenant_id,
-                        agent_id=context.agent_id,
-                        verdict=Verdict.BLOCK,
-                        category=ThreatCategory.PROMPT_INJECTION,
-                        description=f"{description} (image #{image_index})",
-                        source="ml_vision_scanner",
-                        severity="high",
-                        metadata={
-                            "image_index": image_index,
-                            "ocr_text_snippet": text[:200],
-                            "matched_text": match.group()[:100],
-                        },
-                    )
-                )
-                break  # One detection per image is enough
+        for ev in result.events:
+            # Re-source to the vision scanner so SIEM attributes the finding to
+            # image content, while preserving the matched pattern for traceability.
+            ev.source = "ml_vision_scanner"
+            ev.description = f"[OCR image #{image_index}] {ev.description}"
+            meta = dict(ev.metadata or {})
+            meta.update(
+                {
+                    "image_index": image_index,
+                    "ocr_text_snippet": text[:200],
+                    "detection_engine": "input_guardrail",
+                    "via": "ocr",
+                }
+            )
+            ev.metadata = meta
+            events.append(ev)
 
         return events
 
