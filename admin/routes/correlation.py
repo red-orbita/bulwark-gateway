@@ -48,6 +48,9 @@ router = APIRouter()
 
 _CONFIG_KEY = "bulwark:correlation:config"
 _RISK_PREFIX = "bulwark:risk:"
+# Runtime lethal-trifecta accumulator: per-origin pillar HASHes + shared counters.
+_TRIFECTA_PREFIX = "bulwark:trifecta:"
+_COUNTERS_KEY = "bulwark:correlation:counters"
 
 # Risk scope digests are sha256()[:16] hex.
 _DIGEST_RE = re.compile(r"^[0-9a-f]{16}$")
@@ -264,6 +267,71 @@ async def correlation_status(
         "note": None
         if connected
         else "Redis not reachable — active origins and runtime override require Redis.",
+    }
+
+
+@router.get("/trifecta")
+async def correlation_trifecta(
+    user: TokenPayload = Depends(require_permission("correlation:read")),
+):
+    """Runtime lethal-trifecta accumulator observability.
+
+    Surfaces the boot config (enabled/blocking/window), the shared completion
+    counters (``trifecta_completed_total`` / ``trifecta_blocked`` from
+    ``bulwark:correlation:counters``), and the number of origins currently
+    accumulating pillars (live ``bulwark:trifecta:*`` HASHes). Read-only —
+    the accumulator has no runtime-tunable knobs.
+
+    ``BULWARK_TRIFECTA_RUNTIME_*`` are boot flags, not runtime-tunable, and there
+    is no proxy channel to read them cross-pod; in a standard deploy both pods
+    share the same configmap/secret env, so the admin env faithfully reflects the
+    proxy's effective config. Surfaced read-only and clearly labelled as such.
+    """
+    import os
+
+    def _flag(name: str) -> bool:
+        return os.environ.get(name, "false").strip().lower() in ("1", "true", "yes", "on")
+
+    try:
+        window = float(os.environ.get("BULWARK_TRIFECTA_RUNTIME_WINDOW_SECONDS", "1800") or 1800)
+    except (TypeError, ValueError):
+        window = 1800.0
+    config = {
+        "enabled": _flag("BULWARK_TRIFECTA_RUNTIME_ENABLED"),
+        "blocking": _flag("BULWARK_TRIFECTA_RUNTIME_BLOCKING"),
+        "window_seconds": window,
+    }
+
+    r = _redis()
+    connected = False
+    completed_total = 0
+    blocked_total = 0
+    accumulating = 0
+    if r:
+        try:
+            r.ping()
+            connected = True
+            raw = r.hgetall(_COUNTERS_KEY) or {}
+            counters = {_decode(k): _decode(v) for k, v in raw.items()}
+            with contextlib.suppress(TypeError, ValueError):
+                completed_total = int(float(counters.get("trifecta_completed_total", 0) or 0))
+            with contextlib.suppress(TypeError, ValueError):
+                blocked_total = int(float(counters.get("trifecta_blocked", 0) or 0))
+            accumulating = len(_scan(r, f"{_TRIFECTA_PREFIX}*"))
+        except Exception:
+            connected = False
+
+    return {
+        "redis_connected": connected,
+        "config": config,
+        "counters": {
+            "completed_total": completed_total,
+            "blocked_total": blocked_total,
+        },
+        "accumulating_origins": accumulating,
+        "note": None
+        if connected
+        else "Redis not reachable — completion counters and accumulating origins require Redis.",
     }
 
 
