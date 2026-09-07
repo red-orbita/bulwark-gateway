@@ -26,6 +26,9 @@ _CAPABILITY_FLAGS = (
     "grounding_scanning_enabled",
     "image_hygiene_scanning_enabled",
     "vision_scanning_enabled",
+    "long_context_scanning_enabled",
+    "llm_judge_enabled",
+    "mcp_scanning_enabled",
 )
 
 
@@ -59,6 +62,20 @@ class TestInternalStatusExposesFlags:
         body = json.loads(resp.body)
         assert body["image_hygiene_scanning_enabled"] is True
         assert body["vision_scanning_enabled"] is False
+
+    async def test_llm_judge_and_mcp_flags_reflect_settings(self, monkeypatch):
+        from src.config import settings
+        from src.routes.health import internal_scanner_status
+
+        monkeypatch.setattr(settings, "llm_judge_enabled", True)
+        monkeypatch.setattr(settings, "mcp_scanning_enabled", False)
+
+        import json
+
+        resp = await internal_scanner_status(request=SimpleNamespace())
+        body = json.loads(resp.body)
+        assert body["llm_judge_enabled"] is True
+        assert body["mcp_scanning_enabled"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════

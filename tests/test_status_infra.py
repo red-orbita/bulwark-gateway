@@ -154,6 +154,9 @@ class TestSummarizeScanners:
             "grounding_scanning_enabled",
             "image_hygiene_scanning_enabled",
             "vision_scanning_enabled",
+            "long_context_scanning_enabled",
+            "llm_judge_enabled",
+            "mcp_scanning_enabled",
         }
         assert all(v is False for v in out["capability_flags"].values())
 

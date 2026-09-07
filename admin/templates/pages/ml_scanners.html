@@ -349,6 +349,9 @@ function mlScannersPage() {
                 grounding_scanning_enabled: 'Grounding',
                 image_hygiene_scanning_enabled: 'Image Hygiene',
                 vision_scanning_enabled: 'Vision (OCR)',
+                long_context_scanning_enabled: 'Long Context',
+                llm_judge_enabled: 'LLM Judge',
+                mcp_scanning_enabled: 'MCP Tools',
             };
             return labels[flag] || flag.replace(/_enabled$/, '').replace(/_/g, ' ');
         },
