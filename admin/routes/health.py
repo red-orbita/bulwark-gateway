@@ -194,6 +194,10 @@ _CORRELATION_METRIC_MAP: list[tuple[str, str, str]] = [
      "Events folded into origin risk state by the tap consumer"),
     ("tap_dropped", "bulwark_correlation_tap_events_dropped_total",
      "Events dropped on a full tap queue (risk telemetry loss)"),
+    ("trifecta_completed_total", "bulwark_correlation_trifecta_completed_total",
+     "Runtime lethal-trifecta first-completions per origin"),
+    ("trifecta_blocked", "bulwark_correlation_trifecta_blocked_total",
+     "Runtime lethal-trifecta completions hardened to BLOCK"),
 ]
 
 # Inline-evaluation latency histogram. Field names + bucket bounds are duplicated

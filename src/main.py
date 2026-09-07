@@ -121,6 +121,22 @@ async def lifespan(app: FastAPI):
         app.state.correlation_tap = _corr_tap
         await logger.ainfo("correlation_event_tap_started")
 
+    # Initialize the runtime lethal-trifecta accumulator store. Cheap; the store
+    # only holds state once the (opt-in) tracker begins observing requests.
+    if settings.trifecta_runtime_enabled:
+        from src.correlation.trifecta_runtime import get_trifecta_state_store
+
+        get_trifecta_state_store().initialize(
+            redis_url=settings.redis_url,
+            redis_tls_insecure=settings.redis_tls_insecure,
+        )
+        await logger.ainfo(
+            "trifecta_runtime_initialized",
+            blocking=settings.trifecta_runtime_blocking,
+            window_seconds=settings.trifecta_runtime_window_seconds,
+            redis=bool(settings.redis_url),
+        )
+
     # Register enrichment scanners (async, background only)
     from src.enrichment.manager import ENRICHMENT_ENABLED, get_enrichment_manager
 
