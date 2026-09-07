@@ -15,7 +15,7 @@ pyotp==2.10.0
 sqlcipher3-binary==0.6.0
 python-multipart==0.0.32
 pyyaml==6.0.3
-structlog==25.5.0
+structlog==26.1.0
 uvicorn==0.52.4
 
 # Admin-only runtime deps previously installed outside the lock (drift fix):
