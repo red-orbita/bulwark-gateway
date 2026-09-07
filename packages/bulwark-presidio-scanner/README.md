@@ -8,8 +8,8 @@ advisory.
 
 It plugs into Bulwark through the standard `bulwark.scanners` entry-point group,
 so once installed it is auto-discovered by the scanner pipeline (no core code
-changes). This mirrors the pfSense model: a curated third-party engine you switch
-on when you need it.
+changes). This follows the pluggable-engine model: a curated third-party engine
+you switch on when you need it.
 
 ## What you get
 

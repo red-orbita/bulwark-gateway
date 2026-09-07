@@ -8,9 +8,8 @@ General Analysis "GA Guard" model, or any compatible classifier). Bulwark does
 NOT bundle the model or run ONNX locally for this scanner — it POSTs the user
 input to the sidecar and folds the returned score into a Bulwark verdict.
 
-Rationale (pfSense model): rather than compete on "who ships the best classifier
-weights", Bulwark co-opts best-of-breed detectors as pluggable engines. The
-sidecar is:
+Rationale: rather than compete on "who ships the best classifier weights",
+Bulwark co-opts best-of-breed detectors as pluggable engines. The sidecar is:
 
   - INERT by default. ``BULWARK_GA_GUARD_ENABLED=false`` means the scanner is
     never even registered (see src/main.py) — zero hot-path cost.
