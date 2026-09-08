@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..models.auth import (
     ChangePasswordRequest,
+    MFASetupRequest,
     MFASetupResponse,
     ProfileUpdate,
     SessionResponse,
@@ -87,9 +88,19 @@ async def update_user(user_id: str, req: UserUpdate, user: TokenPayload = Depend
     existing = store.get_user_by_id(user_id)
     if not existing:
         raise HTTPException(status_code=404, detail="User not found")
-    updated = store.update_user(user_id, **req.model_dump(exclude_none=True))
+    changes = req.model_dump(exclude_none=True)
+    updated = store.update_user(user_id, **changes)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
+    # SECURITY (F-02): a role change or a deactivation must take effect
+    # immediately, not linger until the operator's existing JWT expires. Revoke
+    # all of the target user's sessions so any cached privilege is dropped and a
+    # fresh login mints a token carrying the current role/active state. (The
+    # get_current_user re-validation is the defence-in-depth backstop.)
+    role_changed = "role" in changes and str(changes["role"]) != str(existing.get("role"))
+    deactivated = "active" in changes and not bool(changes["active"]) and bool(existing.get("active", True))
+    if role_changed or deactivated:
+        store.revoke_all_sessions(user_id)
     audit = get_audit_logger()
     await audit.log(
         actor=user.sub,
@@ -149,7 +160,7 @@ async def revoke_session(user_id: str, session_id: str, user: TokenPayload = Dep
     if user.role != UserRole.ADMIN and user.sub != _resolve_username(user_id):
         raise HTTPException(status_code=403, detail="Cannot revoke other user's sessions")
     store = get_user_store()
-    if not store.revoke_session(session_id):
+    if not store.revoke_session(session_id, user_id=user_id):
         raise HTTPException(status_code=404, detail="Session not found")
     audit = get_audit_logger()
     await audit.log(actor=user.sub, action="session.revoke", resource_type="session", resource_id=session_id)
@@ -157,11 +168,46 @@ async def revoke_session(user_id: str, session_id: str, user: TokenPayload = Dep
 
 
 @router.post("/users/{user_id}/mfa/setup", response_model=MFASetupResponse)
-async def mfa_setup(user_id: str, user: TokenPayload = Depends(get_current_user)):
-    """Generate TOTP secret. Users can only setup their own MFA; admins can setup any."""
-    if user.role != UserRole.ADMIN and user.sub != _resolve_username(user_id):
+async def mfa_setup(
+    user_id: str,
+    req: MFASetupRequest | None = None,
+    user: TokenPayload = Depends(get_current_user),
+):
+    """Generate TOTP secret. Users can only setup their own MFA; admins can setup any.
+
+    SECURITY (F-08): rotating MFA on an account that already has it is guarded by a
+    step-up check so a hijacked session cannot silently rebind the second factor.
+    Self-service re-registration requires the current password AND a valid current
+    TOTP code; an admin acting on another user's already-enabled account must use
+    the explicit disable-then-enroll flow (a target's password cannot be proven
+    here). First-time enrollment (no active MFA) is unchanged.
+    """
+    is_self = user.sub == _resolve_username(user_id)
+    if user.role != UserRole.ADMIN and not is_self:
         raise HTTPException(status_code=403, detail="Cannot setup MFA for other users")
     store = get_user_store()
+    target = store.get_user_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target.get("mfa_secret"):
+        # Re-registration path — MFA is already active on this account.
+        if not is_self:
+            raise HTTPException(
+                status_code=409,
+                detail="MFA already enabled; disable it first before re-enrolling.",
+            )
+        req = req or MFASetupRequest()
+        if not req.current_password or not req.mfa_code:
+            raise HTTPException(
+                status_code=401,
+                detail="Step-up required: current password and a valid MFA code are required to re-register MFA.",
+            )
+        if not store.verify_password(target["username"], req.current_password):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        if not store.verify_mfa(user_id, req.mfa_code):
+            raise HTTPException(status_code=401, detail="Invalid MFA code")
+
     try:
         result = store.setup_mfa(user_id)
     except RuntimeError as e:

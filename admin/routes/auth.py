@@ -212,6 +212,7 @@ async def login(req: LoginRequest, request: Request, response: Response):
     username = result["username"]
     role = result["role"]
     user_id = result["user_id"]
+    tenant = result.get("tenant")
 
     # Check if user must change password before getting full access
     if result.get("force_password_change"):
@@ -224,7 +225,8 @@ async def login(req: LoginRequest, request: Request, response: Response):
             expires_in=0,
         )
 
-    token = AuthService.create_token(username, role, user_id=user_id, ip=ip, user_agent=user_agent)
+    token = AuthService.create_token(username, role, user_id=user_id, ip=ip,
+                                     user_agent=user_agent, tenant=tenant)
 
     audit = get_audit_logger()
     await audit.log(
@@ -385,7 +387,8 @@ async def force_change_password(request: Request):
     # Issue token immediately (no need for second login round-trip)
     role = UserRole(db_user["role"])
     user_agent = request.headers.get("user-agent")
-    token = AuthService.create_token(username, role, user_id=db_user["id"], ip=ip, user_agent=user_agent)
+    token = AuthService.create_token(username, role, user_id=db_user["id"], ip=ip,
+                                     user_agent=user_agent, tenant=db_user.get("tenant_scope") or None)
 
     response = Response(
         content=LoginResponse(

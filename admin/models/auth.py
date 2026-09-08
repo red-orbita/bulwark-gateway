@@ -132,6 +132,19 @@ class MFASetupResponse(BaseModel):
     qr_code_url: str
 
 
+class MFASetupRequest(BaseModel):
+    """Optional step-up proof for (re-)registering MFA.
+
+    First-time enrollment (the account has no active MFA) needs no body. Rotating
+    an account that ALREADY has MFA is a sensitive operation — a hijacked session
+    could otherwise silently rebind the second factor to an attacker's device — so
+    self-service re-registration requires proof of possession of the *current*
+    factors: the current password plus a valid current TOTP code.
+    """
+    current_password: Optional[str] = None
+    mfa_code: Optional[str] = None
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: Optional[str] = None
     new_password: str
