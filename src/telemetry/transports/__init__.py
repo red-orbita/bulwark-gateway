@@ -29,6 +29,7 @@ _ALWAYS_BLOCKED_NETWORKS = [
     ipaddress.ip_network("169.254.0.0/16"),    # Link-local / cloud metadata
     ipaddress.ip_network("0.0.0.0/8"),         # Unspecified
     ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("::/128"),           # IPv6 unspecified
     ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
 ]
 
@@ -86,9 +87,14 @@ def is_ssrf_target_host(host: str, port: Optional[int] = None) -> bool:
     except (socket.gaierror, OSError):
         return True  # Fail-closed: unresolvable = blocked
 
+    if not addrs:
+        return True
+
     for _family, _, _, _, sockaddr in addrs:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
+            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+                ip = ip.ipv4_mapped
             for network in blocked_networks:
                 if ip in network:
                     return True

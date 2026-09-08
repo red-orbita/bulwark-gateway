@@ -16,6 +16,17 @@
         </div>
     </div>
 
+    <div class="sg-card">
+        <label for="siem-activity-mode" class="sg-label">Request Activity Export</label>
+        <div class="flex flex-wrap gap-3 items-center">
+            <select id="siem-activity-mode" x-model="activityMode" class="sg-select">
+                <option value="detections">Detections only (blocks, warnings, redactions)</option>
+                <option value="all_requests">Detections + all API requests</option>
+            </select>
+            <button @click="saveActivityMode()" class="sg-btn sg-btn-primary sg-btn-sm">Apply</button>
+        </div>
+        <p class="text-xs text-gray-400 mt-2">All requests adds privacy-safe /v1 and /v2 activity, including rejections and streams. No message bodies or credentials. HTTP success is not an ALLOW verdict. Applies within 2 seconds on proxies sharing this SIEM configuration; telemetry and a destination must be enabled.</p>
+    </div>
     <!-- Telemetry Stats -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div class="sg-card text-center">
@@ -128,7 +139,7 @@
                             <option value="splunk">Splunk</option>
                             <option value="elastic">Elastic/ELK</option>
                             <option value="datadog">Datadog</option>
-                            <option value="bulwark">Azure Bulwark</option>
+                            <option value="bulwark">Microsoft Sentinel (Azure)</option>
                             <option value="qradar">IBM QRadar</option>
                             <option value="arcsight">ArcSight</option>
                             <option value="wazuh">Wazuh</option>
@@ -216,6 +227,9 @@
                         <label for="siem-format" class="sg-label">Format</label>
                         <select id="siem-format" x-model="form.format" class="sg-select w-full">
                             <option value="ecs_json">ECS JSON</option>
+                            <option value="elastic_bulk">Elasticsearch Bulk (HTTP)</option>
+                            <option value="splunk_hec">Splunk HEC (HTTP)</option>
+                            <option value="rfc5424">RFC 5424 Syslog (ECS payload)</option>
                             <option value="cef">CEF</option>
                             <option value="leef">LEEF</option>
                             <option value="custom_json">Custom JSON</option>
@@ -249,6 +263,14 @@ function siemManager() {
     return {
         transports: [],
         stats: {},
+        activityMode: 'detections',
+        async saveActivityMode() {
+            try {
+                const r = await fetch('/admin/siem/activity', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({mode:this.activityMode}) });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                showToast('SIEM activity mode saved', 'success');
+            } catch (e) { showToast('Could not save activity mode', 'error'); }
+        },
         loadError: null,
         showCreate: false,
         editingTransport: null,
@@ -273,6 +295,9 @@ function siemManager() {
                 const resp = await fetch('/admin/siem/config');
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 this.transports = (await resp.json()).transports || [];
+                const activity = await fetch('/admin/siem/activity');
+                if (!activity.ok) throw new Error(`HTTP ${activity.status}`);
+                this.activityMode = (await activity.json()).mode;
                 const sr = await fetch('/admin/siem/status');
                 if (sr.ok) this.stats = await sr.json();
             } catch (e) {

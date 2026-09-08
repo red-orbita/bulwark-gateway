@@ -1,0 +1,34 @@
+{
+  "tested_at": "2026-09-08T09:29:36Z",
+  "platform": "Graylog 6.1.10",
+  "dependencies": ["OpenSearch 2.11.1", "MongoDB 7.0.16"],
+  "transport": "syslog_tcp",
+  "format": "rfc5424",
+  "scope": "Authenticated admin SIEM router persists configuration; full proxy ASGI lifespan generates detections; actual TCP export to Graylog; authenticated Graylog search API retrieves events for the response X-Request-ID.",
+  "request_id": "7f760604b97a441881a445824689d186",
+  "event_ids": [
+    "0a8f78ff48fc4b6387cac299134f6d24",
+    "0c4f858219384ae0aeb73c2246d442d5",
+    "a247ad613e504a55b936309498adbcff",
+    "4b29070ead4b4065b54813ebf711d764"
+  ],
+  "matched_events": 4,
+  "tenant": "default-corp",
+  "agent": "support-bot",
+  "verdict": "block",
+  "export_errors": 0,
+  "fixes": [
+    "Admin validates socket transport hosts with a separate port instead of requiring HTTP URLs.",
+    "RFC 5424 header includes all mandatory fields and maps ECS severity to syslog severity.",
+    "Syslog MSG preserves the ECS JSON event, including event and request IDs."
+  ],
+  "not_validated": [
+    "Browser rendering",
+    "Full deployed admin middleware and HTTP server",
+    "Syslog TLS",
+    "Syslog UDP",
+    "GELF",
+    "Graylog extraction of nested ECS fields into individually searchable fields",
+    "Exporter outage recovery and runtime configuration reload"
+  ]
+}

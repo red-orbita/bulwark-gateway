@@ -1,0 +1,29 @@
+{
+  "tested_on": "2026-09-08",
+  "platform": "Wazuh 4.9.2 manager, indexer and dashboard",
+  "deployment": "Local hybrid lab: manager and gateway in Minikube; authenticated indexer/dashboard in retained Docker containers. Browser bound to 127.0.0.1:8443.",
+  "pipeline": "Deployed proxy HTTP request -> telemetry TCP export -> Wazuh remoted/analysisd -> Filebeat over verified HTTPS -> Wazuh indexer -> authenticated browser Threat Hunting",
+  "requests": [
+    {"http_status": 200, "request_id": "5960fed678584600ba1291a5a950a723"},
+    {"http_status": 403, "request_id": "e85ba894f468469cb08354585e1a24c1"}
+  ],
+  "indexed_activity_records": 2,
+  "indexed_prompt_injection_detections": 4,
+  "activity_mode_test": {
+    "admin_authentication": "JWT session plus CSRF double-submit",
+    "detections_only": {"http_status": 401, "request_id": "modecheck-02876120ae144bf89b1c4e682a24d9af", "indexed_activity": 0},
+    "all_requests": {"http_status": 401, "request_id": "modecheck-e422d8b8c81d4565bc674972f30d43fd", "indexed_activity": 1},
+    "unauthenticated_tenant": "unknown",
+    "final_mode": "all_requests"
+  },
+  "browser_verified": "Real headless Brave: login HTTP 200, connected Wazuh manager, Threat Hunting charts populated; filtered with rule.groups: bulwark-gateway. Screenshot retained locally in shared/wazuh-demo/wazuh-dashboard.png.",
+  "retained": true,
+  "limitations": [
+    "Plain TCP gateway-to-manager hop inside the lab Kubernetes network; Filebeat-to-indexer and browser use HTTPS.",
+    "Self-signed demo CA; browser automation trusts it only in its isolated profile.",
+    "TCP reconnect retry is bounded and can duplicate events after partial delivery; no exactly-once or durable outage guarantee.",
+    "Not all optional Wazuh modules, external agents or external threat feeds have been validated.",
+    "Hybrid lab networking and local configuration are not yet fully represented by the production Helm chart.",
+    "Full host reboot recovery has not been tested."
+  ]
+}

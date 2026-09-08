@@ -1,0 +1,16 @@
+{
+  "tested_on": "2026-09-08",
+  "platform": "Wazuh manager 4.9.2",
+  "scope": "Replay of four captured real proxy ECS detections via Wazuh JSON logcollector and analysisd, matched in alerts.json. This is NOT deployed proxy-to-Wazuh end-to-end validation.",
+  "matched_event_ids": [
+    "092bfea01200445ba5daea5caa22c980",
+    "239ba31355c34dd59f6a51df6aa07f66",
+    "2591b34751d549b8bd94f39d944b62dc",
+    "58b8c76b05dc4646bf20ff2f5eb32fee"
+  ],
+  "rule_id": "100110",
+  "required_services_verified_running": ["wazuh-analysisd", "wazuh-logcollector", "wazuh-db", "wazuh-apid"],
+  "user_authorized_exception": "Wazuh-only root bootstrap, limited verified capabilities, no-new-privileges, RuntimeDefault seccomp. No privileged mode, hostNetwork or Docker socket.",
+  "retain_lab": true,
+  "not_validated": ["Deployed proxy event shipping", "Wazuh indexer", "Wazuh dashboard", "Admin Wazuh connection test", "Long-term persistence across node restarts"]
+}

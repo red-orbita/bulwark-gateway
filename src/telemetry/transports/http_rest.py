@@ -1,8 +1,8 @@
 """
-HTTP/REST Transport — for Splunk HEC, Microsoft Bulwark, Datadog, Elasticsearch.
+HTTP/REST Transport — for Splunk HEC, Microsoft Sentinel, Datadog, Elasticsearch.
 
 Supports:
-    - Bearer token auth (Splunk HEC)
+    - API key Authorization scheme (Splunk HEC)
     - HMAC shared key (Azure Log Analytics)
     - API key header (Datadog)
     - Basic auth (Elasticsearch)
@@ -11,6 +11,7 @@ Supports:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -75,7 +76,7 @@ class HttpTransportConfig:
     compress: bool = False
     timeout_seconds: float = 10.0
     # Format
-    format: str = "json"  # json, ndjson
+    format: str = "json"  # json, ndjson, elastic_bulk, splunk_hec
 
 
 class HttpRestTransport:
@@ -89,6 +90,8 @@ class HttpRestTransport:
 
     def _build_headers(self, body: bytes) -> dict[str, str]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._config.format in ("ndjson", "elastic_bulk"):
+            headers["Content-Type"] = "application/x-ndjson"
 
         if self._config.auth_method == HttpAuthMethod.BEARER:
             headers["Authorization"] = f"Bearer {self._config.token}"
@@ -114,6 +117,21 @@ class HttpRestTransport:
         return headers
 
     def _serialize_batch(self, events: list[SecurityTelemetryEvent]) -> bytes:
+        if self._config.format == "splunk_hec":
+            # HEC batches are concatenated envelopes, not a JSON array. Keep
+            # the entire ECS document inside event, not only ECS event metadata.
+            return ("\n".join(json.dumps({
+                "time": datetime.fromisoformat(event.timestamp).timestamp(),
+                "source": "bulwark-gateway",
+                "event": event.to_ecs_json(),
+            }) for event in events) + "\n").encode("utf-8")
+        if self._config.format == "elastic_bulk":
+            lines: list[str] = []
+            for event in events:
+                # Stable IDs make re-sending an indexed event idempotent.
+                lines.append(json.dumps({"index": {"_id": event.event.id}}))
+                lines.append(event.model_dump_json(by_alias=True, exclude_none=True))
+            return ("\n".join(lines) + "\n").encode("utf-8")
         if self._config.format == "ndjson":
             lines = [e.model_dump_json(by_alias=True, exclude_none=True) for e in events]
             return ("\n".join(lines) + "\n").encode("utf-8")
@@ -122,43 +140,73 @@ class HttpRestTransport:
             return json.dumps(data).encode("utf-8")
 
     async def send_batch(self, events: list[SecurityTelemetryEvent]) -> bool:
-        """Send batch via HTTP POST. Uses httpx if available, falls back to aiohttp."""
+        """Send a batch and validate the platform acknowledgement."""
+        if not events:
+            return True
         # C-02: SSRF validation on endpoint URL
-        if _is_ssrf_target(self._config.url):
+        if await asyncio.to_thread(_is_ssrf_target, self._config.url):
             logger.error(
                 "http_transport_ssrf_blocked",
                 extra={"url": self._config.url},
             )
             return False
 
-        body = self._serialize_batch(events)
-        headers = self._build_headers(body)
-
         try:
+            body = self._serialize_batch(events)
+            headers = self._build_headers(body)
             # Use httpx (already a project dependency)
             import httpx
 
             ssl_context = None
-            if self._config.auth_method == HttpAuthMethod.MTLS:
+            if self._config.tls_ca or self._config.auth_method == HttpAuthMethod.MTLS:
                 ssl_context = ssl.create_default_context(cafile=self._config.tls_ca)
-                if self._config.tls_cert and self._config.tls_key:
+            if self._config.auth_method == HttpAuthMethod.MTLS:
+                if not self._config.tls_cert or not self._config.tls_key:
+                    logger.error("http_transport_mtls_credentials_missing")
+                    return False
+                if ssl_context is not None:
                     ssl_context.load_cert_chain(self._config.tls_cert, self._config.tls_key)
 
             async with httpx.AsyncClient(
                 verify=self._config.verify_ssl if not ssl_context else ssl_context,
                 timeout=self._config.timeout_seconds,
+                follow_redirects=False,
+                trust_env=False,
             ) as client:
                 response = await client.post(
                     self._config.url,
                     content=body,
                     headers=headers,
                 )
-                if response.status_code >= 400:
+                if not 200 <= response.status_code < 300:
                     logger.error(
                         "http_transport_error",
-                        extra={"status": response.status_code, "body": response.text[:200]},
+                        extra={"status": response.status_code},
                     )
                     return False
+                if self._config.format == "elastic_bulk":
+                    result = response.json()
+                    items = result.get("items", []) if isinstance(result, dict) else []
+                    if (
+                        not isinstance(result, dict)
+                        or result.get("errors") is not False
+                        or not isinstance(items, list)
+                        or len(items) != len(events)
+                    ):
+                        logger.error("elastic_bulk_invalid_or_failed_response")
+                        return False
+                    for item in items:
+                        index = item.get("index") if isinstance(item, dict) else None
+                        status = index.get("status") if isinstance(index, dict) else None
+                        if type(status) is not int or not 200 <= status < 300:
+                            logger.error("elastic_bulk_item_failed")
+                            return False
+                if self._config.format == "splunk_hec":
+                    result = response.json()
+                    code = result.get("code") if isinstance(result, dict) else None
+                    if type(code) is not int or code != 0:
+                        logger.error("splunk_hec_invalid_or_failed_response")
+                        return False
                 return True
 
         except ImportError:

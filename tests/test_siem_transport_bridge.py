@@ -210,7 +210,8 @@ def test_add_http_rest_transport_wires_auth_and_format():
     name, cfg = _only_config(exp)
     assert name == "http_rest"
     assert cfg.url == "https://splunk.example.com:8088/collector"
-    assert cfg.format == "ndjson"
+    # Live HEC rejects a plain NDJSON/ECS array; the platform needs envelopes.
+    assert cfg.format == "splunk_hec"
     assert cfg.verify_ssl is False
     # GAP 1 regression: auth_method must actually be set so the token is sent.
     assert cfg.auth_method is HttpAuthMethod.API_KEY

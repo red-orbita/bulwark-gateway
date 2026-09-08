@@ -25,32 +25,29 @@ metadata:
     app.kubernetes.io/component: siem
 data:
   local_decoder.xml: |
-    <!-- Bulwark Gateway security event decoder -->
-    <decoder name="bulwark-gateway">
-      <prematch>^security_event\s+</prematch>
-      <regex offset="after_prematch">agent=(\S+) category=(\S+) description='([^']+)' pattern='([^']*?)' severity=(\S+) tenant=(\S+) tool=(\S+) verdict=(\S+)</regex>
-      <order>dstuser,extra_data,data,system_name,status,user,url,action</order>
-    </decoder>
+    <!-- ECS NDJSON uses Wazuh's built-in json decoder. -->
   local_rules.xml: |
     <!-- Bulwark Gateway detection rules -->
     <group name="bulwark-gateway,">
 
       <rule id="100100" level="3">
-        <decoded_as>bulwark-gateway</decoded_as>
+        <decoded_as>json</decoded_as>
+        <field name="observer.type" type="pcre2">^bulwark-gateway$</field>
+        <field name="bulwark.verdict" type="pcre2">^(block|warn|redact|allow)$</field>
         <description>Bulwark Gateway: Security event</description>
         <group>bulwark-gateway,</group>
       </rule>
 
       <rule id="100101" level="12">
         <if_sid>100100</if_sid>
-        <field name="action">BLOCK</field>
+        <field name="bulwark.verdict" type="pcre2">^block$</field>
         <description>Bulwark Gateway: Critical security event — action blocked</description>
         <group>bulwark-gateway,attack,</group>
       </rule>
 
       <rule id="100102" level="14">
         <if_sid>100100</if_sid>
-        <field name="extra_data">jailbreak</field>
+        <field name="bulwark.threat_category" type="pcre2">^jailbreak$</field>
         <description>Bulwark Gateway: Jailbreak attempt detected</description>
         <mitre>
           <id>T1059</id>
@@ -60,7 +57,7 @@ data:
 
       <rule id="100103" level="14">
         <if_sid>100100</if_sid>
-        <field name="extra_data">exfiltration</field>
+        <field name="bulwark.threat_category" type="pcre2">^exfiltration$</field>
         <description>Bulwark Gateway: Data exfiltration attempt detected</description>
         <mitre>
           <id>T1041</id>
@@ -70,7 +67,7 @@ data:
 
       <rule id="100104" level="10">
         <if_sid>100100</if_sid>
-        <field name="extra_data">prompt_injection</field>
+        <field name="bulwark.threat_category" type="pcre2">^prompt_injection$</field>
         <description>Bulwark Gateway: Prompt injection attempt detected</description>
         <mitre>
           <id>T1190</id>
@@ -80,7 +77,7 @@ data:
 
       <rule id="100105" level="13">
         <if_sid>100100</if_sid>
-        <field name="extra_data">credential</field>
+        <field name="bulwark.threat_category" type="pcre2">^credential_access$</field>
         <description>Bulwark Gateway: Credential access attempt detected</description>
         <mitre>
           <id>T1552</id>
@@ -90,7 +87,7 @@ data:
 
       <rule id="100106" level="12">
         <if_sid>100100</if_sid>
-        <field name="extra_data">tool_abuse</field>
+        <field name="bulwark.threat_category" type="pcre2">^tool_abuse$</field>
         <description>Bulwark Gateway: Tool abuse detected</description>
         <mitre>
           <id>T1059</id>
@@ -100,7 +97,7 @@ data:
 
       <rule id="100107" level="14">
         <if_sid>100100</if_sid>
-        <field name="extra_data">ssrf</field>
+        <field name="bulwark.threat_category" type="pcre2">^ssrf$</field>
         <description>Bulwark Gateway: SSRF attempt detected</description>
         <mitre>
           <id>T1552.005</id>
@@ -206,11 +203,14 @@ spec:
         app.kubernetes.io/component: siem
     spec:
       securityContext:
-        fsGroup: 1000
-        # SECURITY FIX (VULN 2.2): Run pod as non-root user (wazuh UID 1000)
-        runAsUser: 1000
-        runAsGroup: 1000
-        runAsNonRoot: true
+        fsGroup: 999
+        # Wazuh-only exception authorized for the lab: vendor init requires root,
+        # while analysisd drops to wazuh (999). The gateway remains non-root.
+        runAsUser: 0
+        runAsGroup: 0
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: init-filebeat
           image: "{{ .Values.wazuh.image.repository }}:{{ .Values.wazuh.image.tag }}"
@@ -234,12 +234,13 @@ spec:
             readOnlyRootFilesystem: false
             capabilities:
               drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
           command:
             - sh
             - -c
             - |
-              cp -a /var/ossec/etc/* /mnt/wazuh-etc/ 2>/dev/null || true
-              cp -a /var/ossec/etc/.??* /mnt/wazuh-etc/ 2>/dev/null || true
+              set -e
+              cp -R --no-preserve=ownership /var/ossec/data_tmp/permanent/var/ossec/etc/. /mnt/wazuh-etc/
 
               mkdir -p /mnt/wazuh-etc/decoders /mnt/wazuh-etc/rules
 
@@ -271,6 +272,18 @@ spec:
               BULWARK_CONF
               fi
 
+              chown -R root:999 /mnt/wazuh-etc
+              chown -R 999:999 /mnt/wazuh-etc/lists
+              touch /mnt/bulwark-logs/events.ndjson
+              chmod 644 /mnt/bulwark-logs/events.ndjson
+              cat >> /mnt/wazuh-etc/ossec.conf << 'ECS_CONF'
+              <ossec_config>
+                <localfile>
+                  <log_format>json</log_format>
+                  <location>/var/log/bulwark-gateway/events.ndjson</location>
+                </localfile>
+              </ossec_config>
+              ECS_CONF
               echo "[init-bulwark-config] Configuration injected successfully"
           volumeMounts:
             - name: wazuh-etc
@@ -284,15 +297,15 @@ spec:
       containers:
         - name: wazuh-manager
           image: "{{ .Values.wazuh.image.repository }}:{{ .Values.wazuh.image.tag }}"
-          # SECURITY FIX (VULN 2.2): Run as non-root. Wazuh 4.9+ supports UID 1000.
-          # If Wazuh image requires root for bind ports <1024, use NET_BIND_SERVICE capability.
+          # Vendor bootstrap requires root; analysisd uses chroot and drops UID.
+          # No privileged mode, host networking, or Docker socket access.
           securityContext:
-            runAsUser: 1000
-            runAsGroup: 1000
-            runAsNonRoot: true
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
             allowPrivilegeEscalation: false
             capabilities:
-              add: ["NET_BIND_SERVICE"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL"]
               drop: ["ALL"]
           env:
             - name: WAZUH_CLUSTER_DISABLED
@@ -338,11 +351,23 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 10
           readinessProbe:
-            tcpSocket:
-              port: 55000
+            exec:
+              command:
+                - /var/ossec/framework/python/bin/python3
+                - -c
+                - |
+                  import glob, os
+                  for daemon in ('wazuh-analysisd', 'wazuh-logcollector', 'wazuh-db', 'wazuh-apid'):
+                      files = glob.glob('/var/ossec/var/run/' + daemon + '-*.pid')
+                      if not files:
+                          raise SystemExit(1)
+                      for path in files:
+                          with open(path) as f:
+                              os.kill(int(f.read().strip()), 0)
             initialDelaySeconds: 90
             periodSeconds: 10
             failureThreshold: 12
+            timeoutSeconds: 5
       volumes:
         - name: siem-stats
           persistentVolumeClaim:
