@@ -14,10 +14,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
-import socket
 import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,52 +24,21 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from ..schema import SecurityTelemetryEvent
+from . import is_ssrf_target_host
 
 logger = logging.getLogger(__name__)
 
-# C-02: SSRF protection for SIEM transport endpoints
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("100.64.0.0/10"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-]
-
-_BLOCKED_HOSTNAMES = {
-    "metadata.google.internal", "metadata.google.internal.",
-    "metadata", "localhost",
-    "kubernetes.default", "kubernetes.default.svc",
-    "kubernetes.default.svc.cluster.local",
-}
-
 
 def _is_ssrf_target(url: str) -> bool:
-    """Validate SIEM endpoint URL against SSRF targets (C-02)."""
+    """Validate SIEM endpoint URL against SSRF targets (C-02).
+
+    Delegates to the shared transport SSRF SSOT (``is_ssrf_target_host``), so
+    the blocklist and the ``BULWARK_SIEM_SSRF_ALLOW_PRIVATE`` allowlist stay
+    consistent across HTTP, TCP/TLS, and Syslog transports. Fail-closed.
+    """
     try:
         parsed = urlparse(url)
-        hostname = parsed.hostname or ""
-
-        if hostname.lower() in _BLOCKED_HOSTNAMES:
-            return True
-
-        # Resolve hostname to IP
-        try:
-            addrs = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        except (socket.gaierror, OSError):
-            return True  # Fail-closed: unresolvable = blocked
-
-        for _family, _, _, _, sockaddr in addrs:
-            ip = ipaddress.ip_address(sockaddr[0])
-            for network in _BLOCKED_NETWORKS:
-                if ip in network:
-                    return True
-        return False
+        return is_ssrf_target_host(parsed.hostname or "", parsed.port)
     except Exception:
         return True  # Fail-closed
 

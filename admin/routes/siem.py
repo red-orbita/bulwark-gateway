@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import socket
 import uuid
 from pathlib import Path
@@ -22,19 +23,37 @@ router = APIRouter()
 SIEM_CONFIG_DIR = Path("config/siem")
 _TRANSPORTS_FILE = Path("shared/siem/siem_transports.json")
 
-# SECURITY FIX (C-07): SSRF blocklist for SIEM transport endpoint validation
-_BLOCKED_SSRF_NETWORKS = [
+# Secret transport fields never returned in cleartext over the API, and preserved
+# (not overwritten) when an edit round-trips the masked sentinel back on save.
+_SECRET_FIELDS = ("auth_value", "wazuh_password", "password", "shared_key")
+_SECRET_MASK = "***"  # noqa: S105 - masking placeholder, not a credential
+
+# SECURITY FIX (C-07): SSRF blocklist for SIEM transport endpoint validation.
+# Split into always-blocked (loopback/link-local/metadata) and private ranges;
+# the latter are permitted only when BULWARK_SIEM_SSRF_ALLOW_PRIVATE is set, so
+# an operator can point the SIEM export at an internal collector (e.g. a local
+# containerised SIEM for E2E validation). Default OFF (fail-closed).
+_ALWAYS_BLOCKED_SSRF_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fe80::/10"),
+]
+_PRIVATE_SSRF_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("100.64.0.0/10"),
-    ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
 ]
 _BLOCKED_HOSTNAMES = {"metadata.google.internal", "localhost", "kubernetes.default", "kubernetes.default.svc"}
+
+
+def _allow_private_siem_targets() -> bool:
+    """Whether saving a private-range SIEM endpoint is permitted (opt-in)."""
+    return os.getenv("BULWARK_SIEM_SSRF_ALLOW_PRIVATE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def _validate_url_no_ssrf(url: str) -> str | None:
@@ -47,6 +66,9 @@ def _validate_url_no_ssrf(url: str) -> str | None:
         return f"Blocked hostname: {hostname}"
     if hostname.endswith(".internal") or hostname.endswith(".local"):
         return f"Blocked internal hostname: {hostname}"
+    blocked_networks = list(_ALWAYS_BLOCKED_SSRF_NETWORKS)
+    if not _allow_private_siem_targets():
+        blocked_networks += _PRIVATE_SSRF_NETWORKS
     try:
         addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, OSError):
@@ -55,7 +77,7 @@ def _validate_url_no_ssrf(url: str) -> str | None:
         ip_str = info[4][0]
         try:
             ip = ipaddress.ip_address(ip_str)
-            for net in _BLOCKED_SSRF_NETWORKS:
+            for net in blocked_networks:
                 if ip in net:
                     return f"IP {ip_str} in blocked range {net}"
         except ValueError:
@@ -105,8 +127,8 @@ async def list_platforms(user: TokenPayload = Depends(require_permission("siem:r
 
 @router.get("/config")
 async def get_all_config(user: TokenPayload = Depends(require_permission("siem:read"))):
-    """Get all configured transports."""
-    return {"transports": _transports}
+    """Get all configured transports (secrets masked)."""
+    return {"transports": [_mask_transport(t) for t in _transports]}
 
 
 @router.get("/config/{platform}")
@@ -164,8 +186,9 @@ async def siem_status(user: TokenPayload = Depends(require_permission("siem:read
 def _mask_transport(t: dict) -> dict:
     """H-07: Mask sensitive fields in transport responses."""
     masked = dict(t)
-    if masked.get("wazuh_password"):
-        masked["wazuh_password"] = "***"  # noqa: S105 - masking placeholder, redacts the real secret  # nosemgrep: bulwark-no-hardcoded-jwt-secret
+    for field in _SECRET_FIELDS:
+        if masked.get(field):
+            masked[field] = _SECRET_MASK
     return masked
 
 
@@ -194,6 +217,9 @@ async def create_transport(
         "endpoint": endpoint,
         "port": config.get("port", 514),
         "auth_type": config.get("auth_type", "none"),
+        "auth_value": config.get("auth_value", ""),
+        "api_key_header": config.get("api_key_header", ""),
+        "verify_ssl": config.get("verify_ssl", True),
         "batch_size": config.get("batch_size", 100),
         "flush_interval": config.get("flush_interval", 1.0),
         "format": config.get("format", "ecs_json"),
@@ -235,6 +261,9 @@ async def update_transport(
                 "endpoint",
                 "port",
                 "auth_type",
+                "auth_value",
+                "api_key_header",
+                "verify_ssl",
                 "batch_size",
                 "flush_interval",
                 "format",
@@ -243,11 +272,15 @@ async def update_transport(
                 "wazuh_password",
             ):
                 if key in config:
+                    # Never let the masked sentinel round-tripped from a read
+                    # clobber the stored secret — preserve the existing value.
+                    if key in _SECRET_FIELDS and config[key] == _SECRET_MASK:
+                        continue
                     t[key] = config[key]
             _save_transports()
             audit = get_audit_logger()
             await audit.log(actor=user.sub, action="siem_update", resource_type="transport", resource_id=transport_id)
-            return t
+            return _mask_transport(t)
     raise HTTPException(status_code=404, detail="Transport not found")
 
 

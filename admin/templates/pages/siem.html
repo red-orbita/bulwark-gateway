@@ -190,6 +190,8 @@
                         <label for="siem-auth-type" class="sg-label">Auth Type</label>
                         <select id="siem-auth-type" x-model="form.auth_type" class="sg-select w-full">
                             <option value="none">None</option>
+                            <option value="bearer">Bearer Token</option>
+                            <option value="basic">Basic Auth (user:password)</option>
                             <option value="api_key">API Key</option>
                             <option value="hmac">HMAC</option>
                             <option value="mtls">mTLS</option>
@@ -198,7 +200,7 @@
                     </div>
                     <div>
                         <label for="siem-auth-value-key" class="sg-label">Auth Value / Key</label>
-                        <input id="siem-auth-value-key" type="password" x-model="form.auth_value" class="sg-input w-full" placeholder="API key or token">
+                        <input id="siem-auth-value-key" type="password" x-model="form.auth_value" class="sg-input w-full" placeholder="Token, API key, or user:password">
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
