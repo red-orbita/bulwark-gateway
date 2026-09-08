@@ -23,6 +23,15 @@ from src.telemetry.compliance import OWASP_LLM_VERSION, compliance_for
 _UNKNOWN_SRC_IP = "0.0.0.0"  # noqa: S104 — log-record sentinel value, not a socket bind  # nosec B104
 
 
+def _wire_value(value: object, *, header: bool = False, cef: bool = False) -> str:
+    """Prevent delimiter and record injection in legacy SIEM wire formats."""
+    text = str(value).replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+    text = text.replace("\t", "\\t").replace("\x00", "\\0")
+    if header:
+        return text.replace("|", "\\|")
+    return text.replace("=", "\\=") if cef else text
+
+
 class TelemetryEventCategory(str, Enum):
     """ECS event.category values relevant to Bulwark Gateway."""
 
@@ -179,22 +188,23 @@ class SecurityTelemetryEvent(BaseModel):
             parts = list(comp.owasp_llm or []) + list(comp.eu_ai_act or [])
             if parts:
                 compliance_summary = ",".join(parts)
-        extension = (
-            f"src={self.source.ip or _UNKNOWN_SRC_IP} "
-            f"act={self.bulwark.verdict} "
-            f"cat={self.event.category.value} "
-            f"cs1={self.tenant.id} cs1Label=TenantID "
-            f"cs2={self.bulwark.guardrail_layer} cs2Label=GuardrailLayer "
-            f"cs3={self.bulwark.rule_id or 'none'} cs3Label=RuleID "
-            f"cn1={int(self.bulwark.latency_ms)} cn1Label=LatencyMs "
-            f"cs4={str(self.bulwark.allowed_by_exception).lower()} cs4Label=AllowedByException "
-            f"cs5={self.bulwark.exception_scope or 'none'} cs5Label=ExceptionScope "
-            f"cs6={compliance_summary} cs6Label=Compliance "
-            f"msg={self.message}"
-        )
+        fields = {
+            "src": self.source.ip or _UNKNOWN_SRC_IP, "act": self.bulwark.verdict,
+            "cat": self.event.category.value,
+            "cs1": self.tenant.id, "cs1Label": "TenantID",
+            "cs2": self.bulwark.guardrail_layer, "cs2Label": "GuardrailLayer",
+            "cs3": self.bulwark.rule_id or "none", "cs3Label": "RuleID",
+            "cn1": str(int(self.bulwark.latency_ms)), "cn1Label": "LatencyMs",
+            "cs4": str(self.bulwark.allowed_by_exception).lower(), "cs4Label": "AllowedByException",
+            "cs5": self.bulwark.exception_scope or "none", "cs5Label": "ExceptionScope",
+            "cs6": compliance_summary, "cs6Label": "Compliance",
+            "externalId": self.event.id, "msg": self.message,
+        }
+        extension = " ".join(f"{key}={_wire_value(value, cef=True)}" for key, value in fields.items())
         return (
-            f"CEF:0|BulwarkGateway|Guardrail|{self.observer.version}|"
-            f"{self.bulwark.threat_category or 'generic'}|{name}|{severity}|{extension}"
+            f"CEF:0|BulwarkGateway|Guardrail|{_wire_value(self.observer.version, header=True)}|"
+            f"{_wire_value(self.bulwark.threat_category or 'generic', header=True)}|"
+            f"{_wire_value(name, header=True)}|{severity}|{extension}"
         )
 
     def to_leef(self) -> str:
@@ -204,23 +214,21 @@ class SecurityTelemetryEvent(BaseModel):
         atlas = ",".join(comp.mitre_atlas) if comp and comp.mitre_atlas else "none"
         mitre = ",".join(comp.mitre_attack) if comp and comp.mitre_attack else "none"
         eu_ai_act = ",".join(comp.eu_ai_act) if comp and comp.eu_ai_act else "none"
+        fields = {
+            "cat": self.event.category.value, "sev": str(max(1, self.event.severity.value)),
+            "src": self.source.ip or _UNKNOWN_SRC_IP, "action": self.bulwark.verdict,
+            "tenantId": self.tenant.id, "ruleId": self.bulwark.rule_id or "none",
+            "guardrailLayer": self.bulwark.guardrail_layer, "latencyMs": str(int(self.bulwark.latency_ms)),
+            "allowedByException": str(self.bulwark.allowed_by_exception).lower(),
+            "exceptionScope": self.bulwark.exception_scope or "none",
+            "owaspLlm": owasp, "mitreAtlas": atlas, "mitreAttack": mitre, "euAiAct": eu_ai_act,
+            "eventId": self.event.id, "requestId": self.bulwark.request_id or "none",
+            "agentId": self.tenant.agent_id or "none", "msg": self.message,
+        }
+        attributes = "\t".join(f"{key}={_wire_value(value)}" for key, value in fields.items())
         return (
-            f"LEEF:2.0|BulwarkGateway|Guardrail|{self.observer.version}|SecurityEvent|"
-            f"cat={self.event.category.value}\t"
-            f"sev={self.event.severity.value}\t"
-            f"src={self.source.ip or _UNKNOWN_SRC_IP}\t"
-            f"action={self.bulwark.verdict}\t"
-            f"tenantId={self.tenant.id}\t"
-            f"ruleId={self.bulwark.rule_id or 'none'}\t"
-            f"guardrailLayer={self.bulwark.guardrail_layer}\t"
-            f"latencyMs={int(self.bulwark.latency_ms)}\t"
-            f"allowedByException={str(self.bulwark.allowed_by_exception).lower()}\t"
-            f"exceptionScope={self.bulwark.exception_scope or 'none'}\t"
-            f"owaspLlm={owasp}\t"
-            f"mitreAtlas={atlas}\t"
-            f"mitreAttack={mitre}\t"
-            f"euAiAct={eu_ai_act}\t"
-            f"msg={self.message}"
+            f"LEEF:2.0|BulwarkGateway|Guardrail|{_wire_value(self.observer.version, header=True)}|"
+            f"SecurityEvent|0x09|{attributes}"
         )
 
 

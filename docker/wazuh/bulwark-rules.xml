@@ -1,54 +1,45 @@
-<!-- Bulwark Gateway custom rules for Wazuh
-     Chain from Suricata rule 86600 (JSON decoder with event_type+timestamp)
-     to avoid being silenced by level 0 catch-all.
--->
+<!-- ECS JSON emitted by the Bulwark telemetry exporter. -->
 <group name="bulwark-gateway,">
-
-  <!-- Base: any JSON event with a verdict field (Bulwark signature) -->
-  <rule id="100100" level="3">
-    <if_sid>86600</if_sid>
-    <field name="verdict">block|warn|redact|allow</field>
-    <description>Bulwark Gateway security event: $(event_type)</description>
+  <rule id="100120" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="observer.type" type="pcre2">^bulwark-gateway$</field>
+    <field name="event.kind" type="pcre2">^event$</field>
+    <field name="bulwark.guardrail_layer" type="pcre2">^request_audit$</field>
+    <description>Bulwark request activity: HTTP $(labels.http_status_code) ($(bulwark.request_id))</description>
+    <group>bulwark_activity,</group>
   </rule>
-
-  <!-- Blocked threat -->
+  <rule id="100100" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="observer.type" type="pcre2">^bulwark-gateway$</field>
+    <field name="bulwark.verdict" type="pcre2">^(block|warn|redact|allow)$</field>
+    <description>Bulwark Gateway: $(bulwark.verdict) event $(event.id)</description>
+  </rule>
   <rule id="100101" level="10">
     <if_sid>100100</if_sid>
-    <field name="verdict">block</field>
-    <description>Bulwark Gateway: Threat BLOCKED — $(event_type)</description>
+    <field name="bulwark.verdict" type="pcre2">^block$</field>
+    <description>Bulwark Gateway: threat blocked for $(tenant.id)</description>
     <group>attack,</group>
   </rule>
-
-  <!-- Warning (suspicious but allowed) -->
   <rule id="100102" level="7">
     <if_sid>100100</if_sid>
-    <field name="verdict">warn</field>
-    <description>Bulwark Gateway: Suspicious activity WARNING — $(event_type)</description>
-    <group>suspicious,</group>
+    <field name="bulwark.verdict" type="pcre2">^warn$</field>
+    <description>Bulwark Gateway: suspicious activity warning</description>
   </rule>
-
-  <!-- Redacted output -->
   <rule id="100103" level="5">
     <if_sid>100100</if_sid>
-    <field name="verdict">redact</field>
-    <description>Bulwark Gateway: Output REDACTED — $(event_type)</description>
-    <group>data_protection,</group>
+    <field name="bulwark.verdict" type="pcre2">^redact$</field>
+    <description>Bulwark Gateway: sensitive output redacted</description>
   </rule>
-
-  <!-- Prompt injection attempt -->
   <rule id="100110" level="12">
     <if_sid>100101</if_sid>
-    <field name="event_type">prompt_injection</field>
-    <description>Bulwark Gateway: Prompt injection BLOCKED</description>
+    <field name="bulwark.threat_category" type="pcre2">^prompt_injection$</field>
+    <description>Bulwark Gateway: prompt injection blocked ($(event.id))</description>
     <group>injection,</group>
   </rule>
-
-  <!-- Tool policy violation -->
   <rule id="100111" level="11">
     <if_sid>100101</if_sid>
-    <field name="event_type">tool_policy_violation</field>
-    <description>Bulwark Gateway: Unauthorized tool call BLOCKED</description>
+    <field name="bulwark.threat_category" type="pcre2">^tool_abuse$</field>
+    <description>Bulwark Gateway: unauthorized tool call blocked</description>
     <group>policy_violation,</group>
   </rule>
-
 </group>

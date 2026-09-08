@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     # analysts can drill into passing traffic in the Security Events viewer. This
     # trades Redis memory + write volume for auditability — keep the cap modest.
     log_allowed: bool = False        # Record ALLOW verdicts as browsable events
+    siem_request_audit_enabled: bool = False  # Privacy-safe activity for every /v1 and /v2 request
     # Redis is only the *live buffer* for the Security Events viewer; the durable,
     # queryable history lives in the admin database (synced from these lists). This
     # cap bounds Redis memory per tenant per feed (block/warn and allowed). It must

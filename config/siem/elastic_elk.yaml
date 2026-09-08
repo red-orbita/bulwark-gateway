@@ -20,7 +20,7 @@ batching:
   flush_interval_seconds: 1.0
   compress: true  # gzip for bulk API
 
-format: ndjson  # Elasticsearch _bulk API format
+format: elastic_bulk  # Alternating index-action and ECS document lines; use ecs_json for Logstash
 field_mapping:
   # ECS native — fields map 1:1
   # Index lifecycle management (ILM):

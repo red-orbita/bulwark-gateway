@@ -3,6 +3,47 @@
 Complete reference for understanding, operating, and developing Bulwark Gateway.
 This file is designed so that any AI agent or developer can fully operate the project.
 
+### Local SIEM Lab Storage Constraint (User Requirement)
+
+- Test only ONE SIEM platform at a time, with only its necessary dependencies.
+- Exception explicitly requested by the user: after finishing Wazuh validation,
+  KEEP Wazuh and its necessary dependencies installed for the user's post/demo.
+  Do not uninstall that final lab without further approval.
+- Before pulling/building, check the actual Docker/containerd storage filesystem,
+  not just the workspace disk. Docker currently uses `/var/lib/docker` on the
+  small root partition; the workspace is on a different, larger disk.
+- Budget for compressed layers, unpacked images, writable layers, and data. Keep
+  at least 5 GiB free on the root filesystem; if headroom is uncertain, do not pull.
+- After validating/fixing that SIEM, preserve sanitized evidence and remove ONLY
+  lab-created containers, volumes, networks, and newly downloaded images BEFORE
+  proceeding to another SIEM. Do not delete previously cached/shared images.
+- Never use global prune or modify Docker storage configuration without approval.
+  Preserve Minikube, existing user services, volumes, and source changes.
+- Recheck free space during installation and after cleanup. Stop if the reserve
+  is threatened. The previous multi-SIEM image download filled the root disk.
+
+### SIEM Request Activity
+
+- Detections and request activity are separate. `BULWARK_LOG_ALLOWED` populates
+  the admin history only; it does not enable SIEM activity export.
+- `BULWARK_SIEM_REQUEST_AUDIT_ENABLED=true` emits one privacy-safe activity record
+  for each `/v1/` and `/v2/` HTTP request, including rejected requests and streams.
+  Default off. Requires enabled telemetry and a configured destination for delivery.
+- Activity uses `event.kind=event`, `event.category=web`, and
+  `bulwark.verdict=not_evaluated`: HTTP 200 is NOT evidence of an ALLOW verdict.
+  Bodies, credentials and raw URL paths/query strings are never recorded.
+- This does not export admin audit logs or guarantee delivery during exporter
+  outages. Unauthenticated requests have tenant `unknown`, not client-supplied IDs.
+- Admin SIEM page offers `detections` or `all_requests` via GET/PUT
+  `/admin/siem/activity` (siem:read/write). Stored atomically in
+  `shared/siem/activity.json` (override: `BULWARK_SIEM_ACTIVITY_FILE`), shared with
+  proxy replicas and re-read every 2 seconds. File overrides the env default.
+- Retained local Wazuh demo: manager in Minikube namespace `bulwark-siem`;
+  Docker `wazuh-indexer` and `wazuh-dashboard` with named persistent volumes.
+  Browser: `https://127.0.0.1:8443`, user `admin`; generated credentials and CA
+  are in ignored `shared/wazuh-demo/`. Never commit or print the credentials.
+  This hybrid lab is NOT a production deployment; preserve it for the user's post.
+
 ---
 
 ## 1. What Is This Project

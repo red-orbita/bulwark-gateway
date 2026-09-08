@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
 import socket
 import uuid
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 import yaml
 from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
 
 from ..models.auth import TokenPayload
 from ..models.config import SIEMTestResult
@@ -22,6 +25,39 @@ router = APIRouter()
 
 SIEM_CONFIG_DIR = Path("config/siem")
 _TRANSPORTS_FILE = Path("shared/siem/siem_transports.json")
+
+
+class ActivityMode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["detections", "all_requests"]
+
+
+@router.get("/activity")
+async def get_activity_mode(user: TokenPayload = Depends(require_permission("siem:read"))):
+    path = Path(os.getenv("BULWARK_SIEM_ACTIVITY_FILE", "shared/siem/activity.json"))
+    try:
+        return ActivityMode.model_validate_json(await asyncio.to_thread(path.read_text))
+    except FileNotFoundError:
+        enabled = os.getenv("BULWARK_SIEM_REQUEST_AUDIT_ENABLED", "false").lower() == "true"
+        return {"mode": "all_requests" if enabled else "detections"}
+
+
+@router.put("/activity")
+async def set_activity_mode(config: ActivityMode, user: TokenPayload = Depends(require_permission("siem:write"))):
+    path = Path(os.getenv("BULWARK_SIEM_ACTIVITY_FILE", "shared/siem/activity.json"))
+    def save() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            temp.write_text(config.model_dump_json())
+            temp.replace(path)
+        finally:
+            temp.unlink(missing_ok=True)
+    await asyncio.to_thread(save)
+    await get_audit_logger().log(
+        actor=user.sub, action="siem_activity_mode", resource_type="siem", resource_id=config.mode,
+    )
+    return config
 
 # Secret transport fields never returned in cleartext over the API, and preserved
 # (not overwritten) when an edit round-trips the masked sentinel back on save.
@@ -84,6 +120,31 @@ def _validate_url_no_ssrf(url: str) -> str | None:
             return f"Invalid IP: {ip_str}"
     return None  # Safe
 
+
+def _validate_transport_endpoint(config: dict) -> str | None:
+    """Validate socket destinations as hosts, not HTTP URLs."""
+    endpoint = config.get("endpoint", "")
+    if config.get("transport_type") in ("syslog", "syslog_udp", "syslog_tcp", "syslog_tls", "tcp", "tcp_tls"):
+        try:
+            port = int(config.get("port", 514))
+            if not 1 <= port <= 65535 or not isinstance(endpoint, str) or not endpoint:
+                return "Invalid host or port"
+            host = endpoint
+            if ":" in host:
+                # Only bare IPv6 is accepted here; the port has its own field.
+                ipaddress.IPv6Address(host)
+                host = f"[{host}]"
+            parsed = urlparse(f"https://{host}:{port}")
+            if parsed.username is not None or parsed.path or parsed.query or parsed.fragment:
+                return "Use a bare hostname and a separate port"
+            return _validate_url_no_ssrf(f"https://{host}:{port}")
+        except (ValueError, TypeError):
+            return "Invalid host or port"
+    try:
+        return _validate_url_no_ssrf(endpoint)
+    except (ValueError, TypeError):
+        return "Invalid endpoint URL"
+
 # In-memory transport registry (loaded from disk)
 _transports: list[dict] = []
 
@@ -101,7 +162,12 @@ def _load_transports() -> None:
 def _save_transports() -> None:
     """Persist transports to disk."""
     _TRANSPORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _TRANSPORTS_FILE.write_text(json.dumps(_transports, indent=2))
+    temp = _TRANSPORTS_FILE.with_name(_TRANSPORTS_FILE.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        temp.write_text(json.dumps(_transports, indent=2))
+        temp.replace(_TRANSPORTS_FILE)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 # Load on module import
@@ -201,7 +267,7 @@ async def create_transport(
     # SECURITY FIX (C-07): Validate SIEM transport endpoints against SSRF blocklist
     endpoint = config.get("endpoint", "")
     if endpoint:
-        ssrf_error = _validate_url_no_ssrf(endpoint)
+        ssrf_error = await asyncio.to_thread(_validate_transport_endpoint, config)
         if ssrf_error:
             raise HTTPException(status_code=400, detail=f"Endpoint blocked (SSRF protection): {ssrf_error}")
     wazuh_api_url = config.get("wazuh_api_url", "")
@@ -244,8 +310,11 @@ async def update_transport(
 ):
     """Update a SIEM transport."""
     # SECURITY FIX (C-07): Validate SIEM transport endpoints against SSRF blocklist
-    if "endpoint" in config and config["endpoint"]:
-        ssrf_error = _validate_url_no_ssrf(config["endpoint"])
+    existing = next((t for t in _transports if t["id"] == transport_id), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Transport not found")
+    if any(key in config for key in ("endpoint", "transport_type", "port")):
+        ssrf_error = await asyncio.to_thread(_validate_transport_endpoint, {**existing, **config})
         if ssrf_error:
             raise HTTPException(status_code=400, detail=f"Endpoint blocked (SSRF protection): {ssrf_error}")
     if "wazuh_api_url" in config and config["wazuh_api_url"]:

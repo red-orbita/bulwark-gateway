@@ -1,4 +1,4 @@
-# Splunk Enterprise Security — HTTP Event Collector (HEC)
+# Splunk Enterprise — HTTP Event Collector (HEC)
 # Bulwark Gateway SIEM Integration Template
 ---
 transport: http_rest
@@ -6,8 +6,9 @@ platform: splunk_es
 
 connection:
   url: "https://splunk-hec.example.com:8088/services/collector/event"
-  auth_method: bearer
-  token: "${BULWARK_SPLUNK_HEC_TOKEN}"
+  auth_method: api_key
+  api_key_header: Authorization
+  api_key: "Splunk ${BULWARK_SPLUNK_HEC_TOKEN}"
   verify_ssl: true
   timeout_seconds: 10
 
@@ -16,9 +17,9 @@ batching:
   flush_interval_seconds: 1.0
   compress: false  # Set true for gzip if network-constrained
 
-format: json
+format: splunk_hec
 # Splunk HEC expects {"event": {...}, "sourcetype": "...", "index": "..."}
-# The exporter wraps each event in HEC envelope automatically
+# The exporter wraps each ECS event; configure index and sourcetype on the HEC token.
 field_mapping:
   sourcetype: "bulwark:gateway:security"
   index: "security"

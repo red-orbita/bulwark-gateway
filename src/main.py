@@ -24,6 +24,7 @@ from src.middleware.api_version import APIVersionMiddleware
 from src.middleware.auth import AuthMiddleware
 from src.middleware.quotas import QuotaMiddleware
 from src.middleware.rate_limit import RateLimitMiddleware
+from src.middleware.request_audit import RequestAuditMiddleware
 from src.middleware.request_id import RequestIDMiddleware
 from src.middleware.tenant_router import TenantRouterMiddleware
 from src.routes import admin, health, proxy
@@ -507,7 +508,8 @@ def create_app() -> FastAPI:
         )
 
     # Middleware (order matters — last added = outermost = processes request first)
-    # Request flow: RequestID → Auth → TenantRouter → APIVersion → RateLimit → Quota → CORS → Route handler
+    # Request flow: RequestID -> RequestAudit -> Auth -> TenantRouter -> APIVersion
+    # -> RateLimit -> Quota -> CORS -> Route handler
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -532,6 +534,7 @@ def create_app() -> FastAPI:
     if settings.dedicated_tenants:
         app.add_middleware(TenantRouterMiddleware)
     app.add_middleware(AuthMiddleware)
+    app.add_middleware(RequestAuditMiddleware)
     # Outermost: mint/honour the per-request correlation id BEFORE auth so even
     # rejected requests are traceable and get the echoed X-Request-ID header.
     app.add_middleware(RequestIDMiddleware)

@@ -1,5 +1,1 @@
-<!-- Bulwark Gateway custom decoders -->
-<decoder name="bulwark-gateway">
-  <prematch>^{"event_type":</prematch>
-  <plugin_decoder>JSON_Decoder</plugin_decoder>
-</decoder>
+<!-- ECS NDJSON uses Wazuh's built-in json decoder. No custom decoder required. -->

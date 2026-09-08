@@ -5,7 +5,7 @@ Supports:
     - RFC 5424 (structured data)
     - CEF format (ArcSight, FortiSIEM)
     - LEEF format (IBM QRadar)
-    - JSON (Graylog GELF-compatible)
+    - JSON (raw input; not GELF)
 """
 
 from __future__ import annotations
@@ -89,11 +89,23 @@ class SyslogTransport:
         elif self._config.format == SyslogFormat.JSON:
             return event.model_dump_json(by_alias=True, exclude_none=True)
         else:
-            # RFC5424
-            pri = self._config.facility * 8 + event.event.severity.value
-            return f"<{pri}>1 {event.timestamp} bulwark-gateway - - - {event.message}"
+            # ECS uses increasing severity (0-10); syslog uses decreasing (0-7).
+            severity = {0: 6, 1: 5, 4: 4, 7: 3, 10: 2}[event.event.severity.value]
+            pri = self._config.facility * 8 + severity
+            payload = event.model_dump_json(by_alias=True, exclude_none=True)
+            return f"<{pri}>1 {event.timestamp} bulwark-gateway bulwark - - - {payload}"
 
     async def send_batch(self, events: list[SecurityTelemetryEvent]) -> bool:
+        # A manager restart invalidates an idle writer. Retry once after reconnect;
+        # partial TCP delivery can duplicate events, so downstream uses event.id.
+        for attempt in range(2):
+            if await self._send_once(events):
+                return True
+            if self._config.protocol == SyslogProtocol.UDP or attempt:
+                break
+        return False
+
+    async def _send_once(self, events: list[SecurityTelemetryEvent]) -> bool:
         try:
             await self._ensure_connection()
             for event in events:
@@ -108,6 +120,8 @@ class SyslogTransport:
             return True
         except Exception as e:
             logger.error("syslog_send_error", extra={"error": str(e)})
+            if self._writer is not None:
+                self._writer.close()
             self._writer = None
             return False
 

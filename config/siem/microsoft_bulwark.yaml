@@ -1,4 +1,4 @@
-# Microsoft Bulwark — Azure Log Analytics Data Collector API
+# Microsoft Sentinel (Azure) — Azure Log Analytics Data Collector API
 # Bulwark Gateway SIEM Integration Template
 ---
 transport: http_rest

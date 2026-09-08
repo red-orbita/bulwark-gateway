@@ -1,0 +1,35 @@
+{
+  "tested_at": "2026-09-08T09:59:45Z",
+  "platform": "Splunk Enterprise 9.4.2 (authorized evaluation)",
+  "transport": "http_rest/splunk_hec",
+  "scope": "Authenticated admin SIEM router persists configuration and preserves the masked credential on edit; full proxy ASGI lifespan generates detections; actual HTTP HEC export; authenticated SPL search retrieves full ECS events by the response X-Request-ID.",
+  "request_id": "e953a19d9ca745b2b9cd2c495282ee1a",
+  "event_ids": [
+    "239ba31355c34dd59f6a51df6aa07f66",
+    "2591b34751d549b8bd94f39d944b62dc",
+    "092bfea01200445ba5daea5caa22c980",
+    "58b8c76b05dc4646bf20ff2f5eb32fee"
+  ],
+  "matched_events": 4,
+  "tenant": "default-corp",
+  "agent": "support-bot",
+  "verdict": "block",
+  "export_errors": 0,
+  "invalid_hec_token_rejected": true,
+  "admin_and_proxy_unauthenticated_requests_rejected": true,
+  "before_fix": "Generic ECS array rejected by live HEC with HTTP 400, code 5 (No data). Wrapped ECS accepted with HTTP 200, code 0.",
+  "fixes": [
+    "Serialize batches as concatenated HEC envelopes containing the entire ECS document.",
+    "Use the Splunk Authorization scheme for splunk and splunk_es platform identifiers.",
+    "Require a valid integer HEC success code, not HTTP success alone.",
+    "Preserve event timestamp and inherit index/sourcetype from operator HEC token configuration."
+  ],
+  "not_validated": [
+    "Splunk Enterprise Security licensed application and CIM mapping",
+    "Full deployed admin middleware and HTTP server",
+    "Browser workflow (login page responds but not automated)",
+    "TLS transport",
+    "HEC indexer acknowledgements (search verified indexing instead)",
+    "Exporter outage recovery and runtime configuration reload"
+  ]
+}

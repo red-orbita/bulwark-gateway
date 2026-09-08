@@ -405,7 +405,7 @@ def _build_http_auth(cfg: dict) -> dict:
 
     # Splunk HEC authenticates with the "Splunk <token>" Authorization scheme,
     # not "Bearer <token>". Normalize so an operator can paste the raw HEC token.
-    if platform == "splunk" and auth_type in ("bearer", "oauth2", "api_key") and auth_value:
+    if platform in ("splunk", "splunk_es") and auth_type in ("bearer", "oauth2", "api_key") and auth_value:
         token = auth_value if auth_value.lower().startswith("splunk ") else f"Splunk {auth_value}"
         return {
             "auth_method": HttpAuthMethod.API_KEY,
@@ -445,8 +445,11 @@ def _build_http_auth(cfg: dict) -> dict:
 
 
 def _map_http_format(fmt: str) -> str:
-    """HTTP body format: 'json' (ECS array) or 'ndjson'."""
-    return {"ndjson": "ndjson", "custom_json": "ndjson"}.get((fmt or "").lower(), "json")
+    """HTTP body framing; plain NDJSON is not Elasticsearch Bulk framing."""
+    return {
+        "ndjson": "ndjson", "custom_json": "ndjson",
+        "elastic_bulk": "elastic_bulk", "splunk_hec": "splunk_hec",
+    }.get((fmt or "").lower(), "json")
 
 
 def _map_syslog_format(fmt: str):
@@ -493,10 +496,23 @@ def _add_transport_from_config(exporter: TelemetryExporter, cfg: dict) -> None:
             path=cfg.get("endpoint", "/var/log/bulwark-gateway/events.ndjson"),
         )))
     elif ttype in ("http", "http_rest"):
+        from urllib.parse import urlparse
+
         from .transports.http_rest import HttpRestTransport, HttpTransportConfig
+        endpoint = cfg.get("endpoint", "http://localhost:9200")
+        http_format = _map_http_format(fmt)
+        if (cfg.get("platform") or "").lower() in ("splunk", "splunk_es"):
+            http_format = "splunk_hec"
+        # Existing Elastic admin configs select ECS/NDJSON for a Bulk endpoint.
+        # Logstash HTTP inputs must keep their generic JSON framing.
+        if (
+            (cfg.get("platform") or "").lower() in ("elastic", "elastic_elk")
+            and urlparse(endpoint).path.rstrip("/").endswith("/_bulk")
+        ):
+            http_format = "elastic_bulk"
         exporter.add_transport(HttpRestTransport(HttpTransportConfig(
-            url=cfg.get("endpoint", "http://localhost:9200"),
-            format=_map_http_format(fmt),
+            url=endpoint,
+            format=http_format,
             verify_ssl=bool(cfg.get("verify_ssl", True)),
             **_build_http_auth(cfg),
         )))
