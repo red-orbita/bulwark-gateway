@@ -45,6 +45,15 @@ def test_scalar_fields_parse():
     assert parsed.terms == []
 
 
+def test_event_id_and_input_hash_parse_as_scoped_fields():
+    # Regression: event_id (and the input_hash pivot) must be first-class scoped
+    # filters, not degrade to a free-text term that never matches the column.
+    parsed = parse_event_query("event_id:evt-abc123 input_hash:deadbeef")
+    assert parsed.event_id == "evt-abc123"
+    assert parsed.input_hash == "deadbeef"
+    assert parsed.terms == []
+
+
 def test_tool_alias_maps_to_tool_name():
     assert parse_event_query("tool:run_command").tool_name == "run_command"
     assert parse_event_query("tool_name:bash").tool_name == "bash"
