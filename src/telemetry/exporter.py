@@ -375,6 +375,155 @@ def get_exporter() -> TelemetryExporter:
     return _exporter
 
 
+# ─── Admin→proxy transport-config normalization ──────────────────────────────
+#
+# The admin UI (admin/routes/siem.py + siem.html) persists a transport dict with
+# its own vocabulary; the proxy loader below is the single place that maps that
+# vocabulary onto the concrete transport config objects. Keeping the mapping
+# here (rather than in admin) preserves the src↛admin import boundary.
+
+
+def _default_api_key_header(platform: str) -> str:
+    """Platform-aware default header for API-key auth (Datadog uses DD-API-KEY)."""
+    return {"datadog": "DD-API-KEY"}.get((platform or "").lower(), "Authorization")
+
+
+def _build_http_auth(cfg: dict) -> dict:
+    """Map the admin auth vocabulary onto HttpTransportConfig auth kwargs.
+
+    Admin ``auth_type`` values: none | bearer | oauth2 | api_key | basic | hmac | mtls.
+    The single ``auth_value`` field carries the credential (token / api key /
+    ``user:password`` for basic / shared key for hmac). Multi-field methods
+    (hmac workspace, mtls certs) also read explicit optional fields when present.
+    """
+    from .transports.http_rest import HttpAuthMethod
+
+    platform = (cfg.get("platform") or "").lower()
+    auth_type = (cfg.get("auth_type") or "none").lower()
+    # Prefer the current field name; accept the legacy ``auth_key`` for compat.
+    auth_value = cfg.get("auth_value") or cfg.get("auth_key") or ""
+
+    # Splunk HEC authenticates with the "Splunk <token>" Authorization scheme,
+    # not "Bearer <token>". Normalize so an operator can paste the raw HEC token.
+    if platform == "splunk" and auth_type in ("bearer", "oauth2", "api_key") and auth_value:
+        token = auth_value if auth_value.lower().startswith("splunk ") else f"Splunk {auth_value}"
+        return {
+            "auth_method": HttpAuthMethod.API_KEY,
+            "api_key": token,
+            "api_key_header": "Authorization",
+        }
+
+    if auth_type in ("bearer", "oauth2"):
+        return {"auth_method": HttpAuthMethod.BEARER, "token": auth_value}
+    if auth_type == "api_key":
+        return {
+            "auth_method": HttpAuthMethod.API_KEY,
+            "api_key": auth_value,
+            "api_key_header": cfg.get("api_key_header") or _default_api_key_header(platform),
+        }
+    if auth_type == "basic":
+        user, _, pw = auth_value.partition(":")
+        return {
+            "auth_method": HttpAuthMethod.BASIC,
+            "username": cfg.get("username") or user,
+            "password": cfg.get("password") or pw,
+        }
+    if auth_type == "hmac":
+        return {
+            "auth_method": HttpAuthMethod.HMAC,
+            "workspace_id": cfg.get("workspace_id") or "",
+            "shared_key": cfg.get("shared_key") or auth_value,
+        }
+    if auth_type == "mtls":
+        return {
+            "auth_method": HttpAuthMethod.MTLS,
+            "tls_ca": cfg.get("tls_ca"),
+            "tls_cert": cfg.get("tls_cert"),
+            "tls_key": cfg.get("tls_key"),
+        }
+    return {"auth_method": HttpAuthMethod.NONE}
+
+
+def _map_http_format(fmt: str) -> str:
+    """HTTP body format: 'json' (ECS array) or 'ndjson'."""
+    return {"ndjson": "ndjson", "custom_json": "ndjson"}.get((fmt or "").lower(), "json")
+
+
+def _map_syslog_format(fmt: str):
+    """Map the admin format vocabulary onto SyslogFormat."""
+    from .transports.syslog import SyslogFormat
+
+    return {
+        "cef": SyslogFormat.CEF,
+        "leef": SyslogFormat.LEEF,
+        "rfc5424": SyslogFormat.RFC5424,
+        "ecs_json": SyslogFormat.JSON,
+        "custom_json": SyslogFormat.JSON,
+        "json": SyslogFormat.JSON,
+    }.get((fmt or "").lower(), SyslogFormat.JSON)
+
+
+def _map_tcp_format(fmt: str) -> str:
+    """Map the admin format vocabulary onto the tcp_tls format string."""
+    return {
+        "cef": "cef",
+        "leef": "leef",
+        "json": "json",
+        "ndjson": "ndjson",
+        "ecs_json": "json",
+        "custom_json": "json",
+    }.get((fmt or "").lower(), "cef")
+
+
+def _add_transport_from_config(exporter: TelemetryExporter, cfg: dict) -> None:
+    """Build and register one transport from an admin-written config dict.
+
+    Normalizes the admin ``transport_type`` vocabulary
+    (file | http_rest | syslog_udp/tcp/tls | tcp_tls, plus the legacy
+    http/syslog/tcp aliases) onto the concrete transport, wiring auth and
+    format through so an admin-configured HTTP/syslog SIEM actually receives
+    credentials and the requested wire format.
+    """
+    ttype = (cfg.get("transport_type") or "file").lower()
+    fmt = cfg.get("format", "")
+
+    if ttype == "file":
+        from .transports.file_shipper import FileShipperConfig, FileShipperTransport
+        exporter.add_transport(FileShipperTransport(FileShipperConfig(
+            path=cfg.get("endpoint", "/var/log/bulwark-gateway/events.ndjson"),
+        )))
+    elif ttype in ("http", "http_rest"):
+        from .transports.http_rest import HttpRestTransport, HttpTransportConfig
+        exporter.add_transport(HttpRestTransport(HttpTransportConfig(
+            url=cfg.get("endpoint", "http://localhost:9200"),
+            format=_map_http_format(fmt),
+            verify_ssl=bool(cfg.get("verify_ssl", True)),
+            **_build_http_auth(cfg),
+        )))
+    elif ttype in ("syslog", "syslog_udp", "syslog_tcp", "syslog_tls"):
+        from .transports.syslog import SyslogConfig, SyslogProtocol, SyslogTransport
+        protocol = {
+            "syslog_udp": SyslogProtocol.UDP,
+            "syslog_tls": SyslogProtocol.TLS,
+        }.get(ttype, SyslogProtocol.TCP)
+        exporter.add_transport(SyslogTransport(SyslogConfig(
+            host=cfg.get("endpoint", "localhost"),
+            port=int(cfg.get("port", 514)),
+            protocol=protocol,
+            format=_map_syslog_format(fmt),
+        )))
+    elif ttype in ("tcp", "tcp_tls"):
+        from .transports.tcp_tls import TcpTlsConfig, TcpTlsTransport
+        exporter.add_transport(TcpTlsTransport(TcpTlsConfig(
+            host=cfg.get("endpoint", "localhost"),
+            port=int(cfg.get("port", 6514)),
+            use_tls=bool(cfg.get("use_tls", ttype == "tcp_tls")),
+            format=_map_tcp_format(fmt),
+        )))
+    else:
+        logger.warning("unknown_transport_type", extra={"type": ttype})
+
+
 def load_transports_from_config(exporter: TelemetryExporter) -> None:
     """Load transports from shared config file (written by admin)."""
     config_file = Path(os.getenv("BULWARK_SIEM_TRANSPORTS_FILE", "shared/siem/siem_transports.json"))
@@ -414,36 +563,10 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
     for cfg in configs:
         if not cfg.get("enabled", True):
             continue
-        transport_type = cfg.get("transport_type", "file")
         try:
-            if transport_type == "file":
-                from .transports.file_shipper import FileShipperConfig, FileShipperTransport
-                file_t = FileShipperTransport(FileShipperConfig(
-                    path=cfg.get("endpoint", "/var/log/bulwark-gateway/events.ndjson"),
-                ))
-                exporter.add_transport(file_t)
-            elif transport_type == "syslog":
-                from .transports.syslog import SyslogConfig, SyslogTransport
-                syslog_t = SyslogTransport(SyslogConfig(
-                    host=cfg.get("endpoint", "localhost"),
-                    port=int(cfg.get("port", 514)),
-                ))
-                exporter.add_transport(syslog_t)
-            elif transport_type == "http":
-                from .transports.http_rest import HttpRestTransport, HttpTransportConfig
-                http_t = HttpRestTransport(HttpTransportConfig(
-                    url=cfg.get("endpoint", "http://localhost:9200"),
-                    token=cfg.get("auth_key", ""),
-                ))
-                exporter.add_transport(http_t)
-            elif transport_type == "tcp_tls":
-                from .transports.tcp_tls import TcpTlsConfig, TcpTlsTransport
-                tcp_t = TcpTlsTransport(TcpTlsConfig(
-                    host=cfg.get("endpoint", "localhost"),
-                    port=int(cfg.get("port", 6514)),
-                ))
-                exporter.add_transport(tcp_t)
-            else:
-                logger.warning("unknown_transport_type", extra={"type": transport_type})
+            _add_transport_from_config(exporter, cfg)
         except Exception as e:
-            logger.error("transport_load_error", extra={"type": transport_type, "error": str(e)})
+            logger.error(
+                "transport_load_error",
+                extra={"type": cfg.get("transport_type"), "error": str(e)},
+            )
