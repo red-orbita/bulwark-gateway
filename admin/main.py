@@ -100,6 +100,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     from .services.user_store import get_user_store
     user_store = get_user_store()
     user_store.initialize()
+    # A1 (3rd-pass): reconcile persisted RBAC overrides into the in-memory
+    # permission matrix at boot. require_permission authorises against the live
+    # ROLE_PERMISSIONS dict; without this, a persisted override to a built-in role
+    # silently reverts to the hardcoded defaults on every admin restart. Best-effort
+    # (a corrupt override file is ignored and defaults apply), never fatal.
+    try:
+        from .routes.rbac import apply_persisted_overrides
+        reconciled = apply_persisted_overrides()
+        if reconciled:
+            logger.info("rbac_overrides_applied roles=%d", reconciled)
+    except Exception as exc:  # noqa: BLE001 — startup reconcile is best-effort
+        logger.warning("rbac_overrides_reconcile_deferred error=%s", exc)
     # Declaratively seed service accounts from BULWARK_SERVICE_ACCOUNTS_SEED[_FILE]
     # so a SOAR/playbook key exists the moment a fresh gateway boots (GitOps /
     # unattended deploys). Idempotent (keyed on the key hash) and best-effort: a
