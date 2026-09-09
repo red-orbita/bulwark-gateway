@@ -38,9 +38,31 @@ def read_secret(env_name: str, default: str | None = None, required: bool = Fals
     if secret_file:
         path = Path(secret_file)
         if path.is_file():
-            value = path.read_text().strip()
-            if value:
+            # S-27: an explicitly-configured *_FILE pointing at an existing file is
+            # the AUTHORITATIVE source — never silently fall through to a (possibly
+            # insecure) plain env var / default just because the file is blank. Strip
+            # only a single trailing newline (added by editors/Docker), preserving any
+            # other legitimate whitespace inside the secret; fail closed if empty.
+            raw = path.read_text()
+            if raw.endswith("\r\n"):
+                value = raw[:-2]
+            elif raw.endswith("\n") or raw.endswith("\r"):
+                value = raw[:-1]
+            else:
+                value = raw
+            # File exists but may be blank/whitespace-only: that is a
+            # misconfiguration. Do NOT degrade to env/default — that would
+            # reintroduce the very fallback the operator opted out of by mounting a
+            # secret file. A real secret always carries non-whitespace content, so
+            # an all-whitespace file is treated as blank and fails closed.
+            if value.strip():
                 return value
+            if required:
+                raise SystemExit(
+                    f"FATAL: Secret file '{secret_file}' for '{env_name}' is empty. "
+                    f"Populate it or unset {file_env}."
+                )
+            return ""
 
     # 2. Check direct env var
     env_value = os.getenv(env_name)
