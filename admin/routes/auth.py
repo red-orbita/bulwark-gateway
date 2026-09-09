@@ -266,7 +266,17 @@ async def get_me(user: TokenPayload = Depends(get_current_user)):
 @router.post("/logout")
 async def logout(request: Request, response: Response, user: TokenPayload = Depends(get_current_user)):
     """Revoke current session and clear cookie."""
-    response.delete_cookie("admin_token", path="/", samesite="strict", secure=True, httponly=True)
+    # S-28: the delete flags MUST match the set flags, otherwise a cookie set over
+    # plain HTTP (secure=False, samesite="lax") is not cleared by the browser on
+    # logout. Recompute them with the same predicate the login path uses.
+    is_secure = _should_set_secure_cookie(request)
+    response.delete_cookie(
+        "admin_token",
+        path="/",
+        samesite="strict" if is_secure else "lax",
+        secure=is_secure,
+        httponly=True,
+    )
 
     # Try to revoke the session by token hash
     token = None

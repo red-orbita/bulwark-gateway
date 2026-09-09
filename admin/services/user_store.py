@@ -52,8 +52,17 @@ USER_DB_PATH = "data/users.db"
 
 # Minimum password complexity requirements
 _MIN_PASSWORD_LENGTH = 10
+# S-26: bcrypt silently ignores every byte past 72, so two distinct long
+# passphrases sharing a 72-byte prefix collide to the same hash. Reject anything
+# longer (measured in UTF-8 bytes, since multibyte chars count for more) rather
+# than truncate silently.
+_MAX_PASSWORD_BYTES = 72
 _PASSWORD_REQUIREMENTS = (
     "Password must be at least 10 characters with uppercase, lowercase, digit, and special character."  # noqa: S105 - user-facing policy message, not a credential
+)
+
+_PASSWORD_TOO_LONG = (
+    "Password must not exceed 72 bytes (bcrypt limit)."  # noqa: S105 - user-facing policy message, not a credential
 )
 
 
@@ -65,6 +74,10 @@ def validate_password_complexity(password: str) -> tuple[bool, str]:
     import re
     if len(password) < _MIN_PASSWORD_LENGTH:
         return False, _PASSWORD_REQUIREMENTS
+    # S-26: cap at bcrypt's effective input length so a long password is rejected
+    # up front rather than silently truncated to its first 72 bytes.
+    if len(password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
+        return False, _PASSWORD_TOO_LONG
     if not re.search(r"[A-Z]", password):
         return False, _PASSWORD_REQUIREMENTS
     if not re.search(r"[a-z]", password):
@@ -169,6 +182,11 @@ def _hash_password(password: str) -> str:
     """Hash password using bcrypt (mandatory)."""
     if not _HAS_BCRYPT:
         raise SystemExit("FATAL: bcrypt is required for password hashing. Install: pip install bcrypt")
+    # S-26: defense in depth — never hand bcrypt an over-length input it would
+    # silently truncate. Callers gate on validate_password_complexity first; this
+    # guard makes truncation-collision impossible even on a path that forgot to.
+    if len(password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
+        raise ValueError(f"password exceeds {_MAX_PASSWORD_BYTES}-byte bcrypt limit")
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
@@ -393,7 +411,13 @@ class UserStore:
                 continue
 
             # Secret changed — update hash and force password change on next login
-            new_hash = _hash_password(current_secret)
+            try:
+                new_hash = _hash_password(current_secret)
+            except ValueError as e:
+                # S-26: an over-length rotated secret must not crash boot; skip this
+                # account's sync and keep the existing hash.
+                log.error(f"Password sync skipped for user '{username}': {e}")
+                continue
             now = datetime.now(timezone.utc).isoformat()
             self._cx.execute(
                 "UPDATE users SET password_hash = ?, force_password_change = 1, updated_at = ? WHERE username = ?",
@@ -775,7 +799,13 @@ class PostgreSQLUserStore(UserStore):
                 continue
 
             # Secret changed — update hash and force password change on next login
-            new_hash = _hash_password(current_secret)
+            try:
+                new_hash = _hash_password(current_secret)
+            except ValueError as e:
+                # S-26: an over-length rotated secret must not crash boot; skip this
+                # account's sync and keep the existing hash.
+                log.error("Password sync skipped for user '%s': %s", username, e)
+                continue
             now = datetime.now(timezone.utc).isoformat()
             db.sync_execute(
                 "UPDATE users SET password_hash = ?, force_password_change = 1, updated_at = ? WHERE username = ?",
