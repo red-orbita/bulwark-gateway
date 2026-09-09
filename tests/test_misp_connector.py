@@ -21,6 +21,17 @@ from admin.services.integrations.misp import (
 _BASE = "http://misp.test"
 
 
+@pytest.fixture(autouse=True)
+def _bypass_ssrf_guard(monkeypatch):
+    """The shared connector base runs a real DNS-resolving SSRF guard on
+    ``base_url`` before every request (S-25). This suite uses non-resolvable mock
+    hosts (``*.test``), so neutralise the guard here — dedicated egress-guard
+    coverage lives in ``tests/test_integrations_ssrf_tlp.py``."""
+    import admin.services.ioc_store as ioc_store
+
+    monkeypatch.setattr(ioc_store, "_validate_url_no_ssrf", lambda url: None)
+
+
 def _connector() -> MispConnector:
     return MispConnector(base_url=_BASE, api_key="tok")
 

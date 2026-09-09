@@ -51,6 +51,24 @@ OBSERVABLE_TYPES = (
 # ``amber`` mirrors the conservative default used across the Investigation Center.
 TLP_LEVELS = ("red", "amber", "green", "white")
 
+
+def default_tlp() -> str:
+    """Resolve the fail-safe TLP for an UNMARKED observable (S-24, single SSOT).
+
+    Every external-push data-sharing gate (TAXII / MISP / OpenCTI ``_is_restricted``
+    and ``select_*_tlp``, plus the TheHive/IRIS export markings) treats an observable
+    with no explicit ``tlp`` as this level. Historically hardcoded to ``amber``
+    (shareable), which let a sensitive-but-unmarked indicator leave the gateway. It
+    is now operator-tunable via ``BULWARK_INVESTIGATION_DEFAULT_TLP`` so a
+    data-sharing-strict deployment can set ``red`` to make the unmarked default
+    fail-closed. Reads settings lazily (admin may import src.config); an unrecognised
+    configured value degrades to ``amber`` — a fail-safe *parse*, never fail-open.
+    """
+    from src.config import settings
+
+    value = (getattr(settings, "investigation_default_tlp", "amber") or "amber").strip().lower()
+    return value if value in TLP_LEVELS else "amber"
+
 # Permissible Actions Protocol — how far an indicator may be acted upon.
 PAP_LEVELS = ("red", "amber", "green", "white")
 
@@ -146,7 +164,7 @@ def _row_to_observable(row) -> dict:
         "type": d.get("type") or "other",
         "value": d.get("value") or "",
         "is_ioc": bool(d.get("is_ioc")),
-        "tlp": d.get("tlp") or "amber",
+        "tlp": d.get("tlp") or default_tlp(),
         "pap": d.get("pap") or "amber",
         "tags": _load_tags(d.get("tags")),
         "source": d.get("source") or "manual",

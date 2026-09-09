@@ -188,11 +188,30 @@ class HttpConnectorBase:
         when used as an async context manager.
         """
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout, verify=self.verify_tls)
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout, verify=self.verify_tls, follow_redirects=False
+            )
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.aclose()
+
+    def _egress_guard_error(self) -> Optional[str]:
+        """SSRF pre-flight for the connector's ``base_url`` (S-25).
+
+        The concrete base connectors (opencti / misp / thehive / dfir_iris /
+        cortex) previously fetched an operator-supplied ``base_url`` with **no**
+        egress validation, so a connector pointed at ``169.254.169.254`` (cloud
+        metadata) or an internal-only service would be reached by enrich / lookup /
+        reconcile / test_connection. We run the SAME shared SSRF guard TAXII already
+        uses (``admin.services.ioc_store._validate_url_no_ssrf`` — resolves the host
+        and rejects loopback / RFC1918 / link-local / CGNAT / metadata / ``.internal``
+        / ``.local``) before every request. Returns an error string when blocked,
+        ``None`` when the host is safe. Imported lazily to avoid any import cycle.
+        """
+        from ..ioc_store import _validate_url_no_ssrf
+
+        return _validate_url_no_ssrf(self.base_url)
 
     async def aclose(self) -> None:
         """Close and drop the pooled client (no-op outside pooled mode)."""
@@ -224,13 +243,21 @@ class HttpConnectorBase:
         if not self._circuit.can_execute():
             raise ConnectorError("circuit open — remote temporarily disabled")
 
+        # S-25: re-validate egress on every request (not just at build time) so a
+        # DNS-rebind of the operator-supplied host cannot smuggle the request to an
+        # internal target between validation and connect. A config-level rejection,
+        # not a remote flap, so it does not trip the circuit breaker.
+        ssrf_error = self._egress_guard_error()
+        if ssrf_error:
+            raise ConnectorError(f"base_url blocked (SSRF protection): {ssrf_error}")
+
         url = self.base_url.rstrip("/") + path
         last_error = ""
         last_status: Optional[int] = None
 
         pooled = self._client is not None
         client = self._client or httpx.AsyncClient(
-            timeout=self.timeout, verify=self.verify_tls
+            timeout=self.timeout, verify=self.verify_tls, follow_redirects=False
         )
         try:
             for attempt in range(1, _MAX_ATTEMPTS + 1):

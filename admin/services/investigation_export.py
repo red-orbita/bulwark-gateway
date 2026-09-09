@@ -24,6 +24,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from .investigation_observable_store import default_tlp
+
 # OASIS STIX 2.1 namespace UUID — deterministic SCO/SDO ids are derived from it so
 # re-exporting the same case/observable yields stable identifiers (idempotent
 # import into a downstream store).
@@ -243,7 +245,7 @@ def build_thehive_case(case: dict, observables: list[dict], tasks: list[dict]) -
             "dataType": _TYPE_TO_THEHIVE.get(str(obs.get("type") or ""), "other"),
             "data": obs.get("value") or "",
             "ioc": bool(obs.get("is_ioc")),
-            "tlp": _TLP_TO_INT.get(obs.get("tlp") or "amber", 2),
+            "tlp": _TLP_TO_INT.get(obs.get("tlp") or default_tlp(), 2),
             "pap": _TLP_TO_INT.get(obs.get("pap") or "amber", 2),
             "tags": list(obs.get("tags") or []),
             "message": f"source={obs.get('source') or 'manual'}",
@@ -302,7 +304,7 @@ def build_iris_case(case: dict, observables: list[dict], tasks: list[dict]) -> d
         {
             "ioc_value": obs.get("value") or "",
             "ioc_type": _iris_ioc_type(obs),
-            "ioc_tlp": obs.get("tlp") or "amber",
+            "ioc_tlp": obs.get("tlp") or default_tlp(),
             "ioc_tags": ",".join(obs.get("tags") or []),
             "ioc_description": f"source={obs.get('source') or 'manual'}",
         }

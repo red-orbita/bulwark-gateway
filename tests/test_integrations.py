@@ -36,6 +36,19 @@ def _mk_token(sub: str, role: UserRole, tenant: str | None = None) -> TokenPaylo
 # ─── shared fixtures ─────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _bypass_ssrf_guard(monkeypatch):
+    """The shared connector base runs a real DNS-resolving SSRF guard on
+    ``base_url`` before every request (S-25). These suites drive the connectors
+    against non-resolvable mock hosts (``*.test``), so neutralise the guard at the
+    shared ``ioc_store`` binding — dedicated egress-guard coverage lives in
+    ``tests/test_integrations_ssrf_tlp.py``. (TAXII tests additionally patch their
+    own module-level binding; this autouse patch is harmless alongside them.)"""
+    import admin.services.ioc_store as ioc_store
+
+    monkeypatch.setattr(ioc_store, "_validate_url_no_ssrf", lambda url: None)
+
+
 @pytest.fixture
 async def engine(tmp_path):
     """A migrated throwaway SQLite engine shared by the store fixtures."""

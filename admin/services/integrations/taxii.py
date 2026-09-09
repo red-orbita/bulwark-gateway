@@ -33,6 +33,7 @@ import httpx
 
 from ...models.iocs import IOCType
 from ..investigation_export import build_stix_bundle
+from ..investigation_observable_store import default_tlp
 from ..ioc_store import _parse_stix_indicator_pattern, _validate_url_no_ssrf
 from .base import (
     ConnectorError,
@@ -227,10 +228,11 @@ _SCAFFOLD_TYPES = frozenset({"identity", "report", "marking-definition"})
 def _is_restricted(obs: dict) -> bool:
     """True when an observable's TLP marking is too restrictive to share (pure).
 
-    Unmarked observables default to ``amber`` (shareable) — the same conservative
-    default the MISP/OpenCTI connectors use.
+    Unmarked observables default to :func:`default_tlp` (historically ``amber`` =
+    shareable; operator-tunable to ``red`` for a fail-closed unmarked default —
+    S-24). The same conservative default the MISP/OpenCTI connectors use.
     """
-    return (obs.get("tlp") or "amber").lower() == "red"
+    return (obs.get("tlp") or default_tlp()).lower() == "red"
 
 
 def select_publish_tlp(observables: list[dict]) -> str:
@@ -243,7 +245,7 @@ def select_publish_tlp(observables: list[dict]) -> str:
     best = 0  # index into _TLP_ORDER; 0 == white
     seen = False
     for obs in observables:
-        level = (obs.get("tlp") or "amber").lower()
+        level = (obs.get("tlp") or default_tlp()).lower()
         if level == "red":
             continue
         try:

@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from ..investigation_observable_store import default_tlp
 from .base import (
     ConnectorError,
     ConnectorHealth,
@@ -331,7 +332,7 @@ def _main_observable_type(obs: dict) -> str:
 
 def _is_restricted(obs: dict) -> bool:
     """True when an observable's TLP marking is too restrictive to share externally."""
-    return (obs.get("tlp") or "amber").lower() == _TLP_RESTRICTED
+    return (obs.get("tlp") or default_tlp()).lower() == _TLP_RESTRICTED
 
 
 def select_report_marking(observables: list[dict]) -> str:
@@ -344,7 +345,7 @@ def select_report_marking(observables: list[dict]) -> str:
     best = 0  # index into _TLP_ORDER; 0 == white
     seen = False
     for obs in observables:
-        level = (obs.get("tlp") or "amber").lower()
+        level = (obs.get("tlp") or default_tlp()).lower()
         if level == _TLP_RESTRICTED:
             continue
         try:
