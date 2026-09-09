@@ -165,6 +165,68 @@ detection that would otherwise BLOCK can degrade to WARN/ALLOW.
 
 ---
 
+## L7 — Admin login per-IP throttle is coarse behind a shared-IP reverse proxy
+
+**Status: By design.**
+
+The admin login limiter (`admin/routes/auth.py`) keys its per-IP window on the
+**real socket peer** (`request.client.host`) and deliberately does **not** consume
+`X-Forwarded-For`. A forwarded header is trivially spoofable unless a trusted edge
+strips and re-sets it, and trusting it would let an attacker rotate `XFF` to evade
+the throttle (or pin a victim's IP to lock them out). Refusing to trust it is the
+safe default.
+
+The tradeoff is that when the admin service runs **behind a reverse proxy /
+ingress** (the recommended topology), the socket peer is the proxy, so every
+client collapses into a **single per-IP bucket** — the per-IP limit becomes a
+coarse global cap rather than a true per-client control. The real backstop against
+credential attacks is therefore the **per-username limiter** (`_USERNAME_ATTEMPTS`
+/ Redis `login_attempts:user:*`), which is independent of source IP and blunts
+distributed brute-force, plus MFA and bcrypt cost.
+
+- **Impact:** the per-IP login cap is not a precise per-client control behind a
+  shared-IP proxy; it does not defend against a distributed (many-source) login
+  flood on its own.
+- **Mitigation / opt in:** enforce IP-based login rate limiting **at the edge**
+  (nginx/ingress/WAF), which sees real client IPs and is the correct layer for it;
+  the app-layer per-username limiter + MFA remain the credential-attack backstop.
+  The app will not be changed to trust `X-Forwarded-For` for a security decision.
+- **Refs:** `admin/routes/auth.py` (`_check_login_rate_limit`,
+  `_record_login_attempt`).
+
+---
+
+## L8 — Backend egress SSRF validation is not IP-pinned (DNS-rebind TOCTOU)
+
+**Status: By design.**
+
+The proxy validates a backend URL's resolved addresses against the SSRF blocklist
+(`_url_resolves_to_blocked_ip` in `src/routes/proxy.py`) **before** forwarding, but
+the subsequent `httpx` request performs its **own** DNS resolution at connect time
+and is **not pinned** to the exact IP that was validated. A hostile authoritative
+DNS server could therefore answer with a public IP during validation and a private
+IP at connect (a time-of-check/time-of-use **DNS-rebinding** window). A short-lived
+resolution cache (`_DNS_CACHE`) narrows but does not close the gap.
+
+This is accepted because **backend targets are operator-configured, not
+user-supplied**: agents/backends come from `config/agents.yaml` (env-expanded,
+admin-controlled), so the destination host is trusted infrastructure, not an
+attacker-chosen value. The genuinely user-influenced egress path — HTTP
+**redirects** on outbound integration fetches — is hardened separately: every hop
+is re-validated against the SSRF blocklist and sensitive headers are dropped
+cross-host (see `admin/services/ioc_store.py::_safe_httpx_request`).
+
+- **Impact:** an operator who points a backend at a hostname served by a hostile,
+  attacker-controlled resolver could, in principle, be rebound to an internal
+  address after validation. Not reachable by an unauthenticated/tenant caller.
+- **Mitigation / opt in:** point backends at IP literals or names served by a
+  trusted resolver; restrict egress at the network layer (NetworkPolicy / firewall)
+  so a rebind cannot reach sensitive internal ranges regardless of DNS answers.
+- **Refs:** `src/routes/proxy.py` (`_url_resolves_to_blocked_ip`, `_DNS_CACHE`),
+  `admin/services/ioc_store.py` (redirect re-validation).
+
+---
+
 _When a limitation here is genuinely removed (e.g. a topic classifier ships with
 a real model + tests), delete its entry — this file must only ever list gaps that
 are still real._
