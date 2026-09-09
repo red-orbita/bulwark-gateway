@@ -52,6 +52,12 @@ def _obs(otype: str, value: str, *, tlp: str = "amber", is_ioc: bool = False, **
 
 def _no_ssrf(monkeypatch) -> None:
     monkeypatch.setattr(taxii_mod, "_validate_url_no_ssrf", lambda url: None)
+    # Push routes through the shared connector base, which runs its OWN egress
+    # guard (S-25) via the ``ioc_store`` binding — neutralise that too so the
+    # ``*.test`` mock host is reachable in the happy paths.
+    import admin.services.ioc_store as ioc_store
+
+    monkeypatch.setattr(ioc_store, "_validate_url_no_ssrf", lambda url: None)
 
 
 # ─── Pure helpers ────────────────────────────────────────────────────────────

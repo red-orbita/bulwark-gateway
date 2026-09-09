@@ -423,6 +423,18 @@ class Settings(BaseSettings):
     # budget, so an unattended browser tab or a careless analyst can't hammer a paid
     # / rate-limited external API. A value <= 0 disables the operator cap.
     investigation_session_tool_rpm: int = 60
+    # S-24: the TLP (Traffic Light Protocol) level assumed for an investigation
+    # observable that carries NO explicit marking, used to decide what may be shared
+    # to an external TI platform on push (TheHive/IRIS/OpenCTI/MISP/TAXII). The
+    # historical behaviour treats an unmarked observable as ``amber`` — shareable —
+    # so a sensitive-but-unmarked indicator could be pushed outward. This is the
+    # single knob a data-sharing-strict deployment turns to ``red`` (or ``amber``,
+    # ``green``, ``white``) to make the *unmarked* default fail-closed instead: with
+    # ``red`` an unmarked observable is treated as restricted and excluded from any
+    # external push until an operator marks it explicitly. Default preserves the
+    # existing ``amber`` behaviour for backward compatibility. An unrecognised value
+    # falls back to ``amber`` (fail-safe parse, not fail-open sharing).
+    investigation_default_tlp: str = "amber"
 
     model_config = SettingsConfigDict(
         env_prefix="BULWARK_",
