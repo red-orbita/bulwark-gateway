@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import smtplib
+import socket
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -36,6 +38,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -43,6 +46,65 @@ logger = logging.getLogger(__name__)
 
 # Severity ordering
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+# C-29 (3rd-pass): SSRF guard for operator-configured webhook URLs.
+# Notification destinations (Slack/Teams/Discord/Google-Chat/generic webhooks)
+# are admin-configured, but a compromised/mis-set channel URL — or a redirect
+# from a public one — could point the alert POST at cloud metadata
+# (169.254.169.254), loopback, or an RFC1918 service. We resolve the host at
+# send-time and refuse to deliver to an internal address, and disable automatic
+# redirect-following so a 3xx to an internal target cannot bypass the check.
+# Self-contained (stdlib only) so src/ never imports from src/routes or admin/.
+_NOTIFY_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("::ffff:0:0/96"),
+]
+_NOTIFY_BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal", "kubernetes.default",
+                             "kubernetes.default.svc"}
+
+
+async def _notify_url_ssrf_error(url: str) -> Optional[str]:
+    """Return a reason string if ``url`` resolves to an internal/SSRF target, else None."""
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"Unsupported scheme: {parsed.scheme or '(none)'}"
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname:
+        return "Empty hostname"
+    if hostname in _NOTIFY_BLOCKED_HOSTNAMES:
+        return f"Blocked hostname: {hostname}"
+    if hostname.endswith(".internal") or hostname.endswith(".local"):
+        return f"Blocked internal hostname: {hostname}"
+    try:
+        loop = asyncio.get_event_loop()
+        addr_infos = await loop.getaddrinfo(
+            hostname, parsed.port or (443 if parsed.scheme == "https" else 80),
+            proto=socket.IPPROTO_TCP,
+        )
+    except (socket.gaierror, OSError):
+        return f"Cannot resolve hostname: {hostname}"
+    for info in addr_infos:
+        try:
+            ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return f"Invalid resolved IP: {info[4][0]}"
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        for net in _NOTIFY_BLOCKED_NETWORKS:
+            if ip in net:
+                return f"Resolves to blocked range {net}"
+    return None
 
 # Persistent storage path — uses data/ (mounted as PVC in k8s)
 _CHANNELS_FILE = Path(os.environ.get("BULWARK_NOTIFICATIONS_FILE", "data/notifications_channels.json"))
@@ -331,12 +393,23 @@ class NotificationEngine:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, connect=15.0),
-                follow_redirects=True,
+                follow_redirects=False,  # C-29: no auto-redirect (SSRF bypass vector)
             )
         return self._client
 
     async def _dispatch(self, channel: NotificationChannel, alert: AlertPayload):
         """Route to the appropriate formatter/sender with retry."""
+        # C-29: refuse to deliver to an internal/SSRF target. Only channel types
+        # that POST to an operator-supplied ``channel.url`` are checked; fixed-host
+        # senders (PagerDuty/Opsgenie/Telegram) use hardcoded public API hosts.
+        if channel.type in ("slack", "teams", "discord", "google_chat", "generic") and channel.url:
+            ssrf_reason = await _notify_url_ssrf_error(channel.url)
+            if ssrf_reason:
+                logger.warning(
+                    f"notification_blocked_ssrf channel='{channel.name}' type={channel.type} "
+                    f"reason={ssrf_reason!r}"
+                )
+                return
         dispatch_map = {
             "slack": self._send_slack,
             "teams": self._send_teams,

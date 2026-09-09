@@ -15,8 +15,8 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
-from urllib.parse import urlparse
+from typing import Any, Optional
+from urllib.parse import urljoin, urlparse
 
 from admin.models.iocs import (
     FeedConfig,
@@ -81,7 +81,13 @@ def _load_json_resilient(path: Path, default: dict) -> dict:
         return dict(default)
 
 # SECURITY FIX (C-03): SSRF blocklist for feed URL validation
+# B1 (3rd-pass): extended to parity with the proxy's own list — a bare
+# ``0.0.0.0/8`` (``0.0.0.0`` routes to loopback on Linux) and IPv4-mapped IPv6
+# encodings (``::ffff:169.254.169.254``) previously slipped through and reached
+# cloud metadata / loopback. IPv4-mapped addresses are also normalised back to
+# their embedded IPv4 before the range check (belt-and-suspenders).
 _BLOCKED_SSRF_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),         # "This" network (0.0.0.0 → loopback)
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -91,6 +97,7 @@ _BLOCKED_SSRF_NETWORKS = [
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("::ffff:0:0/96"),     # IPv4-mapped IPv6 (all, catch-all)
 ]
 _BLOCKED_HOSTNAMES = {"metadata.google.internal", "localhost", "kubernetes.default", "kubernetes.default.svc"}
 
@@ -113,12 +120,59 @@ def _validate_url_no_ssrf(url: str) -> str | None:
         ip_str = info[4][0]
         try:
             ip = ipaddress.ip_address(ip_str)
-            for net in _BLOCKED_SSRF_NETWORKS:
-                if ip in net:
-                    return f"IP {ip_str} in blocked range {net}"
         except ValueError:
             return f"Invalid IP: {ip_str}"
+        # B1: normalise an IPv4-mapped IPv6 (``::ffff:a.b.c.d``) back to its
+        # embedded IPv4 so ``::ffff:169.254.169.254`` is checked as 169.254.*.
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        for net in _BLOCKED_SSRF_NETWORKS:
+            if ip in net:
+                return f"IP {ip_str} in blocked range {net}"
     return None  # Safe
+
+
+# B2 (3rd-pass): SSRF-safe HTTP helper for ALL feed fetchers.
+# The pre-flight ``_validate_url_no_ssrf`` only checks the *initial* URL — with
+# ``follow_redirects=True`` a public feed host could 3xx-redirect the client to
+# ``http://169.254.169.254/…`` (cloud metadata) or a loopback/RFC1918 address and
+# the check would be bypassed. This helper follows redirects MANUALLY, re-running
+# the SSRF blocklist against every hop (including the first), so no redirect can
+# ever reach an internal target. Auth/sensitive headers are dropped on a
+# cross-host redirect so an operator feed key is never forwarded to another origin.
+_MAX_REDIRECT_HOPS = 5
+_SENSITIVE_HEADERS = {"authorization", "x-otx-api-key", "x-apikey", "key", "cookie"}
+
+
+def _safe_httpx_request(method: str, url: str, **kwargs: Any) -> Any:
+    """Perform an httpx request with SSRF-safe manual redirect handling.
+
+    Validates the target and every redirect hop against ``_BLOCKED_SSRF_NETWORKS``.
+    Raises ``RuntimeError`` if any hop resolves to a blocked address or the hop
+    budget is exceeded. Caller-supplied ``follow_redirects`` is ignored.
+    """
+    import httpx
+
+    kwargs.pop("follow_redirects", None)
+    headers = dict(kwargs.pop("headers", {}) or {})
+    origin_host = (urlparse(url).hostname or "").lower()
+    current = url
+    for _ in range(_MAX_REDIRECT_HOPS + 1):
+        ssrf_error = _validate_url_no_ssrf(current)
+        if ssrf_error:
+            raise RuntimeError(f"Feed URL blocked (SSRF protection): {ssrf_error}")
+        hop_host = (urlparse(current).hostname or "").lower()
+        send_headers = headers
+        if hop_host != origin_host:
+            # Drop credentials before following a redirect to a different host.
+            send_headers = {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_HEADERS}
+        resp = httpx.request(method, current, headers=send_headers, follow_redirects=False, **kwargs)
+        location = resp.headers.get("location")
+        if resp.is_redirect and location:
+            current = urljoin(current, location)
+            continue
+        return resp
+    raise RuntimeError("Feed URL exceeded maximum redirect hops (possible redirect loop)")
 
 # Map flat JSON keys to IOCType
 _KEY_TO_TYPE: dict[str, IOCType] = {
@@ -795,10 +849,8 @@ class IOCStore:
 
     def _fetch_urlhaus(self, feed: FeedConfig) -> int:
         """Fetch recent malware URLs from URLhaus CSV dump (public, no key needed)."""
-        import httpx
-
         url = feed.url or "https://urlhaus.abuse.ch/downloads/csv_recent/"
-        resp = httpx.get(url, timeout=30, follow_redirects=True)
+        resp = _safe_httpx_request("GET", url, timeout=30)
         if resp.status_code != 200:
             raise RuntimeError(f"URLhaus returned {resp.status_code}")
 
@@ -827,10 +879,8 @@ class IOCStore:
 
     def _fetch_threatfox(self, feed: FeedConfig) -> int:
         """Fetch recent IOCs from ThreatFox hostfile."""
-        import httpx
-
         url = feed.url or "https://threatfox.abuse.ch/downloads/hostfile/"
-        resp = httpx.get(url, timeout=30, follow_redirects=True)
+        resp = _safe_httpx_request("GET", url, timeout=30)
         if resp.status_code != 200:
             raise RuntimeError(f"ThreatFox returned {resp.status_code}")
 
@@ -856,15 +906,13 @@ class IOCStore:
 
     def _fetch_otx(self, feed: FeedConfig) -> int:
         """Fetch from AlienVault OTX."""
-        import httpx
-
         api_key = self._get_feed_api_key(feed)
         if not api_key:
             raise RuntimeError("OTX API key not configured")
 
         url = feed.url or "https://otx.alienvault.com/api/v1/pulses/subscribed"
-        resp = httpx.get(
-            url, headers={"X-OTX-API-KEY": api_key},
+        resp = _safe_httpx_request(
+            "GET", url, headers={"X-OTX-API-KEY": api_key},
             params={"limit": 5, "modified_since": "2024-01-01"}, timeout=30,
         )
         if resp.status_code != 200:
@@ -896,15 +944,13 @@ class IOCStore:
 
     def _fetch_abuseipdb(self, feed: FeedConfig) -> int:
         """Fetch from AbuseIPDB blacklist."""
-        import httpx
-
         api_key = self._get_feed_api_key(feed)
         if not api_key:
             raise RuntimeError("AbuseIPDB API key not configured")
 
         url = feed.url or "https://api.abuseipdb.com/api/v2/blacklist"
-        resp = httpx.get(
-            url, headers={"Key": api_key, "Accept": "application/json"},
+        resp = _safe_httpx_request(
+            "GET", url, headers={"Key": api_key, "Accept": "application/json"},
             params={"confidenceMinimum": 90, "limit": 100}, timeout=30,
         )
         if resp.status_code != 200:
@@ -927,8 +973,6 @@ class IOCStore:
 
     def _fetch_misp(self, feed: FeedConfig) -> int:
         """Fetch from MISP instance (attributes endpoint)."""
-        import httpx
-
         api_key = self._get_feed_api_key(feed)
         if not api_key or not feed.url:
             raise RuntimeError("MISP URL and API key required")
@@ -940,8 +984,8 @@ class IOCStore:
             raise RuntimeError(f"Feed URL blocked (SSRF protection): {ssrf_error}")
 
         url = feed.url.rstrip("/") + "/attributes/restSearch"
-        resp = httpx.post(
-            url,
+        resp = _safe_httpx_request(
+            "POST", url,
             headers={"Authorization": api_key, "Accept": "application/json", "Content-Type": "application/json"},
             json={"limit": 100, "published": True, "enforceWarninglist": True,
                   "type": {"OR": ["ip-dst", "ip-src", "domain", "url", "sha256"]}},
@@ -978,8 +1022,6 @@ class IOCStore:
         drops revoked entries and anything below the feed's confidence floor,
         and carries OpenCTI labels through as tags.
         """
-        import httpx
-
         api_key = self._get_feed_api_key(feed)
         if not api_key or not feed.url:
             raise RuntimeError("OpenCTI URL and API key required")
@@ -1007,8 +1049,8 @@ class IOCStore:
             }
         }
         """
-        resp = httpx.post(
-            url,
+        resp = _safe_httpx_request(
+            "POST", url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"query": query, "variables": {"first": 100}},
             timeout=60,
@@ -1110,16 +1152,14 @@ class IOCStore:
 
     def _fetch_virustotal(self, feed: FeedConfig) -> int:
         """Fetch from VirusTotal hunting notifications or popular threat IOCs."""
-        import httpx
-
         api_key = self._get_feed_api_key(feed)
         if not api_key:
             raise RuntimeError("VirusTotal API key not configured")
 
         # Fetch popular threat actors' IOCs via VT hunting livehunt
         url = feed.url or "https://www.virustotal.com/api/v3/intelligence/hunting_notification_files"
-        resp = httpx.get(
-            url, headers={"x-apikey": api_key}, params={"limit": 50}, timeout=30,
+        resp = _safe_httpx_request(
+            "GET", url, headers={"x-apikey": api_key}, params={"limit": 50}, timeout=30,
         )
         if resp.status_code != 200:
             raise RuntimeError(f"VirusTotal returned {resp.status_code}")
@@ -1142,8 +1182,6 @@ class IOCStore:
 
     def _fetch_custom(self, feed: FeedConfig) -> int:
         """Fetch from a custom feed URL (expects JSON array of IOCs or newline-delimited values)."""
-        import httpx
-
         if not feed.url:
             raise RuntimeError("Custom feed URL not configured")
 
@@ -1157,7 +1195,7 @@ class IOCStore:
         if api_key and feed.auth_header:
             headers[feed.auth_header] = api_key
 
-        resp = httpx.get(feed.url, headers=headers, timeout=30, follow_redirects=True)
+        resp = _safe_httpx_request("GET", feed.url, headers=headers, timeout=30)
         if resp.status_code != 200:
             raise RuntimeError(f"Custom feed returned {resp.status_code}")
 
