@@ -223,6 +223,23 @@ ROLE_PERMISSIONS: dict[UserRole, set[str]] = {
 }
 
 
+# A2 (3rd-pass): pristine, immutable snapshot of the default permission matrix,
+# captured at import time BEFORE any runtime handler can mutate ``ROLE_PERMISSIONS``
+# in place (the RBAC routes rewrite ``ROLE_PERMISSIONS[role]`` on override/reset).
+# This frozen copy is the single source of truth used to (a) reset a built-in role
+# to its true defaults and (b) derive the full known-permission set — so neither
+# can silently drift from this module as new permissions are added.
+DEFAULT_ROLE_PERMISSIONS: dict[UserRole, frozenset[str]] = {
+    role: frozenset(perms) for role, perms in ROLE_PERMISSIONS.items()
+}
+
+# Every permission the system knows about (union of all built-in role defaults),
+# derived from the SSOT above so it can never fall behind the matrix.
+ALL_KNOWN_PERMISSIONS: frozenset[str] = frozenset(
+    perm for perms in DEFAULT_ROLE_PERMISSIONS.values() for perm in perms
+)
+
+
 # ─── Automation service-account permission whitelist ──────────────────────────
 #
 # The subset of RBAC permissions a *service account* (a scoped, non-interactive

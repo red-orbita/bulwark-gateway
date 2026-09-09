@@ -10,7 +10,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..models.auth import ROLE_PERMISSIONS, TokenPayload, UserRole
+from ..models.auth import (
+    ALL_KNOWN_PERMISSIONS,
+    DEFAULT_ROLE_PERMISSIONS,
+    ROLE_PERMISSIONS,
+    TokenPayload,
+    UserRole,
+)
 from ..services.auth_service import require_permission
 
 router = APIRouter()
@@ -96,20 +102,38 @@ def get_effective_permissions() -> dict[str, list[str]]:
     return result
 
 
-# All known permissions in the system
-ALL_PERMISSIONS = sorted({
-    "policies:read", "policies:write", "policies:delete", "policies:apply",
-    "guardrails:read", "guardrails:write", "guardrails:test",
-    "iocs:read", "iocs:write",
-    "siem:read", "siem:write", "siem:test",
-    "notifications:read", "notifications:write",
-    "audit:read", "audit:export",
-    "users:manage",
-    "config:validate", "config:rollback",
-    "admin:read",
-    "sessions:read", "sessions:write",
-    "correlation:read", "correlation:write",
-})
+def apply_persisted_overrides() -> int:
+    """A1 (3rd-pass): reconcile persisted RBAC overrides into the in-memory matrix.
+
+    ``require_permission`` authorises against the live ``ROLE_PERMISSIONS`` dict,
+    but overrides to a built-in role were only written back to that dict inside the
+    PUT handler (request-time). On an admin restart nothing re-applied them, so a
+    persisted narrowing/broadening of a built-in role silently reverted to the
+    hardcoded defaults — a security drift. This is invoked once at admin startup
+    (lifespan) so the persisted file is the effective source of truth from boot.
+
+    Returns the number of built-in roles reconciled. Fail-open: a corrupt override
+    file is ignored (``_load_overrides`` already swallows parse errors) and startup
+    proceeds on defaults rather than crashing.
+    """
+    overrides = _load_overrides()
+    applied = 0
+    for role_name, perms in overrides.items():
+        try:
+            role = UserRole(role_name)
+        except ValueError:
+            continue  # Custom role — no enum entry; only built-ins gate require_permission
+        if not isinstance(perms, list):
+            continue
+        # Only accept known permissions; drop anything stale/unknown defensively.
+        ROLE_PERMISSIONS[role] = {p for p in perms if p in ALL_KNOWN_PERMISSIONS}
+        applied += 1
+    return applied
+
+
+# All known permissions in the system — derived from the SSOT default matrix
+# (admin/models/auth.py) so it can never drift as new permissions are introduced.
+ALL_PERMISSIONS = sorted(ALL_KNOWN_PERMISSIONS)
 
 
 @router.get("/matrix")
@@ -262,52 +286,17 @@ def reset_role_permissions(
         del overrides[role_name]
         _save_overrides(overrides)
 
-    # Restore in-memory for built-in roles
-    defaults = {
-        "admin": {
-            "policies:read", "policies:write", "policies:delete", "policies:apply",
-            "guardrails:read", "guardrails:write", "guardrails:test",
-            "iocs:read", "iocs:write",
-            "siem:read", "siem:write", "siem:test",
-            "notifications:read", "notifications:write",
-            "audit:read", "audit:export",
-            "users:manage",
-            "config:validate", "config:rollback",
-            "admin:read",
-        },
-        "security": {
-            "policies:read", "policies:write", "policies:apply",
-            "guardrails:read", "guardrails:write", "guardrails:test",
-            "iocs:read", "iocs:write",
-            "siem:read", "siem:write", "siem:test",
-            "notifications:read", "notifications:write",
-            "audit:read",
-            "config:validate",
-            "admin:read",
-        },
-        "auditor": {
-            "policies:read",
-            "guardrails:read",
-            "iocs:read",
-            "siem:read",
-            "notifications:read",
-            "audit:read", "audit:export",
-            "admin:read",
-        },
-        "viewer": {
-            "policies:read",
-            "siem:read",
-            "notifications:read",
-            "admin:read",
-        },
-    }
-
-    if role_name in defaults:
-        try:
-            role = UserRole(role_name)
-            ROLE_PERMISSIONS[role] = defaults[role_name]
-        except ValueError:
-            pass
+    # A2 (3rd-pass): restore built-in roles from the pristine SSOT snapshot
+    # (admin/models/auth.py) rather than a hardcoded copy that drifts as new
+    # permissions are added — a stale copy previously stripped ~25 real
+    # permissions (sessions/correlation/investigation/integrations/automation/…)
+    # from admin on reset.
+    try:
+        role = UserRole(role_name)
+        if role in DEFAULT_ROLE_PERMISSIONS:
+            ROLE_PERMISSIONS[role] = set(DEFAULT_ROLE_PERMISSIONS[role])
+    except ValueError:
+        pass  # Custom role — reset simply drops its override above.
 
     effective = get_effective_permissions()
     return {"role": role_name, "permissions": effective.get(role_name, []), "reset": True}
