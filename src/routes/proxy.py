@@ -50,6 +50,7 @@ from src.models import (
     ToolCall,
     Verdict,
 )
+from src.redis_bootstrap import safe_key_segment
 from src.scanners.pipeline import get_scanner_pipeline
 from src.scanners.protocol import ScanContext
 from src.telemetry.counters import get_counters
@@ -2038,7 +2039,7 @@ def _push_recent_block(
         # SECURITY FIX (SGW-XT-002): Per-tenant recent_blocks key.
         # Previously all tenants shared a single list, leaking block metadata
         # across tenant boundaries.
-        redis_key = f"bulwark:recent_blocks:{tenant_id}"
+        redis_key = f"bulwark:recent_blocks:{safe_key_segment(tenant_id)}"
         for event in events[:3]:  # Max 3 events per block
             category = event.category.value if event.category else "unknown"
             severity = event.severity or "high"
@@ -2111,7 +2112,7 @@ def _push_recent_allowed(
             return
         import json as _json
         snippet, input_hash = _make_block_snippet(snippet_source)
-        redis_key = f"bulwark:recent_allowed:{tenant_id}"
+        redis_key = f"bulwark:recent_allowed:{safe_key_segment(tenant_id)}"
         cap = max(1, int(settings.events_max_per_tenant))
         entry = _json.dumps({
             "ts": time.time(),

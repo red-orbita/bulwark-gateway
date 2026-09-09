@@ -35,11 +35,44 @@ in-memory-only deployments stay dependency-free.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Applied to every client so a slow/unreachable Redis cannot stall a hot-path
 # call indefinitely. Callers that need a tighter budget pass ``socket_timeout``.
 _DEFAULT_SOCKET_TIMEOUT = 1.0
+
+
+# ─── Redis key-segment hygiene (S-19) ────────────────────────────────────────
+# A tenant_id / agent_id is interpolated verbatim into colon-delimited Redis key
+# NAMES (``bulwark:cost:{tenant_id}:tokens``, ``bulwark:recent_blocks:{tenant_id}``,
+# ``bulwark:vkeys:{tenant_id}:active`` …). The auth middleware already constrains
+# request-path tenant/agent ids to ``[A-Za-z0-9_-]{1,64}`` (``_SAFE_ID`` in
+# ``src/middleware/auth.py``), so on the proxy hot path this helper is a no-op. It
+# exists to make every key-building callsite *self-defending* (defense in depth):
+# a value that reaches a store from a NON-request path, or a future regression that
+# relaxes the auth edge, can never smuggle a ``:`` to cross the delimiter into
+# another tenant's namespace (e.g. a tenant literally named ``victim:tokens``
+# colliding with ``bulwark:cost:victim:tokens``). Any character outside the safe
+# class — notably ``:`` — is mapped to ``_``; a valid id is returned unchanged so
+# existing keys/data keep their exact names.
+_KEY_SEGMENT_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+_KEY_SEGMENT_MAX_LEN = 64
+
+
+def safe_key_segment(value: Any, *, max_len: int = _KEY_SEGMENT_MAX_LEN) -> str:
+    """Sanitise a single value for safe interpolation into a Redis key name.
+
+    Maps any character outside ``[A-Za-z0-9_-]`` (notably the ``:`` key delimiter)
+    to ``_`` and truncates to ``max_len``. Never raises and never rejects — the
+    key-building callsites are largely fire-and-forget (cost/quota metrics), so a
+    hostile value is degraded to a harmless one rather than dropping the write. An
+    empty / ``None`` value becomes ``"unknown"`` so a key can never collapse a
+    delimiter (``bulwark:cost::tokens``).
+    """
+    text = ("" if value is None else str(value))[:max_len]
+    sanitised = _KEY_SEGMENT_UNSAFE.sub("_", text)
+    return sanitised or "unknown"
 
 
 def connect_redis(
