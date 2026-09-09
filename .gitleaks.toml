@@ -1,0 +1,30 @@
+# Gitleaks configuration for Bulwark Gateway.
+#
+# Extends the upstream default ruleset (every built-in secret rule still
+# applies) and adds a single, tightly-scoped allowlist for the deterministic
+# NON-secret fixtures used by the test suite. Several tests must satisfy the
+# admin/proxy 32-char startup validation for the JWT / encryption secrets, so
+# they seed obviously-fake values via ``os.environ.setdefault(...)``. These are
+# not real credentials — they are public, committed test constants — but their
+# length + entropy trips the low-level ``generic-api-key`` heuristic.
+#
+# The allowlist is intentionally narrow (condition = AND): it matches ONLY
+# ``os.environ.setdefault("<known test env var>", ...)`` lines AND only under
+# ``tests/``. Any real secret committed elsewhere — or any other secret pattern
+# inside ``tests/`` — is still detected and still fails the build.
+
+title = "Bulwark Gateway"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Non-secret JWT/encryption test fixtures seeded via os.environ.setdefault"
+condition = "AND"
+paths = [
+  '''tests/.*\.py$''',
+]
+regexTarget = "line"
+regexes = [
+  '''os\.environ\.setdefault\(\s*["'](ADMIN_JWT_SECRET|BULWARK_JWT_SECRET|BULWARK_KEY_ENCRYPTION_KEY)["']''',
+]
