@@ -23,7 +23,8 @@ import os
 import socket
 import time
 from contextvars import ContextVar
-from urllib.parse import urlparse
+from dataclasses import dataclass
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import httpx
@@ -196,6 +197,11 @@ _BLOCKED_HOSTNAMES = {
     "kubernetes.default", "kubernetes.default.svc",
 }
 
+# SECURITY FIX (S-18): Only http/https backends may be forwarded to. Anything else
+# (file://, gopher://, ftp://, dict://, ...) is a classic SSRF pivot and is rejected
+# before any DNS resolution or connection is attempted.
+_ALLOWED_BACKEND_SCHEMES = frozenset({"http", "https"})
+
 # Cloud metadata IPs (explicit for clarity)
 _BLOCKED_IPS = {
     "169.254.169.254",   # AWS/GCP/Azure metadata
@@ -335,6 +341,49 @@ def _check_ips_blocked(addr_infos: list, *, allow_private: bool = False) -> bool
     return False
 
 
+def _ssrf_hostname_precheck(parsed, *, allow_private: bool) -> bool:
+    """Hostname-only SSRF checks (no DNS). Returns True if the URL must be blocked.
+
+    Covers the checks that do not require resolution: the scheme allowlist (S-18),
+    an empty hostname (S-18), the always-blocked hostname set, and the
+    ``.internal``/``.local`` suffixes for user-supplied URLs. Callers still resolve
+    and validate the concrete IPs afterwards.
+    """
+    # SECURITY FIX (S-18): reject non-http(s) schemes and empty authorities before
+    # any resolution — these never reach the IP-block stage otherwise.
+    if (parsed.scheme or "").lower() not in _ALLOWED_BACKEND_SCHEMES:
+        return True
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return True
+
+    # Block known dangerous hostnames (always)
+    if hostname.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
+        return True
+    # Block .internal/.local for user content, but allow for operator backends
+    # (K8s services use .svc.cluster.local)
+    if not allow_private:
+        if hostname.lower().endswith(".internal") or hostname.lower().endswith(".local"):
+            return True
+    return False
+
+
+def _select_pinned_ip(addr_infos: list, *, allow_private: bool = False) -> str | None:
+    """Return the first resolved IP to pin the connection to, or None if any is blocked.
+
+    Fail-closed: if the address set is empty, or *any* resolved address falls in a
+    blocked range, the whole target is rejected (returns None) — mirroring
+    ``_check_ips_blocked``. Otherwise the first address is returned as the literal
+    IP the connection must be pinned to, closing the DNS-rebinding TOCTOU window
+    (S-09) between validation and connect.
+    """
+    if not addr_infos:
+        return None
+    if _check_ips_blocked(addr_infos, allow_private=allow_private):
+        return None
+    return addr_infos[0][4][0]
+
+
 def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
     """Validate URL at request-time to prevent SSRF via DNS rebinding (C-01).
 
@@ -349,16 +398,9 @@ def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
                        block all private and special-use ranges.
     """
     parsed = urlparse(url)
-    hostname = parsed.hostname or ""
-
-    # Block known dangerous hostnames (always)
-    if hostname.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
+    if _ssrf_hostname_precheck(parsed, allow_private=allow_private):
         return True
-    # Block .internal/.local for user content, but allow for operator backends
-    # (K8s services use .svc.cluster.local)
-    if not allow_private:
-        if hostname.lower().endswith(".internal") or hostname.lower().endswith(".local"):
-            return True
+    hostname = parsed.hostname or ""
 
     # Resolve DNS at request time (prevents DNS rebinding)
     # PERFORMANCE (M-03 fix): Use short-TTL cache to avoid blocking on repeated lookups.
@@ -378,33 +420,88 @@ def _is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
 async def _async_is_ssrf_target(url: str, *, allow_private: bool = False) -> bool:
     """H-03 fix: Async SSRF validation using event loop DNS resolution.
 
-    Uses asyncio.get_event_loop().getaddrinfo() which runs DNS resolution
-    in a thread pool, preventing the async event loop from stalling on
-    slow DNS responses (DoS vector when cache is cold).
+    Thin bool wrapper over :func:`_resolve_pinned_backend` (the SSOT): a URL is an
+    SSRF target iff it cannot be resolved to a safe, pinnable IP.
+    """
+    return (await _resolve_pinned_backend(url, allow_private=allow_private)) is None
+
+
+@dataclass(frozen=True)
+class _PinnedBackend:
+    """A validated backend target with its connection pinned to a concrete IP.
+
+    ``url`` has its host rewritten to the exact IP that passed the SSRF checks, so
+    httpcore connects to that literal address without re-resolving DNS (closing the
+    rebinding TOCTOU window, S-09). ``host_header`` restores the original authority
+    for HTTP routing/vhosting, and ``sni_hostname`` drives TLS SNI + certificate
+    verification against the original hostname (not the IP).
+    """
+
+    url: str
+    host_header: str
+    sni_hostname: str
+
+    def request_overrides(self, headers: dict) -> tuple[dict, dict]:
+        """Return (headers, extensions) to pass alongside the pinned URL.
+
+        Sets an explicit ``Host`` header (httpx honours an explicit Host and only
+        auto-derives one when absent) and the ``sni_hostname`` httpcore extension.
+        """
+        merged = {**headers, "Host": self.host_header}
+        return merged, {"sni_hostname": self.sni_hostname}
+
+
+async def _resolve_pinned_backend(
+    url: str, *, allow_private: bool = False
+) -> _PinnedBackend | None:
+    """Resolve + validate a backend URL and return a rebinding-safe pinned target.
+
+    This is the SSOT for outbound backend SSRF defence. It performs the hostname
+    prechecks (scheme allowlist + empty-host + blocked hostnames, S-18), resolves
+    DNS once (async, short-TTL cached), validates every returned address, and — on
+    success — returns a :class:`_PinnedBackend` whose URL points at the exact
+    validated IP. Because the connection targets that literal IP, a hostile
+    resolver cannot rebind the name to a blocked address between the check and the
+    connect (S-09). Returns ``None`` (fail-closed) when the target must be blocked.
     """
     parsed = urlparse(url)
+    if _ssrf_hostname_precheck(parsed, allow_private=allow_private):
+        return None
     hostname = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
 
-    if hostname.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
-        return True
-    if not allow_private:
-        if hostname.lower().endswith(".internal") or hostname.lower().endswith(".local"):
-            return True
-
-    cache_key = (hostname, parsed.port or 443)
+    cache_key = (hostname, port)
     try:
         if cache_key in _DNS_CACHE:
             addr_infos = _DNS_CACHE[cache_key]
         else:
             loop = asyncio.get_event_loop()
             addr_infos = await loop.getaddrinfo(
-                hostname, parsed.port or 443, proto=socket.IPPROTO_TCP
+                hostname, port, proto=socket.IPPROTO_TCP
             )
             _DNS_CACHE[cache_key] = addr_infos
     except (socket.gaierror, OSError):
-        return True  # Fail-closed
+        return None  # Fail-closed
 
-    return _check_ips_blocked(addr_infos, allow_private=allow_private)
+    pinned_ip = _select_pinned_ip(addr_infos, allow_private=allow_private)
+    if pinned_ip is None:
+        return None
+
+    # Rewrite the URL host to the validated IP literal (bracket IPv6). httpcore
+    # will connect to this exact address without another DNS lookup.
+    try:
+        ip_obj = ipaddress.ip_address(pinned_ip)
+    except ValueError:
+        return None  # Fail-closed on a malformed address
+    host_literal = f"[{pinned_ip}]" if ip_obj.version == 6 else pinned_ip
+    netloc = f"{host_literal}:{parsed.port}" if parsed.port else host_literal
+    pinned_url = urlunparse(parsed._replace(netloc=netloc))
+
+    # Preserve the original authority for the Host header (include an explicit
+    # non-default port to match what the client would otherwise have sent).
+    host_header = f"{hostname}:{parsed.port}" if parsed.port else hostname
+
+    return _PinnedBackend(url=pinned_url, host_header=host_header, sni_hostname=hostname)
 
 
 # Max structured images pulled from one request (DoS guard on extraction itself,
@@ -904,7 +1001,12 @@ async def chat_completions(request: Request):
             # allow_private=True: admin-configured backends CAN use cluster-internal
             # RFC1918 IPs (10.x, 172.16.x, 192.168.x) but NOT metadata/loopback.
             # H-03 fix: Use async DNS resolution to avoid blocking the event loop.
-            if await _async_is_ssrf_target(backend_url, allow_private=True):
+            # SECURITY FIX (S-09/S-18): resolve+validate ONCE and pin the connection
+            # to the exact validated IP. httpcore then connects to that literal
+            # address (no re-resolution), closing the rebinding TOCTOU window
+            # between this check and the actual connect. None ⇒ block.
+            pinned_backend = await _resolve_pinned_backend(backend_url, allow_private=True)
+            if pinned_backend is None:
                 logger.warning("ssrf_blocked", backend_url=backend_url, tenant=tenant_id, agent=agent_id)
                 return JSONResponse(
                     status_code=403,
@@ -1001,7 +1103,7 @@ async def chat_completions(request: Request):
                         token_jti = getattr(request.state, "token_jti", None)
                         return await _handle_streaming(
                             client,
-                            backend_url,
+                            pinned_backend,
                             body,
                             backend_headers,
                             tenant_id,
@@ -1025,10 +1127,15 @@ async def chat_completions(request: Request):
                             if _tenant_stream_counts[tenant_id] <= 0:
                                 del _tenant_stream_counts[tenant_id]
 
+            # SECURITY FIX (S-09): connect to the pinned, already-validated IP with
+            # the original Host header + TLS SNI so DNS cannot be rebound between
+            # the SSRF check and this connect.
+            _pinned_headers, _pinned_ext = pinned_backend.request_overrides(backend_headers)
             resp = await client.post(
-                backend_url,
+                pinned_backend.url,
                 json=body,
-                headers=backend_headers,
+                headers=_pinned_headers,
+                extensions=_pinned_ext,
             )
 
             # If we got a server error (5xx) and have fallbacks, try next
@@ -1476,7 +1583,7 @@ async def validate_tool_call(request: Request):
 
 async def _handle_streaming(
     client: httpx.AsyncClient,
-    url: str,
+    pinned: "_PinnedBackend",
     body: dict,
     headers: dict,
     tenant_id: str,
@@ -1524,7 +1631,12 @@ async def _handle_streaming(
         total_bytes = 0
 
         try:
-            async with client.stream("POST", url, json=body, headers=headers) as resp:
+            # SECURITY FIX (S-09): stream from the pinned/validated IP with the
+            # original Host header + TLS SNI (no DNS re-resolution → no rebinding).
+            _stream_headers, _stream_ext = pinned.request_overrides(headers)
+            async with client.stream(
+                "POST", pinned.url, json=body, headers=_stream_headers, extensions=_stream_ext
+            ) as resp:
                 if resp.status_code != 200:
                     error_body = await resp.aread()
                     # SECURITY FIX (H-13): Sanitize backend error responses.

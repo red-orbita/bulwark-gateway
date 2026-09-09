@@ -186,9 +186,10 @@ class _CapturingClient:
     def __init__(self, sink: dict):
         self._sink = sink
 
-    async def post(self, url, json=None, headers=None):
+    async def post(self, url, json=None, headers=None, extensions=None):
         self._sink["url"] = url
         self._sink["headers"] = dict(headers or {})
+        self._sink["extensions"] = dict(extensions or {})
         return _CapturingResponse()
 
 
@@ -280,11 +281,16 @@ class TestProxyForwardsVaultKey:
         )
 
         # Isolate the vault behavior from the (unrelated) SSRF DNS check, which
-        # would otherwise fail-closed on a non-resolvable test hostname.
-        async def _no_ssrf(*a, **k):
-            return False
+        # would otherwise fail-closed on a non-resolvable test hostname. Pin to a
+        # public IP so the connection-pinning path is exercised without real DNS.
+        async def _pin_ok(url, *a, **k):
+            return proxy._PinnedBackend(
+                url="http://93.184.216.34:11434/v1/chat/completions",
+                host_header="backend.internal:11434",
+                sni_hostname="backend.internal",
+            )
 
-        monkeypatch.setattr(proxy, "_async_is_ssrf_target", _no_ssrf)
+        monkeypatch.setattr(proxy, "_resolve_pinned_backend", _pin_ok)
 
         sink: dict = {}
         monkeypatch.setattr(
@@ -329,10 +335,14 @@ class TestProxyForwardsVaultKey:
                 called["posted"] = True
                 return _CapturingResponse()
 
-        async def _no_ssrf(*a, **k):
-            return False
+        async def _pin_ok(url, *a, **k):
+            return proxy._PinnedBackend(
+                url="http://93.184.216.34:11434/v1/chat/completions",
+                host_header="backend.internal:11434",
+                sni_hostname="backend.internal",
+            )
 
-        monkeypatch.setattr(proxy, "_async_is_ssrf_target", _no_ssrf)
+        monkeypatch.setattr(proxy, "_resolve_pinned_backend", _pin_ok)
         monkeypatch.setattr(
             proxy, "_get_shared_client", lambda timeout=120.0: _NeverCalledClient()
         )
