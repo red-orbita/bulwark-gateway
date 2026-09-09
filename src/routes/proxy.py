@@ -224,8 +224,14 @@ _tenant_stream_lock = asyncio.Lock()
 # P8-01 fix: Redis key prefix for distributed stream counting.
 # With multiple Uvicorn workers, in-memory counters are per-process.
 # Redis provides cross-worker consistency for true per-tenant limits.
+#
+# B3 (3rd-pass): per-tenant counters live under a dedicated ``tenant:``
+# sub-namespace so a tenant literally named ``global`` (a valid ``_SAFE_ID``)
+# cannot collide with the aggregate ``bulwark:streams:global`` counter and
+# corrupt both the global and that tenant's concurrent-stream accounting.
 _STREAM_KEY_PREFIX = "bulwark:streams"
 _STREAM_KEY_GLOBAL = f"{_STREAM_KEY_PREFIX}:global"
+_STREAM_KEY_TENANT_PREFIX = f"{_STREAM_KEY_PREFIX}:tenant"
 _STREAM_TTL = 300  # Safety-net TTL (seconds) — auto-expire if decrement is lost
 
 
@@ -936,7 +942,7 @@ async def chat_completions(request: Request):
                 # Falls back to in-memory if Redis is unavailable.
                 r = _get_stream_redis()
                 use_redis = r is not None
-                tenant_stream_key = f"{_STREAM_KEY_PREFIX}:{tenant_id}"
+                tenant_stream_key = f"{_STREAM_KEY_TENANT_PREFIX}:{tenant_id}"
 
                 if use_redis:
                     try:
