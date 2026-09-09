@@ -133,3 +133,68 @@ class TestAgentRegistry:
         assert reg.count == 0
         backend = reg.resolve("any", "agent")
         assert backend is None
+
+
+class TestEnvExpansionScope:
+    """S-23: ``_expand_env`` must not resolve Bulwark's own process secrets
+    (all under the ``BULWARK_`` namespace, except the documented
+    ``BULWARK_BACKEND*`` routing var) into a backend URL — even though today the
+    config is operator-authored, this is defense-in-depth against a future
+    delegated config-write surface."""
+
+    def test_backend_var_still_expands(self, monkeypatch):
+        from src.services.agent_registry import _expand_env
+
+        monkeypatch.setenv("BULWARK_BACKEND_URL", "http://real-backend:9000")
+        assert _expand_env("${BULWARK_BACKEND_URL}") == "http://real-backend:9000"
+        # ...and the documented ${VAR:-default} default form is preserved.
+        monkeypatch.delenv("BULWARK_BACKEND_URL", raising=False)
+        assert _expand_env("${BULWARK_BACKEND_URL:-http://d:1}") == "http://d:1"
+
+    def test_secret_var_is_never_expanded(self, monkeypatch):
+        from src.services.agent_registry import _expand_env
+
+        monkeypatch.setenv("BULWARK_JWT_SECRET", "super-secret-value")
+        # No default → collapses to empty, NEVER the secret value.
+        assert "super-secret-value" not in _expand_env("http://x/${BULWARK_JWT_SECRET}")
+        assert _expand_env("${BULWARK_JWT_SECRET}") == ""
+
+    def test_secret_var_with_default_uses_default_not_secret(self, monkeypatch):
+        from src.services.agent_registry import _expand_env
+
+        monkeypatch.setenv("BULWARK_API_KEYS", "k1,k2,k3")
+        assert _expand_env("${BULWARK_API_KEYS:-none}") == "none"
+
+    def test_other_sensitive_bulwark_vars_blocked(self, monkeypatch):
+        from src.services.agent_registry import _expand_env
+
+        for name in ("BULWARK_REDIS_PASSWORD", "BULWARK_KEY_ENCRYPTION_KEY", "BULWARK_OTX_KEY"):
+            monkeypatch.setenv(name, "leak-me")
+            assert _expand_env("${%s}" % name) == ""
+
+    def test_operator_owned_non_bulwark_var_still_expands(self, monkeypatch):
+        from src.services.agent_registry import _expand_env
+
+        # The operator's OWN environment is not in the threat model.
+        monkeypatch.setenv("OLLAMA_HOST", "http://ollama:11434")
+        assert _expand_env("${OLLAMA_HOST}") == "http://ollama:11434"
+        monkeypatch.setenv("BACKEND_IP", "10.0.0.5")
+        assert _expand_env("http://${BACKEND_IP}:8080") == "http://10.0.0.5:8080"
+
+    @pytest.mark.asyncio
+    async def test_backend_url_cannot_leak_secret_through_config(self, tmp_path, monkeypatch):
+        """End-to-end: a backend_url referencing a secret resolves WITHOUT it."""
+        monkeypatch.setenv("BULWARK_JWT_SECRET", "top-secret-jwt")
+        cfg = {
+            "defaults": {"backend_url": "http://d:1"},
+            "tenants": {
+                "t": {"agents": {"a": {"backend_url": "http://evil/${BULWARK_JWT_SECRET}"}}}
+            },
+        }
+        path = tmp_path / "agents.yaml"
+        path.write_text(yaml.safe_dump(cfg))
+        reg = AgentRegistry(path)
+        await reg.load()
+        backend = reg.resolve("t", "a")
+        assert backend is not None
+        assert "top-secret-jwt" not in backend.backend_url
