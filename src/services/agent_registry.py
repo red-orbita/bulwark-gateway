@@ -25,14 +25,47 @@ logger = structlog.get_logger()
 # M-03: Expand ${VAR:-default} patterns in config values
 _ENV_PATTERN = re.compile(r'\$\{([^}:]+)(?::-([^}]*))?\}')
 
+# S-23: scope which environment variables ``_expand_env`` will resolve, so a
+# lower-privilege config-write (should the config surface ever be delegated) can
+# never smuggle ``${BULWARK_JWT_SECRET}`` (or any other process secret) into a
+# ``backend_url`` and exfiltrate it to an egress host. Bulwark's OWN secrets all
+# live under the ``BULWARK_`` namespace (JWT_SECRET, API_KEYS, REDIS_PASSWORD,
+# KEY_ENCRYPTION_KEY, feed keys, …). Only ``BULWARK_BACKEND*`` is a documented,
+# non-sensitive backend-routing variable, so within the ``BULWARK_`` namespace
+# that is the sole allowed prefix. Variables OUTSIDE the ``BULWARK_`` namespace
+# (operator-owned, e.g. ``OLLAMA_HOST`` / ``BACKEND_IP``) expand as before — the
+# threat model is leaking Bulwark's own env, not the operator's.
+_SENSITIVE_ENV_PREFIX = "BULWARK_"
+_ALLOWED_BULWARK_ENV_PREFIX = "BULWARK_BACKEND"
+
+
+def _env_var_allowed(name: str) -> bool:
+    """True if ``name`` may be resolved from the process environment (S-23)."""
+    if name.startswith(_ALLOWED_BULWARK_ENV_PREFIX):
+        return True
+    return not name.startswith(_SENSITIVE_ENV_PREFIX)
+
 
 def _expand_env(value):
-    """Expand environment variables in string values (${VAR:-default} syntax)."""
+    """Expand environment variables in string values (${VAR:-default} syntax).
+
+    Expansion is scoped by :func:`_env_var_allowed` (S-23): a ``BULWARK_*`` name
+    that is not ``BULWARK_BACKEND*`` is treated as *unset* — its ``:-default`` is
+    used (empty when none) and a warning is logged — so a process secret can
+    never be interpolated into a backend URL.
+    """
     if not isinstance(value, str):
         return value
     def _replace(m):
         var_name = m.group(1)
         default = m.group(2) or ""
+        if not _env_var_allowed(var_name):
+            logger.warning(
+                "agent_registry_env_expansion_blocked",
+                var=var_name,
+                reason="outside allowed backend-config env scope",
+            )
+            return default
         return os.environ.get(var_name, default)
     return _ENV_PATTERN.sub(_replace, value)
 
