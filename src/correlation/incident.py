@@ -70,12 +70,12 @@ _CRITICAL_OUTPUT: frozenset[ThreatCategory] = frozenset({
 
 # Risk bumps applied to the origin on a confirmed correlation. The subject (the
 # specific authenticated actor) and the session (per tenant+agent) carry the most
-# weight; the content fingerprint and tenant get smaller bumps so a single origin
-# escalates faster than a whole tenant. The subject is the primary hardening
-# target (F3): risk must accumulate there because enforcement BLOCKs on it.
+# weight; the tenant gets a smaller bump so a single origin escalates faster than
+# a whole tenant. The subject is the primary hardening target (F3): risk must
+# accumulate there because enforcement BLOCKs on it. (S-22: there is deliberately
+# no content-fingerprint bump — no enforcement path reads that scope.)
 _RISK_BUMP_SUBJECT = 4.0
 _RISK_BUMP_SESSION = 4.0
-_RISK_BUMP_INPUT = 3.0
 _RISK_BUMP_TENANT = 1.5
 
 
@@ -330,15 +330,18 @@ class InputOutputCorrelator:
             # Elevate the origin's risk state. The subject (authenticated actor)
             # is the primary origin when known — enforcement BLOCKs on it (F3);
             # otherwise the session (tenant+agent) is the most-specific origin. The
-            # content hash and tenant get smaller bumps. The incident records the
-            # decision-scope score so the meter reflects what would be blocked.
+            # tenant gets a smaller bump. The incident records the decision-scope
+            # score so the meter reflects what would be blocked.
+            #
+            # S-22: the "input" (content-hash) scope is intentionally NOT bumped —
+            # evaluate_origin_risk() only reads subject/session/tenant, so an input
+            # bump was dead write-only state (never influenced any enforcement
+            # decision) that merely churned Redis and inflated key cardinality.
             subject_score: float | None = None
             if subject_id:
                 subject_score = self._risk.bump(
                     "subject", f"{tenant_id}:{subject_id}", _RISK_BUMP_SUBJECT
                 )
-            if input_hash:
-                self._risk.bump("input", input_hash, _RISK_BUMP_INPUT)
             session_score = self._risk.bump("session", f"{tenant_id}:{agent_id}", _RISK_BUMP_SESSION)
             self._risk.bump("tenant", tenant_id, _RISK_BUMP_TENANT)
             risk_score = subject_score if subject_score is not None else session_score

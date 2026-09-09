@@ -206,11 +206,18 @@ class CorrelationEventTap:
             return
         # F3 (blast-radius): the subject scope is the primary accrual target when
         # the actor is authenticated — enforcement BLOCKs on the subject, so risk
-        # must accumulate there. The session/tenant scopes still accrue (they drive
-        # WARN-level visibility) but never hard-BLOCK a whole agent for one actor.
+        # must accumulate there.
+        #
+        # S-20: bumping the shared session scope on EVERY authenticated WARN/BLOCK
+        # poisons the cross-actor WARN — evaluate_origin_risk() computes
+        # warn_score = max(decision, session), so one actor's activity would flag
+        # every other actor sharing the same agent (alert fatigue, intra-tenant).
+        # When the subject is known, risk belongs on the subject; the session scope
+        # is reserved for anonymous (subject-less) origins, where it IS the decision
+        # scope and therefore must still accrue. The tenant scope always aggregates.
         if subject_id:
             self._risk.bump("subject", f"{tenant_id}:{subject_id}", amount)
-        if agent_id:
+        elif agent_id:
             self._risk.bump("session", f"{tenant_id}:{agent_id}", amount)
         if tenant_id:
             self._risk.bump("tenant", tenant_id, amount * _TENANT_SCOPE_FRACTION)

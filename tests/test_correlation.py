@@ -336,7 +336,9 @@ def test_correlation_bumps_origin_risk(correlator):
     )
     # Session risk should be elevated after a confirmed correlation.
     assert correlator._risk.get("session", "acme:bot") > 0.0
-    assert correlator._risk.get("input", "d00d") > 0.0
+    # S-22: the input (content-hash) scope is intentionally NOT bumped — no
+    # enforcement path reads it, so it must remain unwritten (no dead Redis state).
+    assert correlator._risk.get("input", "d00d") == 0.0
     assert correlator._risk.get("tenant", "acme") > 0.0
 
 
@@ -484,15 +486,31 @@ def test_tap_apply_bumps_session_and_tenant(monkeypatch):
 
 
 def test_tap_apply_bumps_subject_when_authenticated(monkeypatch):
-    """F3: an authenticated actor accrues to the subject scope (the BLOCK scope).
+    """F3/S-20: an authenticated actor accrues to the subject scope ONLY.
 
-    The session/tenant still accrue (WARN visibility) but the subject carries the
-    full weight so the individual actor — not the shared agent — escalates.
+    The subject is the BLOCK scope, so it carries the full weight. S-20: the
+    shared session scope is NOT bumped when the subject is known — otherwise one
+    actor's activity would poison evaluate_origin_risk()'s WARN meter
+    (max(decision, session)) for every other actor on the same agent. The tenant
+    still aggregates for coarse visibility.
     """
     t = _tap(monkeypatch)
     t._apply(("acme", "bot", "warn", "high", "user-42"))
     assert t._risk.get("subject", "acme:user-42") == pytest.approx(0.75, abs=0.01)
+    assert t._risk.get("session", "acme:bot") == 0.0
+    assert t._risk.get("tenant", "acme") == pytest.approx(0.1875, abs=0.01)
+
+
+def test_tap_apply_anonymous_bumps_session_not_subject(monkeypatch):
+    """S-20 converse: with no subject the session IS the decision scope → it accrues.
+
+    An anonymous origin has no subject to key on, so the session (tenant+agent) is
+    the most-specific enforcement scope and must still accumulate risk.
+    """
+    t = _tap(monkeypatch)
+    t._apply(("acme", "bot", "warn", "high", ""))
     assert t._risk.get("session", "acme:bot") == pytest.approx(0.75, abs=0.01)
+    assert t._risk.get("subject", "acme:") == 0.0
     assert t._risk.get("tenant", "acme") == pytest.approx(0.1875, abs=0.01)
 
 

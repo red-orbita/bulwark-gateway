@@ -79,6 +79,66 @@ _RISK_BUMP_TENANT = 1.0
 # All three pillars — a live set of this size is a completed trifecta.
 _TRIFECTA_SIZE = 3
 
+# S-21: atomic server-side observe. The previous implementation was a non-atomic
+# read-modify-write (HGETALL, then a separate HSET/HDEL/EXPIRE pipeline): two
+# concurrent output-path requests for the same origin could each read a two-pillar
+# state, each add the third, and BOTH observe the ``newly_completed`` transition
+# (duplicate EXCESSIVE_AGENCY event + double risk bump) — or a lost update could
+# drop a pillar and *miss* the completion. Folding the whole read→prune→stamp→ttl
+# sequence into one Lua script makes it a single atomic round-trip: exactly one
+# caller ever sees the completion, with no lost updates (F1). Mirrors the
+# ``_observe_local`` fallback byte-for-byte (prune stale, then stamp new) so both
+# backends share one algorithm.
+#   KEYS[1] = origin key (hash: {pillar_value: last_seen_epoch})
+#   ARGV[1] = now, ARGV[2] = window_seconds, ARGV[3] = ttl_seconds,
+#   ARGV[4] = trifecta_size, ARGV[5..] = new pillar values (>= 1)
+# Returns a flat array: [ newly ("0"/"1"), <live pillar values...> ].
+_LUA_OBSERVE = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local trifecta = tonumber(ARGV[4])
+local is_new = {}
+for i = 5, #ARGV do
+  is_new[ARGV[i]] = true
+end
+local flat = redis.call('HGETALL', key)
+local live = {}
+local live_before = 0
+local stale = {}
+for i = 1, #flat, 2 do
+  local pillar = flat[i]
+  local ts = tonumber(flat[i + 1])
+  if ts ~= nil and (now - ts) <= window then
+    live[pillar] = true
+    live_before = live_before + 1
+  else
+    stale[#stale + 1] = pillar
+  end
+end
+if #stale > 0 then
+  redis.call('HDEL', key, unpack(stale))
+end
+for pillar, _ in pairs(is_new) do
+  redis.call('HSET', key, pillar, now)
+  live[pillar] = true
+end
+redis.call('EXPIRE', key, ttl)
+local result = {}
+local live_after = 0
+for pillar, _ in pairs(live) do
+  live_after = live_after + 1
+  result[#result + 1] = pillar
+end
+local newly = "0"
+if live_after == trifecta and live_before < trifecta then
+  newly = "1"
+end
+table.insert(result, 1, newly)
+return result
+"""
+
 
 class TrifectaStateStore:
     """Sliding-window per-origin pillar accumulator.
@@ -91,6 +151,7 @@ class TrifectaStateStore:
 
     def __init__(self) -> None:
         self._redis: Optional[Any] = None
+        self._observe_script: Optional[Any] = None
         self._local: dict[str, dict[str, float]] = {}
         self._cb_failures = 0
         self._cb_opened_at = 0.0
@@ -108,9 +169,12 @@ class TrifectaStateStore:
                 self._redis = connect_redis(
                     redis_url, redis_tls_insecure=redis_tls_insecure
                 )
+                # Pre-register the atomic observe script (EVALSHA on the hot path).
+                self._observe_script = self._redis.register_script(_LUA_OBSERVE)
             except Exception as e:  # noqa: BLE001 - degrade to in-memory
                 logger.warning("trifecta_state_redis_unavailable", error=str(e))
                 self._redis = None
+                self._observe_script = None
 
     # --- key derivation ----------------------------------------------------
 
@@ -204,19 +268,29 @@ class TrifectaStateStore:
         now: float,
     ) -> tuple[set[str], bool]:
         key = self._redis_key(scope_type, scope_id)
-        current = self._redis.hgetall(key) or {}  # type: ignore[union-attr]
-        live_before, stale = self._split_live(current, window, now)
-        live_after = live_before | new_pillars
-
-        pipe = self._redis.pipeline()  # type: ignore[union-attr]
-        pipe.hset(key, mapping={p: now for p in new_pillars})
-        if stale:
-            pipe.hdel(key, *stale)
         # TTL a little past the window so a fully-idle origin's key self-expires.
-        pipe.expire(key, int(window) + 60)
-        pipe.execute()
-
-        newly = len(live_after) == _TRIFECTA_SIZE and len(live_before) < _TRIFECTA_SIZE
+        ttl = int(window) + 60
+        script = self._observe_script
+        if script is None:
+            # Lazily (re)register — covers direct ``store._redis = fake`` in tests
+            # and a reconnect that missed ``initialize``.
+            script = self._redis.register_script(_LUA_OBSERVE)  # type: ignore[union-attr]
+            self._observe_script = script
+        # Atomic server-side prune+stamp+ttl: one round-trip, no lost updates and
+        # exactly one caller observing the completion under concurrency (F1, S-21).
+        raw = script(
+            keys=[key],
+            args=[now, window, ttl, _TRIFECTA_SIZE, *sorted(new_pillars)],
+        )
+        # Returns [ newly ("0"/"1"), <live pillar values...> ]. decode_responses is
+        # on (str), but tolerate bytes from a differently-configured client.
+        items = [x.decode() if isinstance(x, bytes) else str(x) for x in (raw or [])]
+        if not items:
+            # Defensive: an empty reply means nothing was written — treat as the
+            # new pillars only (fail-open, no spurious completion).
+            return set(new_pillars), False
+        newly = items[0] == "1"
+        live_after = set(items[1:])
         return live_after, newly
 
     # --- in-memory fallback ------------------------------------------------
