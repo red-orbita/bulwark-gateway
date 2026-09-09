@@ -1,24 +1,35 @@
 # Gitleaks configuration for Bulwark Gateway.
 #
 # Extends the upstream default ruleset (every built-in secret rule still
-# applies) and adds a single, tightly-scoped allowlist for the deterministic
-# NON-secret fixtures used by the test suite. Several tests must satisfy the
-# admin/proxy 32-char startup validation for the JWT / encryption secrets, so
-# they seed obviously-fake values via ``os.environ.setdefault(...)``. These are
-# not real credentials — they are public, committed test constants — but their
-# length + entropy trips the low-level ``generic-api-key`` heuristic.
+# applies) and adds ONE tightly-scoped allowlist for the deterministic
+# NON-secret JWT/encryption fixtures used by the test suite. Several tests must
+# satisfy the admin/proxy 32-char startup validation, so they seed obviously
+# fake values via ``os.environ.setdefault(...)``. These are public, committed
+# test constants — not real credentials — but their length + entropy trips the
+# low-level ``generic-api-key`` heuristic.
 #
-# The allowlist is intentionally narrow (condition = AND): it matches ONLY
-# ``os.environ.setdefault("<known test env var>", ...)`` lines AND only under
-# ``tests/``. Any real secret committed elsewhere — or any other secret pattern
-# inside ``tests/`` — is still detected and still fails the build.
+# IMPORTANT (gitleaks 8.24.x behaviour): a top-level ``[[allowlists]]`` table is
+# silently ignored when combined with ``[extend].useDefault = true`` — findings
+# are still reported. The allowlist MUST therefore be attached to the specific
+# default rule (``generic-api-key``) via ``[[rules.allowlists]]``. Verified with
+# gitleaks 8.24.3 against the exact CI scan command (git-log diff range).
+#
+# The allowlist is intentionally narrow (condition = AND): it suppresses ONLY
+# ``os.environ.setdefault("<known JWT/encryption env var>", ...)`` lines AND only
+# under ``tests/`` AND only for the ``generic-api-key`` rule. Any real secret
+# committed elsewhere — any other rule, any other env var, any non-setdefault
+# generic key, or the same pattern outside ``tests/`` — is still detected and
+# still fails the build.
 
 title = "Bulwark Gateway"
 
 [extend]
 useDefault = true
 
-[[allowlists]]
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
 description = "Non-secret JWT/encryption test fixtures seeded via os.environ.setdefault"
 condition = "AND"
 paths = [
