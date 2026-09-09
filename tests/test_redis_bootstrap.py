@@ -206,3 +206,107 @@ def test_risk_and_dialog_digest_keys_never_collide():
     assert risk_key.startswith("bulwark:risk:")
     assert dialog_key.startswith("bulwark:dialog:")
     assert risk_key != dialog_key
+
+
+# ─── S-19: key-segment hygiene (defense-in-depth namespace isolation) ─────────
+
+
+class TestSafeKeySegment:
+    """``safe_key_segment`` neutralises the ':' delimiter so a hostile id can
+    never cross into another tenant's Redis namespace, while a valid id is
+    returned byte-for-byte unchanged (no impact on existing keys/data)."""
+
+    def test_valid_id_is_unchanged(self):
+        from src.redis_bootstrap import safe_key_segment
+
+        for good in ("default-corp", "tenant_1", "AgentX", "a-b_c-123"):
+            assert safe_key_segment(good) == good
+
+    def test_colon_is_neutralised(self):
+        from src.redis_bootstrap import safe_key_segment
+
+        # A tenant literally named ``victim:tokens`` must NOT collapse into the
+        # key space of tenant ``victim`` (``bulwark:cost:victim:tokens``).
+        assert safe_key_segment("victim:tokens") == "victim_tokens"
+
+    def test_other_unsafe_chars_neutralised(self):
+        from src.redis_bootstrap import safe_key_segment
+
+        assert safe_key_segment("a b/c*d") == "a_b_c_d"
+        assert safe_key_segment("weird\u200b:name") == "weird__name"
+
+    def test_empty_or_none_becomes_unknown(self):
+        from src.redis_bootstrap import safe_key_segment
+
+        assert safe_key_segment("") == "unknown"
+        assert safe_key_segment(None) == "unknown"
+
+    def test_truncated_to_max_len(self):
+        from src.redis_bootstrap import safe_key_segment
+
+        assert len(safe_key_segment("x" * 200)) == 64
+        assert len(safe_key_segment("x" * 200, max_len=8)) == 8
+
+
+class TestKeyNameCollisionNeutralised:
+    """The concrete callsites: a malicious id and a benign one that would
+    otherwise collide across the ':' delimiter now build DISTINCT key names."""
+
+    def test_quota_token_key_no_cross_tenant_collision(self):
+        from src.middleware.quotas import TokenBudgetTracker
+
+        tracker = TokenBudgetTracker.__new__(TokenBudgetTracker)  # no Redis
+        # Attacker id ``victim:2026-01-01`` must not reach victim's daily key.
+        hostile = tracker._redis_key("victim")  # bulwark:quota:tokens:victim:<day>
+        crafted = tracker._redis_key("victim:x")
+        assert hostile != crafted
+        assert ":victim:" in hostile
+        # The crafted id's ':' is neutralised → it cannot forge victim's segment.
+        assert ":victim_x:" in crafted
+
+    def test_concurrent_key_no_cross_tenant_collision(self):
+        from src.middleware.quotas import DistributedConcurrencyLimiter
+
+        a = DistributedConcurrencyLimiter._key("victim")
+        b = DistributedConcurrencyLimiter._key("victim:extra")
+        assert a == "bulwark:quota:concurrent:victim"
+        assert b == "bulwark:quota:concurrent:victim_extra"
+        assert a != b
+
+    def test_vkey_hash_and_active_keys_sanitised(self):
+        from src.services.virtual_keys import VirtualKeyManager
+
+        # A tenant named ``t:active`` must not collide with tenant ``t``'s
+        # active-pointer key (``bulwark:vkeys:t:active``).
+        assert VirtualKeyManager._tenant_hash_key("t:active") == "bulwark:vkeys:t_active"
+        assert VirtualKeyManager._tenant_active_key("t") == "bulwark:vkeys:t:active"
+        assert (
+            VirtualKeyManager._tenant_hash_key("t:active")
+            != VirtualKeyManager._tenant_active_key("t")
+        )
+
+    def test_cost_tracker_read_write_use_same_sanitised_key(self):
+        from src.services.cost_tracker import CostTracker, UsageRecord
+
+        tracker = CostTracker.__new__(CostTracker)
+        tracker._redis = None
+        tracker._fallback = {}
+        rec = UsageRecord(
+            tenant_id="victim:tokens",
+            agent_id="a",
+            model="m",
+            prompt_tokens=3,
+            completion_tokens=5,
+            total_tokens=8,
+            estimated_cost_usd=0.0,
+        )
+        tracker._persist_fallback(rec)
+        # The write sanitises the id; the read must resolve to the SAME bucket
+        # (and the reported summary keeps the caller's original id).
+        summary = tracker.get_tenant_usage("victim:tokens")
+        assert summary.tenant_id == "victim:tokens"
+        assert summary.total_tokens == 8
+        # A genuinely different tenant does not read the crafted bucket.
+        other = tracker.get_tenant_usage("victim")
+        assert other.total_tokens == 0
+

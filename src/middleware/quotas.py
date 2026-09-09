@@ -25,9 +25,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
 from src.config import settings
+from src.redis_bootstrap import safe_key_segment
 
 logger = structlog.get_logger()
-
 
 class TenantQuotaConfig:
     """Quota configuration for a single tenant."""
@@ -127,7 +127,9 @@ class TokenBudgetTracker:
     def _redis_key(self, tenant_id: str) -> str:
         """Redis key for tenant's daily token counter."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        return f"bulwark:quota:tokens:{tenant_id}:{today}"
+        # S-19: sanitise the tenant id in the key NAME so a ':' cannot cross the
+        # delimiter into another tenant's counter namespace.
+        return f"bulwark:quota:tokens:{safe_key_segment(tenant_id)}:{today}"
 
     def _ensure_fallback_day(self) -> None:
         """Reset in-memory fallback at day boundary."""
@@ -232,7 +234,9 @@ class DistributedConcurrencyLimiter:
 
     @staticmethod
     def _key(tenant_id: str) -> str:
-        return f"bulwark:quota:concurrent:{tenant_id}"
+        # S-19: sanitise the tenant id in the key NAME so a ':' cannot cross the
+        # delimiter into another tenant's concurrency namespace.
+        return f"bulwark:quota:concurrent:{safe_key_segment(tenant_id)}"
 
     def try_acquire(self, tenant_id: str, limit: int) -> tuple[bool, Optional[str]]:
         """Attempt to reserve a concurrency slot.

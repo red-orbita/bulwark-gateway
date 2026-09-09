@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.redis_bootstrap import safe_key_segment
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +80,21 @@ class VirtualKeyManager:
             self._redis = registry._redis
         except Exception:
             self._redis = None
+
+    @staticmethod
+    def _tenant_hash_key(tenant_id: str) -> str:
+        """Redis hash key holding a tenant's virtual keys.
+
+        S-19: the tenant id is sanitised in the key NAME so a ':' cannot cross
+        the delimiter into another tenant's namespace. The stored ``tenant_id``
+        field keeps the caller's original value.
+        """
+        return f"bulwark:vkeys:{safe_key_segment(tenant_id)}"
+
+    @staticmethod
+    def _tenant_active_key(tenant_id: str) -> str:
+        """Redis hash key mapping provider -> active key id for a tenant (S-19)."""
+        return f"bulwark:vkeys:{safe_key_segment(tenant_id)}:active"
 
     def _derive_encryption_key(self) -> bytes:
         """Derive encryption key from environment.
@@ -185,13 +202,13 @@ class VirtualKeyManager:
                     "is_active": True,
                 }
                 self._redis.hset(
-                    f"bulwark:vkeys:{tenant_id}",
+                    self._tenant_hash_key(tenant_id),
                     key_id,
                     json.dumps(key_data),
                 )
                 # Set as active key for this tenant/provider
                 self._redis.hset(
-                    f"bulwark:vkeys:{tenant_id}:active",
+                    self._tenant_active_key(tenant_id),
                     provider,
                     key_id,
                 )
@@ -218,7 +235,7 @@ class VirtualKeyManager:
         if not self._redis:
             return
         try:
-            raw = self._redis.hgetall(f"bulwark:vkeys:{tenant_id}") or {}
+            raw = self._redis.hgetall(self._tenant_hash_key(tenant_id)) or {}
         except Exception as e:  # noqa: BLE001 - hydration must never raise
             logger.warning("vkey_hydrate_error", extra={"error": str(e)[:100]})
             return
@@ -261,7 +278,7 @@ class VirtualKeyManager:
         if self._redis:
             try:
                 active_key_id = self._redis.hget(
-                    f"bulwark:vkeys:{tenant_id}:active", provider
+                    self._tenant_active_key(tenant_id), provider
                 )
                 if isinstance(active_key_id, bytes):
                     active_key_id = active_key_id.decode()
@@ -283,7 +300,7 @@ class VirtualKeyManager:
         encrypted = self._backend_keys.get(active_key_id)
         if not encrypted and self._redis:
             try:
-                key_data_raw = self._redis.hget(f"bulwark:vkeys:{tenant_id}", active_key_id)
+                key_data_raw = self._redis.hget(self._tenant_hash_key(tenant_id), active_key_id)
                 if key_data_raw:
                     key_data = json.loads(key_data_raw)
                     encrypted = key_data.get("encrypted_key")
@@ -328,12 +345,12 @@ class VirtualKeyManager:
                 # Persist deactivation so other processes observe it.
                 if self._redis:
                     try:
-                        raw = self._redis.hget(f"bulwark:vkeys:{tenant_id}", vk.key_id)
+                        raw = self._redis.hget(self._tenant_hash_key(tenant_id), vk.key_id)
                         if raw:
                             data = json.loads(raw)
                             data["is_active"] = False
                             self._redis.hset(
-                                f"bulwark:vkeys:{tenant_id}",
+                                self._tenant_hash_key(tenant_id),
                                 vk.key_id,
                                 json.dumps(data),
                             )
@@ -377,15 +394,15 @@ class VirtualKeyManager:
             self._audit("revoke", tenant_id, key_id, provider)
             if self._redis:
                 try:
-                    self._redis.hdel(f"bulwark:vkeys:{tenant_id}", key_id)
+                    self._redis.hdel(self._tenant_hash_key(tenant_id), key_id)
                     # Clear the active pointer if it referenced this key.
                     active = self._redis.hget(
-                        f"bulwark:vkeys:{tenant_id}:active", provider
+                        self._tenant_active_key(tenant_id), provider
                     )
                     if isinstance(active, bytes):
                         active = active.decode()
                     if active == key_id:
-                        self._redis.hdel(f"bulwark:vkeys:{tenant_id}:active", provider)
+                        self._redis.hdel(self._tenant_active_key(tenant_id), provider)
                 except Exception:  # noqa: S110 — Redis best-effort active-key cleanup; never break rotation
                     pass
             return True

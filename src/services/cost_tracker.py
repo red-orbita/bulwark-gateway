@@ -25,6 +25,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.redis_bootstrap import safe_key_segment
+
 logger = logging.getLogger(__name__)
 
 # Default pricing per 1M tokens (USD) — configurable via config
@@ -152,10 +154,14 @@ class CostTracker:
             TenantUsageSummary with token counts and cost.
         """
         summary = TenantUsageSummary(tenant_id=tenant_id)
+        # S-19: sanitise the id used in Redis/in-memory key NAMES (a ':' would
+        # otherwise cross the delimiter into another tenant's namespace). The
+        # reported ``summary.tenant_id`` keeps the caller's original value.
+        tkey = safe_key_segment(tenant_id)
 
         if self._redis:
             try:
-                key = f"bulwark:cost:{tenant_id}:tokens"
+                key = f"bulwark:cost:{tkey}:tokens"
                 data = self._redis.hgetall(key)
                 if data:
                     summary.prompt_tokens = int(data.get(b"prompt", data.get("prompt", 0)))
@@ -168,7 +174,7 @@ class CostTracker:
                 logger.warning("cost_tracker_redis_read_error", extra={"error": str(e)[:100]})
 
         # Fallback to in-memory
-        fallback_key = f"{tenant_id}:tokens"
+        fallback_key = f"{tkey}:tokens"
         if fallback_key in self._fallback:
             data = self._fallback[fallback_key]
             summary.prompt_tokens = data.get("prompt", 0)
@@ -228,8 +234,14 @@ class CostTracker:
             try:
                 pipe = self._redis.pipeline(transaction=False)
 
+                # S-19: sanitise the id segments interpolated into key NAMES so a
+                # ':' in a tenant/agent id cannot cross the delimiter into another
+                # namespace. A valid id is unchanged.
+                tkey = safe_key_segment(record.tenant_id)
+                akey = safe_key_segment(record.agent_id)
+
                 # Per-tenant totals
-                tenant_key = f"bulwark:cost:{record.tenant_id}:tokens"
+                tenant_key = f"bulwark:cost:{tkey}:tokens"
                 pipe.hincrby(tenant_key, "prompt", record.prompt_tokens)
                 pipe.hincrby(tenant_key, "completion", record.completion_tokens)
                 pipe.hincrby(tenant_key, "total", record.total_tokens)
@@ -237,7 +249,7 @@ class CostTracker:
                 pipe.hincrbyfloat(tenant_key, "cost_usd", record.estimated_cost_usd)
 
                 # Per-agent totals
-                agent_key = f"bulwark:cost:{record.tenant_id}:{record.agent_id}"
+                agent_key = f"bulwark:cost:{tkey}:{akey}"
                 pipe.hincrby(agent_key, "prompt", record.prompt_tokens)
                 pipe.hincrby(agent_key, "completion", record.completion_tokens)
                 pipe.hincrby(agent_key, "total", record.total_tokens)
@@ -268,7 +280,10 @@ class CostTracker:
 
     def _persist_fallback(self, record: UsageRecord):
         """In-memory fallback persistence."""
-        for key in [f"{record.tenant_id}:tokens", "global"]:
+        # S-19: sanitise the id used in the in-memory key NAME so it matches the
+        # sanitised read path in get_tenant_usage (and cannot collide across ids).
+        tkey = safe_key_segment(record.tenant_id)
+        for key in [f"{tkey}:tokens", "global"]:
             if key not in self._fallback:
                 self._fallback[key] = {"prompt": 0, "completion": 0, "total": 0, "requests": 0, "cost_usd": 0.0}  # type: ignore[dict-item]
             self._fallback[key]["prompt"] += record.prompt_tokens
