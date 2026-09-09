@@ -523,7 +523,13 @@ async def metrics_stream(request: Request, token: Optional[str] = Query(None)):
         return Response(status_code=401, content="Unauthorized")
 
     try:
-        user = AuthService.verify_token(auth_token)
+        # A4: accept either a purpose-scoped SSE token (the intended path — the
+        # query-param token from /sse-token, which leaks into logs and so must
+        # NOT be usable as a session credential) or a full-session bearer token
+        # (header fallback for non-EventSource clients). verify_sse_token rejects
+        # session tokens and verify_token rejects SSE tokens, so this accepts
+        # exactly those two kinds and nothing else.
+        user = AuthService.verify_sse_token(auth_token) or AuthService.verify_token(auth_token)
         if not user:
             return Response(status_code=401, content="Invalid token")
         perms = ROLE_PERMISSIONS.get(user.role, set())

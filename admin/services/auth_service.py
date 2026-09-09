@@ -123,10 +123,18 @@ class AuthService:
 
     @staticmethod
     def verify_token(token: str) -> Optional[TokenPayload]:
-        """Verify and decode JWT token.
+        """Verify and decode a full-session JWT token.
 
         Validates: signature (HS256 only), expiry, issuer, audience.
         Pins algorithms=["HS256"] to block alg:none attacks.
+
+        SECURITY (A4): tokens minted for a narrow purpose (e.g. the short-lived
+        ``purpose="sse"`` token that is deliberately placed in a URL query param,
+        and therefore leaks into access logs / Referer headers) are REJECTED
+        here. This is the generic verifier behind ``get_current_user`` and every
+        bearer-authenticated admin endpoint, so scoping it prevents an SSE URL
+        token from being replayed as a full session credential. Purpose-scoped
+        tokens must be validated by their dedicated verifier (``verify_sse_token``).
         """
         try:
             payload = jwt.decode(
@@ -139,6 +147,47 @@ class AuthService:
                     "require": ["exp", "iat", "sub"],
                 },
             )
+            # A4: a purpose-scoped token is NOT a session credential.
+            if payload.get("purpose"):
+                return None
+            tenant = payload.get("tenant")
+            return TokenPayload(
+                sub=payload["sub"],
+                role=UserRole(payload["role"]),
+                tenant=tenant if tenant else None,
+                exp=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
+                iat=datetime.fromtimestamp(payload["iat"], tz=timezone.utc),
+            )
+        except jwt.ExpiredSignatureError:
+            return None
+        except jwt.InvalidTokenError:
+            return None
+        except (KeyError, ValueError):
+            return None
+
+    @staticmethod
+    def verify_sse_token(token: str) -> Optional[TokenPayload]:
+        """Verify and decode a short-lived ``purpose="sse"`` token.
+
+        Counterpart to ``verify_token`` for the narrow SSE scope: it REQUIRES the
+        ``purpose="sse"`` claim, so a full-session token (which carries no
+        purpose) is rejected here and an SSE token is rejected by
+        ``verify_token``. The SSE endpoint accepts either kind by trying this
+        verifier first, then falling back to the session verifier.
+        """
+        try:
+            payload = jwt.decode(
+                token,
+                JWT_SECRET,
+                algorithms=[JWT_ALGORITHM],
+                audience=JWT_AUDIENCE,
+                issuer=JWT_ISSUER,
+                options={
+                    "require": ["exp", "iat", "sub"],
+                },
+            )
+            if payload.get("purpose") != "sse":
+                return None
             tenant = payload.get("tenant")
             return TokenPayload(
                 sub=payload["sub"],
