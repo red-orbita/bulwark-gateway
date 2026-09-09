@@ -600,10 +600,22 @@ class UserStore:
             self._cx.commit()
         return {"id": session_id, "token_hash": token_hash, "created_at": now, "expires_at": expires_at}
 
-    def revoke_session(self, session_id: str) -> bool:
-        """Revoke a session by ID."""
+    def revoke_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
+        """Revoke a session by ID.
+
+        SECURITY (F-03): when ``user_id`` is supplied the revoke is scoped to the
+        owning user, so a session id alone cannot be used to revoke another
+        operator's session (IDOR/BOLA). Callers that already authorized ownership
+        may omit it, but the routed endpoint always passes it.
+        """
         with self._lock:
-            cur = self._cx.execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
+            if user_id is not None:
+                cur = self._cx.execute(
+                    "UPDATE sessions SET revoked = 1 WHERE id = ? AND user_id = ?",
+                    (session_id, user_id),
+                )
+            else:
+                cur = self._cx.execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
             self._cx.commit()
         return cur.rowcount > 0
 
@@ -999,10 +1011,16 @@ class PostgreSQLUserStore(UserStore):
         )
         return row is not None
 
-    def revoke_session(self, session_id: str) -> bool:
+    def revoke_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         db = self._get_db()
-        db.sync_execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
-        return True
+        if user_id is not None:
+            result = db.sync_execute(
+                "UPDATE sessions SET revoked = 1 WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            )
+        else:
+            result = db.sync_execute("UPDATE sessions SET revoked = 1 WHERE id = ?", (session_id,))
+        return bool(result) if isinstance(result, int) else True
 
     def revoke_all_sessions(self, user_id: str) -> int:
         db = self._get_db()

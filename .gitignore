@@ -39,6 +39,8 @@ credentials.json
 # --- Runtime data (generated at runtime) ---
 data/
 shared/
+# Local SIEM lab (Splunk/Graylog/Wazuh) creds + generated evidence — never track.
+siem-e2e/
 # Test datasets/fixtures are SOURCE, not runtime data — the correlation FP/FN
 # corpus is imported by committed tests, so it must stay tracked despite `data/`.
 !tests/data/

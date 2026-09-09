@@ -193,6 +193,14 @@ def _is_within_directory(base: Path, target: Path) -> bool:
     return base_resolved == target_resolved or base_resolved in target_resolved.parents
 
 
+# SECURITY (F-07): decompression-bomb ceilings. The upload itself is capped at
+# ``_MAX_UPLOAD_SIZE`` (10 MB), but a small archive can declare/expand to orders
+# of magnitude more on disk. These bound the *uncompressed* footprint so a
+# malicious plugin package can never exhaust admin disk/memory during extraction.
+_MAX_TOTAL_UNCOMPRESSED = 100 * 1024 * 1024  # 100 MB total across all members
+_MAX_ARCHIVE_MEMBERS = 2000  # cap the member count (defeats many-tiny-files bombs)
+
+
 def _extract_archive(file_path: Path, dest_dir: Path) -> Path:
     """Extract .zip or .tar.gz to dest_dir. Returns plugin root dir.
 
@@ -200,20 +208,56 @@ def _extract_archive(file_path: Path, dest_dir: Path) -> Path:
     and a resolved-path containment check BEFORE writing to disk. Symlink/hardlink
     members in tarballs are rejected outright (defense against CVE-2007-4559-class
     extraction escapes). We deliberately do not use ``extractall``.
+
+    A decompression-bomb ceiling (F-07) bounds both the declared and the *actually
+    written* uncompressed size: zip central-directory sizes can lie, so zip members
+    are streamed with a running byte cap; tar member sizes are authoritative for the
+    post-decompression content, so their sum is checked up front.
     """
     dest_dir = Path(dest_dir)
     if zipfile.is_zipfile(file_path):
         with zipfile.ZipFile(file_path, 'r') as zf:
+            infos = zf.infolist()
+            if len(infos) > _MAX_ARCHIVE_MEMBERS:
+                raise ValueError("Archive contains too many entries")
+            declared_total = sum(i.file_size for i in infos)
+            if declared_total > _MAX_TOTAL_UNCOMPRESSED:
+                raise ValueError("Archive expands beyond the allowed size (decompression bomb?)")
             for name in zf.namelist():
                 if name.startswith('/') or '..' in Path(name).parts:
                     raise ValueError(f"Unsafe path in archive: {name}")
                 if not _is_within_directory(dest_dir, dest_dir / name):
                     raise ValueError(f"Path traversal blocked: {name}")
-            for name in zf.namelist():
-                zf.extract(name, dest_dir)
+            written = 0
+            for info in infos:
+                name = info.filename
+                target = dest_dir / name
+                if name.endswith('/'):
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # Stream with a running cap: a lying central-directory size cannot
+                # inflate past the ceiling because we count the bytes we write.
+                with zf.open(info, 'r') as src, open(target, 'wb') as dst:
+                    while True:
+                        chunk = src.read(65536)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > _MAX_TOTAL_UNCOMPRESSED:
+                            raise ValueError(
+                                "Archive expands beyond the allowed size (decompression bomb?)"
+                            )
+                        dst.write(chunk)
     elif tarfile.is_tarfile(file_path):
         with tarfile.open(file_path, 'r:*') as tf:
-            for member in tf.getmembers():
+            members = tf.getmembers()
+            if len(members) > _MAX_ARCHIVE_MEMBERS:
+                raise ValueError("Archive contains too many entries")
+            declared_total = sum(m.size for m in members if m.isreg())
+            if declared_total > _MAX_TOTAL_UNCOMPRESSED:
+                raise ValueError("Archive expands beyond the allowed size (decompression bomb?)")
+            for member in members:
                 if member.issym() or member.islnk():
                     raise ValueError(f"Link members are not allowed: {member.name}")
                 if member.name.startswith('/') or '..' in Path(member.name).parts:

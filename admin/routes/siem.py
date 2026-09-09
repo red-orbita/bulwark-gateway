@@ -660,8 +660,6 @@ async def _probe_udp(config: dict, platform: str, ttype: str) -> SIEMTestResult:
 
 async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
     """Test Wazuh integration: API reachability + analysisd status + log file access."""
-    import ipaddress
-    import socket
     import time
     from urllib.parse import urlparse
 
@@ -672,46 +670,28 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
     wazuh_password = config.get("wazuh_password", "wazuh-wui")
     log_path = config.get("endpoint", "/var/log/bulwark-gateway/events.ndjson")
 
-    # H-02: SSRF validation on wazuh_api_url
-    try:
-        parsed = urlparse(wazuh_url)
-        hostname = parsed.hostname or ""
-        _blocked_hosts = {"metadata.google.internal", "localhost", "127.0.0.1",
-                          "kubernetes.default", "kubernetes.default.svc"}
-        _blocked_nets = [
-            ipaddress.ip_network("169.254.0.0/16"),
-            ipaddress.ip_network("10.0.0.0/8"),
-            ipaddress.ip_network("172.16.0.0/12"),
-            ipaddress.ip_network("192.168.0.0/16"),
-            ipaddress.ip_network("127.0.0.0/8"),
-        ]
-        # Allow "wazuh" and "wazuh-manager" service names (internal K8s services)
-        _allowed_hosts = {"wazuh", "wazuh-manager", "wazuh.bulwark-siem.svc.cluster.local"}
-
-        if hostname.lower() in _blocked_hosts:
-            return SIEMTestResult(
-                success=False, platform="wazuh", transport="file",
-                latency_ms=0, error=f"SSRF blocked: {hostname} is not allowed",
-            )
-
-        if hostname.lower() not in _allowed_hosts:
-            try:
-                addrs = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-                for _family, _, _, _, sockaddr in addrs:
-                    ip = ipaddress.ip_address(sockaddr[0])
-                    for net in _blocked_nets:
-                        if ip in net:
-                            return SIEMTestResult(
-                                success=False, platform="wazuh", transport="file",
-                                latency_ms=0, error=f"SSRF blocked: {hostname} resolves to private IP",
-                            )
-            except (socket.gaierror, OSError):
-                pass  # Allow unresolvable for Wazuh (may be K8s service DNS)
-    except Exception:
+    # SECURITY (F-05 / H-02): SSRF validation on wazuh_api_url. Route through the
+    # single hardened validator (_validate_url_no_ssrf) instead of a divergent
+    # inline IPv4-only blocklist, so IPv6 loopback (::1), link-local (fe80::/10),
+    # ULA (fc00::/7) and CGNAT (100.64.0.0/10) are all covered like every other
+    # SIEM endpoint. The internal Wazuh service names are an explicit, intended
+    # exception: the retained on-cluster Wazuh demo resolves to a private K8s
+    # ClusterIP that the shared validator would otherwise (correctly) reject.
+    _allowed_hosts = {"wazuh", "wazuh-manager", "wazuh.bulwark-siem.svc.cluster.local"}
+    parsed = urlparse(wazuh_url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname:
         return SIEMTestResult(
             success=False, platform="wazuh", transport="file",
             latency_ms=0, error="Invalid wazuh_api_url",
         )
+    if hostname not in _allowed_hosts:
+        ssrf_error = _validate_url_no_ssrf(wazuh_url)
+        if ssrf_error is not None:
+            return SIEMTestResult(
+                success=False, platform="wazuh", transport="file",
+                latency_ms=0, error=f"SSRF blocked: {ssrf_error}",
+            )
 
     results = {
         "api_reachable": False,

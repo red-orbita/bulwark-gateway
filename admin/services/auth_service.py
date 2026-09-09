@@ -68,13 +68,21 @@ class AuthService:
 
     @staticmethod
     def create_token(username: str, role: UserRole, user_id: Optional[str] = None,
-                     ip: Optional[str] = None, user_agent: Optional[str] = None) -> str:
-        """Create a JWT token (HS256) with standard claims."""
+                     ip: Optional[str] = None, user_agent: Optional[str] = None,
+                     tenant: Optional[str] = None) -> str:
+        """Create a JWT token (HS256) with standard claims.
+
+        SECURITY (F-01): the ``tenant`` claim carries the operator's tenant scope
+        so per-tenant authorization (e.g. the investigation centre) can pin a
+        scoped operator to their own tenant. A ``None`` tenant means an unscoped
+        (global) operator; a non-empty value confines every tenant-aware check.
+        """
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=JWT_EXPIRY_HOURS)
         payload = {
             "sub": username,
             "role": role.value,
+            "tenant": tenant,
             "iss": JWT_ISSUER,
             "aud": JWT_AUDIENCE,
             "iat": now,
@@ -131,9 +139,11 @@ class AuthService:
                     "require": ["exp", "iat", "sub"],
                 },
             )
+            tenant = payload.get("tenant")
             return TokenPayload(
                 sub=payload["sub"],
                 role=UserRole(payload["role"]),
+                tenant=tenant if tenant else None,
                 exp=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
                 iat=datetime.fromtimestamp(payload["iat"], tz=timezone.utc),
             )
@@ -149,7 +159,8 @@ class AuthService:
         """Verify username/password + MFA.
 
         Returns:
-            {"success": True, "username": str, "role": UserRole, "user_id": str, "force_password_change": bool}
+            {"success": True, "username": str, "role": UserRole, "user_id": str,
+             "tenant": str|None, "force_password_change": bool}
             {"success": False, "error": str}
             {"success": False, "mfa_required": True}
         """
@@ -174,6 +185,7 @@ class AuthService:
             "username": username,
             "role": role,
             "user_id": user["id"],
+            "tenant": user.get("tenant_scope") or None,
             "force_password_change": bool(user.get("force_password_change")),
         }
 
@@ -214,6 +226,21 @@ async def get_current_user(
             if not store.is_session_valid(token_hash):
                 return False
             if not store.check_and_update_activity(token_hash, SESSION_IDLE_TIMEOUT_MINUTES):
+                return False
+            # SECURITY (F-02): the JWT's role/active status is a point-in-time
+            # snapshot. A privilege the operator held at login must not outlive a
+            # disable or demotion for the token's full lifetime. Re-check the
+            # live user record every cache miss: a deactivated account or a role
+            # that no longer matches the token invalidates the session (forcing a
+            # fresh login that mints a token with the current role). Sessions are
+            # also proactively revoked on the mutation itself; this is the
+            # defence-in-depth backstop that also covers direct DB changes.
+            db_user = store.get_user(payload.sub)
+            if db_user is None:
+                return False
+            if not db_user.get("active", True):
+                return False
+            if str(db_user.get("role")) != payload.role.value:
                 return False
         except (ImportError, AttributeError):
             pass

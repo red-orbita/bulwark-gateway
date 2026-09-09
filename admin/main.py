@@ -322,26 +322,43 @@ _MAX_BODY_SIZE = 1 * 1024 * 1024  # 1MB
 
 @app.middleware("http")
 async def body_size_limit(request: Request, call_next):
-    """Reject requests with bodies exceeding 1MB."""
-    # P9-02 fix: Also check actual body size (catches chunked encoding bypass)
+    """Reject requests with bodies exceeding 1MB.
+
+    SECURITY (F-06): a chunked/streamed request carries no Content-Length, so the
+    only way to know its true size is to read it. The body is therefore consumed
+    **incrementally** and the request is rejected the instant the running total
+    crosses the cap — an attacker can never force the admin process to buffer an
+    unbounded body before the 413. A declared Content-Length over the cap is still
+    rejected up front without reading anything. The bounded body is cached on the
+    request so downstream handlers re-read it normally (Starlette replays it).
+    """
     content_length = request.headers.get("content-length")
     if content_length:
-        if int(content_length) > _MAX_BODY_SIZE:
+        try:
+            declared = int(content_length)
+        except ValueError:
+            declared = None
+        if declared is not None and declared > _MAX_BODY_SIZE:
             return Response(
                 content='{"detail":"Request body too large (max 1MB)"}',
                 status_code=413,
                 media_type="application/json",
             )
-    else:
-        # No Content-Length: may be chunked. Read and check actual size.
-        if request.method in ("POST", "PUT", "PATCH"):
-            body = await request.body()
-            if len(body) > _MAX_BODY_SIZE:
+    elif request.method in ("POST", "PUT", "PATCH"):
+        # No Content-Length: may be chunked. Read incrementally and abort early.
+        size = 0
+        chunks: list[bytes] = []
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > _MAX_BODY_SIZE:
                 return Response(
                     content='{"detail":"Request body too large (max 1MB)"}',
                     status_code=413,
                     media_type="application/json",
                 )
+            chunks.append(chunk)
+        # Cache the bounded body so the downstream handler can re-read it.
+        request._body = b"".join(chunks)
     return await call_next(request)
 
 
@@ -451,12 +468,35 @@ async def automation_idempotency(request: Request, call_next):
 
     cached = await store.get(scope, method, path, idem_key)
     if cached is not None:
-        return Response(
-            content=cached["response_body"],
-            status_code=cached["status_code"],
-            media_type="application/json",
-            headers={"Idempotency-Replay": "true"},
-        )
+        # SECURITY (F-04): a cached 2xx must never be replayed to a credential
+        # that is no longer valid. The dedupe scope binds the entry to the exact
+        # presenting key, but a key that was valid when the entry was cached may
+        # since have been disabled, expired or deleted. Re-verify the presenting
+        # service-account key against the live store before serving the stored
+        # response; if it no longer resolves, fall through so the handler's own
+        # `require_permission_automation` rejects it (401) instead of the
+        # middleware short-circuiting a reply for a revoked credential.
+        from .services.service_account_store import ServiceAccountStore
+
+        _auth = request.headers.get("authorization", "")
+        _presented = _auth[7:] if _auth.startswith("Bearer ") else ""
+        # Fail-safe: a cache hit implies the DB is reachable, so a verify() error
+        # here is anomalous. Treat any failure (or a non-resolving key) as "do not
+        # replay" and fall through — the handler's own require_permission_automation
+        # re-checks the credential, so we never serve a stored reply to a key we
+        # could not positively confirm is still valid.
+        _still_valid = False
+        try:
+            _still_valid = await ServiceAccountStore().verify(_presented) is not None
+        except Exception:  # noqa: S110 - fail-safe: fall through to the handler's auth
+            _still_valid = False
+        if _still_valid:
+            return Response(
+                content=cached["response_body"],
+                status_code=cached["status_code"],
+                media_type="application/json",
+                headers={"Idempotency-Replay": "true"},
+            )
 
     response = await call_next(request)
 

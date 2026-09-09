@@ -40,10 +40,17 @@ async def engine(tmp_path):
 
 @pytest.fixture
 def patched_db(engine, monkeypatch):
-    """Point the idempotency store at the throwaway migrated engine."""
-    from admin.services import idempotency_store as mod
+    """Point the idempotency store AND the service-account store at the engine.
 
-    monkeypatch.setattr(mod, "get_database", lambda: engine)
+    The middleware re-verifies the presenting service-account key against the live
+    store before replaying a cached response (F-04), so both stores must resolve to
+    the same throwaway migrated engine for the end-to-end middleware tests.
+    """
+    from admin.services import idempotency_store as idem_mod
+    from admin.services import service_account_store as sa_mod
+
+    monkeypatch.setattr(idem_mod, "get_database", lambda: engine)
+    monkeypatch.setattr(sa_mod, "get_database", lambda: engine)
     return engine
 
 
@@ -181,9 +188,22 @@ class TestServiceAccountRequestHelper:
 
 
 @pytest.fixture
-def client(patched_db):
-    """A minimal app wired with the REAL middleware under test."""
+async def client(patched_db):
+    """A minimal app wired with the REAL middleware under test.
+
+    A real, enabled service account is minted in the shared engine so the
+    middleware's F-04 re-verification of the presenting key resolves; the raw key
+    and ready-made request headers are exposed on ``tc.sa`` for the tests.
+    """
     from admin.main import automation_idempotency
+    from admin.services.service_account_store import ServiceAccountStore
+
+    acct = await ServiceAccountStore().mint(
+        name="idem-playbook",
+        permissions=["investigation:write"],
+        created_by="test",
+    )
+    raw_key = acct["key"]
 
     app = FastAPI()
     app.middleware("http")(automation_idempotency)
@@ -204,20 +224,23 @@ def client(patched_db):
 
     tc = TestClient(app)
     tc.state = state  # type: ignore[attr-defined]
+    tc.sa = {  # type: ignore[attr-defined]
+        "account_id": acct["account_id"],
+        "key": raw_key,
+        "headers": {"Authorization": f"Bearer {raw_key}", "Idempotency-Key": "req-1"},
+    }
     return tc
-
-
-_SA = {"Authorization": "Bearer bwk_sa_testkey", "Idempotency-Key": "req-1"}
 
 
 class TestIdempotencyMiddleware:
     def test_replays_cached_response_without_re_executing(self, client):
-        first = client.post("/admin/investigation/cases", headers=_SA)
+        sa = client.sa["headers"]
+        first = client.post("/admin/investigation/cases", headers=sa)
         assert first.status_code == 200
         assert first.json()["calls"] == 1
         assert "idempotency-replay" not in {k.lower() for k in first.headers}
 
-        second = client.post("/admin/investigation/cases", headers=_SA)
+        second = client.post("/admin/investigation/cases", headers=sa)
         assert second.status_code == 200
         # Handler NOT re-executed — same body replayed.
         assert second.json()["calls"] == 1
@@ -225,15 +248,16 @@ class TestIdempotencyMiddleware:
         assert client.state["calls"] == 1
 
     def test_different_key_re_executes(self, client):
-        client.post("/admin/investigation/cases", headers=_SA)
+        key = client.sa["key"]
+        client.post("/admin/investigation/cases", headers=client.sa["headers"])
         other = client.post(
             "/admin/investigation/cases",
-            headers={"Authorization": "Bearer bwk_sa_testkey", "Idempotency-Key": "req-2"},
+            headers={"Authorization": f"Bearer {key}", "Idempotency-Key": "req-2"},
         )
         assert other.json()["calls"] == 2
 
     def test_no_key_bypasses_cache(self, client):
-        h = {"Authorization": "Bearer bwk_sa_testkey"}
+        h = {"Authorization": f"Bearer {client.sa['key']}"}
         client.post("/admin/investigation/cases", headers=h)
         client.post("/admin/investigation/cases", headers=h)
         assert client.state["calls"] == 2
@@ -245,8 +269,27 @@ class TestIdempotencyMiddleware:
         assert client.state["calls"] == 2
 
     def test_non_2xx_is_not_cached(self, client):
-        client.post("/admin/investigation/fail", headers=_SA)
-        second = client.post("/admin/investigation/fail", headers=_SA)
+        client.post("/admin/investigation/fail", headers=client.sa["headers"])
+        second = client.post("/admin/investigation/fail", headers=client.sa["headers"])
         # Both executed — a failure stays freely retryable.
         assert second.status_code == 400
+        assert client.state["calls"] == 2
+
+    async def test_revoked_key_is_not_replayed(self, client, patched_db):
+        """SECURITY (F-04): a key valid at cache time but disabled afterwards must
+        NOT get the cached 2xx replayed — the middleware falls through so the
+        handler's own auth rejects it."""
+        from admin.services.service_account_store import ServiceAccountStore
+
+        sa = client.sa["headers"]
+        first = client.post("/admin/investigation/cases", headers=sa)
+        assert first.json()["calls"] == 1
+
+        # Disable the credential after its response was cached.
+        assert await ServiceAccountStore().set_enabled(client.sa["account_id"], False) is True
+
+        second = client.post("/admin/investigation/cases", headers=sa)
+        # No replay: the handler re-executed (calls advanced) rather than the
+        # middleware short-circuiting a stored reply for a revoked key.
+        assert second.headers.get("Idempotency-Replay") is None
         assert client.state["calls"] == 2

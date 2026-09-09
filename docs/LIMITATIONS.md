@@ -135,6 +135,36 @@ rather than silent.
 
 ---
 
+## L6 — The input guardrail only scans the first 16 KB of a prompt by default
+
+**Status: By design (bounded DoS trade-off), with an opt-in mitigation.**
+
+The synchronous input guardrail caps its regex work at `guardrail_max_scan_bytes`
+(16 KB) with a head→tail sliding window, and flags any single message longer than
+`guardrail_max_input_size` (8 KB) as *oversized*. These two knobs are independent
+and both intentional: they bound the worst-case cost of scanning an attacker-sized
+prompt on the hot path (a full 16 KB scan of benign text is ~0.7 s observed). The
+consequence is a **long-context blind spot** — an injection buried *past* the
+16 KB boundary in a very long prompt is not seen by the synchronous scan, so a
+detection that would otherwise BLOCK can degrade to WARN/ALLOW.
+
+- **Impact:** do not assume the whole of a very long prompt is regex-scanned
+  inline; the tail beyond `max_scan_bytes` is not covered by the sync guardrail.
+- **Mitigation (opt-in):** set `BULWARK_LONG_CONTEXT_SCANNING_ENABLED=true` to
+  register the `LongContextScanner` (INPUT_ASYNC). It re-runs the **shared**
+  `InputGuardrail` (same pattern SSOT, zero new deps) over the content *beyond*
+  the boundary, chunked so each window is scanned in full, plus a many-shot
+  jailbreak density heuristic. Its total work is itself hard-capped by
+  `BULWARK_LONG_CONTEXT_MAX_SCAN_BYTES` (256 KB) so the feature can never amplify
+  a large prompt into unbounded regex work. Set
+  `BULWARK_LONG_CONTEXT_SCANNING_BLOCKING=true` to let deep BLOCK-worthy findings
+  block rather than warn.
+- **Refs:** `src/guardrails/input_guardrail.py` (`max_scan_bytes`,
+  `max_input_size`), `src/scanners/longcontext/long_context_scanner.py`,
+  `AGENTS.md` §6 (long-context settings).
+
+---
+
 _When a limitation here is genuinely removed (e.g. a topic classifier ships with
 a real model + tests), delete its entry — this file must only ever list gaps that
 are still real._
