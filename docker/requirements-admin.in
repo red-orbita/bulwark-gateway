@@ -20,6 +20,6 @@ uvicorn==0.52.4
 
 # Admin-only runtime deps previously installed outside the lock (drift fix):
 redis==8.1.0
-PyJWT==2.13.0
+PyJWT==2.14.0
 asyncpg==0.31.0
 aiosqlite==0.22.1
