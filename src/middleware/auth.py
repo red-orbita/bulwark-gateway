@@ -15,6 +15,7 @@ import hmac
 import logging
 import os
 import re
+import time
 from typing import Any, Set
 
 import jwt
@@ -33,9 +34,11 @@ logger = logging.getLogger(__name__)
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 
 
-# Token revocation check via Redis (best-effort, non-blocking)
+# Synchronous Redis revocation checks, shared by HTTP and stream callers.
 _revocation_redis = None
 _revocation_redis_init = False
+_REVOCATION_RETRY_SECONDS = 5.0
+_revocation_retry_at = 0.0
 
 # H-05 fix: Local revocation cache with short TTL to survive Redis outages.
 # On Redis failure, previously-validated tokens get a grace period to
@@ -60,7 +63,7 @@ def _is_token_revoked(jti: str) -> bool:
     - Positive cache (not-revoked): 2s TTL — recheck quickly to catch revocations.
     - On Redis failure: fail-closed (reject) for unknown tokens.
     """
-    global _revocation_redis, _revocation_redis_init
+    global _revocation_redis, _revocation_redis_init, _revocation_retry_at
 
     # Check negative cache first — revoked tokens short-circuit immediately
     if jti in _revoked_cache:
@@ -70,22 +73,39 @@ def _is_token_revoked(jti: str) -> bool:
     if jti in _auth_cache:
         return False
 
-    if not _revocation_redis_init:
-        _revocation_redis_init = True
-        try:
-            import redis as _redis
-            url = getattr(settings, "redis_url", None)
-            if url:
-                _revocation_redis = _redis.from_url(url, decode_responses=True, socket_timeout=0.1)
-                _revocation_redis.ping()
-        except Exception:
-            _revocation_redis = None
-
-    if not _revocation_redis:
-        # Fail-closed: cannot verify revocation → reject token (C-04)
+    if time.monotonic() < _revocation_retry_at:
         return True
+
     try:
+        if _revocation_redis is None:
+            # Request-driven cooldown, not a sleep/retry loop on the event loop.
+            _revocation_retry_at = time.monotonic() + _REVOCATION_RETRY_SECONDS
+            import redis as _redis
+            from redis.backoff import NoBackoff
+            from redis.retry import Retry
+
+            url = getattr(settings, "redis_url", None)
+            if not url:
+                return True
+            _revocation_redis = _redis.from_url(
+                url, decode_responses=True, password=getattr(settings, "redis_password", None),
+                max_connections=2,
+            )
+            # from_url parses lazily. Enforce the auth budget AFTER URL options
+            # are parsed so query parameters cannot enable long waits/retries.
+            options = _revocation_redis.connection_pool.connection_kwargs
+            options.update(socket_timeout=0.1, socket_connect_timeout=0.1,
+                           retry=Retry(NoBackoff(), 0), retry_on_timeout=False, retry_on_error=[])
+            if url.startswith("rediss://"):
+                import ssl
+
+                insecure = getattr(settings, "redis_tls_insecure", False)
+                options.update(ssl_cert_reqs=ssl.CERT_NONE if insecure else ssl.CERT_REQUIRED,
+                               ssl_check_hostname=not insecure, ssl_min_version=ssl.TLSVersion.TLSv1_2)
+        # This read also proves readiness; no extra PING on first use.
         is_revoked = bool(_revocation_redis.sismember("bulwark:revoked_tokens", jti))
+        _revocation_redis_init = True
+        _revocation_retry_at = 0.0
         if is_revoked:
             # Cache in negative cache (long TTL — revocation is permanent)
             _revoked_cache[jti] = True
@@ -94,14 +114,22 @@ def _is_token_revoked(jti: str) -> bool:
             _auth_cache[jti] = True
         return is_revoked
     except Exception:
-        # H-05: On Redis error, fail-closed for unknown tokens
-        # (no cached value = never validated before = reject)
+        # Never cache an outage as a clean token or expose driver diagnostics.
+        client = _revocation_redis
+        _revocation_redis = None
+        _revocation_redis_init = False
+        _revocation_retry_at = time.monotonic() + _REVOCATION_RETRY_SECONDS
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                logger.warning("revocation_redis_close_failed")
         return True
 
 # Paths that don't require auth (H-13: removed /health/stats, /health/telemetry)
 # SECURITY (L-06 fix): Removed /internal/scanners/status — it exposes scanner
 # configuration and enabled patterns which is sensitive info disclosure.
-PUBLIC_PATHS = {"/health", "/ready", "/health/live", "/docs", "/openapi.json"}
+PUBLIC_PATHS = {"/health", "/ready", "/ready/attachments", "/health/live", "/docs", "/openapi.json"}
 
 # SECURITY FIX (CRIT-01): API keys are now bound to tenant_id.
 # Format: "key:tenant_id" pairs in BULWARK_API_KEYS.
@@ -215,6 +243,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # anonymous/legacy callers, in which case enforcement falls back to the
         # session scope. NEVER logged or exported (may be PII).
         subject_id: str | None = None
+        attachment_owner: str | None = None
 
         # Validate auth
         if settings.api_keys_enabled:
@@ -275,6 +304,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     # F3: derive the subject from the authenticated ``sub`` claim
                     # (absent ⇒ falls back to session-scoped enforcement).
                     subject_id = payload.get("sub") or None
+                    if isinstance(subject_id, str) and subject_id.strip():
+                        # Ownership must not inherit the correlation scope's prefix
+                        # truncation or collide with the API-key identity namespace.
+                        attachment_owner = "jwt:" + hashlib.sha256(subject_id.encode("utf-8")).hexdigest()
                     # SECURITY FIX (RC-07): Store jti for streaming re-validation
                     request.state._auth_jti = jti
                 except JWTError:
@@ -299,6 +332,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     # F3: each distinct API key is its own subject, identified by a
                     # stable non-reversible digest (never the raw key).
                     tenant_id, subject_id = api_key_result
+                    attachment_owner = "api:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
                 except JWTKeyError as e:
                     # Asymmetric key loading failed — fail-closed
                     logger.error(
@@ -346,12 +380,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     pass  # In non-auth mode, invalid tokens are ignored
 
         # Sanitize tenant_id and agent_id against path traversal
-        if not _SAFE_ID.match(tenant_id):
+        if not isinstance(tenant_id, str) or not _SAFE_ID.fullmatch(tenant_id):
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid tenant_id format"},
             )
-        if not _SAFE_ID.match(agent_id):
+        if not isinstance(agent_id, str) or not _SAFE_ID.fullmatch(agent_id):
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid agent_id format"},
@@ -376,6 +410,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # sane length. Consumed by the correlation engine as a risk *scope* only
         # (hashed before it reaches Redis); never emitted to logs/SIEM.
         request.state.subject_id = subject_id[:128] if subject_id else None
+        # Strict-auth path only. Development-mode JWTs do not establish ownership.
+        request.state.attachment_owner = attachment_owner
         # SECURITY FIX (RC-07): Store auth metadata for streaming re-validation.
         # During long-lived streaming responses, the token must be periodically
         # re-checked for revocation to limit the window of access after revocation.

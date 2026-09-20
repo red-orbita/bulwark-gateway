@@ -123,7 +123,9 @@ def test_no_native_browser_dialogs_in_admin_pages():
     for path in sorted(_PAGES.glob("*.html")):
         if path.name in _DIALOG_ALLOW:
             continue
-        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        source = re.sub(r"<!--[\s\S]*?-->", lambda m: "\n" * m.group().count("\n"),
+                        path.read_text(encoding="utf-8"))
+        for i, line in enumerate(source.splitlines(), 1):
             if _NATIVE_DIALOG.search(line):
                 offenders.append(f"{path.name}:{i}: {line.strip()[:80]}")
     assert not offenders, (
@@ -195,5 +197,4 @@ def test_no_fire_and_forget_delete_in_iocs_and_rbac():
             r"await fetch\([^;]*method:\s*'DELETE'[^;]*\);\s*\n\s*await[^\n]*\n\s*showToast\([^,]*,\s*'success'",
             src,
         ), f"{page}: found fire-and-forget DELETE that toasts success without checking status"
-
 

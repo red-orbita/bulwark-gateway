@@ -245,7 +245,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Skip health checks
-        if request.url.path in ("/health", "/health/live", "/ready"):
+        if request.url.path in ("/health", "/health/live", "/ready", "/ready/attachments"):
             return await call_next(request)
 
         # Reload per-tenant config periodically

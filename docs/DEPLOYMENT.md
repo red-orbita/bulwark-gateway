@@ -55,22 +55,28 @@ This creates random, cryptographically secure secrets for:
 
 ### Step 2: Build Docker Images
 
+The canonical build profile is CPython 3.14 on a digest-pinned minimal Wolfi runtime,
+Linux amd64 only. It retains UID/GID 65532, no shell-based entrypoint and read-only
+runtime compatibility. See [Release Packaging](PACKAGING.md) for supported options
+and target-interpreter dependency gates. A successful build is a candidate, not a
+passing vulnerability scan or an approved production release.
+
 ```bash
 # Build the proxy image
-docker build -t bulwark-gateway-proxy:latest -f Dockerfile .
+docker build --platform linux/amd64 -t bulwark-gateway-proxy:rc-local -f Dockerfile .
 
 # Build the admin image
-docker build -t bulwark-gateway-admin:latest -f docker/Dockerfile.admin .
+docker build --platform linux/amd64 -t bulwark-gateway-admin:rc-local -f docker/Dockerfile.admin .
 ```
 
 If using a remote registry (ECR, GCR, Docker Hub):
 
 ```bash
-docker tag bulwark-gateway-proxy:latest your-registry/bulwark-gateway-proxy:v1.0.0
-docker push your-registry/bulwark-gateway-proxy:v1.0.0
+docker tag bulwark-gateway-proxy:rc-local your-registry/bulwark-gateway-proxy:rc-local
+docker push your-registry/bulwark-gateway-proxy:rc-local
 
-docker tag bulwark-gateway-admin:latest your-registry/bulwark-gateway-admin:v1.0.0
-docker push your-registry/bulwark-gateway-admin:v1.0.0
+docker tag bulwark-gateway-admin:rc-local your-registry/bulwark-gateway-admin:rc-local
+docker push your-registry/bulwark-gateway-admin:rc-local
 ```
 
 When deploying via `k8s/deploy.sh` with a remote registry, set `IMAGE_REGISTRY`
@@ -1188,6 +1194,15 @@ This means **any** secrets provider that can mount a file or create a Kubernetes
 | `key-encryption-key` | Proxy + Admin | Fernet key for virtual keys **and** the PostgreSQL MFA-secret at-rest encryption | Rotation invalidates existing MFA secrets (users re-enroll) + virtual keys |
 
 > **CRITICAL**: `db-encryption-key` MUST be a valid hexadecimal string (e.g., `openssl rand -hex 32`). Non-hex values will cause SQLCipher to fail with `file is not a database` on startup. Do NOT use base64 or arbitrary strings.
+
+When database encryption is explicitly configured, startup refuses to fall back
+to plaintext SQLite if SQLCipher is unavailable. An explicit
+`DB_ENCRYPTION_KEY_FILE` is authoritative: a missing, empty, unreadable or oversized
+key file fails startup rather than falling back to an environment value. Kubernetes
+projected-secret symlinks are supported. Keep the existing key during upgrades;
+changing it does not re-encrypt an existing database. With no configured key,
+development SQLite remains unencrypted and requires external storage protection
+before production use.
 | `grafana-password` | Grafana | Dashboard login | Requires Grafana restart |
 
 #### Admin database at-rest encryption — SQLite vs PostgreSQL

@@ -58,20 +58,33 @@ class ToolPolicyScanner(OutputScanner):
         This scanner expects tool_calls data in context.metadata["tool_calls"].
         If no tool calls are present, it returns ALLOW.
         """
-        if not self._policy_engine:
-            return GuardrailResult(verdict=Verdict.ALLOW)
-
         tool_calls_raw = context.metadata.get("tool_calls", [])
         if not tool_calls_raw:
             return GuardrailResult(verdict=Verdict.ALLOW)
+        if not self._policy_engine or not isinstance(tool_calls_raw, list) or len(tool_calls_raw) > 128:
+            return GuardrailResult(verdict=Verdict.BLOCK)
 
         # Parse tool calls
+        def unique_keys(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("Duplicate tool argument key")
+                result[key] = value
+            return result
+
         tool_calls = []
         for tc in tool_calls_raw:
             try:
-                args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                args = {}
+                raw = tc.get("function", {}).get("arguments", "{}")
+                if not isinstance(raw, str) or len(raw) > 1024 * 1024 or len(raw.encode()) > 1024 * 1024:
+                    return GuardrailResult(verdict=Verdict.BLOCK)
+                args = json.loads(raw, object_pairs_hook=unique_keys)
+                if not isinstance(args, dict):
+                    return GuardrailResult(verdict=Verdict.BLOCK)
+                json.dumps(args, allow_nan=False)
+            except (ValueError, TypeError, AttributeError, RecursionError):
+                return GuardrailResult(verdict=Verdict.BLOCK)
             tool_calls.append(
                 ToolCall(
                     id=tc.get("id"),

@@ -16,6 +16,9 @@ import unicodedata
 from dataclasses import dataclass, field
 
 from src.guardrails import schema_validation
+from src.guardrails.attachments import AttachmentPolicy
+from src.guardrails.backend_egress import BackendEgressPolicy
+from src.guardrails.input_dlp import InputDlpPolicy
 from src.models import GuardrailResult, SecurityEvent, ThreatCategory, ToolCall, Verdict
 
 # Self-protection: paths that tool calls must NEVER modify
@@ -299,7 +302,7 @@ class AgentPolicy:
 
     tenant_id: str
     agent_id: str
-    allowed_tools: list[str] = field(default_factory=list)  # empty = all allowed
+    allowed_tools: list[str] = field(default_factory=list)  # empty denies all in strict mode
     denied_tools: list[str] = field(default_factory=list)
     tool_policies: dict[str, ToolPolicy] = field(default_factory=dict)
     max_tool_calls_per_request: int = 20
@@ -324,6 +327,9 @@ class AgentPolicy:
     # allowed). Supported keys: allow_images (bool) | max_image_size_mb (int) |
     # ocr_scan (bool) | nsfw_detection (bool).
     multimodal: dict = field(default_factory=dict)
+    input_dlp: InputDlpPolicy = field(default_factory=InputDlpPolicy)
+    backend_egress: BackendEgressPolicy = field(default_factory=BackendEgressPolicy)
+    attachments: AttachmentPolicy = field(default_factory=AttachmentPolicy)
 
 
 class ToolPolicyEngine:
@@ -375,7 +381,7 @@ class ToolPolicyEngine:
             )
 
         # Check allowlist (if defined, only listed tools are allowed)
-        if policy.allowed_tools and tool_call.name not in {
+        if (policy.allowed_tools or policy.sandbox_level == "strict") and tool_call.name not in {
             _normalize_tool_name(t) for t in policy.allowed_tools
         }:
             events.append(
@@ -408,7 +414,7 @@ class ToolPolicyEngine:
                     tool_name=tool_call.name,
                 )
             )
-            return GuardrailResult(verdict=Verdict.BLOCK, events=events)
+            return GuardrailResult(verdict=Verdict.BLOCK, events=events, blocked_tools=[tool_call.name])
 
         # Check command execution permission
         if tool_call.name in _EXECUTION_TOOLS:

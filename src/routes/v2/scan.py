@@ -317,7 +317,8 @@ async def _emit_scan_events(
             confidence=1.0,
             event_id=event.event_id,
         )
-        queue.enqueue_nowait(telemetry_event)
+        if not await queue.enqueue(telemetry_event):
+            await logger.awarn("security_event_delivery_rejected", event_id=event.event_id)
 
     # Fire notifications for high/critical findings
     engine = get_notification_engine()

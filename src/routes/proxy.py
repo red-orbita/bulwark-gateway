@@ -20,17 +20,23 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import socket
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import anyio
 import httpx
 import structlog
 from cachetools import TTLCache
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
+from starlette.requests import ClientDisconnect
 
 from src.config import settings
 from src.correlation.event_tap import get_event_tap
@@ -211,6 +217,12 @@ _DNS_CACHE: TTLCache = TTLCache(maxsize=256, ttl=5.0)
 # H-04 fix: Maximum size for accumulated tool call arguments in streaming responses.
 # Prevents memory exhaustion from malicious/compromised backends streaming infinite data.
 _MAX_TOOL_ARGS_BYTES = int(os.environ.get("BULWARK_MAX_TOOL_ARGS_BYTES", str(1024 * 1024)))  # 1MB default
+_MAX_STREAM_DURATION_SECONDS = 300
+_MAX_STREAM_BYTES = 50 * 1024 * 1024
+_MAX_JSON_RESPONSE_BYTES = 10 * 1024 * 1024
+_MAX_JSON_RESPONSE_SECONDS = 120.0
+_MAX_SSE_LINE_BYTES = 2 * _MAX_TOOL_ARGS_BYTES + 65536
+_TOKEN_REVALIDATION_INTERVAL = 30
 
 # SECURITY FIX (H-05): Per-tenant stream limit to prevent one tenant from
 # exhausting all concurrent streaming slots and blocking other tenants.
@@ -234,6 +246,30 @@ _STREAM_KEY_PREFIX = "bulwark:streams"
 _STREAM_KEY_GLOBAL = f"{_STREAM_KEY_PREFIX}:global"
 _STREAM_KEY_TENANT_PREFIX = f"{_STREAM_KEY_PREFIX}:tenant"
 _STREAM_TTL = 300  # Safety-net TTL (seconds) — auto-expire if decrement is lost
+
+# Separate, cluster-slot-compatible namespace: never reinterpret old integer counters.
+_STREAM_LEASE_GLOBAL = "bulwark:{stream-leases}:global"
+_STREAM_LEASE_TENANT = "bulwark:{stream-leases}:tenant"
+_STREAM_CLEANUP_SECONDS = 5
+_STREAM_LEASE_MARGIN_SECONDS = 30
+_STREAM_LEASE_ACQUIRE = """
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) + tonumber(clock[2]) / 1000000
+for _, key in ipairs(KEYS) do
+  redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+end
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[2]) then return 429 end
+if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[3]) then return 503 end
+for _, key in ipairs(KEYS) do
+  redis.call('ZADD', key, now + tonumber(ARGV[4]), ARGV[1])
+  redis.call('EXPIRE', key, math.ceil(tonumber(ARGV[4])))
+end
+return 200
+"""
+_STREAM_LEASE_RELEASE = """
+for _, key in ipairs(KEYS) do redis.call('ZREM', key, ARGV[1]) end
+return 1
+"""
 
 
 def _check_json_depth(obj, max_depth: int = 50, current: int = 0):
@@ -503,6 +539,9 @@ async def chat_completions(request: Request):
     # RequestIDMiddleware set it on request.state (honouring an inbound
     # X-Request-ID); fall back to a fresh id for direct/test invocations.
     request_id = getattr(request.state, "request_id", None) or uuid4().hex
+    # External tracing IDs may contain client-supplied data. Admission evidence
+    # uses a separate internal identifier, stable across this request's attempts.
+    admission_id = uuid4().hex if settings.audit_admission_required else ""
     _request_id.set(request_id)
     source_ip = request.client.host if request.client else None
 
@@ -512,6 +551,9 @@ async def chat_completions(request: Request):
     # Now we read the raw body with an explicit size cap.
     MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB
     content_length = request.headers.get("content-length")
+    if content_length and (not content_length.isascii() or not content_length.isdecimal()
+                           or len(content_length) > 20):
+        raise HTTPException(status_code=400, detail="Invalid Content-Length")
     if content_length and int(content_length) > MAX_BODY_SIZE:
         return JSONResponse(
             status_code=413,
@@ -524,18 +566,14 @@ async def chat_completions(request: Request):
                 },
         )
     try:
-        raw_body = await request.body()
-        if len(raw_body) > MAX_BODY_SIZE:
-            return JSONResponse(
-                status_code=413,
-            content={
-                "error": {
+        raw_body = bytearray()
+        async for body_chunk in request.stream():
+            if len(raw_body) + len(body_chunk) > MAX_BODY_SIZE:
+                return JSONResponse(status_code=413, content={"error": {
                     "message": "Request body too large (max 10MB)",
-                    "type": "validation_error",
-                    "code": "body_too_large",
-                }
-            },
-            )
+                    "type": "validation_error", "code": "body_too_large",
+                }})
+            raw_body.extend(body_chunk)
         # SECURITY FIX (H-06): Use object_pairs_hook to detect and reject
         # duplicate JSON keys. Duplicate keys create parser differentials
         # between the proxy (last-wins) and backends (first-wins or error),
@@ -572,6 +610,13 @@ async def chat_completions(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid request body") from exc
 
+    if (not isinstance(body, dict) or not isinstance(body.get("messages"), list)
+            or not all(isinstance(message, dict) for message in body["messages"])):
+        raise HTTPException(status_code=400, detail="Invalid chat request")
+
+    from src.routes.attachments import resolve_chat_attachments
+    body = await resolve_chat_attachments(body, request)
+
     # SECURITY FIX (P6-02): Strip null bytes and C0 control characters from all message content.
     # JSON \u0000 is valid but breaks regex word boundaries (\b): "ig\x00nore" doesn't match \bignore\b.
     # LLM backends strip nulls during tokenization, so the model sees the full injection.
@@ -589,9 +634,99 @@ async def chat_completions(request: Request):
 
     messages = body.get("messages", [])
 
+    # Resolve operator policy with authenticated identity, never request-body IDs.
+    # Keep this snapshot for all input checks in this request.
+    _in_policy = _get_agent_policy(request, tenant_id, agent_id)
+    from src.guardrails.input_dlp import InputDlpPolicy, inspect_request
+    _dlp_policy = _in_policy.input_dlp if _in_policy is not None else InputDlpPolicy()
+    from src.guardrails.attachments import AttachmentPolicy, inspect_chat_attachments
+    attachment_policy = _in_policy.attachments if _in_policy is not None else AttachmentPolicy()
+    if settings.attachment_guard_enabled or attachment_policy.enabled:
+        global_attachments = AttachmentPolicy(
+            enabled=True, max_file_bytes=settings.attachment_max_file_bytes,
+            max_total_bytes=settings.attachment_max_total_bytes, max_attachments=settings.attachment_max_count,
+            extract_documents=settings.attachment_extract_documents,
+            max_document_bytes=settings.attachment_max_document_bytes,
+        )
+        if settings.attachment_guard_enabled:
+            attachment_policy = AttachmentPolicy(
+                enabled=True,
+                max_file_bytes=min(global_attachments.max_file_bytes, attachment_policy.max_file_bytes)
+                if attachment_policy.enabled else global_attachments.max_file_bytes,
+                max_total_bytes=min(global_attachments.max_total_bytes, attachment_policy.max_total_bytes)
+                if attachment_policy.enabled else global_attachments.max_total_bytes,
+                max_attachments=min(global_attachments.max_attachments, attachment_policy.max_attachments)
+                if attachment_policy.enabled else global_attachments.max_attachments,
+                extract_documents=global_attachments.extract_documents and (
+                    attachment_policy.extract_documents if attachment_policy.enabled else True
+                ),
+                max_document_bytes=min(global_attachments.max_document_bytes, attachment_policy.max_document_bytes)
+                if attachment_policy.enabled else global_attachments.max_document_bytes,
+            )
+        attachment_dlp_budget = settings.input_dlp_max_bytes if settings.input_dlp_enabled else 65536
+        if _dlp_policy.enabled:
+            attachment_dlp_budget = min(attachment_dlp_budget, _dlp_policy.max_bytes)
+        attachment_result = await inspect_chat_attachments(
+            body, tenant_id, agent_id, request_id, policy=attachment_policy, input_guardrail=input_guardrail,
+            dlp_options=InputDlpPolicy(
+                enabled=True, max_bytes=attachment_dlp_budget,
+                redact_email=settings.redact_email or (_dlp_policy.enabled and _dlp_policy.redact_email),
+                redact_phone=settings.redact_phone or (_dlp_policy.enabled and _dlp_policy.redact_phone),
+                blocked_terms=_dlp_policy.blocked_terms if _dlp_policy.enabled else (),
+            ),
+            extraction_work_dir=settings.attachment_extraction_work_dir,
+            extraction_languages=settings.attachment_extraction_languages,
+            parser_isolation_confirmed=settings.attachment_parser_isolation_confirmed,
+        )
+        if attachment_result.guardrail_result.events:
+            await _log_events(attachment_result.guardrail_result.events, source_ip)
+        if attachment_result.guardrail_result.verdict == Verdict.BLOCK:
+            failure = next((event.metadata.get("extraction_reason") for event in reversed(
+                attachment_result.guardrail_result.events
+            ) if event.metadata.get("reason") == "inspection_unavailable"), None)
+            if attachment_policy.extract_documents and failure is not None:
+                status = 503 if failure in ("unavailable", "busy", "timeout", "extraction_failed") else 422
+                _counters.record_error()
+                return JSONResponse(status_code=status, content={"error": {
+                    "message": "Document could not be completely processed; provide readable text or request review",
+                    "type": "document_processing_error", "code": "attachment_processing_failed",
+                    "reason": failure,
+                }})
+            _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+            _record_tenant_usage(tenant_id, "block")
+            return JSONResponse(status_code=403, content={"error": {
+                "message": "Attachment rejected by security policy",
+                "type": "security_violation", "code": "attachment_blocked",
+            }})
+        if attachment_result.sanitized_body is not None:
+            body = attachment_result.sanitized_body
+            messages = body["messages"]
+    if settings.input_dlp_enabled or _dlp_policy.enabled:
+        dlp_budget = settings.input_dlp_max_bytes
+        if _dlp_policy.enabled:
+            dlp_budget = min(dlp_budget, _dlp_policy.max_bytes) if settings.input_dlp_enabled else _dlp_policy.max_bytes
+        dlp_result = inspect_request(
+            body, tenant_id, agent_id, request_id,
+            max_bytes=dlp_budget,
+            redact_email=settings.redact_email or (_dlp_policy.enabled and _dlp_policy.redact_email),
+            redact_phone=settings.redact_phone or (_dlp_policy.enabled and _dlp_policy.redact_phone),
+            blocked_terms=_dlp_policy.blocked_terms if _dlp_policy.enabled else (),
+        )
+        if dlp_result.verdict == Verdict.BLOCK:
+            await _log_events(dlp_result.events, source_ip)
+            _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+            _record_tenant_usage(tenant_id, "block")
+            return JSONResponse(status_code=403, content={"error": {
+                "message": "Request blocked by security policy",
+                "type": "security_violation", "code": "security_block",
+            }})
+
     # === PHASE 1: Input Guardrail ===
     # Use scanner pipeline if available, otherwise fall back to direct call
     _pipeline = get_scanner_pipeline()
+    scan_content = " ".join(
+        _content_to_text(msg.get("content")) for msg in messages if msg.get("content")
+    )
     if _pipeline.input_blocking_count > 0 and settings.scanners_pipeline_enabled:
         _scan_ctx = ScanContext(
             tenant_id=tenant_id,
@@ -605,7 +740,7 @@ async def chat_completions(request: Request):
         # guardrail only scans prose; without this the tool array reaches the
         # backend unscanned. Absent/empty ⇒ the scanner is a zero-cost ALLOW.
         _tool_defs = body.get("tools")
-        if isinstance(_tool_defs, list) and _tool_defs:
+        if "tools" in body:
             _scan_ctx.metadata["tool_definitions"] = _tool_defs
         # Pre-extract structured vision-API image payloads (data URIs + remote
         # URLs) so the multimodal scanners read them from metadata instead of
@@ -619,29 +754,46 @@ async def chat_completions(request: Request):
         # scan context so the LanguageDetector / ImageHygiene / Vision scanners can
         # enforce per-agent `allowed_languages` / `multimodal` settings. Without this
         # the scanners' enforcement branches never receive policy data and fail open.
-        _in_policy = _get_agent_policy(request, tenant_id, agent_id)
         if _in_policy is not None:
             if _in_policy.allowed_languages:
                 _scan_ctx.metadata["allowed_languages"] = _in_policy.allowed_languages
                 _scan_ctx.metadata["block_unknown_language"] = _in_policy.block_unknown_language
             if _in_policy.multimodal:
                 _scan_ctx.metadata["multimodal"] = _in_policy.multimodal
-        # SECURITY FIX (M-08): Scan ALL role messages, not just 'user'.
-        # System/tool messages can contain attacker-controlled content that bypasses scanning.
-        # Join all message content for cross-message pattern detection.
-        all_content = " ".join(
-            _content_to_text(msg.get("content")) for msg in messages if msg.get("content")
-        )
-        # Also scan user messages individually for single-message attacks
-        user_messages = [
-            _content_to_text(msg.get("content")) for msg in messages if msg.get("role") == "user" and msg.get("content")
-        ]
-        user_content = " ".join(user_messages)
-        # Use the broader scan (all content) for guardrail evaluation
-        scan_content = all_content if all_content else user_content
         input_result = await _pipeline.run_input_blocking(scan_content, _scan_ctx)
     else:
         input_result = input_guardrail.inspect_messages(messages, tenant_id, agent_id)
+
+    if input_result.verdict == Verdict.REDACT:
+        # A flattened replacement cannot safely reconstruct multiple message roles.
+        # Keep at most two slots: two already means the replacement is ambiguous.
+        text_slots = []
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, str) and content:
+                text_slots.append((msg, "content"))
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"]:
+                        text_slots.append((part, "text"))
+                        if len(text_slots) > 1:
+                            break
+            if len(text_slots) > 1:
+                break
+        if input_result.modified_content is None or len(text_slots) != 1:
+            input_result = GuardrailResult(verdict=Verdict.BLOCK, events=[
+                *input_result.events,
+                SecurityEvent(
+                    tenant_id=tenant_id, agent_id=agent_id, request_id=request_id,
+                    verdict=Verdict.BLOCK, category=ThreatCategory.POLICY_VIOLATION,
+                    description="Input redaction cannot preserve message boundaries",
+                    source="input_redaction", severity="high",
+                ),
+            ])
+        else:
+            target, field = text_slots[0]
+            target[field] = input_result.modified_content
+            await _log_events(input_result.events, source_ip)
 
     if input_result.verdict == Verdict.BLOCK:
         await _log_events(input_result.events, source_ip)
@@ -867,6 +1019,20 @@ async def chat_completions(request: Request):
     backends_to_try = [backend] + backend.fallback_backends
 
     for attempt_idx, current_backend in enumerate(backends_to_try):
+        backend_url = f"{current_backend.backend_url.rstrip('/')}{current_backend.path_prefix}/chat/completions"
+        if _in_policy is not None and not _in_policy.backend_egress.permits(backend_url):
+            await _log_events([SecurityEvent(
+                tenant_id=tenant_id, agent_id=agent_id, request_id=request_id,
+                verdict=Verdict.BLOCK, category=ThreatCategory.POLICY_VIOLATION,
+                description="Backend destination denied by agent egress policy",
+                source="backend_egress", severity="high",
+            )], source_ip)
+            _counters.record("block", (time.perf_counter() - _req_start) * 1000)
+            _record_tenant_usage(tenant_id, "block")
+            return JSONResponse(status_code=403, content={"error": {
+                "message": "Request blocked by security policy",
+                "type": "security_violation", "code": "security_block",
+            }})
         try:
             # SECURITY FIX (H-05): Use shared client with connection pool
             # instead of creating a new client per request (FD exhaustion)
@@ -902,8 +1068,6 @@ async def chat_completions(request: Request):
                 )
             backend_headers.update(auth_headers)
 
-            backend_url = f"{current_backend.backend_url.rstrip('/')}{current_backend.path_prefix}/chat/completions"
-
             # SECURITY FIX (VULN 1.2): ALWAYS perform SSRF check at request-time,
             # even for operator-configured backends. DNS rebinding can cause a
             # previously-valid hostname to resolve to dangerous IPs (169.254.169.254,
@@ -924,6 +1088,22 @@ async def chat_completions(request: Request):
             },
                 )
 
+            if settings.audit_admission_required:
+                from src.telemetry.admission import admit_before_upstream
+                admission_failure = await admit_before_upstream(
+                    required=True,
+                    exporter=getattr(request.app.state, "telemetry_exporter", None),
+                    authenticated=bool(subject_id), tenant_id=tenant_id, agent_id=agent_id,
+                    request_id=admission_id, timeout_ms=settings.audit_admission_timeout_ms,
+                )
+                if admission_failure is not None:
+                    await logger.awarn("upstream_audit_admission_denied", reason=admission_failure)
+                    _counters.record_error()
+                    return JSONResponse(status_code=503, content={"error": {
+                        "message": "Required audit evidence unavailable",
+                        "type": "service_unavailable", "code": "audit_admission_failed",
+                    }})
+
             if is_streaming:
                 # SECURITY FIX (H-05): Per-tenant stream limit enforcement.
                 # Check both global capacity and per-tenant limit.
@@ -939,103 +1119,96 @@ async def chat_completions(request: Request):
                         },
                     )
 
-                # P8-01 fix: Use Redis for distributed stream counting across workers.
-                # Falls back to in-memory if Redis is unavailable.
                 r = _get_stream_redis()
                 use_redis = r is not None
-                tenant_stream_key = f"{_STREAM_KEY_TENANT_PREFIX}:{tenant_id}"
+                tenant_stream_key = f"{_STREAM_LEASE_TENANT}:{safe_key_segment(tenant_id)}"
+                lease = uuid4().hex
+                deadline = time.monotonic() + _MAX_STREAM_DURATION_SECONDS
 
-                if use_redis:
-                    try:
-                        # Atomic check-and-increment for per-tenant limit
-                        current_tenant = r.incr(tenant_stream_key)
-                        r.expire(tenant_stream_key, _STREAM_TTL)
-                        if current_tenant > _MAX_STREAMS_PER_TENANT:
-                            r.decr(tenant_stream_key)
-                            return JSONResponse(
-                                status_code=429,
-                                content={
-                                    "error": {
-                                        "message": _TENANT_STREAM_LIMIT_MSG,
-                                        "type": "rate_limit",
-                                        "code": "tenant_stream_limit",
-                                    }
-                                },
-                            )
-                        # Global distributed check
-                        current_global = r.incr(_STREAM_KEY_GLOBAL)
-                        r.expire(_STREAM_KEY_GLOBAL, _STREAM_TTL)
-                        if current_global > _MAX_CONCURRENT_STREAMS:
-                            r.decr(_STREAM_KEY_GLOBAL)
-                            r.decr(tenant_stream_key)
-                            return JSONResponse(
-                                status_code=503,
-                        content={
-                            "error": {
-                                "message": "Too many concurrent streaming connections",
-                                "type": "capacity_error",
-                                "code": "stream_limit",
-                            }
-                        },
-                            )
-                    except Exception:
-                        # Redis failed mid-operation — fall back to in-memory
-                        use_redis = False
-                        r = None
+                if not use_redis and settings.redis_url:
+                    return JSONResponse(status_code=503, content={"error": {
+                        "message": "Stream capacity unavailable", "code": "stream_capacity_unavailable",
+                    }})
 
-                if not use_redis:
-                    # In-memory fallback (per-process only — best effort)
-                    async with _tenant_stream_lock:
-                        current_count = _tenant_stream_counts.get(tenant_id, 0)
-                        if current_count >= _MAX_STREAMS_PER_TENANT:
-                            return JSONResponse(
-                                status_code=429,
-                                content={
-                                    "error": {
-                                        "message": _TENANT_STREAM_LIMIT_MSG,
-                                        "type": "rate_limit",
-                                        "code": "tenant_stream_limit",
-                                    }
-                                },
-                            )
-                        _tenant_stream_counts[tenant_id] = current_count + 1
+                slot = {"acquired": False, "released": False, "reserved": False}
 
+                async def release_capacity(
+                    slot=slot, use_redis=use_redis, r=r, tenant_stream_key=tenant_stream_key, lease=lease,
+                ):
+                    with anyio.CancelScope(shield=True):
+                        if slot["released"]:
+                            return
+                        slot["released"] = True
+                        if slot["acquired"]:
+                            _stream_semaphore.release()
+                        if use_redis and slot["reserved"]:
+                            try:
+                                await _drain_stream_redis_call(
+                                    r.eval, _STREAM_LEASE_RELEASE, 2, tenant_stream_key, _STREAM_LEASE_GLOBAL, lease,
+                                )
+                            except Exception:
+                                logger.warning("stream_lease_release_failed")
+                        elif slot["reserved"]:
+                            async with _tenant_stream_lock:
+                                _tenant_stream_counts[tenant_id] = _tenant_stream_counts.get(tenant_id, 1) - 1
+                                if _tenant_stream_counts[tenant_id] <= 0:
+                                    del _tenant_stream_counts[tenant_id]
+
+                transferred = False
                 try:
-                    async with _stream_semaphore:
-                        # Streaming path: forward SSE with chunk-level guardrails
-                        policy_engine = request.app.state.policy_loader.engine
-                        # SECURITY FIX (RC-07): Pass token jti for periodic re-validation
-                        token_jti = getattr(request.state, "token_jti", None)
-                        return await _handle_streaming(
-                            client,
-                            backend_url,
-                            body,
-                            backend_headers,
-                            tenant_id,
-                            agent_id,
-                            source_ip,
-                            ioc_manager,
-                            policy_engine,
-                            token_jti=token_jti,
-                            request_id=request_id,
-                        )
-                finally:
                     if use_redis:
+                        # Own even an uncertain reservation before submitting the
+                        # worker: a cancelled or failed call may still commit Lua.
+                        slot["reserved"] = True
                         try:
-                            r.decr(tenant_stream_key)
-                            r.decr(_STREAM_KEY_GLOBAL)
-                        except Exception:  # noqa: S110 — best-effort stream-counter decrement; Redis TTL reclaims it
-                            pass  # Best effort — TTL will clean up
+                            admission = await _drain_stream_redis_call(
+                                r.eval, _STREAM_LEASE_ACQUIRE, 2, tenant_stream_key, _STREAM_LEASE_GLOBAL,
+                                lease, _MAX_STREAMS_PER_TENANT, _MAX_CONCURRENT_STREAMS,
+                                _MAX_STREAM_DURATION_SECONDS + _STREAM_LEASE_MARGIN_SECONDS,
+                            )
+                            if admission in (429, 503):
+                                slot["reserved"] = False  # Atomic script explicitly refused admission.
+                        except Exception:
+                            logger.warning("stream_lease_admission_failed")
+                            admission = 503
+                        if admission != 200:
+                            return JSONResponse(status_code=429 if admission == 429 else 503, content={"error": {
+                                "message": "Stream capacity unavailable", "code": "stream_limit",
+                            }})
                     else:
+                        # In-memory fallback (per-process only — best effort)
                         async with _tenant_stream_lock:
-                            _tenant_stream_counts[tenant_id] = _tenant_stream_counts.get(tenant_id, 1) - 1
-                            if _tenant_stream_counts[tenant_id] <= 0:
-                                del _tenant_stream_counts[tenant_id]
+                            current_count = _tenant_stream_counts.get(tenant_id, 0)
+                            if current_count >= _MAX_STREAMS_PER_TENANT:
+                                return JSONResponse(status_code=429, content={"error": {
+                                    "message": _TENANT_STREAM_LIMIT_MSG,
+                                    "type": "rate_limit", "code": "tenant_stream_limit",
+                                }})
+                            _tenant_stream_counts[tenant_id] = current_count + 1
+                            slot["reserved"] = True
+                    with anyio.fail_after(max(0, deadline - time.monotonic())):
+                        await _stream_semaphore.acquire()
+                        slot["acquired"] = True
+                        response = await _handle_streaming(
+                            client, backend_url, body, backend_headers, tenant_id, agent_id,
+                            source_ip, ioc_manager, request.app.state.policy_loader.engine,
+                            token_jti=getattr(request.state, "token_jti", None), request_id=request_id,
+                        )
+                    if isinstance(response, StreamingResponse):
+                        response = _CapacityStreamingResponse(
+                            response.body_iterator, release_capacity=release_capacity,
+                            status_code=response.status_code, headers=dict(response.headers),
+                            media_type=response.media_type, background=response.background,
+                            deadline=deadline,
+                        )
+                        transferred = True
+                    return response
+                finally:
+                    if not transferred:
+                        await release_capacity()
 
-            resp = await client.post(
-                backend_url,
-                json=body,
-                headers=backend_headers,
+            resp = await _post_bounded_json(
+                client, backend_url, body, backend_headers, timeout=current_backend.timeout,
             )
 
             # If we got a server error (5xx) and have fallbacks, try next
@@ -1090,7 +1263,43 @@ async def chat_completions(request: Request):
         )
 
     try:
-        response_data = resp.json()
+        response_data = json.loads(resp.content, object_pairs_hook=_unique_json_keys)
+        _check_json_depth(response_data, max_depth=32)
+        if not isinstance(response_data, dict):
+            raise ValueError("Invalid response envelope")
+        if "model" in response_data and (
+            not isinstance(response_data["model"], str) or len(response_data["model"]) > 256
+        ):
+            raise ValueError("Invalid response model")
+        choices = response_data.get("choices", [])
+        if not isinstance(choices, list) or len(choices) > 128 or any(
+            not isinstance(choice, dict) or not isinstance(choice.get("message", {}), dict)
+            for choice in choices
+        ):
+            raise ValueError("Invalid choices")
+        for choice in choices:
+            message = choice.get("message", {})
+            if message.get("content") is not None and not isinstance(message["content"], str):
+                raise ValueError("Unsupported message content")
+            tools = message.get("tool_calls", [])
+            if not isinstance(tools, list) or len(tools) > 128:
+                raise ValueError("Invalid tool calls")
+            for tool in tools:
+                if not isinstance(tool, dict) or not isinstance(tool.get("function"), dict):
+                    raise ValueError("Invalid tool function")
+                function = tool["function"]
+                if (not isinstance(function.get("name"), str) or not 1 <= len(function["name"]) <= 256
+                        or not isinstance(function.get("arguments"), str)
+                        or (tool.get("id") is not None and (
+                            not isinstance(tool["id"], str) or len(tool["id"]) > 256))):
+                    raise ValueError("Invalid tool fields")
+        usage = response_data.get("usage")
+        if usage is not None:
+            if not isinstance(usage, dict):
+                raise ValueError("Invalid usage")
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                if key in usage and (type(usage[key]) is not int or not 0 <= usage[key] <= 2**63 - 1):
+                    raise ValueError("Invalid token counts")
     except Exception:
         return JSONResponse(status_code=502, content={"error": "Backend returned invalid JSON"})
 
@@ -1100,6 +1309,11 @@ async def chat_completions(request: Request):
 
     for choice in choices:
         message = choice.get("message", {})
+        if "function_call" in message:
+            return JSONResponse(status_code=403, content={"error": {
+                "message": "Unsupported legacy function call blocked",
+                "type": "security_violation", "code": "security_block",
+            }})
         tool_calls_raw = message.get("tool_calls", [])
 
         if tool_calls_raw:
@@ -1109,7 +1323,9 @@ async def chat_completions(request: Request):
                 tc_name = tc.get("function", {}).get("name", "")
                 try:
                     args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                except (json.JSONDecodeError, TypeError):
+                    if not isinstance(args, dict):
+                        raise ValueError("Tool arguments must be an object")
+                except (ValueError, TypeError):
                     # SECURITY FIX (PENTEST-DEEP CRIT-4): Fail-closed on malformed
                     # tool arguments. An adversary can embed blocked argument patterns
                     # in deliberately broken JSON to bypass denied_arguments checks.
@@ -1189,6 +1405,27 @@ async def chat_completions(request: Request):
     _output_events_corr: list[SecurityEvent] = []
     for choice in choices:
         message = choice.get("message", {})
+        # Tool arguments are an executable egress channel. Reject rather than
+        # mutate them and accidentally invoke defaults or invalidate authorization.
+        retained_tools = []
+        for tc in message.get("tool_calls", []):
+            if _checked_tool_arguments(
+                tc.get("function", {}).get("arguments", ""), tenant_id, agent_id, ioc_manager,
+            ) is None:
+                await _log_events([SecurityEvent(
+                    tenant_id=tenant_id, agent_id=agent_id, request_id=request_id,
+                    verdict=Verdict.BLOCK, category=ThreatCategory.POLICY_VIOLATION,
+                    description="Tool arguments blocked by security policy",
+                    source="tool_argument_egress", severity="high",
+                )], source_ip)
+            else:
+                retained_tools.append(tc)
+        if "tool_calls" in message:
+            if retained_tools:
+                message["tool_calls"] = retained_tools
+            else:
+                message.pop("tool_calls", None)
+                choice["finish_reason"] = "stop"
         for tc in message.get("tool_calls", []):
             args_raw = tc.get("function", {}).get("arguments", "")
             if args_raw:
@@ -1229,7 +1466,7 @@ async def chat_completions(request: Request):
             else:
                 filter_result = output_filter.inspect_and_redact(content, tenant_id, agent_id)
 
-            if filter_result.verdict == Verdict.REDACT and filter_result.modified_content:
+            if filter_result.verdict == Verdict.REDACT and filter_result.modified_content is not None:
                 message["content"] = filter_result.modified_content
                 _output_events_corr.extend(filter_result.events)
                 await _log_events(filter_result.events, source_ip)
@@ -1435,6 +1672,48 @@ async def chat_completions(request: Request):
     return JSONResponse(content=response_data)
 
 
+async def _post_bounded_json(
+    client: httpx.AsyncClient, url: str, body: dict, headers: dict, *, timeout: float,
+) -> httpx.Response:
+    """Consume the response incrementally, not HTTPX's unbounded convenience POST.
+
+    A total-body deadline is separate from HTTPX's inactivity timeout. Exceeded
+    limits do not retry upstream: it may already have performed side effects.
+    """
+    try:
+        with anyio.fail_after(min(timeout, _MAX_JSON_RESPONSE_SECONDS)):
+            request_headers = {**headers, "Accept-Encoding": "identity"}
+            async with client.stream("POST", url, json=body, headers=request_headers) as resp:
+                if resp.status_code != 200:
+                    return httpx.Response(resp.status_code)  # Never consume discarded error bodies.
+                if resp.headers.get("content-encoding", "identity").lower() != "identity":
+                    raise HTTPException(502, "Compressed backend response is unsupported")
+                length = resp.headers.get("content-length")
+                if length is not None and (
+                    not length.isascii() or not length.isdecimal() or len(length) > 20
+                    or int(length) > _MAX_JSON_RESPONSE_BYTES
+                ):
+                    raise HTTPException(502, "Invalid or oversized backend response")
+                raw = bytearray()
+                try:
+                    async for chunk in resp.aiter_raw():
+                        if len(raw) + len(chunk) > _MAX_JSON_RESPONSE_BYTES:
+                            raise HTTPException(502, "Backend response exceeds inspection budget")
+                        raw.extend(chunk)
+                        await asyncio.sleep(0)
+                except httpx.TimeoutException:
+                    # The backend already accepted this POST. Never replay it to
+                    # a fallback just because the response could not be completed.
+                    raise HTTPException(504, "Backend response read timed out") from None
+                if length is not None and len(raw) != int(length):
+                    raise HTTPException(502, "Incomplete backend response")
+                return httpx.Response(200, content=bytes(raw))
+    except TimeoutError:
+        raise HTTPException(504, "Backend response deadline exceeded") from None
+    except httpx.RemoteProtocolError:
+        raise HTTPException(502, "Incomplete backend response") from None
+
+
 @router.post("/tool/validate")
 async def validate_tool_call(request: Request):
     """
@@ -1447,18 +1726,39 @@ async def validate_tool_call(request: Request):
     request_id = getattr(request.state, "request_id", None) or uuid4().hex
     _request_id.set(request_id)
 
-    body = await request.json()
-    tool_call = ToolCall(
-        id=body.get("id"),
-        name=body.get("name", ""),
-        arguments=body.get("arguments", {}),
-    )
+    # Sidecar requests do not necessarily pass a configured tenant quota reader.
+    # Bound receipt here before parsing, including absent/forged Content-Length.
+    raw = bytearray()
+    try:
+        async with asyncio.timeout(10):
+            async for chunk in request.stream():
+                if len(raw) + len(chunk) > 65536:
+                    raise HTTPException(413, "Tool validation body too large")
+                raw.extend(chunk)
+                await asyncio.sleep(0)
+    except TimeoutError:
+        raise HTTPException(408, "Tool validation upload timeout") from None
+    except ClientDisconnect:
+        raise HTTPException(400, "Incomplete tool validation body") from None
+    try:
+        body = json.loads(raw, object_pairs_hook=_unique_json_keys)
+        _check_json_depth(body, max_depth=32)
+        tool_call = ToolCall.model_validate(body, strict=True)
+        if not tool_call.name.strip():
+            raise ValueError("Empty tool name")
+        args_str = json.dumps(tool_call.arguments, ensure_ascii=False, allow_nan=False)
+    except (ValueError, TypeError, RecursionError, ValidationError):
+        raise HTTPException(400, "Invalid tool validation request") from None
+
+    # Never authorize a large object using only the guardrail's scanned prefix.
+    scan_limit = min(16384, input_guardrail.max_scan_bytes, input_guardrail.max_input_size)
+    if len(args_str.encode("utf-8")) > scan_limit:
+        raise HTTPException(413, "Tool arguments exceed complete inspection budget")
 
     policy_engine = request.app.state.policy_loader.engine
     result = policy_engine.evaluate_tool_call(tool_call, tenant_id, agent_id)
 
     # Also run input guardrail on arguments
-    args_str = json.dumps(tool_call.arguments)
     input_result = input_guardrail.inspect(args_str, tenant_id, agent_id)
 
     if input_result.verdict == Verdict.BLOCK:
@@ -1479,6 +1779,155 @@ async def validate_tool_call(request: Request):
         "blocked_tools": result.blocked_tools,
         "events": [e.model_dump(mode="json") for e in result.events] if result.events else [],
     }
+
+
+async def _drain_stream_redis_call(call: Callable, *args):
+    """Finish a bounded Redis call before propagating even repeated Task.cancel()."""
+    cancelled = False
+    with anyio.CancelScope(shield=True):
+        worker = asyncio.create_task(asyncio.to_thread(call, *args))
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception:
+                break  # Retrieve the worker exception below, never orphan it.
+        if cancelled:
+            try:
+                worker.result()
+            except Exception:
+                logger.warning("cancelled_stream_redis_call_failed")
+            raise asyncio.CancelledError
+        return worker.result()
+
+
+class _CapacityStreamingResponse(StreamingResponse):
+    """Keep admission slots until send completion, disconnect, or cancellation."""
+
+    def __init__(self, *args, release_capacity: Callable[[], Awaitable[None]], deadline: float, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._release_capacity = release_capacity
+        self._deadline = deadline
+
+    async def __call__(self, scope, receive, send):
+        try:
+            with anyio.fail_after(max(0, self._deadline - time.monotonic())):
+                await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    with anyio.move_on_after(_STREAM_CLEANUP_SECONDS):
+                        close = getattr(self.body_iterator, "aclose", None)
+                        if close is not None:
+                            await close()
+                finally:
+                    await self._release_capacity()
+
+
+async def _bounded_sse_lines(resp: httpx.Response, token_jti: str | None) -> AsyncIterator[str]:
+    """Bound consumption before line assembly, including blanks and partial lines."""
+    # Avoid decompression allocations before the byte budget can be enforced.
+    if resp.headers.get("content-encoding", "identity").lower() != "identity":
+        raise ValueError("Compressed SSE is unsupported")
+    start = time.monotonic()
+    last_revalidation = start
+    total = 0
+    pending = bytearray()
+    previous_cr = False
+
+    def check_lifetime() -> float:
+        nonlocal last_revalidation
+        now = time.monotonic()
+        remaining = _MAX_STREAM_DURATION_SECONDS - (now - start)
+        if remaining <= 0:
+            raise ValueError("Stream duration exceeded")
+        if token_jti and now - last_revalidation >= _TOKEN_REVALIDATION_INTERVAL:
+            last_revalidation = now
+            if _is_token_revoked(token_jti):
+                raise ValueError("Stream token revoked")
+        return remaining
+
+    chunks = resp.aiter_bytes().__aiter__()
+    while True:
+        remaining = check_lifetime()
+        try:
+            # An idle/no-newline backend cannot evade the lifetime bound either.
+            async with asyncio.timeout(min(remaining, _TOKEN_REVALIDATION_INTERVAL) if token_jti else remaining):
+                chunk = await anext(chunks)
+        except StopAsyncIteration:
+            break
+        check_lifetime()
+        total += len(chunk)
+        if total > _MAX_STREAM_BYTES:
+            raise ValueError("Stream byte budget exceeded")
+        offset = 0
+        for separator in re.finditer(rb"[\r\n]", chunk):
+            check_lifetime()
+            end = separator.start()
+            if previous_cr and end == offset and chunk[end] == 10:
+                previous_cr = False
+                offset = separator.end()
+                continue
+            previous_cr = chunk[end] == 13
+            if len(pending) + end - offset > _MAX_SSE_LINE_BYTES:
+                raise ValueError("SSE line budget exceeded")
+            pending.extend(chunk[offset:end])
+            yield pending.decode("utf-8")
+            pending.clear()
+            offset = separator.end()
+        if len(pending) + len(chunk) - offset > _MAX_SSE_LINE_BYTES:
+            raise ValueError("SSE line budget exceeded")
+        pending.extend(chunk[offset:])
+        if offset < len(chunk):
+            previous_cr = False
+    check_lifetime()
+    if pending:
+        yield pending.decode("utf-8")
+
+
+async def _bounded_sse_events(resp: httpx.Response, token_jti: str | None) -> AsyncIterator[str]:
+    """Parse complete SSE events; only data is eligible for canonical JSON replay."""
+    parts: list[str] = []
+    size = 0
+    fields = 0
+    first = True
+    async for line in _bounded_sse_lines(resp, token_jti):
+        if first:
+            line = line.removeprefix("\ufeff")
+            first = False
+        if not line:
+            if parts:
+                yield "\n".join(parts)
+            parts.clear()
+            size = fields = 0
+            continue
+        size += len(line.encode("utf-8")) + 1
+        fields += 1
+        if size > _MAX_SSE_LINE_BYTES or fields > 1024:
+            raise ValueError("SSE event budget exceeded")
+        field, _, value = line.partition(":")
+        value = value.removeprefix(" ")
+        if field == "data":
+            parts.append(value)
+        elif field == "event" and value not in ("", "message"):
+            raise ValueError("Unsupported SSE event type")
+        # Comments, IDs, retry and unknown fields are never forwarded as data.
+    if parts:
+        raise ValueError("Incomplete SSE event")
+
+
+@asynccontextmanager
+async def _shielded_backend_stream(client: httpx.AsyncClient, url: str, body: dict, headers: dict):
+    manager = client.stream("POST", url, json=body, headers={**headers, "Accept-Encoding": "identity"})
+    response = await manager.__aenter__()
+    try:
+        yield response
+    finally:
+        # httpx marks a response closed before awaiting transport cleanup. Shield
+        # the first close, not a later retry after cancellation interrupted it.
+        with anyio.move_on_after(_STREAM_CLEANUP_SECONDS, shield=True):
+            await manager.__aexit__(None, None, None)
 
 
 async def _handle_streaming(
@@ -1507,13 +1956,6 @@ async def _handle_streaming(
     BUFFER_SIZE = 256  # chars before flushing to client
     # SECURITY FIX (C-04): 50% overlapping window prevents boundary-split secret leakage
     OVERLAP_SIZE = 128
-    # SECURITY FIX (M-07): Max stream duration and body size to prevent worker starvation
-    MAX_STREAM_DURATION_SECONDS = 300  # 5 minutes
-    MAX_STREAM_BYTES = 50 * 1024 * 1024  # 50MB
-    # SECURITY FIX (RC-07): Re-validate token every 30 seconds during streaming.
-    # Previously tokens were only validated once at request start, allowing revoked
-    # tokens to continue receiving data for up to 5 minutes.
-    TOKEN_REVALIDATION_INTERVAL = 30  # seconds
 
     # Re-publish the correlation id on the ContextVar for the streaming task chain
     # (BaseHTTPMiddleware/StreamingResponse may run the generator in a fresh
@@ -1524,69 +1966,29 @@ async def _handle_streaming(
     async def stream_generator():
         content_buffer = ""
         tool_call_buffer: dict[int, dict] = {}  # index -> {name, arguments}
-        tool_call_lines: list[str] = []  # C-01: Buffer raw SSE lines until policy validated
+        tool_call_lines: list[str] = []  # Released only after complete inspection
+        tool_line_bytes = 0
+        tool_calls_seen = 0
         blocked = False
-        stream_start = time.monotonic()
-        last_revalidation = stream_start  # RC-07: Track last token check
-        total_bytes = 0
+        choice_finished = False
 
         try:
-            async with client.stream("POST", url, json=body, headers=headers) as resp:
+            async with _shielded_backend_stream(client, url, body, headers) as resp:
                 if resp.status_code != 200:
-                    error_body = await resp.aread()
                     # SECURITY FIX (H-13): Sanitize backend error responses.
                     # Do NOT forward raw error bodies — they may contain internal
                     # infrastructure details, stack traces, or secrets.
-                    safe_error = _sanitize_backend_error(resp.status_code, error_body)
+                    safe_error = _sanitize_backend_error(resp.status_code, b"")
                     yield f"data: {json.dumps(safe_error)}\n\n"
                     return
 
-                async for line in resp.aiter_lines():
+                async for data in _bounded_sse_events(resp, token_jti):
                     if blocked:
                         break
-
-                    # SECURITY (M-07): Enforce max stream duration
-                    if time.monotonic() - stream_start > MAX_STREAM_DURATION_SECONDS:
-                        yield _make_error_event("Stream terminated: max duration exceeded")
-                        break
-
-                    # SECURITY FIX (RC-07): Periodic token re-validation.
-                    # Revoked tokens must not continue receiving streaming data.
-                    # Check every TOKEN_REVALIDATION_INTERVAL seconds.
-                    now = time.monotonic()
-                    if token_jti and (now - last_revalidation) >= TOKEN_REVALIDATION_INTERVAL:
-                        last_revalidation = now
-                        if _is_token_revoked(token_jti):
-                            logger.warning(
-                                "streaming_token_revoked",
-                                extra={"tenant": tenant_id, "jti": token_jti},
-                            )
-                            yield _make_error_event("Stream terminated: token revoked")
-                            break
-
-                    # SECURITY (M-07): Enforce max response body size
-                    total_bytes += len(line.encode("utf-8"))
-                    if total_bytes > MAX_STREAM_BYTES:
-                        yield _make_error_event("Stream terminated: max body size exceeded")
-                        break
-
-                    if not line.startswith("data: "):
-                        # SECURITY FIX (CRIT-03): Scan ALL SSE lines through output filter,
-                        # not just data lines. SSE comments (:), event types, and IDs can
-                        # be used by compromised backends to exfiltrate secrets.
-                        filtered_line = _filter_chunk(line, tenant_id, agent_id, source_ip, request_id)
-                        if filtered_line is None:
-                            # Secret detected in non-data line — strip it silently
-                            logger.warning(
-                                "sse_nondata_secret_stripped",
-                                extra={"tenant": tenant_id, "line_type": line[:10]},
-                            )
-                            continue
-                        yield f"{filtered_line}\n"
-                        continue
-
-                    data = line[6:]
                     if data == "[DONE]":
+                        if tool_call_buffer:
+                            yield _make_error_event("Incomplete tool call stream")
+                            return
                         # Flush remaining buffer
                         if content_buffer:
                             redacted = _filter_chunk(content_buffer, tenant_id, agent_id, source_ip, request_id)
@@ -1600,41 +2002,103 @@ async def _handle_streaming(
                         return
 
                     try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        # SECURITY FIX (CRIT-03): Malformed JSON in data lines must also
-                        # be scanned. A compromised backend could send secrets as non-JSON.
-                        filtered_data = _filter_chunk(data, tenant_id, agent_id, source_ip, request_id)
-                        if filtered_data is None:
-                            logger.warning(
-                                "sse_malformed_json_secret_stripped",
-                                extra={"tenant": tenant_id},
-                            )
-                            continue
-                        yield f"data: {filtered_data}\n\n"
-                        continue
+                        chunk = json.loads(data, object_pairs_hook=_unique_json_keys)
+                    except ValueError:
+                        yield _make_error_event("Invalid or ambiguous JSON stream")
+                        return
 
+                    if (not isinstance(chunk, dict) or "choices" not in chunk
+                            or any(key in chunk for key in ("delta", "tool_calls", "function_call"))):
+                        yield _make_error_event("Unsupported streaming envelope")
+                        return
+                    line = f"data: {json.dumps(chunk, allow_nan=False)}"
                     choices = chunk.get("choices", [])
+                    # State is single-choice; never mix tools/content across choices.
+                    if not isinstance(choices, list) or len(choices) > 1 or any(
+                        not isinstance(c, dict) or c.get("index", 0) != 0 for c in choices
+                    ):
+                        yield _make_error_event("Unsupported streaming choices")
+                        return
+                    if not choices:
+                        if (not isinstance(chunk.get("usage"), dict)
+                                or any(key in chunk for key in ("delta", "tool_calls", "function_call"))):
+                            yield _make_error_event("Unsupported streaming usage")
+                            return
+                        if output_filter.inspect_and_redact(
+                            json.dumps(chunk, ensure_ascii=False), tenant_id, agent_id,
+                        ).verdict != Verdict.ALLOW:
+                            yield _make_error_event("Stream metadata blocked by security policy")
+                            return
+                        yield f"{line}\n\n"
+                        continue
                     for choice in choices:
                         delta = choice.get("delta", {})
                         finish_reason = choice.get("finish_reason")
+                        if not isinstance(delta, dict) or (choice_finished and (delta or finish_reason is not None)):
+                            yield _make_error_event("Data after terminal streaming choice")
+                            return
+                        if finish_reason is not None:
+                            if finish_reason not in ("stop", "length", "content_filter", "tool_calls"):
+                                yield _make_error_event("Unsupported streaming finish reason")
+                                return
+                            choice_finished = True
+                        if "function_call" in delta or finish_reason == "function_call":
+                            yield _make_error_event("Unsupported legacy function call blocked")
+                            return
+
+                        if finish_reason is not None:
+                            terminal_content = delta.get("content")
+                            if terminal_content:
+                                if not isinstance(terminal_content, str) or "tool_calls" in delta:
+                                    yield _make_error_event("Invalid terminal content delta")
+                                    return
+                                content_buffer += terminal_content
+                                delta.pop("content")
+                                line = f"data: {json.dumps(chunk, allow_nan=False)}"
+                            # Consumers may stop at finish_reason. Release inspected
+                            # text before that event, never after terminal metadata.
+                            if content_buffer:
+                                redacted = _filter_chunk(content_buffer, tenant_id, agent_id, source_ip, request_id)
+                                if redacted is None:
+                                    yield _make_error_event("Output blocked by security policy")
+                                    return
+                                yield _make_content_event(redacted)
+                                content_buffer = ""
 
                         # C-01: Accumulate tool calls — do NOT yield until policy validated
                         if "tool_calls" in delta:
+                            if delta.get("content"):
+                                yield _make_error_event("Mixed tool and content delta")
+                                return
                             for tc_delta in delta["tool_calls"]:
                                 idx = tc_delta.get("index", 0)
+                                if type(idx) is not int or not 0 <= idx < 128:
+                                    yield _make_error_event("Invalid tool call index")
+                                    return
                                 if idx not in tool_call_buffer:
+                                    tool_calls_seen += 1
+                                    if tool_calls_seen > 128:
+                                        yield _make_error_event("Too many tool calls")
+                                        return
                                     tool_call_buffer[idx] = {"name": "", "arguments": ""}
                                 if "function" in tc_delta:
                                     fn = tc_delta["function"]
                                     if "name" in fn:
-                                        tool_call_buffer[idx]["name"] = fn["name"]
+                                        if not isinstance(fn["name"], str):
+                                            yield _make_error_event("Invalid tool name")
+                                            return
+                                        if tool_call_buffer[idx]["name"] and fn["name"]:
+                                            yield _make_error_event("Repeated tool name during stream")
+                                            return
+                                        if fn["name"]:
+                                            tool_call_buffer[idx]["name"] = fn["name"]
                                     if "arguments" in fn:
                                         tool_call_buffer[idx]["arguments"] += fn["arguments"]
                                         # H-04 fix: Bound tool call buffer to prevent memory
                                         # exhaustion from malicious/compromised backends streaming
                                         # infinite tool call arguments.
-                                        if len(tool_call_buffer[idx]["arguments"]) > _MAX_TOOL_ARGS_BYTES:
+                                        argument_bytes = len(tool_call_buffer[idx]["arguments"].encode("utf-8"))
+                                        if argument_bytes > _MAX_TOOL_ARGS_BYTES:
                                             logger.warning(
                                                 "tool_call_buffer_overflow",
                                                 extra={"index": idx, "size": len(tool_call_buffer[idx]["arguments"])},
@@ -1642,8 +2106,13 @@ async def _handle_streaming(
                                             yield _make_error_event("Tool call arguments exceeded maximum size")
                                             return
                             # Buffer the SSE line — NOT yielded yet
+                            tool_line_bytes += len(line.encode("utf-8"))
+                            if tool_line_bytes > 2 * _MAX_TOOL_ARGS_BYTES:
+                                yield _make_error_event("Tool stream exceeded buffer limit")
+                                return
                             tool_call_lines.append(f"{line}\n\n")
-                            continue
+                            if finish_reason != "tool_calls":
+                                continue
 
                         # C-01: Tool calls finished — perform policy check BEFORE yielding
                         if finish_reason == "tool_calls" and tool_call_buffer:
@@ -1651,10 +2120,12 @@ async def _handle_streaming(
                             tool_calls_for_policy = []
                             for idx in sorted(tool_call_buffer.keys()):
                                 tc_data = tool_call_buffer[idx]
-                                try:
-                                    args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
-                                except (json.JSONDecodeError, TypeError):
-                                    args = {}
+                                args = _checked_tool_arguments(
+                                    tc_data["arguments"], tenant_id, agent_id, ioc_manager,
+                                )
+                                if args is None or not tc_data["name"]:
+                                    yield _make_error_event("Tool arguments blocked by security policy")
+                                    return
                                 tool_calls_for_policy.append(
                                     ToolCall(
                                         id=f"call_{idx}",
@@ -1667,7 +2138,7 @@ async def _handle_streaming(
                                 tool_calls_for_policy, tenant_id, agent_id
                             )
 
-                            if policy_result.verdict == Verdict.BLOCK:
+                            if policy_result.verdict != Verdict.ALLOW:
                                 # Log security events + fire notifications
                                 await _log_events(policy_result.events, source_ip, request_id)
                                 asyncio.create_task(_fire_webhook_alert(policy_result.events, tenant_id, agent_id))
@@ -1685,12 +2156,27 @@ async def _handle_streaming(
                                 blocked = True
                                 break
 
-                            # Policy ALLOW — now yield all buffered tool call lines
+                            # Inspect decoded envelopes too (IDs/metadata are egress).
+                            final_result = output_filter.inspect_and_redact(
+                                json.dumps(chunk, ensure_ascii=False), tenant_id, agent_id,
+                            )
+                            if final_result.verdict != Verdict.ALLOW:
+                                yield _make_error_event("Tool metadata blocked by security policy")
+                                return
+                            for buffered_line in tool_call_lines:
+                                envelope = json.dumps(json.loads(buffered_line[6:]), ensure_ascii=False)
+                                envelope_result = output_filter.inspect_and_redact(envelope, tenant_id, agent_id)
+                                if envelope_result.verdict != Verdict.ALLOW or ioc_manager.check_content(envelope):
+                                    yield _make_error_event("Tool metadata blocked by security policy")
+                                    return
+                            # Only clean original bytes may leave; never replay redacted input.
                             for buffered_line in tool_call_lines:
                                 yield buffered_line
-                            yield f"{line}\n\n"  # yield the finish event
+                            if "tool_calls" not in delta:
+                                yield f"{line}\n\n"
                             tool_call_lines.clear()
                             tool_call_buffer.clear()
+                            tool_line_bytes = 0
                             continue
 
                         # Content token — buffer for output filtering
@@ -1709,19 +2195,34 @@ async def _handle_streaming(
                                     blocked = True
                                     break
                                 # Yield only the non-overlapping portion (already scanned)
-                                yield_portion = redacted[:len(redacted) - OVERLAP_SIZE]
+                                split_at = max(0, len(redacted) - OVERLAP_SIZE)
+                                yield_portion = redacted[:split_at]
                                 yield _make_content_event(yield_portion)
-                                # Keep overlap for next iteration to catch boundary-split patterns
-                                content_buffer = content_buffer[-OVERLAP_SIZE:]
+                                # Retain sanitized overlap, not secret-bearing original bytes.
+                                content_buffer = redacted[split_at:]
                             continue
 
                         # Non-content delta (role, etc) — pass through
+                        if tool_call_buffer and finish_reason is not None:
+                            yield _make_error_event("Incomplete tool call stream")
+                            return
+                        if output_filter.inspect_and_redact(
+                            json.dumps(chunk, ensure_ascii=False), tenant_id, agent_id,
+                        ).verdict != Verdict.ALLOW:
+                            yield _make_error_event("Stream metadata blocked by security policy")
+                            return
                         yield f"{line}\n\n"
 
-        except httpx.TimeoutException:
+                if tool_call_buffer:
+                    yield _make_error_event("Incomplete tool call stream")
+
+        except (httpx.TimeoutException, TimeoutError):
             yield _make_error_event("Request timed out")
         except httpx.ConnectError:
             yield _make_error_event("Service unavailable")
+        except Exception:
+            logger.warning("stream_inspection_failed", request_id=request_id)
+            yield _make_error_event("Stream blocked by security policy")
 
     return StreamingResponse(
         stream_generator(),
@@ -1732,6 +2233,68 @@ async def _handle_streaming(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _unique_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    """Reject parser differentials instead of inspecting only the last value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _checked_tool_arguments(raw: str, tenant_id: str, agent_id: str, ioc_manager) -> dict | None:
+    """Approve complete JSON and decoded text, never a sanitized copy of raw bytes."""
+    try:
+        if not isinstance(raw, str) or len(raw) > _MAX_TOOL_ARGS_BYTES:
+            return None
+        if len(raw.encode("utf-8")) > _MAX_TOOL_ARGS_BYTES:
+            return None
+        args = json.loads(raw, object_pairs_hook=_unique_json_keys)
+        if not isinstance(args, dict):
+            return None
+        _check_json_depth(args, max_depth=32)
+        decoded = json.dumps(args, ensure_ascii=False, allow_nan=False)
+        for text in (raw, decoded):
+            if ioc_manager.check_content(text):
+                return None
+            if output_filter.inspect_and_redact(text, tenant_id, agent_id).verdict != Verdict.ALLOW:
+                return None
+        # JSON escaping can hide multiline keys and control-separated secrets.
+        # Inspect decoded string leaves as well as the serialized envelope.
+        pending: list[object] = [args]
+        visited = 0
+        while pending:
+            value = pending.pop()
+            visited += 1
+            if visited > 4096:
+                return None
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                value = str(value)
+            if isinstance(value, str):
+                if ioc_manager.check_content(value):
+                    return None
+                if output_filter.inspect_and_redact(value, tenant_id, agent_id).verdict != Verdict.ALLOW:
+                    return None
+            elif isinstance(value, (dict, list)):
+                count = len(value) * (3 if isinstance(value, dict) else 1)
+                if visited + len(pending) + count > 4096:
+                    return None
+                if isinstance(value, dict):
+                    pending.extend(value.keys())
+                    pending.extend(value.values())
+                    for key, child in value.items():
+                        if isinstance(child, (str, int, float)) and not isinstance(child, bool):
+                            if len(str(key)) + len(str(child)) > _MAX_TOOL_ARGS_BYTES:
+                                return None
+                            pending.append(f"{key}={child}")
+                else:
+                    pending.extend(value)
+        return args
+    except Exception:
+        return None
 
 
 def _filter_chunk(
@@ -1756,7 +2319,7 @@ def _filter_chunk(
         if result.events:
             _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip, request_id)
         return None
-    if result.verdict == Verdict.REDACT and result.modified_content:
+    if result.verdict == Verdict.REDACT:
         # Fire telemetry for streaming redaction (fire-and-forget)
         if result.events:
             _schedule_streaming_telemetry(result.events, tenant_id, agent_id, source_ip, request_id)
@@ -1858,6 +2421,35 @@ async def _log_events(
     _ensure_request_id(events, request_id)
     queue = get_telemetry_queue()
     for event in events:
+        if (event.source == "attachment_guard" and event.metadata.get("reason") == "inspection_unavailable"
+                and "extraction_reason" in event.metadata):
+            # Failed processing is not an attack verdict and must never harden
+            # origin risk. Only fixed reason codes leave this operational path.
+            from typing import get_args
+
+            from src.guardrails.document_extraction import ExtractionReason
+            from src.telemetry.schema import (
+                BulwarkFields,
+                ECSEvent,
+                SecurityTelemetryEvent,
+                TelemetrySeverity,
+                TenantFields,
+            )
+            reason = event.metadata["extraction_reason"]
+            if reason not in (*get_args(ExtractionReason), "inspection_incomplete"):
+                reason = "extraction_failed"
+            record = SecurityTelemetryEvent(
+                message="Document processing could not complete",
+                tags=["bulwark-gateway", "document-processing"], labels={"reason": reason},
+                event=ECSEvent(kind="event", action="document_processing_failed", outcome="failure",
+                               severity=TelemetrySeverity.LOW),
+                bulwark=BulwarkFields(verdict="not_evaluated", guardrail_layer="document_processing"),
+                tenant=TenantFields(id=event.tenant_id or "unknown", agent_id=event.agent_id),
+            )
+            await logger.awarn("document_processing_failed", reason=reason)
+            if not await queue.enqueue(record):
+                await logger.awarn("document_processing_evidence_rejected")
+            continue
         # F3: an allow-exception degrades BLOCK→WARN and tags the metadata. Surface
         # that in BOTH the stdout log and the SIEM export so an incident analyst can
         # tell an exception-allowed attack apart from a generic warn.
@@ -1896,7 +2488,8 @@ async def _log_events(
             exception_scope=_exception_scope,
             event_id=event.event_id,
         )
-        queue.enqueue_nowait(telemetry_event)
+        if not await queue.enqueue(telemetry_event):
+            await logger.awarn("security_event_delivery_rejected", event_id=event.event_id)
 
         # Feed the correlation event tap (feedback loop) fire-and-forget. Only
         # active when correlation is enabled; publish() is non-blocking and drops

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "corpus_sha256": "9705e84049457397b2d2c73aa352b06a6411f54730c8c80af486c1ff20a3ed8b",
+  "classification": "previously known baseline",
+  "owner": "repository-tooling-fixture",
+  "provenance_ref": "config/examples/evaluation-smoke.jsonl",
+  "label_review_ref": "synthetic-smoke-labels-not-independent-review",
+  "rights_review_ref": "repository-authored-fixture-not-legal-approval",
+  "collected_at": "2026-09-10",
+  "used_for_tuning": true,
+  "tuning_sha256": null
+}

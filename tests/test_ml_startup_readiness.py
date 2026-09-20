@@ -211,3 +211,40 @@ def test_resolve_message_lists_all_degraded_sorted():
     assert action == "refuse"
     # Names are sorted for stable, readable operator output.
     assert message.index("a_scanner") < message.index("z_scanner")
+
+
+@pytest.mark.parametrize("lane", [ScannerType.INPUT_BLOCKING, ScannerType.OUTPUT_BLOCKING])
+async def test_startup_exception_cannot_disappear_from_readiness(lane):
+    class BrokenStartup(_HealthScanner):
+        async def startup(self):
+            raise RuntimeError("private startup failure")
+
+    pipeline = ScannerPipeline()
+    pipeline.register(BrokenStartup("broken", True, lane))
+    await pipeline.startup()
+    assert await pipeline.unhealthy_blocking_scanners() == ["broken"]
+    assert (await pipeline.health_check())["broken"] is False
+    ctx = ScanContext(tenant_id="t", agent_id="a", request_id="r")
+    result = await getattr(pipeline, f"run_{lane.value}")("hello", ctx)
+    assert result.verdict == Verdict.BLOCK
+    pipeline.disable("broken")
+    assert await pipeline.unhealthy_blocking_scanners() == []
+
+
+@pytest.mark.parametrize("fail_mode", ["closed", "open"])
+async def test_sdk_enforces_startup_readiness(fail_mode):
+    from src.sdk.guard import Guard
+
+    guard = Guard(config={"fail_mode": fail_mode})
+    guard.pipeline.register(_HealthScanner("unhealthy", False))
+    if fail_mode == "closed":
+        with pytest.raises(RuntimeError, match="unhealthy"):
+            await guard.startup()
+        assert not guard.initialized
+    else:
+        await guard.startup()
+        try:
+            assert guard.initialized
+            assert not guard.pipeline._all_scanners["unhealthy"].enabled
+        finally:
+            await guard.shutdown()

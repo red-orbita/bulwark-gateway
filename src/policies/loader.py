@@ -4,11 +4,15 @@ Supports hot-reload via polling (no external dependencies).
 """
 
 import asyncio
+import os
 from pathlib import Path
 
 import structlog
 import yaml
 
+from src.guardrails.attachments import AttachmentPolicy
+from src.guardrails.backend_egress import BackendEgressPolicy
+from src.guardrails.input_dlp import InputDlpPolicy
 from src.guardrails.tool_policy import AgentPolicy, ToolPolicy, ToolPolicyEngine
 
 logger = structlog.get_logger()
@@ -21,7 +25,7 @@ class PolicyLoader:
         self.policies_dir = policies_dir
         self.engine = ToolPolicyEngine()
         self._policies: list[AgentPolicy] = []
-        self._file_mtimes: dict[str, float] = {}
+        self._file_mtimes: dict[str, tuple[int, int, int, int, int]] = {}
         self._reload_task: asyncio.Task | None = None
 
     @property
@@ -29,39 +33,32 @@ class PolicyLoader:
         return len(self._policies)
 
     async def load_all(self):
-        """Load all policy YAML files from the policies directory."""
-        if not self.policies_dir.exists():
-            await logger.awarn("policies_dir_missing", path=str(self.policies_dir))
-            return
+        """Startup cannot silently omit a tenant whose policy failed validation."""
+        await self.reload(strict=True)
 
-        for policy_file in self.policies_dir.glob("*.yaml"):
-            try:
-                await self._load_file(policy_file)
-                self._file_mtimes[str(policy_file)] = policy_file.stat().st_mtime
-            except Exception as e:
-                await logger.aerror("policy_load_error", file=str(policy_file), error=str(e))
+    @staticmethod
+    def _file_version(info: os.stat_result) -> tuple[int, int, int, int, int]:
+        return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
-    async def _load_file(self, path: Path):
-        """Load a single policy file."""
-        with open(path) as f:
-            data = yaml.safe_load(f)
-
-        if not data or "agents" not in data:
-            return
-
-        tenant_id = data.get("tenant", "default")
-
-        for agent_data in data["agents"]:
-            policy = self._parse_agent_policy(tenant_id, agent_data)
-            self.engine.register_policy(policy)
-            self._policies.append(policy)
-            await logger.ainfo(
-                "policy_loaded",
-                tenant=tenant_id,
-                agent=policy.agent_id,
-                tools_allowed=len(policy.allowed_tools),
-                tools_denied=len(policy.denied_tools),
-            )
+    @staticmethod
+    def _read_policy_file(path: Path) -> tuple[dict, tuple[int, int, int, int, int]]:
+        with path.open("rb") as stream:
+            version = PolicyLoader._file_version(os.fstat(stream.fileno()))
+            raw = stream.read(1024 * 1024 + 1)
+            if PolicyLoader._file_version(os.fstat(stream.fileno())) != version:
+                raise ValueError("Policy changed during read")
+        if len(raw) > 1024 * 1024:
+            raise ValueError("Policy file exceeds size limit")
+        data = yaml.safe_load(raw)
+        # Shipped and persisted baseline policies historically use agents: {}.
+        # Preserve only that empty representation, not arbitrary mapping shapes.
+        if isinstance(data, dict) and data.get("agents") == {}:
+            data["agents"] = []
+        if not isinstance(data, dict) or not isinstance(data.get("agents"), list):
+            raise ValueError("Policy must contain an agents list")
+        if len(data["agents"]) > 1024:
+            raise ValueError("Policy exceeds 1024 agents")
+        return data, version
 
     def _parse_agent_policy(self, tenant_id: str, data: dict) -> AgentPolicy:
         """Parse agent policy from YAML dict."""
@@ -93,31 +90,55 @@ class PolicyLoader:
             allowed_languages=data.get("allowed_languages", []) or [],
             block_unknown_language=bool(data.get("block_unknown_language", False)),
             multimodal=data.get("multimodal", {}) or {},
+            input_dlp=InputDlpPolicy.model_validate(data.get("input_dlp", {})),
+            backend_egress=BackendEgressPolicy.model_validate(data.get("backend_egress", {})),
+            attachments=AttachmentPolicy.model_validate(data.get("attachments", {})),
         )
 
-    async def reload(self):
+    async def reload(self, *, strict: bool = False):
         """Hot-reload policies without restart."""
         await logger.ainfo("policy_reload_start")
         new_engine = ToolPolicyEngine()
         new_policies: list[AgentPolicy] = []
+        new_mtimes: dict[str, tuple[int, int, int, int, int]] = {}
+        errors = False
+        identities: set[tuple[str, str]] = set()
 
         if not self.policies_dir.exists():
             return
 
         for policy_file in self.policies_dir.glob("*.yaml"):
             try:
-                with open(policy_file) as f:
-                    data = yaml.safe_load(f)
-                if not data or "agents" not in data:
-                    continue
+                data, version = await asyncio.to_thread(self._read_policy_file, policy_file)
                 tenant_id = data.get("tenant", "default")
                 for agent_data in data["agents"]:
                     policy = self._parse_agent_policy(tenant_id, agent_data)
+                    identity = (policy.tenant_id, policy.agent_id)
+                    if identity in identities:
+                        raise ValueError("Duplicate tenant/agent policy")
+                    identities.add(identity)
                     new_engine.register_policy(policy)
                     new_policies.append(policy)
-                self._file_mtimes[str(policy_file)] = policy_file.stat().st_mtime
-            except Exception as e:
-                await logger.aerror("policy_reload_error", file=str(policy_file), error=str(e))
+                if self._file_version(policy_file.stat()) != version:
+                    raise ValueError("Policy replaced during reload")
+                new_mtimes[str(policy_file)] = version
+            except Exception:
+                errors = True
+                await logger.aerror("policy_reload_error", file=str(policy_file))
+
+        # No await between this final check and publication: never stamp old
+        # contents with the metadata of a replacement file.
+        try:
+            current = {str(p): self._file_version(p.stat()) for p in self.policies_dir.glob("*.yaml")}
+            errors = errors or current != new_mtimes
+        except OSError:
+            errors = True
+
+        if errors:
+            await logger.aerror("policy_reload_rejected", reason="invalid_policy", keeping="previous")
+            if strict:
+                raise RuntimeError("Policy validation failed; refusing partial startup")
+            return
 
         # SECURITY FIX (H-04): Refuse to swap to empty policy engine.
         # If all policy files fail to parse, keep the previous (working) engine.
@@ -131,6 +152,7 @@ class PolicyLoader:
         self._policy_version = getattr(self, "_policy_version", 0) + 1
         self.engine = new_engine
         self._policies = new_policies
+        self._file_mtimes = new_mtimes
 
         # SECURITY FIX (M-01): Invalidate response cache on policy reload
         # to prevent stale cached responses from bypassing updated policies
@@ -173,7 +195,7 @@ class PolicyLoader:
                 else:
                     # Check mtimes
                     for fpath in current_files:
-                        mtime = Path(fpath).stat().st_mtime
+                        mtime = self._file_version(Path(fpath).stat())
                         if self._file_mtimes.get(fpath) != mtime:
                             changed = True
                             break

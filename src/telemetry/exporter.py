@@ -12,14 +12,18 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
+
+if TYPE_CHECKING:
+    from .shared_outbox import DestinationSnapshot
 
 from .queue import TelemetryQueue, get_telemetry_queue
 from .schema import SecurityTelemetryEvent
@@ -31,6 +35,70 @@ BATCH_SIZE = int(os.getenv("BULWARK_TELEMETRY_BATCH_SIZE", "100"))
 FLUSH_INTERVAL = float(os.getenv("BULWARK_TELEMETRY_FLUSH_INTERVAL", "1.0"))
 STATS_FILE = Path(os.getenv("BULWARK_SIEM_STATS_FILE", "shared/siem/siem_stats.json"))
 STATS_FLUSH_INTERVAL = 5.0  # seconds
+MAX_TLS_MATERIAL_BYTES = 1024 * 1024
+
+
+def _tls_material(config: dict[str, Any]) -> dict[str, bytes]:
+    material = {}
+    try:
+        for name in ("tls_ca", "tls_cert", "tls_key"):
+            if config.get(name):
+                with open(config[name], "rb") as source:
+                    data = source.read(MAX_TLS_MATERIAL_BYTES + 1)
+                if not data or len(data) > MAX_TLS_MATERIAL_BYTES:
+                    raise ValueError("Invalid TLS material size")
+                material[name] = data
+    except (OSError, ValueError, TypeError):
+        raise ValueError("TLS material unavailable or invalid") from None
+    return material
+
+
+def _config_revision(transport: TransportProtocol, config: dict[str, Any], material: dict[str, bytes]) -> str:
+    identity = {"type": type(transport).__module__ + "." + type(transport).__qualname__, "config": config}
+    if material:
+        identity["tls_material"] = {name: hashlib.sha256(data).hexdigest() for name, data in material.items()}
+    serialized = json.dumps(identity, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+class _PinnedTlsTransport:
+    """Use the exact fingerprinted bytes, not mutable secret-mount pathnames.
+
+    Linux sealed memfds keep private keys off disk and prevent check/use races.
+    Unsupported platforms fail registration rather than using mutable material.
+    """
+
+    def __init__(self, original: TransportProtocol, config: Any, material: dict[str, bytes]):
+        from .transports.http_rest import HttpRestTransport
+        from .transports.syslog import SyslogTransport
+        from .transports.tcp_tls import TcpTlsTransport
+
+        self._fds: list[int] = []
+        if type(original) not in (HttpRestTransport, SyslogTransport, TcpTlsTransport):
+            raise ValueError("Shared TLS requires a supported pinnable transport")
+        self.revision = _config_revision(original, asdict(config), material)
+        try:
+            import fcntl
+
+            paths = {}
+            for name, data in material.items():
+                fd = os.memfd_create("bulwark-telemetry-tls", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+                self._fds.append(fd)
+                with os.fdopen(os.dup(fd), "wb") as target:
+                    target.write(data)
+                fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
+                            fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+                paths[name] = f"/proc/self/fd/{fd}"
+            factory: Any = type(original)
+            self.transport: TransportProtocol = factory(replace(config, **paths))
+        except Exception:
+            self.release()
+            raise ValueError("Unable to pin shared TLS material") from None
+
+    def release(self) -> None:
+        for fd in self._fds:
+            os.close(fd)
+        self._fds.clear()
 
 
 class TransportProtocol(Protocol):
@@ -105,6 +173,8 @@ class TransportWithCircuitBreaker:
     # "global" = receives ALL events (admin-only SIEM endpoints)
     # set of tenant_ids = only receives events from those tenants
     tenant_scope: str | set[str] = "global"
+    snapshot: DestinationSnapshot | None = None
+    pinned_tls: _PinnedTlsTransport | None = None
 
 
 class TelemetryExporter:
@@ -124,15 +194,20 @@ class TelemetryExporter:
         self._flush_interval = flush_interval or FLUSH_INTERVAL
         self._transports: list[TransportWithCircuitBreaker] = []
         self._running = False
+        self._initialized = False
         self._task: Optional[asyncio.Task] = None
         self._stats_task: Optional[asyncio.Task] = None
         self._stats = {
             "batches_sent": 0,
             "events_exported": 0,
             "export_errors": 0,
+            "delivery_retries": 0,
         }
+        self._delivery_timeout = 30.0
+        self._delivered_indexes: list[int] = []
 
-    def add_transport(self, transport: TransportProtocol, tenant_scope: str | set[str] = "global") -> None:
+    def add_transport(self, transport: TransportProtocol, tenant_scope: str | set[str] = "global",
+                      *, destination_id: str | None = None, revision: str | None = None) -> None:
         """Add a transport with optional tenant scope filtering.
 
         Args:
@@ -140,8 +215,42 @@ class TelemetryExporter:
             tenant_scope: "global" for admin SIEM (receives all events),
                          or a set of tenant_ids that this transport is allowed to receive.
         """
+        from .transports.file_shipper import FileShipperTransport
+
+        # A file flush is neither crash-durable nor safe for shared rotation.
+        if self._queue.durable and isinstance(transport, FileShipperTransport):
+            raise ValueError("FileShipperTransport is not supported with durable telemetry (local or shared)")
+        snapshot = None
+        pinned_tls = None
+        if self._queue.shared:
+            from .shared_outbox import DestinationSnapshot
+            scope = None if tenant_scope == "global" else tuple(sorted(
+                tenant_scope if isinstance(tenant_scope, set) else {tenant_scope}
+            ))
+            config = getattr(transport, "_config", None)
+            if is_dataclass(config) and not isinstance(config, type):
+                material = _tls_material(asdict(config))
+                if material:
+                    pinned_tls = _PinnedTlsTransport(transport, config, material)
+                fingerprint = _config_revision(transport, asdict(config), material)
+            else:
+                fingerprint = None
+            effective_revision = fingerprint if fingerprint is not None else revision
+            if effective_revision is None:
+                raise ValueError("Shared custom transport requires an immutable config revision")
+            try:
+                snapshot = DestinationSnapshot(destination_id=destination_id or transport.name,
+                                               revision=effective_revision, tenant_scope=scope)
+                snapshots = tuple(tw.snapshot for tw in self._transports if tw.snapshot is not None) + (snapshot,)
+                self._queue.set_destinations(snapshots)
+            except Exception:
+                if pinned_tls is not None:
+                    pinned_tls.release()
+                raise
         self._transports.append(TransportWithCircuitBreaker(
-            transport=transport, tenant_scope=tenant_scope
+            transport=transport, tenant_scope=set(tenant_scope) if isinstance(tenant_scope, set) else tenant_scope,
+            snapshot=snapshot,
+            pinned_tls=pinned_tls,
         ))
         logger.info("telemetry_transport_added", extra={
             "transport": transport.name,
@@ -154,6 +263,12 @@ class TelemetryExporter:
         if not enabled:
             logger.info("telemetry_exporter_disabled")
             return
+
+        if self._queue.durable and not self._transports:
+            raise RuntimeError("Durable telemetry requires an explicitly configured supported transport")
+
+        await self._queue.initialize()
+        self._initialized = True
 
         # Always start stats persistence (even without transports)
         self._running = True
@@ -183,32 +298,127 @@ class TelemetryExporter:
                 pass
 
         # Final flush
-        remaining = await self._queue.dequeue_batch(batch_size=self._batch_size * 10, timeout=0.1)
-        if remaining:
-            await self._send_to_transports(remaining)
-
-        for tw in self._transports:
-            await tw.transport.close()
-
-        self._queue.close()
+        try:
+            if self._queue.shared:
+                if self._initialized:
+                    await self._flush_shared()
+                remaining = []
+            else:
+                remaining = await self._queue.dequeue_batch(batch_size=min(self._batch_size * 10, 10000), timeout=0.1)
+            if remaining:
+                success = await self._send_to_transports(remaining)
+                await self._queue.acknowledge_batch(self._delivered_indexes)
+                if not success:
+                    self._queue.requeue_batch(remaining)
+        finally:
+            for tw in self._transports:
+                try:
+                    await asyncio.wait_for(tw.transport.close(), self._delivery_timeout)
+                except Exception:
+                    logger.warning("telemetry_transport_close_failed")
+                finally:
+                    if tw.pinned_tls is not None:
+                        try:
+                            await asyncio.wait_for(tw.pinned_tls.transport.close(), self._delivery_timeout)
+                        except Exception:
+                            logger.warning("telemetry_pinned_transport_close_failed")
+                        finally:
+                            tw.pinned_tls.release()
+            await self._queue.aclose()
+            self._initialized = False
         self._persist_stats()
         logger.info("telemetry_exporter_stopped", extra={"stats": self._stats})
 
     async def _run_loop(self) -> None:
         """Main export loop — runs until stopped."""
         while self._running:
+            batch: list[SecurityTelemetryEvent] = []
             try:
+                if self._queue.shared:
+                    await self._flush_shared()
+                    await asyncio.sleep(self._flush_interval)
+                    continue
                 batch = await self._queue.dequeue_batch(
                     batch_size=self._batch_size,
                     timeout=self._flush_interval,
                 )
                 if batch:
-                    await self._send_to_transports(batch)
+                    success = await self._send_to_transports(batch)
+                    await self._queue.acknowledge_batch(self._delivered_indexes)
+                    if not success:
+                        self._queue.requeue_batch(batch)
+                        batch = []
+                        self._stats["delivery_retries"] += 1
+                        await asyncio.sleep(self._flush_interval)
             except asyncio.CancelledError:
+                self._queue.requeue_batch(batch)
                 break
-            except Exception as e:
-                logger.error("telemetry_loop_error", extra={"error": str(e)})
+            except Exception:
+                self._queue.requeue_batch(batch)
+                logger.error("telemetry_loop_error")
                 await asyncio.sleep(1.0)
+
+    @staticmethod
+    def _transport_revision(transport: TransportProtocol) -> str | None:
+        """Fingerprint the effective built-in config without persisting secrets.
+
+        Custom transports must supply a revision and remain immutable while
+        registered. Built-in config mutations are checked again before sending.
+        """
+        config = getattr(transport, "_config", None)
+        if not is_dataclass(config) or isinstance(config, type):
+            return None
+        values = asdict(config)
+        return _config_revision(transport, values, _tls_material(values))
+
+    async def _flush_shared(self) -> None:
+        """Claim only exact registered snapshots; acknowledge each destination."""
+        outbox = self._queue.shared_outbox
+        if outbox is None:
+            raise RuntimeError("Shared telemetry store unavailable")
+        for tw in self._transports:
+            snapshot = tw.snapshot
+            if snapshot is None or not tw.circuit.can_execute():
+                continue
+            try:
+                revision = await asyncio.to_thread(self._transport_revision, tw.transport)
+            except ValueError:
+                self._stats["export_errors"] += 1
+                logger.error("shared_outbox_tls_material_unavailable")
+                continue
+            scope = None if tw.tenant_scope == "global" else tuple(sorted(
+                tw.tenant_scope if isinstance(tw.tenant_scope, set) else {tw.tenant_scope}
+            ))
+            if (revision is not None and revision != snapshot.revision) or scope != snapshot.tenant_scope:
+                self._stats["export_errors"] += 1
+                logger.error("shared_outbox_destination_changed")
+                continue
+            leases = await outbox.claim(snapshot, limit=min(self._batch_size, 1000),
+                                        lease_seconds=max(60.0, self._delivery_timeout + 15.0))
+            if not leases:
+                continue
+            # Cancellation leaves leases intact for expiry/recovery. No cleanup
+            # path can acknowledge data without an explicit transport success.
+            try:
+                success = await asyncio.wait_for(
+                    (tw.pinned_tls.transport if tw.pinned_tls else tw.transport).send_batch(
+                        [lease.event for lease in leases]), self._delivery_timeout,
+                ) is True
+            except Exception:
+                success = False
+                logger.error("shared_outbox_transport_failed")
+            if success:
+                tw.circuit.record_success()
+                tw.retry_delay = 1.0
+                self._stats["batches_sent"] += 1
+                self._stats["events_exported"] += len(leases)
+            else:
+                tw.circuit.record_failure()
+                tw.retry_delay = min(tw.retry_delay * 2, tw.max_retry_delay)
+                self._stats["export_errors"] += 1
+                self._stats["delivery_retries"] += 1
+            await outbox.finish(leases, success=success, retry_seconds=tw.retry_delay)
+        await outbox.status()
 
     async def _stats_flush_loop(self) -> None:
         """Periodically persist stats to shared file for admin dashboard."""
@@ -295,16 +505,21 @@ class TelemetryExporter:
         pipe.set("bulwark:siem:updated_at", time.time())
         pipe.execute()
 
-    async def _send_to_transports(self, batch: list[SecurityTelemetryEvent]) -> None:
+    async def _send_to_transports(self, batch: list[SecurityTelemetryEvent]) -> bool:
         """Fan-out batch to registered transports with circuit breaker and tenant filtering.
 
         SECURITY FIX (CRIT-04): Each transport only receives events matching its
         tenant_scope. This prevents cross-tenant information disclosure where a
         tenant-configured SIEM endpoint receives events from ALL tenants.
         """
+        if not self._transports:
+            self._delivered_indexes = []
+            return False
+        delivered = True
+        covered: set[int] = set()
+        failed: set[int] = set()
+        self._delivered_indexes = []
         for tw in self._transports:
-            if not tw.circuit.can_execute():
-                continue
 
             # SECURITY FIX (CRIT-04): Filter events by transport's tenant scope
             if tw.tenant_scope == "global":
@@ -326,25 +541,37 @@ class TelemetryExporter:
                 if not filtered_batch:
                     continue  # No events for this transport in this batch
 
+            covered.update(id(event) for event in filtered_batch)
+            if not tw.circuit.can_execute():
+                delivered = False
+                failed.update(id(event) for event in filtered_batch)
+                continue
+
             try:
-                success = await tw.transport.send_batch(filtered_batch)
+                success = await asyncio.wait_for(tw.transport.send_batch(filtered_batch), self._delivery_timeout)
                 if success:
                     tw.circuit.record_success()
                     tw.retry_delay = 1.0  # Reset backoff
                     self._stats["batches_sent"] += 1
                     self._stats["events_exported"] += len(filtered_batch)
                 else:
+                    delivered = False
+                    failed.update(id(event) for event in filtered_batch)
                     tw.circuit.record_failure()
                     tw.retry_delay = min(tw.retry_delay * 2, tw.max_retry_delay)
                     self._stats["export_errors"] += 1
-            except Exception as e:
+            except Exception:
+                delivered = False
+                failed.update(id(event) for event in filtered_batch)
                 tw.circuit.record_failure()
                 tw.retry_delay = min(tw.retry_delay * 2, tw.max_retry_delay)
                 self._stats["export_errors"] += 1
                 logger.error(
                     "telemetry_transport_error",
-                    extra={"transport": tw.transport.name, "error": str(e)},
+                    extra={"transport": tw.transport.name},
                 )
+        self._delivered_indexes = [i for i, event in enumerate(batch) if id(event) in covered - failed]
+        return delivered and len(covered) == len({id(event) for event in batch})
 
     @property
     def stats(self) -> dict:
@@ -489,12 +716,20 @@ def _add_transport_from_config(exporter: TelemetryExporter, cfg: dict) -> None:
     """
     ttype = (cfg.get("transport_type") or "file").lower()
     fmt = cfg.get("format", "")
+    scope = cfg.get("tenant_scope", "global")
+    if isinstance(scope, list):
+        if not all(isinstance(tenant, str) and tenant for tenant in scope):
+            raise ValueError("Invalid telemetry tenant scope")
+        scope = set(scope)
+    elif not isinstance(scope, str) or not scope:
+        raise ValueError("Invalid telemetry tenant scope")
+    registration = {"tenant_scope": scope, "destination_id": cfg.get("id")}
 
     if ttype == "file":
         from .transports.file_shipper import FileShipperConfig, FileShipperTransport
         exporter.add_transport(FileShipperTransport(FileShipperConfig(
             path=cfg.get("endpoint", "/var/log/bulwark-gateway/events.ndjson"),
-        )))
+        )), **registration)
     elif ttype in ("http", "http_rest"):
         from urllib.parse import urlparse
 
@@ -515,7 +750,7 @@ def _add_transport_from_config(exporter: TelemetryExporter, cfg: dict) -> None:
             format=http_format,
             verify_ssl=bool(cfg.get("verify_ssl", True)),
             **_build_http_auth(cfg),
-        )))
+        )), **registration)
     elif ttype in ("syslog", "syslog_udp", "syslog_tcp", "syslog_tls"):
         from .transports.syslog import SyslogConfig, SyslogProtocol, SyslogTransport
         protocol = {
@@ -527,7 +762,7 @@ def _add_transport_from_config(exporter: TelemetryExporter, cfg: dict) -> None:
             port=int(cfg.get("port", 514)),
             protocol=protocol,
             format=_map_syslog_format(fmt),
-        )))
+        )), **registration)
     elif ttype in ("tcp", "tcp_tls"):
         from .transports.tcp_tls import TcpTlsConfig, TcpTlsTransport
         exporter.add_transport(TcpTlsTransport(TcpTlsConfig(
@@ -535,8 +770,10 @@ def _add_transport_from_config(exporter: TelemetryExporter, cfg: dict) -> None:
             port=int(cfg.get("port", 6514)),
             use_tls=bool(cfg.get("use_tls", ttype == "tcp_tls")),
             format=_map_tcp_format(fmt),
-        )))
+        )), **registration)
     else:
+        if exporter._queue.durable:
+            raise ValueError("Unsupported durable telemetry transport")
         logger.warning("unknown_transport_type", extra={"type": ttype})
 
 
@@ -544,7 +781,7 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
     """Load transports from shared config file (written by admin)."""
     config_file = Path(os.getenv("BULWARK_SIEM_TRANSPORTS_FILE", "shared/siem/siem_transports.json"))
     if not config_file.exists():
-        if not EXPORTER_ENABLED:
+        if exporter._queue.durable or not EXPORTER_ENABLED:
             logger.info("no_siem_transports_config", extra={"path": str(config_file)})
             return
         # Auto-seed a default file_shipper transport
@@ -573,6 +810,8 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
     try:
         configs = json.loads(config_file.read_text())
     except Exception as e:
+        if exporter._queue.durable:
+            raise RuntimeError("Unable to load durable telemetry transport configuration") from None
         logger.error("siem_transports_config_error", extra={"error": str(e)})
         return
 
@@ -582,6 +821,10 @@ def load_transports_from_config(exporter: TelemetryExporter) -> None:
         try:
             _add_transport_from_config(exporter, cfg)
         except Exception as e:
+            if exporter._queue.durable:
+                raise RuntimeError(
+                    "Unable to register durable telemetry transport; FileShipperTransport is unsupported"
+                ) from None
             logger.error(
                 "transport_load_error",
                 extra={"type": cfg.get("transport_type"), "error": str(e)},

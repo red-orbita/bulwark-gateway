@@ -5,7 +5,10 @@ Scanners are the atomic units of security checking. Each scanner:
   - Has a unique name and version
   - Declares whether it runs in the blocking hot path or async enrichment
   - Returns a GuardrailResult with a verdict and optional events
-  - Must handle its own failures gracefully (never crash the pipeline)
+  - Lets safe_scan enforce lane-specific timeout and exception behavior
+
+Blocking scanners must not swallow failures as ALLOW. Advisory lanes do not
+gate responses. Caller cancellation propagates rather than approving a scan.
 """
 
 from __future__ import annotations
@@ -149,7 +152,7 @@ class InputScanner(ABC):
     async def safe_scan(
         self, content: str, context: ScanContext, timeout_ms: float = 5000.0
     ) -> GuardrailResult:
-        """Scan with timeout and exception safety. Never raises.
+        """Scan with timeout and exception safety; caller cancellation propagates.
 
         Args:
             content: Text to scan

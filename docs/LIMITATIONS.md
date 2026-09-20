@@ -8,6 +8,19 @@ have."_ Where a capability cannot be delivered cleanly in the default runtime
 honestly and record the gap here. Each entry states **what** the limitation is,
 **why** it is accepted, its **impact**, and how to **opt in / work around** it.
 
+Release approval is separate from feature availability. Candidate builds can
+contain unresolved OS-package vulnerabilities and must not be promoted if the
+release scanner rejects them. A successful build, SBOM, signature or local test
+does not waive that gate. Offline CycloneDX Draft-07 structural validation is
+implemented with a pinned local schema bundle; format annotations and inventory
+completeness are not certification. Python CI test/lint dependencies are hash-locked
+for the supported CI platform; external tool provisioning, source/build
+provenance, storage-encryption evidence and
+production-topology validation remain release acceptance requirements; see
+[Release Verification](RELEASE-VERIFICATION.md) and [Packaging](PACKAGING.md).
+Private lab ledgers are not distributed as product documentation or substituted
+for release-specific public evidence.
+
 Status legend:
 
 | Status | Meaning |
@@ -37,6 +50,17 @@ scanner remains `EXPERIMENTAL` (it never claims BETA/GA on the hygiene guards
 alone).
 
 - **Impact:** text rendered *inside* an image is not read/scanned by default.
+- **Preventive option:** enable the strict chat attachment guard
+  (`BULWARK_ATTACHMENT_GUARD_ENABLED=true` or agent `attachments.enabled: true`).
+  Text-only mode rejects image/opaque attachments. Optional document extraction
+  accepts readable PNG/JPEG/PDF by OCR/text conversion in Bubblewrap, followed by
+  full extracted-text guardrail/DLP inspection; originals are never forwarded.
+  It needs operator-provisioned native tools and namespace support absent from
+  the stock image. Complex graphics and unreadable pages require other processing;
+  these failures are not malicious detections. See [Chatbot Attachments](CHATBOT-ATTACHMENTS.md).
+- **OCR failure behavior:** a separately configured blocking VisionScanner now
+  rejects unavailable/failed OCR. No automatic EasyOCR downloads occur. This does
+  not guarantee successful extraction or detection of arbitrary visual attacks.
 - **Opt in:** install pillow + an OCR backend deliberately, understanding it will
   **not** load in a stock distroless image (you must build a fatter image).
 - **Refs:** [ROADMAP §3 status note](ROADMAP.md), [ARCHITECTURE maturity
@@ -162,6 +186,12 @@ detection that would otherwise BLOCK can degrade to WARN/ALLOW.
 - **Refs:** `src/guardrails/input_guardrail.py` (`max_scan_bytes`,
   `max_input_size`), `src/scanners/longcontext/long_context_scanner.py`,
   `AGENTS.md` §6 (long-context settings).
+
+Structured text blocks now have a separate bounded windowed path in
+`inspect_messages`: up to 64 KiB and 128 blocks/windows, with fail-closed behavior
+on incomplete inspection. The opt-in long-context scanner also rejects cap-exceeded
+inputs in blocking mode (WARN in advisory mode); it no longer silently approves
+the unscanned remainder. Neither path provides unlimited-context coverage.
 
 ---
 

@@ -26,6 +26,8 @@ backend:
 
 # -- Proxy configuration
 proxy:
+  # -- Explicit browser origins; empty denies cross-origin requests.
+  corsOrigins: []
   # -- Number of replicas (minimum for HPA)
   replicas: 2
   # -- DNS ndots for the pod resolver. Lower than the k8s default (5) so that
@@ -56,6 +58,52 @@ proxy:
   failMode: "closed"
   # -- Rate limit (requests per minute)
   rateLimit: 60
+  # -- Strict attachment admission, independent of ML. Text-only by default;
+  # optional isolated PNG/JPEG/PDF extraction requires operator provisioning.
+  attachments:
+    # -- Opt-in global guard (YAML boolean).
+    enabled: false
+    # -- Per-file decoded byte budget (integer 1..65536); runtime scan caps also apply.
+    maxFileBytes: 16000
+    # -- Total decoded attachment byte budget per request (integer 1..65536).
+    maxTotalBytes: 65536
+    # -- Maximum attachments across all messages (integer 1..5).
+    maxCount: 5
+    # -- Global extraction permission when enabled=true; never enables the guard.
+    extractDocuments: false
+    # -- Decoded document size limit (integer 1..2097152).
+    maxDocumentBytes: 2097152
+    # -- Existing absolute ephemeral directory. Only the mounted /tmp is supported;
+    # no directory bootstrap or durable /app/data document storage.
+    extractionWorkDir: "/tmp"
+    # -- One to three installed OCR languages, e.g. eng+spa (runtime syntax).
+    extractionLanguages: "eng"
+    # -- Strict YAML boolean: operator validated native tools and Bubblewrap under
+    # the unchanged security context. Required when extractDocuments=true; also
+    # set for agent-policy-only extraction while the global guard remains off.
+    parserIsolationConfirmed: false
+    # -- /tmp budget when extraction or isolation confirmation is enabled.
+    # Whole Mi, 256..4096Mi, at least 256Mi per worker. Enrichment keeps its 500Mi
+    # minimum. Size memory requests/limits and quotas separately: CHATBOT-HELM.md.
+    extractionTmpSize: "256Mi"
+    # -- Asynchronous uploads. One worker/replica, no autoscaling; Recreate rollout.
+    service:
+      enabled: false
+      # -- local-sqlite (dedicated block PVC) or shared-postgresql (reuse the
+      # validated TLS snapshot/egress of telemetry.outbox shared-postgresql).
+      storage: local-sqlite
+      maxDocuments: 100
+      maxBytes: 33554432
+      maxPerTenant: 20
+      ttlSeconds: 3600
+      # -- Required operational attestation: encrypted volume/database, restricted
+      # backup access and retention. This flag does not implement encryption.
+      storageProtectionConfirmed: false
+      local:
+        existingClaim: ""
+        storageClass: ""
+        size: 1Gi
+        accessMode: ReadWriteOnce
   # -- Output filter: opt-in PII redaction. Secrets/SSN/cards/IBAN are always
   #    redacted. Emails/phones are often legitimate agent output, so redaction
   #    is opt-in (enable for stricter tenants, e.g. healthcare).
@@ -142,8 +190,8 @@ proxy:
 
   # -- Enrichment Pipeline (background semantic analysis)
   enrichment:
-    # -- Enable async enrichment (replay DB always active; ML scanners optional)
-    enabled: true
+    # -- Secure opt-in: enable only with preprovisioned, manifest-verified models.
+    enabled: false
     # -- Replay DB path inside the container
     replayDbPath: "/app/shared/enrichment/attack_replay.db"
     # -- Enrichment data PVC size
@@ -156,9 +204,14 @@ proxy:
     suspiciousThreshold: "0.78"
     # -- Threat similarity threshold (0.0-1.0)
     threatThreshold: "0.88"
-    # -- Init container image for model download (lightweight Python image)
-    # Override to use a private registry or pre-built image with models
-    initImage: "python:3.12-slim"
+    # -- REQUIRED when enabled: preprovisioned PVC with model files at its root.
+    # No downloads. Explicitly enabling without provisioning fails helm template.
+    # Init uses the existing proxy image.
+    existingModelClaim: ""
+    # -- Trusted relative filename -> SHA-256 manifest, including ALL model assets.
+    modelManifest: {}
+    # -- Bound total verified model bytes (also provision enough ephemeral storage).
+    modelMaxBytes: 1073741824
   # -- ML model integrity verification (SHA-256 checksums)
   mlModels:
     checksums:
@@ -312,6 +365,9 @@ admin:
       internal: true
       # -- PostgreSQL host (leave empty for internal; set for external PG)
       host: ""
+      # -- External PostgreSQL: exact IPv4 /32 allowed by admin NetworkPolicy.
+      # Required with networkPolicies.enabled; keep synchronized with resolved host.
+      egressCIDR: ""
       # -- PostgreSQL port
       port: 5432
       # -- Database name
@@ -369,6 +425,8 @@ redis:
     repository: redis
     # -- Redis image tag
     tag: "7-alpine"
+    # -- Immutable digest; optional for existing deployments, preferred for releases.
+    digest: ""
   # -- Redis password (auto-generated if empty)
   password: ""
   resources:
@@ -386,6 +444,10 @@ redis:
   maxMemory: "64mb"
   # -- PVC storage size
   storage: 1Gi
+  # -- Standalone only: mount an existing PVC without creating/deleting redis-data.
+  existingClaim: ""
+  # -- AOF replay budget before liveness starts (5-second periods).
+  startupFailureThreshold: 60
   # -- PodDisruptionBudget
   pdb:
     # -- Enable PDB for Redis
@@ -497,6 +559,44 @@ ingress:
 telemetry:
   # -- Enable telemetry collection
   enabled: true
+  auditAdmission:
+    # -- Require durable evidence before each upstream attempt. Requires enabled
+    # telemetry and local-durable/shared-postgresql outbox mode.
+    required: false
+    # -- Admission decision budget in milliseconds (integer 1..10000).
+    timeoutMs: 250
+  outbox:
+    # -- Exactly one mode: legacy, local-durable, shared-postgresql.
+    # Legacy preserves the existing ephemeral memory/disk queue behavior.
+    mode: legacy
+    local:
+      # -- Dedicated proxy-only RWO PVC, never the admin telemetry-data PVC.
+      existingClaim: ""
+      size: 2Gi
+      storageClass: ""
+      accessMode: ReadWriteOnce
+    postgresql:
+      # -- Operator-managed PG, independent of the admin database deployment.
+      # Existing Secret MUST contain a complete PostgreSQL URL, not just password.
+      existingSecret: ""
+      urlKey: postgresql-url
+      host: ""
+      port: 5432
+      # -- TLS is mandatory in shared mode. verify-full authenticates the host.
+      ssl: true
+      sslMode: verify-full
+      # -- Optional PEM CA bundle key in the same Secret; empty uses image trust.
+      caKey: ""
+      poolMin: 2
+      poolMax: 20
+      maxEvents: 100000
+      maxBytes: 52428800
+      # -- Exactly one scoped destination: IPv4 CIDR (/8..32) OR explicit pod
+      # labels with a namespace. No wildcard selectors or unrestricted egress.
+      egress:
+        cidr: ""
+        namespace: ""
+        podLabels: {}
   # -- Batch size before flush
   batchSize: 100
   # -- Flush interval in seconds

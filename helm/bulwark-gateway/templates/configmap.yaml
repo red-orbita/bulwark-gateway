@@ -10,13 +10,33 @@ metadata:
   labels:
     {{- include "bulwark-gateway.proxy.labels" . | nindent 4 }}
 data:
-  BULWARK_AGENTS_FILE: "/app/shared/admin/agents.yaml"
+  BULWARK_AGENTS_CONFIG: "/app/shared/admin/agents.yaml"
   # IOC database — admin writes to its admin-data volume (/app/data/iocs.json);
   # the proxy reads the same PVC mounted read-only at /app/shared/admin. Without
   # this the proxy would read the baked-in image copy and admin-managed IOCs
   # would never reach the hot path.
   BULWARK_IOC_PATH: "/app/shared/admin/iocs.json"
   BULWARK_FAIL_MODE: {{ .Values.proxy.failMode | quote }}
+  BULWARK_CORS_ORIGINS: {{ .Values.proxy.corsOrigins | toJson | quote }}
+  # Always explicit, including when disabled; no ML/model dependency.
+  BULWARK_ATTACHMENT_GUARD_ENABLED: {{ .Values.proxy.attachments.enabled | quote }}
+  BULWARK_ATTACHMENT_MAX_FILE_BYTES: {{ .Values.proxy.attachments.maxFileBytes | int64 | quote }}
+  BULWARK_ATTACHMENT_MAX_TOTAL_BYTES: {{ .Values.proxy.attachments.maxTotalBytes | int64 | quote }}
+  BULWARK_ATTACHMENT_MAX_COUNT: {{ .Values.proxy.attachments.maxCount | int64 | quote }}
+  # Also render for agent-policy-only extraction with the global guard off.
+  BULWARK_ATTACHMENT_EXTRACT_DOCUMENTS: {{ .Values.proxy.attachments.extractDocuments | quote }}
+  BULWARK_ATTACHMENT_MAX_DOCUMENT_BYTES: {{ .Values.proxy.attachments.maxDocumentBytes | int64 | quote }}
+  BULWARK_ATTACHMENT_EXTRACTION_WORK_DIR: {{ .Values.proxy.attachments.extractionWorkDir | quote }}
+  BULWARK_ATTACHMENT_EXTRACTION_LANGUAGES: {{ .Values.proxy.attachments.extractionLanguages | quote }}
+  BULWARK_ATTACHMENT_PARSER_ISOLATION_CONFIRMED: {{ .Values.proxy.attachments.parserIsolationConfirmed | quote }}
+  BULWARK_ATTACHMENT_SERVICE_ENABLED: {{ .Values.proxy.attachments.service.enabled | quote }}
+  {{- if .Values.proxy.attachments.service.enabled }}
+  BULWARK_ATTACHMENT_SERVICE_DB_URL_FILE: {{ ternary "/run/attachment-config/database-url" "/run/outbox-pg/postgresql-url" (eq .Values.proxy.attachments.service.storage "local-sqlite") | quote }}
+  BULWARK_ATTACHMENT_SERVICE_MAX_DOCUMENTS: {{ .Values.proxy.attachments.service.maxDocuments | int64 | quote }}
+  BULWARK_ATTACHMENT_SERVICE_MAX_BYTES: {{ .Values.proxy.attachments.service.maxBytes | int64 | quote }}
+  BULWARK_ATTACHMENT_SERVICE_MAX_PER_TENANT: {{ .Values.proxy.attachments.service.maxPerTenant | int64 | quote }}
+  BULWARK_ATTACHMENT_SERVICE_TTL_SECONDS: {{ .Values.proxy.attachments.service.ttlSeconds | int64 | quote }}
+  {{- end }}
   BULWARK_REDACT_EMAIL: {{ .Values.proxy.outputFilter.redactEmail | quote }}
   BULWARK_REDACT_PHONE: {{ .Values.proxy.outputFilter.redactPhone | quote }}
   BULWARK_LOG_FORMAT: "json"
@@ -24,6 +44,25 @@ data:
   BULWARK_RATE_LIMIT_RPM: {{ .Values.proxy.rateLimit | quote }}
   BULWARK_WORKERS: {{ .Values.proxy.workers | quote }}
   BULWARK_TELEMETRY_ENABLED: {{ .Values.telemetry.enabled | quote }}
+  BULWARK_AUDIT_ADMISSION_REQUIRED: {{ .Values.telemetry.auditAdmission.required | quote }}
+  BULWARK_AUDIT_ADMISSION_TIMEOUT_MS: {{ .Values.telemetry.auditAdmission.timeoutMs | int64 | quote }}
+  BULWARK_TELEMETRY_DURABLE: {{ eq .Values.telemetry.outbox.mode "local-durable" | quote }}
+  BULWARK_TELEMETRY_SHARED_OUTBOX: {{ eq .Values.telemetry.outbox.mode "shared-postgresql" | quote }}
+  {{- if eq .Values.telemetry.outbox.mode "local-durable" }}
+  BULWARK_TELEMETRY_DISK_PATH: "/app/data/telemetry_queue.db"
+  {{- end }}
+  {{- if eq .Values.telemetry.outbox.mode "shared-postgresql" }}
+  BULWARK_ADMIN_DB_URL_FILE: "/run/outbox-pg/postgresql-url"
+  BULWARK_ADMIN_DB_SSL: {{ .Values.telemetry.outbox.postgresql.ssl | quote }}
+  BULWARK_ADMIN_DB_SSL_MODE: {{ .Values.telemetry.outbox.postgresql.sslMode | quote }}
+  BULWARK_ADMIN_DB_POOL_MIN: {{ .Values.telemetry.outbox.postgresql.poolMin | quote }}
+  BULWARK_ADMIN_DB_POOL_MAX: {{ .Values.telemetry.outbox.postgresql.poolMax | quote }}
+  BULWARK_SHARED_OUTBOX_MAX_EVENTS: {{ .Values.telemetry.outbox.postgresql.maxEvents | int64 | quote }}
+  BULWARK_SHARED_OUTBOX_MAX_BYTES: {{ .Values.telemetry.outbox.postgresql.maxBytes | int64 | quote }}
+  {{- if .Values.telemetry.outbox.postgresql.caKey }}
+  SSL_CERT_FILE: "/run/outbox-pg/ca.crt"
+  {{- end }}
+  {{- end }}
   BULWARK_TELEMETRY_BATCH_SIZE: {{ .Values.telemetry.batchSize | quote }}
   BULWARK_TELEMETRY_FLUSH_INTERVAL: {{ .Values.telemetry.flushInterval | quote }}
   BULWARK_SIEM_STATS_FILE: "/app/shared/siem/siem_stats.json"
@@ -50,11 +89,13 @@ data:
   {{- if .Values.proxy.enrichment.enabled }}
   BULWARK_ENRICHMENT_ENABLED: "true"
   BULWARK_REPLAY_DB_PATH: {{ .Values.proxy.enrichment.replayDbPath | quote }}
-  BULWARK_EMBED_MODEL: {{ .Values.proxy.enrichment.model | quote }}
+  BULWARK_EMBED_MODEL: "/app/verified-enrichment"
   BULWARK_EMBED_THRESH_SUSPICIOUS: {{ .Values.proxy.enrichment.suspiciousThreshold | quote }}
   BULWARK_EMBED_THRESH_THREAT: {{ .Values.proxy.enrichment.threatThreshold | quote }}
   SENTENCE_TRANSFORMERS_HOME: {{ .Values.proxy.enrichment.modelCachePath | quote }}
   HF_HOME: "/tmp/hf_cache"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
   {{- end }}
   {{- if .Values.proxy.cache.enabled }}
   BULWARK_CACHE_ENABLED: "true"
@@ -165,6 +206,7 @@ data:
   BULWARK_ADMIN_DB_URL_FILE: "/run/secrets-pg/postgresql-url"
   BULWARK_ADMIN_DB_POOL_MIN: {{ .Values.admin.database.postgresql.poolMin | quote }}
   BULWARK_ADMIN_DB_POOL_MAX: {{ .Values.admin.database.postgresql.poolMax | quote }}
+  BULWARK_ADMIN_DB_SSL: {{ ne .Values.admin.database.postgresql.sslMode "disable" | quote }}
   BULWARK_ADMIN_DB_SSL_MODE: {{ .Values.admin.database.postgresql.sslMode | quote }}
   {{- end }}
   # SkillSpector configuration
@@ -176,7 +218,10 @@ data:
   {{- if .Values.proxy.enrichment.enabled }}
   BULWARK_ENRICHMENT_ENABLED: "true"
   BULWARK_REPLAY_DB_PATH: {{ .Values.proxy.enrichment.replayDbPath | quote }}
-  BULWARK_EMBED_MODEL: {{ .Values.proxy.enrichment.model | quote }}
+  # Admin has no verified model mount; never fetch models from the network.
+  BULWARK_EMBED_MODEL: "/app/verified-enrichment"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
   BULWARK_EMBED_THRESH_SUSPICIOUS: {{ .Values.proxy.enrichment.suspiciousThreshold | quote }}
   BULWARK_EMBED_THRESH_THREAT: {{ .Values.proxy.enrichment.threatThreshold | quote }}
   {{- end }}
@@ -193,7 +238,8 @@ metadata:
 data:
   redis.conf: |
     maxmemory {{ .Values.redis.maxMemory }}
-    maxmemory-policy allkeys-lru
+    # Security state shares this instance: never silently evict revocations.
+    maxmemory-policy noeviction
     save 60 1000
     appendonly yes
     protected-mode yes

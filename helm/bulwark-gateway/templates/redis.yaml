@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: redis
-          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          image: {{ include "bulwark-gateway.redis.image" . | quote }}
           command:
             - sh
             - -c
@@ -71,6 +71,15 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - REDISCLI_AUTH="$(cat /run/secrets/redis-password)" redis-cli ping
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: {{ .Values.redis.startupFailureThreshold }}
           livenessProbe:
             exec:
               command:
@@ -90,7 +99,7 @@ spec:
       volumes:
         - name: redis-data
           persistentVolumeClaim:
-            claimName: redis-data
+            claimName: {{ .Values.redis.existingClaim | default "redis-data" | quote }}
         - name: redis-config
           configMap:
             name: redis-config
@@ -122,6 +131,7 @@ spec:
   selector:
     {{- include "bulwark-gateway.redis.selectorLabels" . | nindent 4 }}
 ---
+{{- if not .Values.redis.existingClaim }}
 # Redis PVC
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -139,6 +149,7 @@ spec:
   resources:
     requests:
       storage: {{ .Values.redis.storage }}
+{{- end }}
 {{- if .Values.redis.pdb.enabled }}
 ---
 # Redis PodDisruptionBudget
@@ -180,7 +191,7 @@ data:
     appendonly yes
     appendfsync everysec
     maxmemory {{ .Values.redis.maxMemory }}
-    maxmemory-policy allkeys-lru
+    maxmemory-policy noeviction
     tcp-keepalive 60
     timeout 300
     hz 10
@@ -192,7 +203,7 @@ data:
     appendonly yes
     appendfsync everysec
     maxmemory {{ .Values.redis.maxMemory }}
-    maxmemory-policy allkeys-lru
+    maxmemory-policy noeviction
     tcp-keepalive 60
     timeout 300
     hz 10
@@ -278,7 +289,7 @@ spec:
                 topologyKey: kubernetes.io/hostname
       containers:
         - name: redis
-          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          image: {{ include "bulwark-gateway.redis.image" . | quote }}
           command: ["sh", "/etc/redis/data-entrypoint.sh"]
           ports:
             - containerPort: 6379
@@ -413,7 +424,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: bulwark
-          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          image: {{ include "bulwark-gateway.redis.image" . | quote }}
           command: ["sh", "/etc/redis/bulwark-entrypoint.sh"]
           ports:
             - containerPort: 26379
@@ -566,7 +577,7 @@ data:
     appendonly yes
     appendfsync everysec
     maxmemory {{ .Values.redis.maxMemory }}
-    maxmemory-policy allkeys-lru
+    maxmemory-policy noeviction
     cluster-enabled yes
     cluster-config-file /data/nodes.conf
     cluster-node-timeout 5000
@@ -634,7 +645,7 @@ spec:
                 topologyKey: kubernetes.io/hostname
       containers:
         - name: redis
-          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          image: {{ include "bulwark-gateway.redis.image" . | quote }}
           command: ["sh", "/etc/redis/cluster-entrypoint.sh"]
           ports:
             - containerPort: 6379

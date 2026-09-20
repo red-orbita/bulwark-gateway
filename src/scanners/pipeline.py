@@ -76,6 +76,7 @@ class RegisteredScanner:
     priority: int
     metrics: ScannerMetrics = field(default_factory=ScannerMetrics)
     enabled: bool = True
+    startup_failed: bool = False
 
 
 class ScannerPipeline:
@@ -151,7 +152,7 @@ class ScannerPipeline:
         logger.info(
             "scanner_registered",
             extra={
-                "name": info.name,
+                "scanner": info.name,
                 "version": info.version,
                 "type": info.scanner_type.value,
                 "priority": info.priority,
@@ -168,7 +169,7 @@ class ScannerPipeline:
         for lane in (self._input_blocking, self._input_async, self._output_blocking, self._output_async):
             lane[:] = [s for s in lane if s.info.name != name]
 
-        logger.info("scanner_unregistered", extra={"name": name})
+        logger.info("scanner_unregistered", extra={"scanner": name})
         return True
 
     def enable(self, name: str) -> bool:
@@ -195,7 +196,8 @@ class ScannerPipeline:
 
         Returns:
             Combined GuardrailResult. BLOCK stops immediately.
-            WARN events are accumulated. ALLOW is default.
+            Precedence: BLOCK > REDACT > WARN > ALLOW. Empty replacements are
+            valid; REDACT without replacement content fails closed.
         """
         all_events: list[SecurityEvent] = []
         final_verdict = Verdict.ALLOW
@@ -203,6 +205,8 @@ class ScannerPipeline:
         for registered in self._input_blocking:
             if not registered.enabled:
                 continue
+            if registered.startup_failed:
+                return GuardrailResult(verdict=Verdict.BLOCK, events=all_events)
 
             start = time.perf_counter()
             result = await registered.scanner.safe_scan(
@@ -226,11 +230,17 @@ class ScannerPipeline:
             if result.verdict == Verdict.WARN:
                 registered.metrics.total_warns += 1
                 all_events.extend(result.events)
-                final_verdict = Verdict.WARN
+                if final_verdict == Verdict.ALLOW:
+                    final_verdict = Verdict.WARN
 
-            if result.verdict == Verdict.REDACT and result.modified_content:
+            if result.verdict == Verdict.REDACT:
                 all_events.extend(result.events)
+                if result.modified_content is None:
+                    registered.metrics.total_errors += 1
+                    registered.metrics.total_blocks += 1
+                    return GuardrailResult(verdict=Verdict.BLOCK, events=all_events)
                 content = result.modified_content  # Pass redacted content to next scanner
+                final_verdict = Verdict.REDACT
 
         return GuardrailResult(
             verdict=final_verdict,
@@ -292,6 +302,8 @@ class ScannerPipeline:
         for registered in self._output_blocking:
             if not registered.enabled:
                 continue
+            if registered.startup_failed:
+                return GuardrailResult(verdict=Verdict.BLOCK, events=all_events)
 
             start = time.perf_counter()
             result = await registered.scanner.safe_scan(
@@ -310,10 +322,14 @@ class ScannerPipeline:
                     events=all_events,
                 )
 
-            if result.verdict == Verdict.REDACT and result.modified_content:
+            if result.verdict == Verdict.REDACT:
+                all_events.extend(result.events)
+                if result.modified_content is None:
+                    registered.metrics.total_errors += 1
+                    registered.metrics.total_blocks += 1
+                    return GuardrailResult(verdict=Verdict.BLOCK, events=all_events)
                 modified = result.modified_content
                 final_verdict = Verdict.REDACT
-                all_events.extend(result.events)
 
             if result.verdict == Verdict.WARN:
                 registered.metrics.total_warns += 1
@@ -360,15 +376,22 @@ class ScannerPipeline:
     async def startup(self) -> None:
         """Initialize all registered scanners."""
         for registered in self._all_scanners.values():
+            if not registered.enabled:
+                continue
             try:
                 await registered.scanner.startup()
-                logger.info("scanner_started", extra={"name": registered.info.name})
-            except Exception as e:
+                registered.startup_failed = False
+                logger.info("scanner_started", extra={"scanner": registered.info.name})
+            except Exception:
                 logger.error(
                     "scanner_startup_failed",
-                    extra={"name": registered.info.name, "error": str(e)[:200]},
+                    extra={"scanner": registered.info.name},
                 )
-                registered.enabled = False
+                registered.startup_failed = True
+                # Leave blocking controls visible to readiness and fail-closed
+                # until the caller explicitly applies its degradation policy.
+                if registered.info.scanner_type in (ScannerType.INPUT_ASYNC, ScannerType.OUTPUT_ASYNC):
+                    registered.enabled = False
 
     async def shutdown(self) -> None:
         """Shutdown all registered scanners."""
@@ -378,7 +401,7 @@ class ScannerPipeline:
             except Exception as e:
                 logger.warning(
                     "scanner_shutdown_error",
-                    extra={"name": registered.info.name, "error": str(e)[:200]},
+                    extra={"scanner": registered.info.name, "error_type": type(e).__name__},
                 )
 
     # === Introspection ===
@@ -410,6 +433,9 @@ class ScannerPipeline:
         """Run health checks on all scanners."""
         results = {}
         for name, registered in self._all_scanners.items():
+            if registered.startup_failed:
+                results[name] = False
+                continue
             try:
                 results[name] = await registered.scanner.health()
             except Exception:
@@ -429,6 +455,9 @@ class ScannerPipeline:
         degraded: list[str] = []
         for registered in (*self._input_blocking, *self._output_blocking):
             if not registered.enabled:
+                continue
+            if registered.startup_failed:
+                degraded.append(registered.info.name)
                 continue
             try:
                 healthy = await registered.scanner.health()

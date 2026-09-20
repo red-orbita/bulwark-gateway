@@ -20,12 +20,13 @@ import hashlib
 import logging
 import os
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -84,17 +85,27 @@ _csp_nonce_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    """Admin app lifecycle."""
+    """Unwind every acquired service, including partial startup and failed cleanup."""
+    async with AsyncExitStack() as cleanup:
+        async with _admin_lifespan(app, cleanup):
+            yield
+
+
+@asynccontextmanager
+async def _admin_lifespan(app: FastAPI, cleanup: AsyncExitStack) -> AsyncGenerator:
+    """Register cleanup before initialization can acquire partial resources."""
     # Initialize database abstraction layer (PostgreSQL or SQLite)
     # This runs schema migrations and provides the async engine for new code.
     # Existing services (user_store, audit_logger) continue using their own
     # connections until individually migrated to use the shared engine.
     from .services.database import close_database, init_database
+    cleanup.push_async_callback(close_database)
     db_engine = await init_database()
     app.state.db = db_engine
 
     get_metrics()  # Initialize singleton
     audit_log = get_audit_logger()
+    cleanup.push_async_callback(audit_log.close)
     await audit_log.initialize()
     # Initialize user store (create tables + seed defaults)
     from .services.user_store import get_user_store
@@ -145,10 +156,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # Start background feed scheduler
     from .services.feed_scheduler import get_feed_scheduler
     scheduler = get_feed_scheduler()
+    cleanup.push_async_callback(scheduler.stop)
     await scheduler.start()
     # Initialize GDPR compliance service
     from .services.gdpr import get_gdpr_service
     gdpr_service = get_gdpr_service()
+    cleanup.push_async_callback(gdpr_service.close)
     await gdpr_service.initialize()
     # Start the durable Security Events sync: drains the proxy's capped Redis
     # live buffer (bulwark:recent_blocks:* / recent_allowed:*) into the
@@ -157,6 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # SIEM-aware (see events_sync.resolve_retention_days).
     from .services.events_sync import get_events_sync
     events_sync = get_events_sync()
+    cleanup.push_async_callback(events_sync.stop)
     await events_sync.start()
     # Start the reconcile poller (Investigation Phase 4): the poll-fallback half of
     # the two inbound-sync trigger paths. On a configurable interval it sweeps every
@@ -167,6 +181,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # inert) for connectors used outbound-push only.
     from .services.integrations.reconcile_poller import get_reconcile_poller
     reconcile_poller = get_reconcile_poller()
+    cleanup.push_async_callback(reconcile_poller.stop)
     await reconcile_poller.start()
     # Start the sighting feedback dispatcher (Investigation Phase 5.3): sweeps
     # freshly-blocked IOC matches and reports each as a sighting back to the
@@ -175,24 +190,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # fully inert when disabled and fail-open when on.
     from .services.integrations.sighting_dispatcher import get_sighting_dispatcher
     sighting_dispatcher = get_sighting_dispatcher()
+    cleanup.push_async_callback(sighting_dispatcher.stop)
     await sighting_dispatcher.start()
     yield
-    await sighting_dispatcher.stop()
-    await reconcile_poller.stop()
-    await events_sync.stop()
-    await scheduler.stop()
-    await gdpr_service.close()
-    await audit_log.close()
-    await close_database()
 
 
 _admin_debug = os.getenv("ADMIN_DEBUG", "false").lower() in ("true", "1")
+
+
+async def request_validation_error(request: Request, exc: RequestValidationError):
+    # Pydantic errors include input values, which may contain passwords/tokens.
+    return JSONResponse(status_code=422, content={"detail": "Invalid request data"})
 
 app = FastAPI(
     title="Bulwark Gateway Admin Portal",
     version="1.0.0",
     description="Administration interface for Bulwark Gateway security proxy",
     lifespan=lifespan,
+    exception_handlers={RequestValidationError: request_validation_error},
     docs_url="/docs" if _admin_debug else None,
     redoc_url="/redoc" if _admin_debug else None,
     openapi_url="/openapi.json" if _admin_debug else None,

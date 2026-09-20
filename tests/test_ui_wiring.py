@@ -48,12 +48,12 @@ def _route_segments(path: str) -> list[str]:
 
 def _build_route_index() -> dict[str, list[list[str]]]:
     index: dict[str, list[list[str]]] = {}
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        if not path:
-            continue
-        for method in getattr(route, "methods", None) or set():
-            index.setdefault(method.upper(), []).append(_route_segments(path))
+    # FastAPI can store lazy included routers rather than flattened app.routes.
+    # OpenAPI expands them through the public API, preserving mounted prefixes.
+    for path, operations in app.openapi()["paths"].items():
+        for method in operations:
+            if method.lower() in {"get", "post", "put", "patch", "delete", "head", "options", "trace"}:
+                index.setdefault(method.upper(), []).append(_route_segments(path))
     return index
 
 
@@ -288,4 +288,3 @@ def test_classlist_toggle_force_arg_is_boolean():
         "instead of force-set — coerce with Boolean(...)/!! or use a comparison):\n"
         + "\n".join(offenders)
     )
-

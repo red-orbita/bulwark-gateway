@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Callable, TypeVar
 
 from src.models import SecurityEvent, Verdict
@@ -40,6 +42,9 @@ from src.scanners.protocol import ScanContext
 logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
+_MAX_WRAP_SNAPSHOT_BYTES = 1024 * 1024
+_MAX_WRAP_SNAPSHOT_NODES = 1024
+_MAX_WRAP_SNAPSHOT_DEPTH = 32
 
 
 # === Scanner registry mapping (name -> import path + class) ===
@@ -146,11 +151,14 @@ class Guard:
 
         import importlib
 
+        unknown = [name for name in self._scanner_names if name not in _SCANNER_REGISTRY]
+        if unknown and self._config.get("fail_mode", "closed") == "closed":
+            raise RuntimeError(f"Unknown scanner: {', '.join(unknown)}")
         for name in self._scanner_names:
             if name not in _SCANNER_REGISTRY:
                 logger.warning(
                     "scanner_not_found",
-                    extra={"name": name, "available": list(_SCANNER_REGISTRY.keys())},
+                    extra={"scanner": name, "available": list(_SCANNER_REGISTRY.keys())},
                 )
                 continue
 
@@ -160,18 +168,28 @@ class Guard:
                 scanner_cls = getattr(module, class_name)
                 scanner_instance = scanner_cls()
                 self._pipeline.register(scanner_instance)
-                logger.debug("sdk_scanner_loaded", extra={"name": name})
+                logger.debug("sdk_scanner_loaded", extra={"scanner": name})
             except Exception as e:
                 logger.error(
                     "sdk_scanner_load_failed",
-                    extra={"name": name, "error": str(e)[:200]},
+                    extra={"scanner": name, "error_type": type(e).__name__},
                 )
                 if self._config.get("fail_mode", "closed") == "closed":
                     raise RuntimeError(
-                        f"Failed to load scanner '{name}': {e}"
+                        f"Failed to load scanner '{name}'"
                     ) from e
 
         await self._pipeline.startup()
+        from src.scanners.pipeline import resolve_blocking_readiness
+        degraded = await self._pipeline.unhealthy_blocking_scanners()
+        action, message = resolve_blocking_readiness(degraded, self._config.get("fail_mode", "closed"))
+        if action == "refuse":
+            await self._pipeline.shutdown()
+            raise RuntimeError(message)
+        if action == "degrade":
+            for name in degraded:
+                self._pipeline.disable(name)
+            logger.error("sdk_scanners_degraded", extra={"scanners": degraded})
         self._initialized = True
         logger.info(
             "guard_started",
@@ -290,8 +308,10 @@ class Guard:
     ) -> Any:
         """Wrap an LLM call with input and output scanning.
 
-        Scans the first positional argument (or 'prompt'/'content' kwarg)
-        as input, executes the LLM call, then scans the output.
+        Scans one scalar prompt or all text-only message roles, executes the LLM
+        call, then scans one supported text response. Ambiguous inputs, tools,
+        streaming, multimodal blocks and multiple output choices require a
+        dedicated adapter and are rejected, not passed through uninspected.
 
         Args:
             llm_call: The LLM function to wrap (sync or async).
@@ -308,6 +328,9 @@ class Guard:
             SecurityError: If input or output is blocked.
         """
         self._ensure_initialized()
+
+        # Capture before any scan await; never forward caller-owned mutable data.
+        args, kwargs = _snapshot_wrap_value((args, kwargs))
 
         # Extract input content for scanning
         input_content = _extract_input_content(args, kwargs)
@@ -326,12 +349,37 @@ class Guard:
                     f"Input blocked: {_reason}",
                     result=input_result,
                 )
+            if input_result.verdict == Verdict.REDACT:
+                replacement = input_result.modified_content
+                if replacement is None:
+                    raise SecurityError("Input redaction has no replacement", result=input_result)
+                # Match the extraction order; never flatten a conversation back
+                # into roles or silently send the original after a REDACT.
+                for key in ("prompt", "content", "input", "query", "message"):
+                    if isinstance(kwargs.get(key), str):
+                        kwargs[key] = replacement
+                        break
+                else:
+                    if isinstance(kwargs.get("messages"), list):
+                        raise SecurityError("Conversation redaction requires an explicit adapter", result=input_result)
+                    for index, arg in enumerate(args):
+                        if isinstance(arg, str):
+                            args = (*args[:index], replacement, *args[index + 1:])
+                            break
+                    else:
+                        raise SecurityError("Unsupported input redaction shape", result=input_result)
+                input_content = replacement
 
         # Execute the LLM call
-        if asyncio.iscoroutinefunction(llm_call):
+        if inspect.iscoroutinefunction(llm_call) or inspect.iscoroutinefunction(type(llm_call).__call__):
             response = await llm_call(*args, **kwargs)
         else:
-            response = llm_call(*args, **kwargs)
+            response = await asyncio.to_thread(llm_call, *args, **kwargs)
+            if inspect.isawaitable(response):
+                response = await response
+
+        # The provider may retain and mutate its response during output scanning.
+        response = _snapshot_wrap_value(response)
 
         # Extract output content for scanning
         output_content = _extract_output_content(response)
@@ -351,13 +399,19 @@ class Guard:
                     f"Output blocked: {_reason}",
                     result=output_result,
                 )
-            if output_result.verdict == Verdict.REDACT and output_result.modified_content:
+            if output_result.verdict == Verdict.REDACT:
+                if output_result.modified_content is None:
+                    raise SecurityError("Output redaction has no replacement", result=output_result)
                 # Return redacted content
                 if isinstance(response, str):
                     return output_result.modified_content
+                if isinstance(response, dict) and "choices" in response:
+                    raise SecurityError("Choice redaction requires an explicit adapter", result=output_result)
                 if isinstance(response, dict) and "content" in response:
-                    response["content"] = output_result.modified_content
-                    return response
+                    return {**response, "content": output_result.modified_content}
+                if isinstance(response, dict) and "text" in response:
+                    return {**response, "text": output_result.modified_content}
+                raise SecurityError("Output redaction requires an explicit adapter", result=output_result)
 
         return response
 
@@ -404,7 +458,7 @@ class Guard:
                     **kwargs,
                 )
 
-            if asyncio.iscoroutinefunction(func):
+            if inspect.iscoroutinefunction(func) or inspect.iscoroutinefunction(type(func).__call__):
                 return async_wrapper  # type: ignore[return-value]
             return sync_wrapper  # type: ignore[return-value]
 
@@ -488,6 +542,67 @@ class SecurityError(Exception):
 # === Helpers ===
 
 
+def _snapshot_wrap_value(value: Any) -> Any:
+    """Detach only bounded passive data, without serializers or copy hooks."""
+    from src.sdk.integrations._structured import _record_fields
+
+    nodes = 0
+    size = 0
+    active: set[int] = set()
+
+    def visit(item: Any, depth: int) -> Any:
+        nonlocal nodes, size
+        nodes += 1
+        if nodes > _MAX_WRAP_SNAPSHOT_NODES or depth > _MAX_WRAP_SNAPSHOT_DEPTH:
+            raise SecurityError("Wrapper snapshot limit exceeded")
+        kind = type(item)
+        if type(kind) is not type:
+            raise SecurityError("Custom payload metaclasses are unsupported")
+        if kind is str:
+            text = _bounded_wrap_text(item, _MAX_WRAP_SNAPSHOT_BYTES)
+            size += len(text.encode("utf-8"))
+            if size > _MAX_WRAP_SNAPSHOT_BYTES:
+                raise SecurityError("Wrapper snapshot byte limit exceeded")
+            return text
+        if item is None or kind in (bool, int, float):
+            if kind is int and item.bit_length() > 256:
+                raise SecurityError("Numeric snapshot limit exceeded")
+            return item
+        identity = id(item)
+        if identity in active:
+            raise SecurityError("Cyclic payload is unsupported")
+        active.add(identity)
+        try:
+            if kind in (list, tuple):
+                if len(item) > _MAX_WRAP_SNAPSHOT_NODES - nodes:
+                    raise SecurityError("Wrapper snapshot limit exceeded")
+                return kind(visit(child, depth + 1) for child in item)
+            # SimpleNamespace has a member descriptor on Python 3.13, unlike
+            # ordinary passive records. Exact-type access cannot invoke hooks.
+            fields = item if kind is dict else vars(item) if kind is SimpleNamespace else _record_fields(item)
+            if len(fields) * 2 > _MAX_WRAP_SNAPSHOT_NODES - nodes:
+                raise SecurityError("Wrapper snapshot limit exceeded")
+            copied = {}
+            for key, child in fields.items():
+                if type(key) is not str:
+                    raise SecurityError("Only string mapping keys are supported")
+                copied[visit(key, depth + 1)] = visit(child, depth + 1)
+            if kind is dict:
+                return copied
+            record = SimpleNamespace() if kind is SimpleNamespace else object.__new__(kind)
+            vars(kind)["__dict__"].__get__(record, kind).update(copied)
+            return record
+        finally:
+            active.remove(identity)
+
+    try:
+        return visit(value, 0)
+    except SecurityError:
+        raise
+    except Exception:
+        raise SecurityError("Unable to capture wrapper snapshot") from None
+
+
 def _run_async(coro: Any) -> Any:
     """Run an async coroutine from synchronous code.
 
@@ -511,55 +626,83 @@ def _run_async(coro: Any) -> Any:
 
 
 def _extract_input_content(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
-    """Extract input content from function arguments.
-
-    Looks for the first string argument, or 'prompt'/'content'/'messages' kwargs.
-    """
-    # Check common kwarg names
-    for key in ("prompt", "content", "input", "query", "message"):
-        if key in kwargs and isinstance(kwargs[key], str):
-            return kwargs[key]
-
-    # Check 'messages' kwarg (OpenAI-style)
-    if "messages" in kwargs and isinstance(kwargs["messages"], list):
-        user_msgs = [
-            m.get("content", "")
-            for m in kwargs["messages"]
-            if isinstance(m, dict) and m.get("role") == "user"
-        ]
-        if user_msgs:
-            return " ".join(user_msgs)
-
-    # First positional string argument
-    for arg in args:
-        if isinstance(arg, str):
-            return arg
-
-    return None
+    """Select exactly one supported input; bound text before allocating a join."""
+    if kwargs.get("stream") or any(kwargs.get(key) for key in ("tools", "functions", "tool_choice", "function_call")):
+        raise SecurityError("Tools and streaming require a dedicated adapter")
+    keys = [key for key in ("prompt", "content", "input", "query", "message", "messages") if key in kwargs]
+    positional = [arg for arg in args if isinstance(arg, str)]
+    if len(keys) + len(positional) != 1 or any(isinstance(arg, (dict, list, tuple)) for arg in args):
+        raise SecurityError("Ambiguous or unsupported input shape")
+    value = kwargs[keys[0]] if keys else positional[0]
+    if not keys or keys[0] != "messages":
+        return _bounded_wrap_text(value, 16384)
+    if not isinstance(value, list) or not 0 < len(value) <= 128:
+        raise SecurityError("Expected 1 to 128 text messages")
+    texts: list[str] = []
+    size = 0
+    for message in value:
+        if not isinstance(message, dict) or message.get("role") not in (
+            "user", "system", "developer", "assistant", "tool", "function",
+        ):
+            raise SecurityError("Unsupported message shape")
+        if any(message.get(key) for key in ("tool_calls", "function_call")):
+            raise SecurityError("Tool history requires a dedicated adapter")
+        content = message.get("content")
+        if isinstance(content, list):
+            if len(content) > 128:
+                raise SecurityError("Too many text blocks")
+            parts = []
+            part_bytes = 0
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "text":
+                    raise SecurityError("Non-text input requires a dedicated adapter")
+                text = _bounded_wrap_text(block.get("text"), 16384)
+                part_bytes += len(text.encode("utf-8")) + 1
+                if size + part_bytes - (not texts) > 16384:
+                    raise SecurityError("Input exceeds generic wrapper inspection budget")
+                parts.append(text)
+        else:
+            parts = [_bounded_wrap_text(content, 16384)]
+        for text in parts:
+            size += len(text.encode("utf-8")) + bool(texts)
+            if size > 16384:
+                raise SecurityError("Input exceeds generic wrapper inspection budget")
+            texts.append(text)
+    return " ".join(texts)
 
 
 def _extract_output_content(response: Any) -> str | None:
-    """Extract text content from an LLM response."""
+    """Inspect one known text slot; never silently approve an unknown response."""
     if isinstance(response, str):
-        return response
+        return _bounded_wrap_text(response, 65536)
 
     if isinstance(response, dict):
-        # OpenAI-style response
-        if "choices" in response:
+        keys = [key for key in ("choices", "content", "text") if key in response]
+        if len(keys) != 1 or any(response.get(key) for key in ("tool_calls", "function_call")):
+            raise SecurityError("Ambiguous or unsupported output shape")
+        if keys[0] == "choices":
             choices = response["choices"]
-            if choices and isinstance(choices[0], dict):
-                message = choices[0].get("message", {})
-                return message.get("content")
-        # Simple dict with content
-        if "content" in response:
-            return response["content"]
-        if "text" in response:
-            return response["text"]
+            if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+                raise SecurityError("Multiple or malformed choices require a dedicated adapter")
+            message = choices[0].get("message")
+            if (not isinstance(message, dict) or "delta" in choices[0]
+                    or any(message.get(key) for key in ("tool_calls", "function_call"))):
+                raise SecurityError("Tool or streaming response requires a dedicated adapter")
+            return _bounded_wrap_text(message.get("content"), 65536)
+        return _bounded_wrap_text(response[keys[0]], 65536)
+    if hasattr(response, "content") and not any(
+        getattr(response, key, None) for key in ("choices", "tool_calls", "function_call")
+    ):
+        return _bounded_wrap_text(response.content, 65536)
+    raise SecurityError("Unsupported output requires a dedicated adapter")
 
-    # Object with .content attribute
-    if hasattr(response, "content"):
-        content = response.content
-        if isinstance(content, str):
-            return content
 
-    return None
+def _bounded_wrap_text(value: Any, max_bytes: int) -> str:
+    if not isinstance(value, str) or len(value) > max_bytes:
+        raise SecurityError("Unsupported text or inspection budget exceeded")
+    try:
+        if len(value.encode("utf-8")) > max_bytes:
+            raise SecurityError("Inspection budget exceeded")
+    except UnicodeError:
+        raise SecurityError("Invalid text encoding") from None
+    return value

@@ -36,6 +36,17 @@ async def health_live():
     return {"status": "alive"}
 
 
+@router.get("/ready/attachments")
+async def attachment_readiness(request: Request):
+    """Worker/storage progress, not a disclosure of document or tenant state."""
+    service = getattr(request.app.state, "attachment_service", None)
+    available = service is not None and service.ready is True
+    return JSONResponse(
+        status_code=200 if available else 503,
+        content={"status": "ready" if available else "not_ready"},
+    )
+
+
 @router.get("/health/telemetry")
 async def telemetry_stats(request: Request):
     """Telemetry pipeline stats: queue depth, export counts, circuit breakers.

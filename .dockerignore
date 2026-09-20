@@ -37,6 +37,8 @@ docker/
 # Exception: the proxy launcher is baked into the image (distroless has no shell;
 # derives the uvicorn worker count from BULWARK_WORKERS — GAP-A).
 !docker/proxy_launcher.py
+!docker/verify_runtime.py
+!docker/requirements-runtime-check.lock
 
 # --- Secrets (injected at runtime via mounts) ---
 secrets/
@@ -47,6 +49,12 @@ secrets/
 data/
 reports/
 shared/
+models/
+.evaluation-tmp/
+.pytest-*/
+debates/
+sdk-go/
+node_modules/
 
 # --- IDE / Editor ---
 .vscode/
@@ -60,3 +68,10 @@ shared/
 # --- OS artifacts ---
 .DS_Store
 Thumbs.db
+
+# Runtime license/attribution must survive the broad Markdown exclusion.
+!LICENSE
+!LICENSING.md
+!src/evaluation/data/NOTICE
+!src/evaluation/data/**/LICENSE*
+!src/evaluation/data/**/NOTICE*
