@@ -13,6 +13,7 @@ by design), and negatives use closed ports / blocked hosts.
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -63,6 +64,37 @@ async def test_wazuh_network_route_still_blocks_localhost(monkeypatch):
         {"platform": "wazuh", "transport_type": "syslog_tcp", "endpoint": "localhost", "port": 5514},
         SimpleNamespace(sub="operator"),
     )
+    assert not result.success and "SSRF" in result.error
+
+
+@pytest.mark.parametrize("transport", ["http_rest", "syslog_tcp", "syslog_udp", "file"])
+async def test_slow_dns_validation_does_not_block_event_loop(monkeypatch, transport):
+    entered = threading.Event()
+    release = threading.Event()
+    main_thread = threading.get_ident()
+    thread_ids = []
+
+    def slow_validation(*args):
+        thread_ids.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=2)
+        return "Blocked test destination"
+
+    monkeypatch.setattr(siem, "_check_probe_host", slow_validation)
+    monkeypatch.setattr(siem, "_validate_url_no_ssrf", slow_validation)
+    config = {"platform": "wazuh", "transport_type": transport,
+              "endpoint": "collector.example", "wazuh_api_url": "https://collector.example:55000"}
+    probe = siem._test_wazuh_connection if transport == "file" else siem._probe_transport
+    task = asyncio.create_task(probe(config))
+    try:
+        async with asyncio.timeout(1):
+            while not entered.is_set():
+                await asyncio.sleep(0.01)
+        assert len(thread_ids) == 1 and thread_ids[0] != main_thread
+        assert not task.done(), "The event loop must run while DNS is still pending"
+    finally:
+        release.set()
+        result = await asyncio.wait_for(task, timeout=3)
     assert not result.success and "SSRF" in result.error
 
 # ─── _endpoint_host_port ─────────────────────────────────────────────────────

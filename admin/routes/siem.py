@@ -519,7 +519,7 @@ async def _probe_http(config: dict, platform: str, ttype: str) -> SIEMTestResult
     default_port = int(config.get("port", 443) or 443)
     host, port = _endpoint_host_port(endpoint, default_port)
 
-    ssrf_error = _check_probe_host(host, port)
+    ssrf_error = await asyncio.to_thread(_check_probe_host, host, port)
     if ssrf_error:
         return SIEMTestResult(
             success=False, platform=platform, transport=ttype, latency_ms=0.0,
@@ -572,7 +572,7 @@ async def _probe_tcp(config: dict, platform: str, ttype: str, *, use_tls: bool) 
     default_port = int(config.get("port", 514) or 514)
     host, port = _endpoint_host_port(endpoint, default_port)
 
-    ssrf_error = _check_probe_host(host, port)
+    ssrf_error = await asyncio.to_thread(_check_probe_host, host, port)
     if ssrf_error:
         return SIEMTestResult(
             success=False, platform=platform, transport=ttype, latency_ms=0.0,
@@ -628,7 +628,7 @@ async def _probe_udp(config: dict, platform: str, ttype: str) -> SIEMTestResult:
     default_port = int(config.get("port", 514) or 514)
     host, port = _endpoint_host_port(endpoint, default_port)
 
-    ssrf_error = _check_probe_host(host, port)
+    ssrf_error = await asyncio.to_thread(_check_probe_host, host, port)
     if ssrf_error:
         return SIEMTestResult(
             success=False, platform=platform, transport=ttype, latency_ms=0.0,
@@ -691,7 +691,7 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
             latency_ms=0, error="Invalid wazuh_api_url",
         )
     if hostname not in _allowed_hosts:
-        ssrf_error = _validate_url_no_ssrf(wazuh_url)
+        ssrf_error = await asyncio.to_thread(_validate_url_no_ssrf, wazuh_url)
         if ssrf_error is not None:
             return SIEMTestResult(
                 success=False, platform="wazuh", transport="file",
