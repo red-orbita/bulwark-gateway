@@ -393,7 +393,7 @@ async def test_siem_connection(
 ):
     """Test SIEM connectivity with a real probe (no fabricated results).
 
-    Wazuh runs a full API/analysisd check. Every other transport runs a real
+    Wazuh file shipping runs an API/analysisd check. Network transports run a real
     connectivity probe appropriate to its protocol (HTTP request, TCP/TLS
     handshake, UDP datagram, or filesystem writability) with measured latency.
     """
@@ -401,8 +401,8 @@ async def test_siem_connection(
     platform = config.get("platform", config.get("transport_id", "unknown"))
     await audit.log(actor=user.sub, action="siem_test", resource_type="siem", resource_id=platform)
 
-    # Wazuh: real API test
-    if platform == "wazuh":
+    # A Wazuh syslog destination is not a manager API or a monitored file path.
+    if platform == "wazuh" and config.get("transport_type", "file") == "file":
         return await _test_wazuh_connection(config)
 
     return await _probe_transport(config)
@@ -665,7 +665,12 @@ async def _test_wazuh_connection(config: dict) -> SIEMTestResult:
 
     import httpx
 
-    wazuh_url = config.get("wazuh_api_url", "https://localhost:55000")
+    wazuh_url = config.get("wazuh_api_url", "")
+    if not isinstance(wazuh_url, str) or not wazuh_url.strip():
+        return SIEMTestResult(
+            success=False, platform="wazuh", transport="file", latency_ms=0,
+            error="Configure a Wazuh manager API URL for the file integration test (not localhost).",
+        )
     wazuh_user = config.get("wazuh_user", "wazuh-wui")
     wazuh_password = config.get("wazuh_password", "wazuh-wui")
     log_path = config.get("endpoint", "/var/log/bulwark-gateway/events.ndjson")

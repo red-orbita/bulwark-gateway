@@ -64,7 +64,7 @@
                         </div>
                         <p class="text-xs text-gray-400 mt-1">
                             <template x-if="transport.platform === 'wazuh'">
-                                <span>File: <span x-text="transport.endpoint"></span> | API: <span x-text="transport.wazuh_api_url || 'not configured'"></span></span>
+                                <span>Endpoint: <span x-text="transport.endpoint"></span><span x-show="transport.transport_type === 'file'"> | API: <span x-text="transport.wazuh_api_url || 'not configured'"></span></span></span>
                             </template>
                             <template x-if="transport.platform !== 'wazuh'">
                                 <span>Endpoint: <span x-text="transport.endpoint"></span>:<span x-text="transport.port"></span> |
@@ -161,16 +161,16 @@
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label for="siem-field" class="sg-label" x-text="form.platform === 'wazuh' ? 'Log File Path' : 'Endpoint'"></label>
-                        <input id="siem-field" type="text" x-model="form.endpoint" class="sg-input w-full" :placeholder="form.platform === 'wazuh' ? '/var/log/bulwark-gateway/events.ndjson' : 'siem.company.com'">
+                        <label for="siem-field" class="sg-label" x-text="form.transport_type === 'file' ? 'Log File Path' : 'Endpoint'"></label>
+                        <input id="siem-field" type="text" x-model="form.endpoint" class="sg-input w-full" :placeholder="form.transport_type === 'file' ? '/var/log/bulwark-gateway/events.ndjson' : 'siem.company.com'">
                     </div>
-                    <div x-show="form.platform !== 'wazuh'">
+                    <div x-show="form.transport_type !== 'file'">
                         <label for="siem-port" class="sg-label">Port</label>
                         <input id="siem-port" type="number" x-model="form.port" class="sg-input w-full" placeholder="514">
                     </div>
                 </div>
                 <!-- Wazuh-specific: API URL for connection test -->
-                <div x-show="form.platform === 'wazuh'" class="sg-card !bg-gray-900/50 !border-purple-800/30">
+                <div x-show="form.platform === 'wazuh' && form.transport_type === 'file'" class="sg-card !bg-gray-900/50 !border-purple-800/30">
                     <div class="flex items-center gap-2 mb-2">
                         <i data-lucide="shield-check" class="w-4 h-4 text-purple-400"></i>
                         <h4 class="text-sm font-semibold text-purple-300">Wazuh Integration</h4>
@@ -286,7 +286,6 @@ function siemManager() {
                 this.form.auth_type = 'none';
                 this.form.batch_size = 100;
                 this.form.flush_interval = 1.0;
-                if (!this.form.wazuh_api_url) this.form.wazuh_api_url = 'https://localhost:55000';
             }
         },
         async init() {

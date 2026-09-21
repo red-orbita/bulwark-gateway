@@ -13,8 +13,57 @@ by design), and negatives use closed ports / blocked hosts.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from admin.routes import siem
+
+
+@pytest.mark.parametrize("transport", ["syslog_tcp", "syslog_udp", "syslog_tls", "tcp_tls", "http_rest"])
+async def test_wazuh_network_test_uses_configured_transport(monkeypatch, transport):
+    monkeypatch.setattr(siem, "get_audit_logger", lambda: SimpleNamespace(log=AsyncMock()))
+    probe = AsyncMock(return_value="network-result")
+    manager = AsyncMock(side_effect=AssertionError("Network test must not use manager API"))
+    monkeypatch.setattr(siem, "_probe_transport", probe)
+    monkeypatch.setattr(siem, "_test_wazuh_connection", manager)
+    config = {"platform": "wazuh", "transport_type": transport, "endpoint": "collector.example", "port": 5514}
+    assert await siem.test_siem_connection(config, SimpleNamespace(sub="operator")) == "network-result"
+    probe.assert_awaited_once_with(config)
+    manager.assert_not_awaited()
+
+
+@pytest.mark.parametrize("transport", [None, "file"])
+async def test_wazuh_file_test_keeps_manager_checks(monkeypatch, transport):
+    monkeypatch.setattr(siem, "get_audit_logger", lambda: SimpleNamespace(log=AsyncMock()))
+    manager = AsyncMock(return_value="manager-result")
+    monkeypatch.setattr(siem, "_test_wazuh_connection", manager)
+    config = {"platform": "wazuh"}
+    if transport is not None:
+        config["transport_type"] = transport
+    assert await siem.test_siem_connection(config, SimpleNamespace(sub="operator")) == "manager-result"
+    manager.assert_awaited_once_with(config)
+
+
+@pytest.mark.parametrize("url", [None, "", " "])
+async def test_wazuh_file_without_api_url_fails_without_network(monkeypatch, url):
+    def forbidden(*args):
+        pytest.fail("Unconfigured manager test must not resolve an implicit endpoint")
+
+    monkeypatch.setattr(siem, "_validate_url_no_ssrf", forbidden)
+    result = await siem._test_wazuh_connection({"wazuh_api_url": url})
+    assert not result.success and result.latency_ms == 0
+    assert "Configure a Wazuh manager API URL" in result.error
+
+
+async def test_wazuh_network_route_still_blocks_localhost(monkeypatch):
+    monkeypatch.setattr(siem, "get_audit_logger", lambda: SimpleNamespace(log=AsyncMock()))
+    result = await siem.test_siem_connection(
+        {"platform": "wazuh", "transport_type": "syslog_tcp", "endpoint": "localhost", "port": 5514},
+        SimpleNamespace(sub="operator"),
+    )
+    assert not result.success and "SSRF" in result.error
 
 # ─── _endpoint_host_port ─────────────────────────────────────────────────────
 
