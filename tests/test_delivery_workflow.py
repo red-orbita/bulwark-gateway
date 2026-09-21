@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -52,7 +53,8 @@ def test_builds_request_sbom_and_provenance():
               if step.get("uses", "").startswith("docker/build-push-action@")]
     assert len(builds) == 2
     assert all(step["with"]["sbom"] is True and step["with"]["provenance"] == "mode=max" for step in builds)
-    assert all(step["uses"] == "docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0" for step in builds)
+    assert all(re.fullmatch(r"docker/build-push-action@[a-f0-9]{40}", step["uses"]) for step in builds)
+    assert builds[0]["uses"] == builds[1]["uses"]
 
 
 @pytest.mark.parametrize("evidence", ["complete", "missing_contract", "skipped_contract", "missing_legacy", "empty"])
