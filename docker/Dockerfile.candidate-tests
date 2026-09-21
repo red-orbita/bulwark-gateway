@@ -8,7 +8,7 @@ COPY --from=testlocks /requirements-test-cp314.lock /build/native-test.lock
 RUN python tests/packaging_locks.py ci > /build/ci.lock && \
     python -m pip install --no-cache-dir --target /packages --python-version 3.14 \
       --only-binary=:all: --require-hashes -r ci.lock -r requirements-test.lock -r native-test.lock
-FROM cgr.dev/chainguard/python@sha256:afe19d0e00ec069cad58d69310ba53bbc038a686e279646a47c6549df20d323f
+FROM cgr.dev/chainguard/python@sha256:1206ffee8644e6338b3fc8b6e5dc384b03d91ad1df1d6b74fa4255544ac51ad2
 COPY --from=tooling /packages /usr/lib/python3.14/site-packages
 COPY src /app/src
 COPY admin /app/admin

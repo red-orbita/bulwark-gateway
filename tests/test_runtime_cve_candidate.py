@@ -11,14 +11,16 @@ import pytest
 ROOT = Path(__file__).parents[1]
 
 
-def test_canonical_builds_share_the_validated_candidate_profile():
+def test_canonical_builds_enforce_the_candidate_profile():
     assert not (ROOT / "docker/Dockerfile.runtime-candidate").exists()
     for filename in ("Dockerfile", "docker/Dockerfile.admin"):
         candidate = (ROOT / filename).read_text()
         assert "--python-version 3.14" in candidate
         assert "--only-binary=:all: --require-hashes" in candidate
         assert 'org.bulwark.release.profile="python314-amd64-rc"' in candidate
-        assert "afe19d0e00ec069cad58d69310ba53bbc038a686e279646a47c6549df20d323f" in candidate
+        role = "admin" if filename.endswith(".admin") else "proxy"
+        assert (f'RUN --mount=type=bind,from=builder,source=/verification,target=/verification '
+                f'["python3", "/app/docker/verify_runtime.py", "{role}"]') in candidate
 
 
 @pytest.mark.parametrize("image", ["latest", "image:tag", "sha256:abc", "--privileged"])

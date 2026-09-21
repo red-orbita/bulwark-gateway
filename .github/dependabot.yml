@@ -66,31 +66,21 @@ updates:
       npm-dev:
         patterns: ["*"]
 
-  # ── Container base images (proxy) ──────────────────────────────────────────
+  # Keep proxy/admin runtime pins in one PR; parity tests reject partial updates.
   - package-ecosystem: "docker"
-    directory: "/"
+    directories: ["/", "/docker"]
     schedule:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
     commit-message:
       prefix: "chore"
+    groups:
+      container-bases:
+        patterns: ["*"]
     # The builder selects cp314 wheels explicitly; the pinned Wolfi runtime is
     # Python 3.14. Review builder/runtime updates together and retain the target
     # dependency/import gate. No automatic interpreter-major migration.
-    ignore:
-      - dependency-name: "python"
-        update-types: ["version-update:semver-major"]
-
-  # ── Container base images (admin — docker/Dockerfile.admin) ────────────────
-  - package-ecosystem: "docker"
-    directory: "/docker"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
-    commit-message:
-      prefix: "chore"
     ignore:
       - dependency-name: "python"
         update-types: ["version-update:semver-major"]
