@@ -17,6 +17,7 @@ import os
 import pickle
 import struct
 import zipfile
+import zlib
 
 import numpy as np
 import pytest
@@ -92,6 +93,46 @@ class TestRawPickle:
 # ═══════════════════════════════════════════════════════════════════
 
 class TestContainers:
+    @pytest.mark.parametrize("compress", [gzip.compress, bz2.compress, lzma.compress, zlib.compress])
+    def test_decompression_is_bounded_before_allocation(self, monkeypatch, compress):
+        monkeypatch.setattr(mas, "_MAX_DECOMPRESS_BYTES", 1024)
+        findings = mas.analyze_bytes(compress(b"A" * 65536))
+        assert "BWK-ART-DECOMPRESS-BOMB" in _rule_ids(findings)
+
+    @pytest.mark.parametrize("compress", [gzip.compress, bz2.compress, lzma.compress, zlib.compress])
+    def test_compressed_benign_and_incomplete_streams(self, compress):
+        data = compress(_benign_pickle_bytes())
+        assert mas.analyze_bytes(data) == []
+        assert "BWK-ART-COMPRESSED-OPAQUE" in _rule_ids(mas.analyze_bytes(data[:-3]))
+        assert "BWK-ART-COMPRESSED-OPAQUE" in _rule_ids(mas.analyze_bytes(data + data))
+
+    def test_nested_compression_is_bounded(self):
+        data = _benign_pickle_bytes()
+        for _ in range(6):
+            data = gzip.compress(data)
+        assert "BWK-ART-COMPRESSED-OPAQUE" in _rule_ids(mas.analyze_bytes(data))
+
+    def test_xz_uses_explicit_format_and_memory_limit(self, monkeypatch):
+        original = lzma.LZMADecompressor
+        calls = []
+
+        def decoder(**kwargs):
+            calls.append(kwargs)
+            return original(**kwargs)
+
+        monkeypatch.setattr(mas.lzma, "LZMADecompressor", decoder)
+        assert mas.analyze_bytes(lzma.compress(_benign_pickle_bytes())) == []
+        assert calls == [{"format": lzma.FORMAT_XZ, "memlimit": 64 * 1024 * 1024}]
+
+    def test_decompression_error_does_not_disclose_diagnostic(self, monkeypatch):
+        def fail(*args, **kwargs):
+            raise ValueError("private-parser-details")
+
+        monkeypatch.setattr(mas.lzma, "LZMADecompressor", fail)
+        findings = mas.analyze_bytes(b"\xfd7zXZ\x00invalid")
+        assert "BWK-ART-COMPRESSED-OPAQUE" in _rule_ids(findings)
+        assert "private-parser-details" not in str(findings)
+
     def test_torch_style_zip_with_malicious_data_pkl(self):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
@@ -314,4 +355,3 @@ class TestScanUploadEndpoint:
                 user=object(),
             )
         assert exc.value.status_code == 400
-

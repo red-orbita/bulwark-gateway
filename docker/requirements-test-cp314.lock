@@ -1,0 +1,4 @@
+# Native test fixture only; Linux amd64 / CPython 3.13 and 3.14, not runtime.
+numpy==2.4.6 \
+    --hash=sha256:a7830bab239b79cda9c08c2da014761cafb48da6150e1da17ac06283f43b6089 \
+    --hash=sha256:a2c306dea656c12c68f51f4cea133cbe78ca7435eb28c735eac1d3ebe73be6e8

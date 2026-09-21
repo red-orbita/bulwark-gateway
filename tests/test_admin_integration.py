@@ -124,6 +124,15 @@ class TestUsersFlow:
 
 
 class TestTenantsFlow:
+    @pytest.fixture(autouse=True)
+    def isolated_tenant_config(self, tmp_path, monkeypatch):
+        from admin.services import tenant_manager
+
+        # Exercise persistence without writing to the container-only /app mount
+        # or modifying the repository's agent seed.
+        manager = tenant_manager.TenantManager(config_path=tmp_path / "agents.yaml")
+        monkeypatch.setattr(tenant_manager, "_instance", manager)
+
     async def test_list_tenants(self, auth_client):
         resp = await auth_client.get("/admin/tenants")
         assert resp.status_code == 200
@@ -331,5 +340,4 @@ class TestAdminJwtSecretValidation:
         # In debug mode a weak secret only warns, does not abort.
         result = self._import_auth_service("weak", debug="true")
         assert result.returncode == 0, result.stderr
-
 

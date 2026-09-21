@@ -1,0 +1,6 @@
+{
+  "profile": "regex",
+  "block_threshold": 0.9,
+  "warn_threshold": 0.7,
+  "timeout_seconds": 60
+}

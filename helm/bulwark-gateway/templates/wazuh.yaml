@@ -471,13 +471,23 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              app.kubernetes.io/part-of: bulwark-gateway
+              kubernetes.io/metadata.name: {{ include "bulwark-gateway.namespace" . | quote }}
           podSelector:
             matchLabels:
               app.kubernetes.io/name: proxy
       ports:
         - port: 1514
           protocol: UDP
+        - port: 55000
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "bulwark-gateway.namespace" . | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin
+      ports:
         - port: 55000
           protocol: TCP
 {{- end }}

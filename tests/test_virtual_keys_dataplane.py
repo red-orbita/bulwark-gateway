@@ -21,6 +21,7 @@ Positive AND negative cases are covered per project convention.
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 # Test-safe environment MUST be set before importing src.* modules.
 os.environ.setdefault("BULWARK_JWT_SECRET", "test-secret-key-for-vk-dataplane-32chars!!")
@@ -166,6 +167,10 @@ class _CapturingResponse:
     headers: dict[str, str] = {}
     content = b"{}"
 
+    async def aiter_raw(self):
+        import json
+        yield json.dumps(self.json()).encode()
+
     def json(self):
         return {
             "id": "chatcmpl-test",
@@ -191,6 +196,10 @@ class _CapturingClient:
         self._sink["headers"] = dict(headers or {})
         return _CapturingResponse()
 
+    @asynccontextmanager
+    async def stream(self, method, url, **kwargs):
+        yield await self.post(url, **kwargs)
+
 
 @pytest.fixture(scope="module")
 def app_client():
@@ -202,13 +211,19 @@ def app_client():
     loop and raises at teardown — so we share a single client instead.
     """
     import hashlib
+    import secrets
 
     from fastapi.testclient import TestClient
 
     import src.middleware.auth as auth
     import src.telemetry.exporter as _tele_exporter
     import src.telemetry.queue as _tele_queue
+    from src.config import settings
     from src.main import create_app
+
+    # Explicit fixture key avoids depending on collection order of other tests.
+    original_jwt_secret = settings.jwt_secret
+    settings.jwt_secret = secrets.token_hex(32)
 
     # Deterministic auth: bind our API key to the "default" tenant directly.
     # Env-based BULWARK_API_KEYS is unreliable here because another test module
@@ -229,6 +244,7 @@ def app_client():
         with TestClient(app, raise_server_exceptions=False) as client:
             yield app, client
     finally:
+        settings.jwt_secret = original_jwt_secret
         if _added:
             auth._API_KEY_BINDINGS.pop(key_hash, None)
         # Leave clean singletons for any module that runs afterwards.

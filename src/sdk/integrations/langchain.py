@@ -19,10 +19,12 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
 from src.sdk.guard import Guard, SecurityError
+from src.sdk.integrations._structured import StructuredValue, scan_structure, scan_structure_async
 
 if TYPE_CHECKING:
     pass  # LangChain types would go here if available
@@ -112,74 +114,25 @@ class LangChainGuard:
                     return self._wrapped.OutputType
                 return Any  # type: ignore[return-value]
 
-            def invoke(
-                self, input: Any, config: RunnableConfig | None = None, **kwargs: Any
-            ) -> Any:
+            def invoke(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
                 """Synchronous invoke with scanning."""
-                input_text = _extract_lc_input(input)
-
-                # Scan input
-                if input_text:
-                    result = guard.scan_input_sync(input_text)
-                    if result.verdict.value == "block":
-                        raise SecurityError(
-                            f"Input blocked: {result.events[0].description if result.events else 'policy violation'}",
-                            result=result,
-                        )
-
-                # Run chain
+                if input is None:
+                    raise SecurityError("Explicit input is required")
+                input, kwargs = scan_structure((input, kwargs), guard.scan_input_sync)
                 output = self._wrapped.invoke(input, config=config, **kwargs)
+                return scan_structure(output, guard.scan_output_sync, output=True)
 
-                # Scan output
-                output_text = _extract_lc_output(output)
-                if output_text:
-                    out_result = guard.scan_output_sync(output_text)
-                    if out_result.verdict.value == "block":
-                        _reason = out_result.events[0].description if out_result.events else "policy violation"
-                        raise SecurityError(
-                            f"Output blocked: {_reason}",
-                            result=out_result,
-                        )
-                    if out_result.verdict.value == "redact" and out_result.modified_content:
-                        output = _replace_lc_output(output, out_result.modified_content)
-
-                return output
-
-            async def ainvoke(
-                self, input: Any, config: RunnableConfig | None = None, **kwargs: Any
-            ) -> Any:
+            async def ainvoke(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
                 """Async invoke with scanning."""
-                input_text = _extract_lc_input(input)
-
-                # Scan input
-                if input_text:
-                    result = await guard.scan_input(input_text)
-                    if result.verdict.value == "block":
-                        raise SecurityError(
-                            f"Input blocked: {result.events[0].description if result.events else 'policy violation'}",
-                            result=result,
-                        )
-
-                # Run chain
+                if input is None:
+                    raise SecurityError("Explicit input is required")
+                input, kwargs = await scan_structure_async((input, kwargs), guard.scan_input)
                 if hasattr(self._wrapped, "ainvoke"):
                     output = await self._wrapped.ainvoke(input, config=config, **kwargs)
                 else:
-                    output = self._wrapped.invoke(input, config=config, **kwargs)
+                    output = await asyncio.to_thread(self._wrapped.invoke, input, config=config, **kwargs)
 
-                # Scan output
-                output_text = _extract_lc_output(output)
-                if output_text:
-                    out_result = await guard.scan_output(output_text)
-                    if out_result.verdict.value == "block":
-                        _reason = out_result.events[0].description if out_result.events else "policy violation"
-                        raise SecurityError(
-                            f"Output blocked: {_reason}",
-                            result=out_result,
-                        )
-                    if out_result.verdict.value == "redact" and out_result.modified_content:
-                        output = _replace_lc_output(output, out_result.modified_content)
-
-                return output
+                return await scan_structure_async(output, guard.scan_output, output=True)
 
         return BulwarkRunnable(chain)
 
@@ -213,53 +166,27 @@ class LangChainGuard:
 
             name = "bulwark_guard"
 
-            def on_llm_start(
-                self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
-            ) -> None:
+            def on_llm_start(self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any) -> None:
                 """Scan prompts when LLM starts."""
-                for prompt in prompts:
-                    try:
-                        result = guard.scan_input_sync(prompt)
-                        if result.events:
-                            logger.warning(
-                                "langchain_input_event",
-                                extra={
-                                    "verdict": result.verdict.value,
-                                    "events_count": len(result.events),
-                                    "latency_ms": result.latency_ms,
-                                },
-                            )
-                    except Exception as e:
-                        logger.debug(
-                            "langchain_callback_scan_error",
-                            extra={"error": str(e)[:200]},
-                        )
+                try:
+                    tree = StructuredValue(prompts)
+                    if tree.texts:
+                        result = guard.scan_input_sync(tree.text)
+                        if result.events or result.verdict.value in ("block", "redact"):
+                            logger.warning("langchain_callback_input_event")
+                except Exception:
+                    logger.warning("langchain_callback_input_rejected")
 
             def on_llm_end(self, response: Any, **kwargs: Any) -> None:
                 """Scan LLM output."""
                 try:
-                    text = ""
-                    if hasattr(response, "generations"):
-                        for gen_list in response.generations:
-                            for gen in gen_list:
-                                if hasattr(gen, "text"):
-                                    text += gen.text
-                    if text:
-                        result = guard.scan_output_sync(text)
-                        if result.events:
-                            logger.warning(
-                                "langchain_output_event",
-                                extra={
-                                    "verdict": result.verdict.value,
-                                    "events_count": len(result.events),
-                                    "latency_ms": result.latency_ms,
-                                },
-                            )
-                except Exception as e:
-                    logger.debug(
-                        "langchain_callback_output_error",
-                        extra={"error": str(e)[:200]},
-                    )
+                    tree = StructuredValue(response, output=True)
+                    if tree.texts:
+                        result = guard.scan_output_sync(tree.text)
+                        if result.events or result.verdict.value in ("block", "redact"):
+                            logger.warning("langchain_callback_output_event")
+                except Exception:
+                    logger.warning("langchain_callback_output_rejected")
 
         return BulwarkCallbackHandler()
 
@@ -269,69 +196,16 @@ class LangChainGuard:
 
 def _extract_lc_input(input_data: Any) -> str | None:
     """Extract text content from LangChain input formats."""
-    if isinstance(input_data, str):
-        return input_data
-
-    if isinstance(input_data, dict):
-        # Common LangChain input keys
-        for key in ("input", "query", "question", "prompt", "human_input", "content"):
-            if key in input_data and isinstance(input_data[key], str):
-                return input_data[key]
-        # Messages format
-        if "messages" in input_data and isinstance(input_data["messages"], list):
-            texts = []
-            for msg in input_data["messages"]:
-                if isinstance(msg, dict) and msg.get("role") == "user":
-                    texts.append(msg.get("content", ""))
-                elif hasattr(msg, "content") and hasattr(msg, "type"):
-                    if getattr(msg, "type", "") == "human":
-                        texts.append(getattr(msg, "content", ""))
-            if texts:
-                return " ".join(texts)
-
-    # HumanMessage or similar
-    if hasattr(input_data, "content"):
-        content = input_data.content
-        if isinstance(content, str):
-            return content
-
-    return None
+    return StructuredValue(input_data).text or None
 
 
 def _extract_lc_output(output: Any) -> str | None:
     """Extract text content from LangChain output formats."""
-    if isinstance(output, str):
-        return output
-
-    if isinstance(output, dict):
-        for key in ("output", "result", "answer", "response", "text", "content"):
-            if key in output and isinstance(output[key], str):
-                return output[key]
-
-    # AIMessage or similar
-    if hasattr(output, "content"):
-        content = output.content
-        if isinstance(content, str):
-            return content
-
-    return None
+    return StructuredValue(output, output=True).text or None
 
 
 def _replace_lc_output(output: Any, new_content: str) -> Any:
     """Replace text content in a LangChain output object."""
-    if isinstance(output, str):
+    if type(output) is str:
         return new_content
-
-    if isinstance(output, dict):
-        for key in ("output", "result", "answer", "response", "text", "content"):
-            if key in output and isinstance(output[key], str):
-                output[key] = new_content
-                return output
-
-    if hasattr(output, "content"):
-        try:
-            output.content = new_content
-        except AttributeError:
-            pass
-
-    return output
+    raise SecurityError("Structured redaction requires per-field inspection")

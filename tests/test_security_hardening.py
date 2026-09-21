@@ -144,12 +144,14 @@ class TestProfileEndpoints:
         if resp.status_code == 200:
             data = resp.json()
             self.token = data["access_token"]
-            self.headers = {"Authorization": f"Bearer {self.token}"}
+            self.headers = {"Authorization": f"Bearer {self.token}",
+                            "x-csrf-token": self.client.cookies.get("_csrf_token", "")}
         else:
             self.token = None
             self.headers = {}
 
     def test_get_profile_unauthenticated(self):
+        self.client.cookies.clear()
         resp = self.client.get("/admin/profile")
         assert resp.status_code == 401
 

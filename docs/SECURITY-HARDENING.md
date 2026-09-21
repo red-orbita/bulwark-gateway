@@ -98,6 +98,13 @@ detection-logic changes; all 1301 unit tests pass, 3 skipped.
 
 ### 2026-08-19 — Distroless container migration & runtime hardening (post-1.0.0)
 
+Historical checkpoint: the canonical release-candidate Dockerfiles now use the
+reviewed CPython3.14/Wolfi profile described in [Packaging](PACKAGING.md), with
+target dependency checks and unchanged UID/GID65532. The CVE counts below describe
+the original checkpoint only, not current artifacts. The new minimal base includes
+a pip wheel even though no package-manager executable or shell is admitted by the
+build gate; do not extrapolate the old "no package manager" claim to all payloads.
+
 Both container images were migrated to a **Google Distroless** runtime, removing
 the shell and OS toolchain from the attack surface and eliminating all
 Python-library CVEs.
@@ -341,7 +348,7 @@ Stated plainly so operators do not over-rely on any single layer.
 | Update IOC database | Daily (automated via feeds) | Admin portal → IOCs → Feeds |
 | Review audit logs | Weekly | Admin portal → Audit Log |
 | Dependency updates | Monthly | `pip-audit`, hash-pinned lockfiles |
-| Refresh distroless base image | On fixed-CVE digest publish | Re-pin the SHA256 digest in `Dockerfile` / `docker/Dockerfile.admin` |
+| Refresh minimal runtime base | On fixed-CVE digest publish | Verify publisher signatures, re-pin both canonical Dockerfiles and repeat runtime/scanning gates |
 | Pentest / red team | Quarterly | Use built-in red team framework |
 | Certificate renewal | Before expiry | cert-manager (automatic) or manual |
 

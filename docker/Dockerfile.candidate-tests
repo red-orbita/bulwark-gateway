@@ -1,0 +1,27 @@
+# Isolated regression environment, never a release image. Named contexts contain
+# source tests/scripts only, no workspace root or operator data.
+FROM python:3.13-slim-trixie@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS tooling
+WORKDIR /build
+COPY requirements.lock requirements-admin.lock requirements-test.lock ./
+COPY --from=testsrc /packaging_locks.py /build/tests/packaging_locks.py
+COPY --from=testlocks /requirements-test-cp314.lock /build/native-test.lock
+RUN python tests/packaging_locks.py ci > /build/ci.lock && \
+    python -m pip install --no-cache-dir --target /packages --python-version 3.14 \
+      --only-binary=:all: --require-hashes -r ci.lock -r requirements-test.lock -r native-test.lock
+FROM cgr.dev/chainguard/python@sha256:afe19d0e00ec069cad58d69310ba53bbc038a686e279646a47c6549df20d323f
+COPY --from=tooling /packages /usr/lib/python3.14/site-packages
+COPY src /app/src
+COPY admin /app/admin
+COPY config /app/config
+COPY pyproject.toml requirements.lock requirements-admin.lock requirements-postgres.lock /app/
+COPY --from=testsrc / /app/tests/
+COPY --from=scriptsrc / /app/scripts/
+COPY --from=testlocks / /app/docker/
+COPY --from=helmsrc / /app/helm/
+COPY --from=workflowsrc / /app/.github/
+COPY --from=examplesrc / /app/examples/
+ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 OPENBLAS_NUM_THREADS=1
+WORKDIR /app
+USER 65532:65532
+ENTRYPOINT ["python3", "-m", "pytest", "-p", "pytest_asyncio.plugin", "-p", "pytest_httpx", "-o", "cache_dir=/tmp/pytest-cache", "--basetemp=/tmp/pytest-work"]

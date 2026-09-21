@@ -1346,6 +1346,19 @@ monitoring) recur because Bulwark is itself a runtime monitor.
 
 ## 14. Container Security
 
+Current canonical release-candidate packaging supersedes the historical Distroless
+description below: `Dockerfile` and `docker/Dockerfile.admin` use pinned
+`cgr.dev/chainguard/python` CPython3.14/Wolfi, Linux amd64, UID/GID65532. The pinned
+Python3.13 builder selects hash-approved cp314 wheels; a read-only build-only
+metadata verifier checks dependencies/extras and native imports in the actual
+target interpreter. The proxy excludes admin source; PostgreSQL remains opt-in.
+Unreviewed ML/embedding/SkillSpector build options fail closed. The base has no
+shell executable but includes a pip wheel, so do not claim zero package-manager
+payloads. No current CVE count follows from a distribution name. See
+`docs/PACKAGING.md` and require fresh exact-artifact scans before promotion.
+
+### Historical Distroless Profile
+
 Both Dockerfiles use multi-stage builds with a Google Distroless runtime:
 
 ```

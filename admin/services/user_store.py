@@ -92,6 +92,21 @@ def validate_password_complexity(password: str) -> tuple[bool, str]:
 def _get_db_encryption_key() -> str | None:
     """Read DB encryption key from Docker secret or env var."""
     from .secrets import read_secret
+    filename = os.environ.get("DB_ENCRYPTION_KEY_FILE")
+    if filename:
+        # A configured mount is authoritative, including when missing or empty.
+        # Projected Kubernetes secret symlinks remain supported.
+        try:
+            path = Path(filename)
+            if not path.is_file() or path.stat().st_size > 4096:
+                raise ValueError("Invalid key file")
+            with path.open("r") as stream:
+                raw = stream.read(4097)
+            if len(raw) > 4096 or not raw.strip():
+                raise ValueError("Invalid key file")
+        except (OSError, ValueError):
+            raise SystemExit("FATAL: Configured database encryption key file is unavailable or invalid") from None
+        return raw[:-2] if raw.endswith("\r\n") else raw[:-1] if raw.endswith(("\r", "\n")) else raw
     key = read_secret("DB_ENCRYPTION_KEY", default="")
     return key if key else None
 
@@ -237,9 +252,12 @@ class UserStore:
         Uses SQLCipher (AES-256) if:
           1. sqlcipher3 (or legacy pysqlcipher3) is installed
           2. DB_ENCRYPTION_KEY is provided (via Docker secret or env var)
-        Otherwise falls back to standard SQLite.
+        Without a configured key, uses standard SQLite. A configured key never
+        permits fallback to plaintext when SQLCipher is unavailable.
         """
         encryption_key = _get_db_encryption_key()
+        if encryption_key and not _HAS_SQLCIPHER:
+            raise SystemExit("FATAL: Database encryption requested but SQLCipher is unavailable")
 
         if encryption_key and _HAS_SQLCIPHER:
             # Use encrypted database
@@ -257,11 +275,6 @@ class UserStore:
         else:
             # Unencrypted fallback
             self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
-            if encryption_key and not _HAS_SQLCIPHER:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "DB_ENCRYPTION_KEY set but sqlcipher3 not installed — database is NOT encrypted"
-                )
 
         if self._encrypted:
             # sqlcipher3/pysqlcipher3 don't support sqlite3.Row; use a dict factory
@@ -309,7 +322,7 @@ class UserStore:
             """)
 
             # Migrate: add new profile columns if they don't exist (for existing DBs)
-            for col in ("email", "phone", "first_name", "last_name"):
+            for col in ("email", "phone", "first_name", "last_name", "bootstrap_password_hash"):
                 try:
                     self._cx.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
                 except Exception:  # noqa: S110 - idempotent column add; ignore duplicate-column on already-migrated DBs
@@ -368,11 +381,12 @@ class UserStore:
             )
 
         for username, password, role in defaults:
+            password_hash = _hash_password(password)
             self._cx.execute(
                 "INSERT INTO users (id, username, password_hash, role, active, "
-                "created_at, updated_at, force_password_change) "
-                "VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
-                (str(uuid4()), username, _hash_password(password), role.value, now, now),
+                "created_at, updated_at, force_password_change, bootstrap_password_hash) "
+                "VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?)",
+                (str(uuid4()), username, password_hash, role.value, now, now, password_hash),
             )
         self._cx.commit()
 
@@ -380,8 +394,8 @@ class UserStore:
         """Sync default user passwords with current secrets.
 
         If the secret value changed (e.g. K8s secret rotated), update the stored hash.
-        Only syncs built-in accounts (admin, security, auditor) and only if the
-        current secret doesn't match the stored hash.
+        Compare against the last observed bootstrap secret, not the operator's
+        changed login password. Legacy rows establish a baseline without reset.
         """
         import logging
         log = logging.getLogger(__name__)
@@ -398,14 +412,27 @@ class UserStore:
             # Skip if using default (no explicit secret configured)
             if current_secret == fallback:
                 continue
+            if len(current_secret.encode("utf-8")) > 72:
+                log.error("Password sync skipped for user '%s': bootstrap secret exceeds bcrypt limit", username)
+                continue
 
             row = self._cx.execute(
-                "SELECT password_hash FROM users WHERE username = ?", (username,)
+                "SELECT password_hash, bootstrap_password_hash FROM users WHERE username = ?", (username,)
             ).fetchone()
             if not row:
                 continue
 
-            stored_hash = row["password_hash"]
+            stored_hash = row["bootstrap_password_hash"]
+            if not stored_hash:
+                # Legacy data cannot distinguish a secret rotation from a user
+                # password change. Preserve login and remember this secret once.
+                self._cx.execute(
+                    "UPDATE users SET bootstrap_password_hash = ? "
+                    "WHERE username = ? AND bootstrap_password_hash IS NULL",
+                    (_hash_password(current_secret), username),
+                )
+                self._cx.commit()
+                continue
             # Check if current secret already matches stored hash
             if _verify_password(current_secret, stored_hash):
                 continue
@@ -420,8 +447,9 @@ class UserStore:
                 continue
             now = datetime.now(timezone.utc).isoformat()
             self._cx.execute(
-                "UPDATE users SET password_hash = ?, force_password_change = 1, updated_at = ? WHERE username = ?",
-                (new_hash, now, username),
+                "UPDATE users SET password_hash = ?, bootstrap_password_hash = ?, force_password_change = 1, "
+                "updated_at = ? WHERE username = ? AND bootstrap_password_hash = ?",
+                (new_hash, new_hash, now, username, stored_hash),
             )
             self._cx.commit()
             log.info(f"Password synced for user '{username}' (secret rotation detected, force_password_change=1)")
@@ -760,11 +788,12 @@ class PostgreSQLUserStore(UserStore):
                 ("auditor", read_secret("AUDITOR_PASSWORD", default="bulwark-auditor"), UserRole.AUDITOR),
             ]
             for username, password, role in defaults:
+                password_hash = _hash_password(password)
                 db.sync_execute(
                     "INSERT INTO users (id, username, password_hash, role, active, "
-                    "created_at, updated_at, force_password_change) "
-                    "VALUES (?, ?, ?, ?, 1, ?, ?, 1)",
-                    (str(uuid4()), username, _hash_password(password), role.value, now, now),
+                    "created_at, updated_at, force_password_change, bootstrap_password_hash) "
+                    "VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?)",
+                    (str(uuid4()), username, password_hash, role.value, now, now, password_hash),
                 )
         else:
             # Table already seeded (e.g. persistent PostgreSQL volume). If a
@@ -777,7 +806,7 @@ class PostgreSQLUserStore(UserStore):
         """Sync built-in user passwords with current secrets (PostgreSQL, sync version).
 
         Only touches admin/security/auditor, and only when the current secret
-        differs from both the built-in default and the stored hash. On a detected
+        differs from both the built-in default and last observed bootstrap hash. On a detected
         rotation the hash is updated and force_password_change is set so the
         operator must pick a new password on next login.
         """
@@ -796,15 +825,23 @@ class PostgreSQLUserStore(UserStore):
             # Skip if using default (no explicit secret configured)
             if current_secret == fallback:
                 continue
+            if len(current_secret.encode("utf-8")) > 72:
+                log.error("Password sync skipped for user '%s': bootstrap secret exceeds bcrypt limit", username)
+                continue
 
             row = db.sync_fetch_one(
-                "SELECT password_hash FROM users WHERE username = ?", (username,)
+                "SELECT password_hash, bootstrap_password_hash FROM users WHERE username = ?", (username,)
             )
             if not row:
                 continue
 
-            stored_hash = row.get("password_hash") if hasattr(row, "get") else row["password_hash"]
+            stored_hash = row.get("bootstrap_password_hash") if hasattr(row, "get") else row["bootstrap_password_hash"]
             if not stored_hash:
+                db.sync_execute(
+                    "UPDATE users SET bootstrap_password_hash = ? "
+                    "WHERE username = ? AND bootstrap_password_hash IS NULL",
+                    (_hash_password(current_secret), username),
+                )
                 continue
             # Skip if the current secret already matches the stored hash
             if _verify_password(current_secret, stored_hash):
@@ -820,8 +857,9 @@ class PostgreSQLUserStore(UserStore):
                 continue
             now = datetime.now(timezone.utc).isoformat()
             db.sync_execute(
-                "UPDATE users SET password_hash = ?, force_password_change = 1, updated_at = ? WHERE username = ?",
-                (new_hash, now, username),
+                "UPDATE users SET password_hash = ?, bootstrap_password_hash = ?, force_password_change = 1, "
+                "updated_at = ? WHERE username = ? AND bootstrap_password_hash = ?",
+                (new_hash, new_hash, now, username, stored_hash),
             )
             log.info(
                 "Password synced for user '%s' (secret rotation detected, force_password_change=1)",

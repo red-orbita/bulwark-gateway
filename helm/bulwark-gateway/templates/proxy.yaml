@@ -1,3 +1,4 @@
+{{- include "bulwark-gateway.validateValues" . }}
 ---
 # Proxy ServiceAccount
 apiVersion: v1
@@ -20,10 +21,15 @@ metadata:
 spec:
   replicas: {{ .Values.proxy.replicas }}
   strategy:
+    {{- if or (eq .Values.telemetry.outbox.mode "local-durable") .Values.proxy.attachments.service.enabled }}
+    # No overlapping exporters may drain the local SQLite outbox.
+    type: Recreate
+    {{- else }}
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+    {{- end }}
   selector:
     matchLabels:
       {{- include "bulwark-gateway.proxy.selectorLabels" . | nindent 6 }}
@@ -112,6 +118,88 @@ spec:
           type: RuntimeDefault
           {{- end }}
       initContainers:
+        {{- if eq .Values.telemetry.outbox.mode "shared-postgresql" }}
+        - name: validate-outbox-postgresql
+          image: {{ include "bulwark-gateway.proxy.image" . }}
+          imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
+          command:
+            - python3
+            - -c
+            - |
+              import importlib.util, ipaddress, os, ssl, sys
+              from pathlib import Path
+              from urllib.parse import urlsplit
+
+              # Freeze the exact secret consumed by the proxy: no SQLite URL or
+              # secret rotation may bypass the PostgreSQL-only contract.
+              try:
+                  source = Path("/run/outbox-source")
+                  target = Path("/run/outbox-pg")
+                  with (source / "postgresql-url").open("rb") as stream:
+                      raw = stream.read(8193)
+                  if not raw or len(raw) > 8192:
+                      raise ValueError("invalid URL size")
+                  url = raw.decode("utf-8").strip()
+                  parsed = urlsplit(url)
+                  if (parsed.scheme not in {"postgresql", "postgresql+asyncpg", "postgres"}
+                          or parsed.hostname != os.environ["PG_HOST"]
+                          or (parsed.port or 5432) != int(os.environ["PG_PORT"])
+                          or not parsed.username or not parsed.password
+                          or parsed.path in {"", "/"} or parsed.query or parsed.fragment
+                          or any(ord(c) < 33 for c in url)):
+                      raise ValueError("invalid PostgreSQL URL")
+                  cidr = os.environ["PG_CIDR"]
+                  if cidr:
+                      network = ipaddress.ip_network(cidr, strict=True)
+                      try:
+                          host_ip = ipaddress.ip_address(parsed.hostname)
+                      except ValueError:
+                          host_ip = None
+                      if host_ip is not None and host_ip not in network:
+                          raise ValueError("host outside PostgreSQL CIDR")
+                  if importlib.util.find_spec("asyncpg") is None:
+                      raise ValueError("runtime must include asyncpg")
+                  ca = source / "ca.crt"
+                  if ca.exists():
+                      with ca.open("rb") as stream:
+                          pem = stream.read(1048577)
+                      if not pem or len(pem) > 1048576:
+                          raise ValueError("invalid CA size")
+                      ssl.create_default_context(cadata=pem.decode("ascii"))
+                      (target / "ca.crt").write_bytes(pem)
+                  (target / "postgresql-url").unlink(missing_ok=True)
+                  (target / "postgresql-url").write_text(url, encoding="utf-8")
+                  (target / "postgresql-url").chmod(0o400)
+              except Exception:
+                  sys.exit("Invalid shared PostgreSQL provisioning; refusing startup")
+          env:
+            - name: PG_HOST
+              value: {{ .Values.telemetry.outbox.postgresql.host | quote }}
+            - name: PG_PORT
+              value: {{ .Values.telemetry.outbox.postgresql.port | quote }}
+            - name: PG_CIDR
+              value: {{ .Values.telemetry.outbox.postgresql.egress.cidr | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 64Mi
+          volumeMounts:
+            - name: outbox-pg-secret
+              mountPath: /run/outbox-source
+              readOnly: true
+            - name: outbox-pg-config
+              mountPath: /run/outbox-pg
+        {{- end }}
         - name: init-policies
           image: {{ include "bulwark-gateway.proxy.image" . }}
           imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
@@ -197,70 +285,64 @@ spec:
         {{- end }}
         {{- if .Values.proxy.enrichment.enabled }}
         - name: init-enrichment-model
-          image: {{ .Values.proxy.enrichment.initImage | default "python:3.12-slim" }}
-          imagePullPolicy: IfNotPresent
+          image: {{ include "bulwark-gateway.proxy.image" . }}
+          imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
           command:
             - python3
             - -c
             - |
-              import os, sys, json, urllib.request, urllib.error
-              from pathlib import Path
+              import hashlib, json, os, shutil, stat, sys
+              from pathlib import Path, PurePosixPath
 
-              MODEL_NAME = os.getenv("BULWARK_EMBED_MODEL", "{{ .Values.proxy.enrichment.model }}")
-              TARGET_DIR = Path("{{ .Values.proxy.enrichment.modelCachePath }}")
-              HF_BASE = "https://huggingface.co"
-
-              REQUIRED_FILES = [
-                  "config.json", "tokenizer.json", "tokenizer_config.json",
-                  "special_tokens_map.json", "vocab.txt", "modules.json",
-                  "sentence_bert_config.json",
-              ]
-              MODEL_FILES = ["model.safetensors", "pytorch_model.bin"]
-              POOLING_FILES = ["1_Pooling/config.json"]
-
-              model_dir = TARGET_DIR / f"sentence-transformers_{MODEL_NAME}"
-
-              # Check if already downloaded
-              if model_dir.exists() and (model_dir / "config.json").exists():
-                  has_weights = any((model_dir / f).exists() for f in MODEL_FILES)
-                  if has_weights:
-                      print(f"Model already exists at {model_dir}, skipping download")
-                      sys.exit(0)
-
-              print(f"Downloading sentence-transformers/{MODEL_NAME} to {model_dir}...")
-              model_dir.mkdir(parents=True, exist_ok=True)
-
-              files = REQUIRED_FILES + ["model.safetensors"] + POOLING_FILES
-              ok, fail = 0, 0
-              for filename in files:
-                  dest = model_dir / filename
-                  if dest.exists():
-                      ok += 1
-                      continue
-                  url = f"{HF_BASE}/sentence-transformers/{MODEL_NAME}/resolve/main/{filename}"
-                  try:
-                      dest.parent.mkdir(parents=True, exist_ok=True)
-                      req = urllib.request.Request(url, headers={"User-Agent": "bulwark-init/1.0"})
-                      with urllib.request.urlopen(req, timeout=120) as resp:
-                          with open(dest, "wb") as f:
-                              while chunk := resp.read(1048576):
-                                  f.write(chunk)
-                      print(f"  OK: {filename} ({dest.stat().st_size // 1024}KB)")
-                      ok += 1
-                  except Exception as e:
-                      print(f"  SKIP: {filename} ({e})")
-                      fail += 1
-
-              print(f"Download complete: {ok} OK, {fail} skipped")
-              # Non-fatal: proxy starts with graceful degradation if model missing
-              sys.exit(0)
+              try:
+                  manifest = json.loads(os.environ["MODEL_MANIFEST"])
+                  source = Path("/provisioned-model")
+                  target = Path("/app/verified-enrichment")
+                  budget = int(os.environ["MODEL_MAX_BYTES"])
+                  # EmptyDir survives retries. Only verified manifest-listed
+                  # bytes enter the runtime view, never unlisted source files.
+                  for old in target.iterdir():
+                      if old.is_dir() and not old.is_symlink():
+                          shutil.rmtree(old)
+                      else:
+                          old.unlink()
+                  for name, expected in manifest.items():
+                      relative = PurePosixPath(name)
+                      if relative.is_absolute() or ".." in relative.parts:
+                          raise ValueError("invalid model path")
+                      src = source / relative
+                      if any(p.is_symlink() for p in [src, *src.parents]):
+                          raise ValueError("model symlinks are forbidden")
+                      dst = target / relative
+                      dst.parent.mkdir(parents=True, exist_ok=True)
+                      digest = hashlib.sha256()
+                      fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                      with os.fdopen(fd, "rb") as reader, dst.open("wb") as writer:
+                          if not stat.S_ISREG(os.fstat(reader.fileno()).st_mode):
+                              raise ValueError("model asset must be a regular file")
+                          while chunk := reader.read(1048576):
+                              budget -= len(chunk)
+                              if budget < 0:
+                                  raise ValueError("model byte budget exceeded")
+                              digest.update(chunk)
+                              writer.write(chunk)
+                      if digest.hexdigest() != expected.lower():
+                          raise ValueError("model checksum mismatch")
+                  print("Preprovisioned enrichment model verified; no downloads")
+              except Exception:
+                  sys.exit("Invalid enrichment model provisioning; refusing startup")
           env:
-            - name: BULWARK_EMBED_MODEL
-              value: "{{ .Values.proxy.enrichment.model }}"
+            - name: MODEL_MANIFEST
+              value: {{ .Values.proxy.enrichment.modelManifest | toJson | quote }}
+            - name: MODEL_MAX_BYTES
+              value: {{ .Values.proxy.enrichment.modelMaxBytes | int64 | quote }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           resources:
             limits:
               memory: 256Mi
@@ -269,10 +351,11 @@ spec:
               memory: 64Mi
               cpu: 100m
           volumeMounts:
-            - name: enrichment-data
-              mountPath: /app/shared/enrichment
-            - name: tmp
-              mountPath: /tmp
+            - name: enrichment-model-source
+              mountPath: /provisioned-model
+              readOnly: true
+            - name: enrichment-model-verified
+              mountPath: /app/verified-enrichment
         {{- end }}
       containers:
         - name: proxy
@@ -307,6 +390,18 @@ spec:
             - name: secrets
               mountPath: /run/secrets
               readOnly: true
+            {{- if and .Values.proxy.attachments.service.enabled (eq .Values.proxy.attachments.service.storage "local-sqlite") }}
+            - name: attachment-data
+              mountPath: /app/attachments
+            - name: attachment-config
+              mountPath: /run/attachment-config
+              readOnly: true
+            {{- end }}
+            {{- if eq .Values.telemetry.outbox.mode "shared-postgresql" }}
+            - name: outbox-pg-config
+              mountPath: /run/outbox-pg
+              readOnly: true
+            {{- end }}
             {{- if and (not .Values.redis.enabled) .Values.externalRedis.existingSecret }}
             - name: redis-external-secret
               mountPath: /run/secrets/redis-password
@@ -330,6 +425,9 @@ spec:
             {{- if .Values.proxy.enrichment.enabled }}
             - name: enrichment-data
               mountPath: /app/shared/enrichment
+            - name: enrichment-model-verified
+              mountPath: /app/verified-enrichment
+              readOnly: true
             {{- end }}
             - name: telemetry-data
               mountPath: /app/data
@@ -347,7 +445,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: {{ ternary "/ready/attachments" "/health" .Values.proxy.attachments.service.enabled }}
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -360,6 +458,31 @@ spec:
             periodSeconds: 5
             failureThreshold: 6
       volumes:
+        {{- if and .Values.proxy.attachments.service.enabled (eq .Values.proxy.attachments.service.storage "local-sqlite") }}
+        - name: attachment-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.proxy.attachments.service.local.existingClaim | default "proxy-attachments" | quote }}
+        - name: attachment-config
+          configMap:
+            name: attachment-storage-config
+        {{- end }}
+        {{- if eq .Values.telemetry.outbox.mode "shared-postgresql" }}
+        - name: outbox-pg-secret
+          secret:
+            secretName: {{ .Values.telemetry.outbox.postgresql.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.telemetry.outbox.postgresql.urlKey | quote }}
+                path: postgresql-url
+              {{- if .Values.telemetry.outbox.postgresql.caKey }}
+              - key: {{ .Values.telemetry.outbox.postgresql.caKey | quote }}
+                path: ca.crt
+              {{- end }}
+        - name: outbox-pg-config
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Mi
+        {{- end }}
         - name: secrets
           secret:
             secretName: bulwark-proxy-secrets
@@ -383,21 +506,35 @@ spec:
             claimName: ml-models
         {{- end }}
         {{- if .Values.proxy.enrichment.enabled }}
+        - name: enrichment-model-source
+          persistentVolumeClaim:
+            claimName: {{ .Values.proxy.enrichment.existingModelClaim | quote }}
+            readOnly: true
+        - name: enrichment-model-verified
+          emptyDir:
+            sizeLimit: {{ .Values.proxy.enrichment.modelMaxBytes | int64 | quote }}
         - name: enrichment-data
           persistentVolumeClaim:
             claimName: enrichment-data
         {{- end }}
         - name: telemetry-data
+          {{- if eq .Values.telemetry.outbox.mode "local-durable" }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.telemetry.outbox.local.existingClaim | default "proxy-outbox" | quote }}
+          {{- else }}
           emptyDir:
             medium: Memory
             sizeLimit: 50Mi
+          {{- end }}
         - name: siem-stats
           persistentVolumeClaim:
             claimName: siem-stats
         - name: tmp
           emptyDir:
             medium: Memory
-            {{- if .Values.proxy.enrichment.enabled }}
+            {{- if or .Values.proxy.attachments.extractDocuments .Values.proxy.attachments.parserIsolationConfirmed }}
+            sizeLimit: {{ max (ternary 500 50 .Values.proxy.enrichment.enabled) (int (trimSuffix "Mi" .Values.proxy.attachments.extractionTmpSize)) }}Mi
+            {{- else if .Values.proxy.enrichment.enabled }}
             sizeLimit: 500Mi
             {{- else }}
             sizeLimit: 50Mi

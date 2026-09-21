@@ -1,6 +1,7 @@
 """Activity auditing covers clean, rejected, streaming and interrupted requests."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,7 +12,7 @@ from src.middleware import request_audit
 async def test_one_activity_event_without_payloads_or_untrusted_identity(monkeypatch, status):
     records = []
     monkeypatch.setattr(request_audit.settings, "siem_request_audit_enabled", True)
-    monkeypatch.setattr(request_audit, "get_telemetry_queue", lambda: SimpleNamespace(enqueue_nowait=lambda e: records.append(e) or True))
+    monkeypatch.setattr(request_audit, "get_telemetry_queue", lambda: SimpleNamespace(enqueue=AsyncMock(side_effect=lambda e: records.append(e) or True)))
     messages = []
     async def app(scope, receive, send):
         if status != 401:
@@ -42,7 +43,7 @@ async def test_one_activity_event_without_payloads_or_untrusted_identity(monkeyp
 async def test_interrupted_stream_is_not_success(monkeypatch):
     records = []
     monkeypatch.setattr(request_audit.settings, "siem_request_audit_enabled", True)
-    monkeypatch.setattr(request_audit, "get_telemetry_queue", lambda: SimpleNamespace(enqueue_nowait=lambda e: records.append(e) or True))
+    monkeypatch.setattr(request_audit, "get_telemetry_queue", lambda: SimpleNamespace(enqueue=AsyncMock(side_effect=lambda e: records.append(e) or True)))
     async def app(scope, receive, send):
         await send({"type": "http.response.start", "status": 200, "headers": []})
         raise RuntimeError("stream disconnected")

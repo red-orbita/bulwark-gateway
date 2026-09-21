@@ -78,11 +78,67 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
       ports:
         - port: 8080
           protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- if .Values.monitoring.prometheus.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
   egress:
+    {{- if .Values.wazuh.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.wazuh.namespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: wazuh
+      ports:
+        - port: 1514
+          protocol: UDP
+        - port: 55000
+          protocol: TCP
+    {{- end }}
     # Redis
+    {{- if eq .Values.telemetry.outbox.mode "shared-postgresql" }}
+    # Shared outbox: only the operator-approved PG destination and port.
+    - to:
+        {{- with .Values.telemetry.outbox.postgresql.egress }}
+        {{- if .cidr }}
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+        {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .podLabels | nindent 14 }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.telemetry.outbox.postgresql.port }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.redis.enabled }}
     - to:
         - podSelector:
@@ -119,6 +175,15 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    {{- if eq .Values.backend.type "ip" }}
+    # Headless backend Endpoints are not pods selected by a Service label.
+    - to:
+        - ipBlock:
+            cidr: {{ printf "%s/32" .Values.backend.ip | quote }}
+      ports:
+        - port: {{ .Values.backend.port }}
+          protocol: TCP
+    {{- end }}
     # External backends (HTTPS + custom ports)
     - to:
         - ipBlock:
@@ -128,10 +193,14 @@ spec:
               - 172.16.0.0/12
               - 192.168.0.0/16
       ports:
+        {{- if not (and (eq .Values.telemetry.outbox.mode "shared-postgresql") (eq (int .Values.telemetry.outbox.postgresql.port) 443)) }}
         - port: 443
           protocol: TCP
+        {{- end }}
+        {{- if not (and (eq .Values.telemetry.outbox.mode "shared-postgresql") (eq (int .Values.telemetry.outbox.postgresql.port) 8000)) }}
         - port: 8000
           protocol: TCP
+        {{- end }}
     {{- if and .Values.dedicatedTenants.enabled .Values.dedicatedTenants.tenants }}
     # Tier 2: Shared proxy can forward to dedicated tenant proxy pods
     - to:
@@ -184,6 +253,31 @@ spec:
   egress: []  # Sealed leaf classifier — no outbound
 {{- end }}
 ---
+{{- if and (eq .Values.telemetry.outbox.mode "shared-postgresql") (eq .Values.telemetry.outbox.postgresql.egress.namespace (include "bulwark-gateway.namespace" .)) }}
+# Same-namespace PG may be covered by this chart's default deny ingress.
+# Cross-namespace/external database ingress remains owned by its operator.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: outbox-postgresql-ingress
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.telemetry.outbox.postgresql.egress.podLabels | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "bulwark-gateway.proxy.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.telemetry.outbox.postgresql.port }}
+          protocol: TCP
+---
+{{- end }}
 # NetworkPolicy: Admin — ingress from Ingress controller ONLY, egress to Redis + Wazuh
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -220,7 +314,21 @@ spec:
         - port: 8090
           protocol: TCP
     {{- end }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
+      ports:
+        - port: 8090
+          protocol: TCP
   egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+      ports:
+        - port: 8080
+          protocol: TCP
     # Redis
     {{- if .Values.redis.enabled }}
     - to:
@@ -245,21 +353,33 @@ spec:
     # PostgreSQL (when using database backend)
     {{- if eq .Values.admin.database.type "postgresql" }}
     - to:
+        {{- if and .Values.admin.database.postgresql.internal (not .Values.admin.database.postgresql.host) }}
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: postgresql
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- else }}
+        - ipBlock:
+            cidr: {{ .Values.admin.database.postgresql.egressCIDR | quote }}
+        {{- end }}
       ports:
-        - port: {{ .Values.admin.database.postgresql.port | default 5432 }}
+        # Bundled Service may expose a custom port, but the pod listens on 5432.
+        - port: {{ ternary 5432 (.Values.admin.database.postgresql.port | int) (and .Values.admin.database.postgresql.internal (not .Values.admin.database.postgresql.host)) }}
           protocol: TCP
     {{- end }}
-    # Wazuh API
+    {{- if .Values.wazuh.enabled }}
+    # Wazuh lives in its dedicated namespace, not alongside the admin.
     - to:
-        - podSelector:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.wazuh.namespace | quote }}
+          podSelector:
             matchLabels:
               app.kubernetes.io/name: wazuh
       ports:
         - port: 55000
           protocol: TCP
+    {{- end }}
     {{- if .Values.monitoring.prometheus.enabled }}
     # Prometheus query API — the admin dashboards page runs the ported Grafana
     # PromQL against Prometheus for in-UI charts (falls back to Redis if blocked).
@@ -284,6 +404,31 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+{{- if and (eq .Values.admin.database.type "postgresql") .Values.admin.database.postgresql.internal (not .Values.admin.database.postgresql.host) }}
+---
+# Only the admin can enter the bundled PostgreSQL database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: admin-postgresql-ingress
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: admin
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- end }}
 {{- if .Values.monitoring.prometheus.enabled }}
 ---
 # NetworkPolicy: Prometheus — can scrape proxy and admin
@@ -339,9 +484,14 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP
+        - port: 53
+          protocol: TCP
 {{- end }}
 {{- if .Values.monitoring.grafana.enabled }}
 ---
@@ -382,9 +532,14 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP
+        - port: 53
+          protocol: TCP
 {{- end }}
 ---
 # Helm test hooks — allow the ephemeral test pods (component: test) to reach
@@ -411,6 +566,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - port: 53
           protocol: UDP

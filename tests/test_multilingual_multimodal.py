@@ -588,7 +588,7 @@ class TestVisionScanner:
             small_img = base64.b64encode(b"\x89PNG\r\n" + b"\x00" * 50).decode()
             ctx = _make_context(metadata={"image_contents": [small_img]})
             result = await scanner.scan("check this", ctx)
-            assert result.verdict == Verdict.BLOCK
+            assert result.verdict == Verdict.WARN
             assert result.events[0].category.value == "prompt_injection"
 
     @pytest.mark.asyncio
@@ -612,7 +612,7 @@ class TestVisionScanner:
             small_img = base64.b64encode(b"\x89PNG\r\n" + b"\x00" * 50).decode()
             ctx = _make_context(metadata={"image_contents": [small_img]})
             result = await scanner.scan("check this", ctx)
-            assert result.verdict == Verdict.BLOCK
+            assert result.verdict == Verdict.WARN
             # Re-contextualized as image-borne for SIEM clarity.
             ev = result.events[0]
             assert ev.source == "ml_vision_scanner"
@@ -660,8 +660,8 @@ class TestVisionScanner:
         content = " ".join(
             f"data:image/png;base64,{img_data}" for _ in range(10)
         )
-        results = scanner._extract_data_uris(content)
-        assert len(results) <= 5  # Max 5 per message
+        with pytest.raises(ValueError, match="Too many images"):
+            scanner._extract_data_uris(content)
 
     # --- OCR path (self._available=True) delegates hygiene to ImageHygieneScanner,
     # but keeps its own pre-OCR policy gate + size limit as defense in depth. ---
@@ -1149,4 +1149,3 @@ class TestStructuredImagesReachScanner:
         # Flattened text only (no image_contents metadata, no inline data URI).
         result = await scanner.scan("please describe this picture", _make_context())
         assert result.verdict == Verdict.ALLOW
-

@@ -1,0 +1,14 @@
+# Linux amd64 / CPython 3.13 CI only. Combine with CI runtime + test locks.
+# Existing tool versions; PyPI hashes and advisory metadata checked 2026-09-17.
+ast-serialize==0.5.0 \
+    --hash=sha256:b54f60c1d78767a53b67eaa663f0dfac3afe606aa07f1301572f588b73d64809
+librt==0.11.0 \
+    --hash=sha256:7c39513d8b7477a2e1ed8c43fc21c524e8d5a0f8d4e8b7b074dbdbe7820a08e2
+mypy==2.1.0 \
+    --hash=sha256:e195b817c13f02352a9c124301f9f30f078405444679b6753c1b96b6eed37285
+mypy-extensions==1.1.0 \
+    --hash=sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505
+pathspec==1.1.1 \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+ruff==0.15.15 \
+    --hash=sha256:48decfa11d740de4889de623be1463308346312f2409a56e24aa280c86162dc4

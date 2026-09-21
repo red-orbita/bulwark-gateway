@@ -22,7 +22,9 @@ from __future__ import annotations
 import base64
 import json
 import re
+import unicodedata
 from typing import Any, Optional
+from urllib.parse import unquote
 
 # ---------------------------------------------------------------------------
 # TP1: Hidden Instructions patterns
@@ -294,8 +296,13 @@ def analyze_text(text: str, context: str = "tool_description") -> list[dict[str,
 
     # --- TP3: Parameter Description Injection ---
 
+    # Compatibility characters and URL escapes must not hide existing signatures.
+    # Keep the original text for invisible-character and encoding detectors above.
+    injection_text = text
+    for _ in range(2):
+        injection_text = unicodedata.normalize("NFKC", unquote(injection_text))
     for pattern in _INJECTION_PATTERNS:
-        m = pattern.search(text)
+        m = pattern.search(injection_text)
         if m:
             sev = "high" if "override" in m.group().lower() else "medium"
             findings.append({
@@ -328,7 +335,9 @@ def analyze_manifest(data: dict[str, Any], source: str = "") -> list[dict[str, A
     """
     Analyze a parsed MCP manifest/tool definition for poisoning.
 
-    Scans tool names, descriptions, and parameter descriptions.
+    Scans string values throughout definitions, including nested schemas and
+    defaults. References are inspected as text, never fetched or expanded.
+    Exhausting the work budget emits a high-severity incomplete-scan finding.
 
     Args:
         data: Parsed JSON/YAML dict (tool definitions)
@@ -339,42 +348,64 @@ def analyze_manifest(data: dict[str, Any], source: str = "") -> list[dict[str, A
     """
     findings: list[dict[str, Any]] = []
 
-    # Scan tool definitions
+    # Request-wide budgets bound both traversal and regex work, including when
+    # this core is called directly by the admin scanner rather than the proxy.
+    max_nodes, max_text_bytes, max_findings = 4096, 262_144, 256
+    nodes = text_bytes = 0
     tools = data.get("tools", data.get("functions", []))
     if isinstance(tools, dict):
-        tools = list(tools.values())
+        tools = list(tools.values()) if len(tools) <= 128 else None
 
-    for i, tool in enumerate(tools if isinstance(tools, list) else []):
-        if not isinstance(tool, dict):
-            continue
-
-        tool_name = tool.get("name", f"tool_{i}")
-
-        # Scan tool description
-        desc = tool.get("description", "")
-        if desc:
-            desc_findings = analyze_text(desc, f"tool '{tool_name}' description")
-            for f in desc_findings:
-                f["file"] = source
-                f["tool_name"] = tool_name
-            findings.extend(desc_findings)
-
-        # Scan parameter descriptions
-        params = tool.get("parameters", tool.get("inputSchema", {}))
-        if isinstance(params, dict):
-            properties = params.get("properties", {})
-            for param_name, param_def in properties.items():
-                if isinstance(param_def, dict):
-                    param_desc = param_def.get("description", "")
-                    if param_desc:
-                        param_findings = analyze_text(
-                            param_desc, f"tool '{tool_name}' param '{param_name}'"
-                        )
-                        for f in param_findings:
-                            f["file"] = source
-                            f["tool_name"] = tool_name
-                            f["parameter"] = param_name
-                        findings.extend(param_findings)
+    try:
+        if not isinstance(tools, list) or len(tools) > 128:
+            raise ValueError("tool limit or shape")
+        for i, tool in enumerate(tools):
+            if not isinstance(tool, dict):
+                raise ValueError("tool shape")
+            tool_name = str(tool.get("name", f"tool_{i}"))[:128]
+            pending: list[tuple[Any, str, int]] = [(tool, "", 0)]
+            while pending:
+                value, path, depth = pending.pop()
+                nodes += 1
+                if nodes > max_nodes or depth > 32:
+                    raise ValueError("schema work limit")
+                if isinstance(value, str):
+                    remaining = max_text_bytes - text_bytes
+                    if len(value) > min(remaining, 16_384):
+                        raise ValueError("text limit")
+                    encoded_size = len(value.encode("utf-8"))
+                    text_bytes += encoded_size
+                    if text_bytes > max_text_bytes or encoded_size > 16_384:
+                        raise ValueError("text limit")
+                    matches = analyze_text(value, "tool definition")
+                    if len(findings) + len(matches) >= max_findings:
+                        raise ValueError("finding limit")
+                    for finding in matches:
+                        finding["file"] = source
+                        finding["tool_name"] = tool_name
+                        finding["location"] = path
+                        if ".properties." in path:
+                            finding["parameter"] = path.split(".properties.", 1)[1].split(".", 1)[0]
+                    findings.extend(matches)
+                elif isinstance(value, (dict, list)):
+                    child_count = len(value) * (2 if isinstance(value, dict) else 1)
+                    if nodes + len(pending) + child_count > max_nodes:
+                        raise ValueError("schema work limit")
+                    children = value.items() if isinstance(value, dict) else enumerate(value)
+                    for key, child in children:
+                        pending.append((child, f"{path}.{str(key)[:128]}", depth + 1))
+                        if isinstance(value, dict):
+                            pending.append((str(key), f"{path}.<key>", depth + 1))
+    except (ValueError, RecursionError):
+        findings.append({
+            "rule_id": "BWK-MCP-SCAN-INCOMPLETE",
+            "severity": "high",
+            "message": "Tool definitions exceed inspection limits or have an unsupported shape",
+            "confidence": 100,
+            "pattern": "scan_incomplete",
+            "category": "policy_violation",
+            "file": source,
+        })
 
     return findings
 

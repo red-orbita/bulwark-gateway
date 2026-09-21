@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def _iso_if_datetime(value):
@@ -53,6 +53,21 @@ class LoginResponse(BaseModel):
     username: str
     mfa_required: bool = False
     force_password_change: bool = False
+
+
+class InitialPasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    username: str = Field(min_length=1, max_length=128)
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=12, max_length=72)
+
+    @field_validator("new_password")
+    @classmethod
+    def bcrypt_byte_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password exceeds supported byte length")
+        return value
 
 
 class UserInfo(BaseModel):

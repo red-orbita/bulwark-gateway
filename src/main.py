@@ -447,26 +447,41 @@ async def lifespan(app: FastAPI):
 
     app.state._ml_sync_task = asyncio.create_task(_ml_config_sync_loop())
 
-    await logger.ainfo(
-        "bulwark-gateway ready",
-        policies=app.state.policy_loader.count,
-        iocs=app.state.ioc_manager.count,
-        agents=app.state.agent_registry.count,
-    )
-    yield
-    # Shutdown
-    app.state._ml_sync_task.cancel()
-    corr_tap_shutdown = getattr(app.state, "correlation_tap", None)
-    if corr_tap_shutdown is not None:
-        await corr_tap_shutdown.stop()
-    await app.state.scanner_pipeline.shutdown()
-    await app.state.telemetry_exporter.stop()
-    await app.state.policy_loader.stop_hot_reload()
-    # Flush pending trace spans before exit
-    from src.telemetry.tracing import shutdown_tracing
+    app.state.attachment_service = None
+    try:
+        if settings.attachment_service_enabled:
+            from src.attachments.runtime import start_attachment_service
+            app.state.attachment_service = await start_attachment_service(app, settings)
 
-    shutdown_tracing()
-    await logger.ainfo("bulwark-gateway shutting down")
+        await logger.ainfo(
+            "bulwark-gateway ready",
+            policies=app.state.policy_loader.count,
+            iocs=app.state.ioc_manager.count,
+            agents=app.state.agent_registry.count,
+        )
+        yield
+    finally:
+        # A failed attachment startup must also drain already-started services.
+        try:
+            if app.state.attachment_service is not None:
+                await app.state.attachment_service.stop()
+        finally:
+            app.state._ml_sync_task.cancel()
+            try:
+                await app.state._ml_sync_task
+            except asyncio.CancelledError:
+                pass
+            corr_tap_shutdown = getattr(app.state, "correlation_tap", None)
+            if corr_tap_shutdown is not None:
+                await corr_tap_shutdown.stop()
+            await app.state.scanner_pipeline.shutdown()
+            await app.state.telemetry_exporter.stop()
+            await app.state.policy_loader.stop_hot_reload()
+            # Flush pending trace spans before exit
+            from src.telemetry.tracing import shutdown_tracing
+
+            shutdown_tracing()
+            await logger.ainfo("bulwark-gateway shutting down")
 
 
 def create_app() -> FastAPI:
@@ -508,12 +523,19 @@ def create_app() -> FastAPI:
         )
 
     # Middleware (order matters — last added = outermost = processes request first)
-    # Request flow: RequestID -> RequestAudit -> Auth -> TenantRouter -> APIVersion
-    # -> RateLimit -> Quota -> CORS -> Route handler
+    # Request flow: RequestID -> RequestAudit -> CORS -> Auth -> TenantRouter
+    # -> APIVersion -> RateLimit -> Quota -> Route handler. Only preflight bypasses
+    # auth; actual requests still require credentials, including allowed origins.
+    app.add_middleware(QuotaMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(APIVersionMiddleware)
+    if settings.dedicated_tenants:
+        app.add_middleware(TenantRouterMiddleware)
+    app.add_middleware(AuthMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_methods=["POST"],
+        allow_methods=["POST", "GET", "DELETE"] if settings.attachment_service_enabled else ["POST"],
         allow_headers=[
             "Authorization",
             "Content-Type",
@@ -526,14 +548,6 @@ def create_app() -> FastAPI:
         # Let browser clients read the correlation id echoed on the response.
         expose_headers=["X-Request-ID"],
     )
-    app.add_middleware(QuotaMiddleware)
-    app.add_middleware(RateLimitMiddleware)
-    app.add_middleware(APIVersionMiddleware)
-    # Tier 2: Route dedicated tenants to their own proxy pods
-    # Only active if BULWARK_DEDICATED_TENANTS is configured
-    if settings.dedicated_tenants:
-        app.add_middleware(TenantRouterMiddleware)
-    app.add_middleware(AuthMiddleware)
     app.add_middleware(RequestAuditMiddleware)
     # Outermost: mint/honour the per-request correlation id BEFORE auth so even
     # rejected requests are traceable and get the echoed X-Request-ID header.
@@ -542,6 +556,8 @@ def create_app() -> FastAPI:
     # Routes
     app.include_router(health.router, tags=["health"])
     app.include_router(proxy.router, prefix="/v1", tags=["proxy"])
+    from src.routes.attachments import router as attachment_router
+    app.include_router(attachment_router)
     app.include_router(v2_router, prefix="/v2", tags=["v2"])
     app.include_router(admin.router, prefix="/admin", tags=["admin"])
 

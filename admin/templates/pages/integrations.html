@@ -174,7 +174,7 @@
                         <div class="flex justify-between"><span class="text-gray-500">Suppressed</span><span class="text-gray-300 font-mono" x-text="sightingsStatus.total_suppressed ?? 0"></span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Failed</span><span class="font-mono" :class="(sightingsStatus.total_failed ?? 0) > 0 ? 'text-red-400' : 'text-gray-300'" x-text="sightingsStatus.total_failed ?? 0"></span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Interval</span><span class="text-gray-400 font-mono" x-text="(sightingsStatus.interval_seconds ?? 0) + 's'"></span></div>
-                        <div x-show="sightingsStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="sightingsStatus.last_error" x-text="'⚠ ' + sightingsStatus.last_error"></div>
+                        <div x-show="sightingsStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="sightingsStatus.last_error" x-text="'Warning: ' + sightingsStatus.last_error"></div>
                     </div>
                 </template>
                 <div x-show="!sightingsStatus" x-cloak class="text-[11px] text-gray-600">No data.</div>
@@ -195,7 +195,7 @@
                         <div class="flex justify-between"><span class="text-gray-500">Reconciled</span><span class="text-emerald-300 font-mono" x-text="reconcileStatus.total_reconciled ?? 0"></span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Conflicts</span><span class="font-mono" :class="(reconcileStatus.total_conflicts ?? 0) > 0 ? 'text-amber-400' : 'text-gray-300'" x-text="reconcileStatus.total_conflicts ?? 0"></span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Errors</span><span class="font-mono" :class="(reconcileStatus.total_errors ?? 0) > 0 ? 'text-red-400' : 'text-gray-300'" x-text="reconcileStatus.total_errors ?? 0"></span></div>
-                        <div x-show="reconcileStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="reconcileStatus.last_error" x-text="'⚠ ' + reconcileStatus.last_error"></div>
+                        <div x-show="reconcileStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="reconcileStatus.last_error" x-text="'Warning: ' + reconcileStatus.last_error"></div>
                     </div>
                 </template>
                 <div x-show="!reconcileStatus" x-cloak class="text-[11px] text-gray-600">No data.</div>
@@ -215,7 +215,7 @@
                         <div class="flex justify-between"><span class="text-gray-500">Delivered</span><span class="text-emerald-300 font-mono" x-text="webhookDeliveryStatus.total_delivered ?? 0"></span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Failed</span><span class="font-mono" :class="(webhookDeliveryStatus.total_failed ?? 0) > 0 ? 'text-red-400' : 'text-gray-300'" x-text="webhookDeliveryStatus.total_failed ?? 0"></span></div>
                         <div class="flex justify-between"><span class="text-gray-500">Subscriptions</span><span class="text-gray-300 font-mono" x-text="(webhookDeliveryStatus.subscriptions || []).length"></span></div>
-                        <div x-show="webhookDeliveryStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="webhookDeliveryStatus.last_error" x-text="'⚠ ' + webhookDeliveryStatus.last_error"></div>
+                        <div x-show="webhookDeliveryStatus.last_error" x-cloak class="pt-1 text-[10px] text-red-400/80 truncate" :title="webhookDeliveryStatus.last_error" x-text="'Warning: ' + webhookDeliveryStatus.last_error"></div>
                     </div>
                 </template>
                 <div x-show="!webhookDeliveryStatus" x-cloak class="text-[11px] text-gray-600">No data.</div>

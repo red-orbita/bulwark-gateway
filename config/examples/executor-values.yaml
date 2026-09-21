@@ -1,0 +1,51 @@
+# Standalone opt-in overlay; does not change the shared chart defaults.
+# Read docs/EXECUTOR-DEPLOYMENT.md before enabling. No image is shipped here.
+executor:
+  enabled: false
+  image: "" # REQUIRED: actual approved repository@sha256:<64 lowercase hex>.
+  factoryModule: config.examples.executor_operator
+  replicas: 1
+  workers: 1
+  # The reference factory intentionally refuses startup until reviewed operator
+  # tools, strict policies and authenticated principals are baked into the image.
+  issuer: corporate-action-authorizer
+  audience: bulwark-dedicated-executor
+  tls:
+    boundary: serviceMesh # Or internalIngress, restricted to the authorizer path.
+    confirmed: false # Attestation only: this chart does NOT provision TLS.
+  redis:
+    host: executor-replay.executor-storage.svc.cluster.local
+    port: 6380
+    username: executor-reservations
+    durabilityConfirmed: false # Review acknowledged-write preservation first.
+  # Existing, distinct Secrets in the executor namespace; never raw secret values.
+  secrets:
+    publicKey:
+      name: executor-verification-key
+      key: public.pem
+    redisPassword:
+      name: executor-replay-credential
+      key: password
+    redisCA:
+      name: executor-replay-ca
+      key: ca.crt
+    toolCredential:
+      name: executor-tool-credential
+      key: credential
+  network:
+    authorizer:
+      namespace: corporate-authorizer
+      podLabels:
+        app.kubernetes.io/name: action-authorizer
+    redis:
+      namespace: executor-storage
+      podLabels:
+        app.kubernetes.io/name: executor-replay
+    # Empty means no tool egress. Only exact namespaces + nonempty workload labels
+    # and a single TCP port per destination are accepted. No CIDRs/allow-any rules.
+    # External tools must use a dedicated, destination-restricted egress gateway.
+    toolDestinations: []
+    # - namespace: corporate-tools
+    #   podLabels:
+    #     app.kubernetes.io/name: approved-tool-api
+    #   port: 443

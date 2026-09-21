@@ -75,11 +75,9 @@ updates:
     open-pull-requests-limit: 3
     commit-message:
       prefix: "chore"
-    # The distroless runtime is Python 3.13 (Debian 13 trixie); the builder MUST
-    # stay on 3.13 to preserve ABI compatibility with the runtime's site-packages
-    # (a 3.14 venv cannot be copied into a 3.13 interpreter). Suppress python
-    # major bumps so they stop reappearing — a runtime refresh is a deliberate,
-    # human-reviewed change (see the dependabot-triage skill).
+    # The builder selects cp314 wheels explicitly; the pinned Wolfi runtime is
+    # Python 3.14. Review builder/runtime updates together and retain the target
+    # dependency/import gate. No automatic interpreter-major migration.
     ignore:
       - dependency-name: "python"
         update-types: ["version-update:semver-major"]

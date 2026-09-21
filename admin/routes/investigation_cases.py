@@ -477,7 +477,11 @@ class TaskAddRequest(BaseModel):
 
     title: str = Field(..., min_length=1, max_length=200)
     assignee: Optional[str] = Field(default=None, max_length=128)
-    due_at: Optional[str] = Field(default=None, max_length=64)
+    due_at: Optional[str] = Field(
+        default=None, max_length=64,
+        description="ISO-8601 datetime with seconds and explicit timezone offset; "
+        "normalized to UTC. Null or blank means no deadline; date-only/naive values are rejected.",
+    )
 
 
 class TaskStateRequest(BaseModel):
@@ -485,7 +489,11 @@ class TaskStateRequest(BaseModel):
 
     status: Optional[str] = Field(default=None, description=f"one of {TASK_STATUSES}")
     assignee: Optional[str] = Field(default=None, max_length=128)
-    due_at: Optional[str] = Field(default=None, max_length=64)
+    due_at: Optional[str] = Field(
+        default=None, max_length=64,
+        description="ISO-8601 datetime with seconds and explicit timezone offset; "
+        "normalized to UTC. Omitted/null leaves unchanged; blank clears. Date-only/naive values are rejected.",
+    )
 
 
 class TaskNoteRequest(BaseModel):

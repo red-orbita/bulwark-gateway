@@ -158,7 +158,8 @@ class InputGuardrail:
     # Detect leet-like content (letter adjacent to leet symbol)
     _LEET_INDICATOR_RE = re.compile(r"[a-zA-Z][$@01357|]|[$@01357|][a-zA-Z]")
 
-    def __init__(self):
+    def __init__(self, *, offline: bool = False):
+        self._offline = offline
         self.all_patterns = list(ALL_PATTERNS)
         # Assign pattern_ids for dynamic toggle support
         for i, p in enumerate(self.all_patterns):
@@ -1616,8 +1617,8 @@ class InputGuardrail:
 
         matched_descriptions = set()
         # Get dynamic registry (disabled patterns + custom patterns from admin)
-        from src.guardrails.dynamic_registry import get_pattern_registry, safe_regex_search
-        _registry = get_pattern_registry()
+        from src.guardrails.dynamic_registry import DynamicPatternRegistry, get_pattern_registry, safe_regex_search
+        _registry = DynamicPatternRegistry(offline=True) if self._offline else get_pattern_registry()
 
         # SECURITY FIX (H-09): Per-request CPU budget for regex evaluation.
         # Prevents algorithmic complexity DoS where crafted near-miss inputs
@@ -1902,7 +1903,7 @@ class InputGuardrail:
         # inspect the most RECENT messages first — the live attack surface — under an
         # aggregate wall-clock budget. Older overflow content is NOT silently dropped
         # from detection: it is still covered by the capped concatenated split-attack
-        # scan below. We intentionally do NOT fail-closed here: BLOCKing a legitimate
+        # scan below. For legacy strings we intentionally do NOT fail-closed here: BLOCKing a legitimate
         # long conversation would be a worse (availability) failure than relying on the
         # concat scan for the tail. Operators can tune the budget via
         # BULWARK_GUARDRAIL_MESSAGES_BUDGET_SECONDS.
@@ -1910,13 +1911,60 @@ class InputGuardrail:
         _msg_deadline = _time.monotonic() + self.messages_budget_seconds
         _scan_truncated = False
 
+        # Separate from the legacy cross-turn concat cap. These are request-wide
+        # bounds on structured text only; file policy/extraction runs upstream.
+        max_structured_bytes = 65_536
+        max_structured_blocks = 128
+        structured_bytes = 0
+        structured_blocks = 0
+        structured_windows = 0
+
+        def scan_incomplete() -> GuardrailResult:
+            return GuardrailResult(verdict=Verdict.BLOCK, events=[SecurityEvent(
+                tenant_id=tenant_id, agent_id=agent_id, verdict=Verdict.BLOCK,
+                category=ThreatCategory.POLICY_VIOLATION,
+                description="Structured text inspection could not be completed",
+                source="input_guardrail_budget", severity="high",
+                metadata={"reason": "scan_incomplete"},
+            )])
+
         # Determine inspection order: most-recent message first so the freshest
         # (and most attack-relevant) turns are always inspected within budget.
-        indexed = [
-            (i, m.get("role", "user"), m.get("content", ""))
-            for i, m in enumerate(messages)
-        ]
-        for _pos, (_idx, role, content) in enumerate(reversed(indexed)):
+        indexed = []
+        for i, message in enumerate(messages):
+            content = message.get("content", "")
+            structured = isinstance(content, list)
+            if structured:
+                # Only text blocks belong to this detector. Image/file inspection
+                # is enforced separately: this does NOT perform OCR or decode files.
+                structured_blocks += len(content)
+                if structured_blocks > max_structured_blocks:
+                    return scan_incomplete()
+                parts: list[str] = []
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        text = part["text"]
+                        # Bound allocation before UTF-8 encoding; count separators too.
+                        if len(text) > max_structured_bytes:
+                            return scan_incomplete()
+                        try:
+                            structured_bytes += len(text.encode("utf-8")) + bool(parts)
+                        except UnicodeEncodeError:
+                            return scan_incomplete()
+                        if structured_bytes > max_structured_bytes:
+                            return scan_incomplete()
+                        parts.append(text)
+                content = " ".join(parts)
+            elif content is None:
+                content = ""
+            elif not isinstance(content, str):
+                return GuardrailResult(verdict=Verdict.BLOCK, events=[SecurityEvent(
+                    tenant_id=tenant_id, agent_id=agent_id, verdict=Verdict.BLOCK,
+                    category=ThreatCategory.POLICY_VIOLATION,
+                    description="Unsupported message content", source="input_guardrail", severity="high",
+                )])
+            indexed.append((i, message.get("role", "user"), content, structured))
+        for _pos, (_idx, role, content, structured) in enumerate(reversed(indexed)):
             if not content:
                 continue
 
@@ -1928,13 +1976,50 @@ class InputGuardrail:
 
             # Budget guard: once the aggregate deadline is passed, stop the expensive
             # per-message inspection of older turns. The first (most recent) message is
-            # always inspected regardless, so a single-turn request is never skipped.
-            if _pos > 0 and _time.monotonic() > _msg_deadline:
+            # always inspected regardless for legacy strings. Structured text instead
+            # fails closed on exhaustion in its bounded window loop below.
+            if not structured and _pos > 0 and _time.monotonic() > _msg_deadline:
                 _scan_truncated = True
                 continue
 
             # Inspect ALL roles — adversaries inject into system/tool/assistant messages
-            result = self.inspect(content, tenant_id, agent_id)
+            if structured:
+                # Keep windows within BOTH inspect() thresholds, avoiding its legacy
+                # oversized reconstruction/truncation. Overlap covers nearby seams,
+                # not arbitrarily long split instructions. Never create synthetic turns.
+                window_size = min(4096, self.max_scan_bytes, self.max_input_size)
+                if window_size < 2:
+                    return scan_incomplete()
+                overlap = min(1024, window_size // 2)
+                result = GuardrailResult(verdict=Verdict.ALLOW)
+                seen_events: set[tuple] = set()
+                for offset in range(0, len(content), window_size - overlap):
+                    structured_windows += 1
+                    if structured_windows > 128 or _time.monotonic() > _msg_deadline:
+                        return scan_incomplete()
+                    try:
+                        window_result = self.inspect(content[offset:offset + window_size], tenant_id, agent_id)
+                    except Exception:
+                        return scan_incomplete()
+                    if (
+                        _time.monotonic() > _msg_deadline
+                        or any(e.source == "input_guardrail_budget" for e in window_result.events)
+                    ):
+                        return scan_incomplete()
+                    if window_result.verdict == Verdict.BLOCK:
+                        return GuardrailResult(verdict=Verdict.BLOCK, events=all_events + window_result.events)
+                    if window_result.verdict == Verdict.WARN:
+                        result.verdict = Verdict.WARN
+                    for event in window_result.events:
+                        # Overlapping detections must not inflate per-turn scoring.
+                        key = (event.source, event.description, event.matched_pattern, event.verdict)
+                        if key not in seen_events:
+                            seen_events.add(key)
+                            result.events.append(event)
+                    if offset + window_size >= len(content):
+                        break
+            else:
+                result = self.inspect(content, tenant_id, agent_id)
             all_events.extend(result.events)
             if result.verdict == Verdict.BLOCK:
                 final_verdict = Verdict.BLOCK

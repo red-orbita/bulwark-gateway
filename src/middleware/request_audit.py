@@ -112,7 +112,7 @@ class RequestAuditMiddleware:
                         agent_id=state.get("agent_id") if state.get("subject_id") else None,
                     ),
                 )
-                if not get_telemetry_queue().enqueue_nowait(record):
+                if not await get_telemetry_queue().enqueue(record):
                     logger.warning("request_audit_queue_full")
             except Exception:
                 logger.warning("request_audit_unavailable")

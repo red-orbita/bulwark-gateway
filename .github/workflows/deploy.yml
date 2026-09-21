@@ -1,7 +1,7 @@
 # Bulwark Gateway — CI/CD Pipeline (GitHub Actions)
 #
 # Triggers:
-#   - Push to main → build, test, deploy to staging
+#   - Push to master -> tests; publication/deployment require repository opt-in
 #   - Tag v*.*.* → build, test, deploy to production
 #   - Pull request → build and test only
 #
@@ -18,10 +18,13 @@ name: Build & Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*.*.*"]
   pull_request:
-    branches: [main]
+    branches: [master]
+
+permissions:
+  contents: read
 
 env:
   REGISTRY: ${{ secrets.REGISTRY_URL || 'ghcr.io' }}
@@ -34,29 +37,163 @@ jobs:
   # ─── Stage 1: Lint & Test ────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: pip
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.lock
-          pip install -e ".[admin,dev]"
+          python -m venv .ci-venv
+          echo "$PWD/.ci-venv/bin" >> "$GITHUB_PATH"
+          python tests/packaging_locks.py ci > "$RUNNER_TEMP/ci-runtime.lock"
+          python tests/packaging_locks.py constraints > "$RUNNER_TEMP/ci-runtime.constraints"
+          .ci-venv/bin/python -m pip install --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/ci-runtime.lock" \
+            -c "$RUNNER_TEMP/ci-runtime.constraints" -r requirements-test.lock -r requirements-lint.lock \
+            -r docker/requirements-test-cp314.lock
+          .ci-venv/bin/python -m pip check
+          .ci-venv/bin/python tests/packaging_locks.py verify
+          .ci-venv/bin/python tests/packaging_locks.py verify requirements-test.lock requirements-lint.lock docker/requirements-test-cp314.lock
 
       - name: Lint
-        run: ruff check src/ tests/ admin/
+        # This job never publishes artifacts to a registry or deploys services.
+        run: python -m ruff check src/ tests/ admin/
 
       - name: Type check
         run: |
-          mypy src/ --ignore-missing-imports
-          mypy admin/ --ignore-missing-imports
+          python -m mypy src/ --ignore-missing-imports
+          python -m mypy admin/ --ignore-missing-imports
 
       - name: Unit tests
-        run: pytest tests/ -q --tb=short --ignore=tests/test_admin_integration.py
+        # Stdlib line coverage, not branch coverage. No new unlocked tooling.
+        run: |
+          python - <<'PY'
+          import dis
+          import json
+          import sys
+          import trace
+          import types
+          from pathlib import Path
+          import pytest
+
+          def coverage_report(root, counts):
+              def executable_lines(code):
+                  lines = {line for _, line in dis.findlinestarts(code) if isinstance(line, int) and line > 0}
+                  for value in code.co_consts:
+                      if isinstance(value, types.CodeType):
+                          lines.update(executable_lines(value))
+                  return lines
+              files = {}
+              for directory in ('src', 'admin', 'scripts'):
+                  for path in sorted((root / directory).rglob('*.py')):
+                      lines = executable_lines(compile(path.read_bytes(), str(path), 'exec'))
+                      hits = {line for line in lines if counts.get((str(path), line), 0)}
+                      files[str(path.relative_to(root))] = {
+                          'executable': len(lines), 'covered': len(hits),
+                          'missing': sorted(lines - hits),
+                      }
+              total = sum(item['executable'] for item in files.values())
+              covered = sum(item['covered'] for item in files.values())
+              if not total or not covered:
+                  raise RuntimeError('Missing coverage evidence')
+              return {'tool': 'stdlib.trace', 'scope': 'src/admin/scripts; current process only',
+                      'branch_coverage': False, 'files': files, 'executable': total,
+                      'covered': covered, 'percent': 100 * covered / total}
+
+          tracer = trace.Trace(count=True, trace=False, ignoredirs=[sys.prefix, sys.base_prefix])
+          status = tracer.runfunc(pytest.main, [
+              'tests/', '-q', '-ra', '--tb=short', '--junitxml=test-results.xml',
+              '--ignore=tests/test_admin_integration.py', '--ignore=tests/test_postgres_parity.py',
+              '--ignore=tests/test_postgres_release_contract.py',
+          ])
+          counts = {(str(Path(filename).resolve()), line): count
+                    for (filename, line), count in tracer.results().counts.items()}
+          report = coverage_report(Path.cwd(), counts)
+          Path('coverage.json').write_text(json.dumps(report, sort_keys=True), encoding='utf-8')
+          print(f"Stdlib line coverage: {report['percent']:.2f}% (not branch coverage)")
+          raise SystemExit(status)
+          PY
+
+      - name: Require executed release security tests
+        run: |
+          python - <<'PY'
+          from xml.etree import ElementTree
+          cases = ElementTree.parse('test-results.xml').findall('.//testcase')
+          for suite in ('test_release_verification', 'test_release_signing', 'test_delivery_workflow', 'test_packaging_locks', 'test_documentation_publication', 'test_release_sbom_schema', 'test_release_scan_policy', 'test_anyio_tls_idna', 'test_ci_tool_locks'):
+              selected = [case for case in cases if case.get('classname', '').endswith(suite)]
+              if not selected or any(case.find('skipped') is not None for case in selected):
+                  raise SystemExit('Release security suite missing or skipped')
+          PY
+
+      - name: Upload test evidence including skips
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: unit-test-results
+          path: |
+            test-results.xml
+            coverage.json
+          retention-days: 30
+          if-no-files-found: error
+
+  # Clean runtime environments: never merge the incompatible service locks or
+  # install test tooling here. This gate is independent of the combined suite.
+  test-runtime-locks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: proxy
+            locks: requirements.lock
+            requirements: -r requirements.lock
+          - runtime: proxy-postgres
+            locks: requirements.lock requirements-postgres.lock
+            requirements: -r requirements.lock -r requirements-postgres.lock
+          - runtime: admin
+            locks: requirements-admin.lock
+            requirements: -r requirements-admin.lock
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+      - name: Install and verify isolated runtime
+        env:
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          python -m venv .runtime-venv
+          .runtime-venv/bin/python -m pip install --only-binary=:all: --require-hashes ${{ matrix.requirements }}
+          .runtime-venv/bin/python -m pip check
+          .runtime-venv/bin/python tests/packaging_locks.py verify ${{ matrix.locks }}
+          .runtime-venv/bin/python - <<'PY'
+          import importlib.util
+          import os
+          import fastapi
+          import httpx
+          import pydantic
+          import redis
+          import uvicorn
+          if os.environ['RUNTIME'] == 'proxy':
+              assert importlib.util.find_spec('asyncpg') is None
+          else:
+              import asyncpg
+              assert asyncpg.__version__ == '0.31.0'
+          if os.environ['RUNTIME'] == 'admin':
+              import aiosqlite
+              import cryptography
+              import jinja2
+              import sqlcipher3
+          else:
+              from src.guardrails.input_guardrail import InputGuardrail
+              from src.guardrails.output_filter import OutputFilter
+              import jsonschema
+          PY
 
   # ─── Stage 1b: PostgreSQL Parity Tests ──────────────────────────────────────
   # The default `test` job exercises the admin stores on their SQLite fallback.
@@ -66,6 +203,7 @@ jobs:
   # just string-level unit tests. Gates `build` alongside `test`.
   test-postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -87,34 +225,62 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           cache: pip
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.lock
-          pip install -e ".[admin,dev,postgres]"
+          python -m venv .ci-venv
+          echo "$PWD/.ci-venv/bin" >> "$GITHUB_PATH"
+          python tests/packaging_locks.py ci > "$RUNNER_TEMP/ci-runtime.lock"
+          python tests/packaging_locks.py constraints > "$RUNNER_TEMP/ci-runtime.constraints"
+          .ci-venv/bin/python -m pip install --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/ci-runtime.lock" \
+            -c "$RUNNER_TEMP/ci-runtime.constraints" -r requirements-test.lock -r requirements-lint.lock \
+            -r docker/requirements-test-cp314.lock
+          .ci-venv/bin/python -m pip check
+          .ci-venv/bin/python tests/packaging_locks.py verify
+          .ci-venv/bin/python tests/packaging_locks.py verify requirements-test.lock requirements-lint.lock docker/requirements-test-cp314.lock
 
       - name: PostgreSQL parity tests
-        run: pytest tests/test_postgres_parity.py -v --tb=short
+        run: python -m pytest tests/test_postgres_parity.py tests/test_postgres_release_contract.py -v -ra --tb=short --junitxml=postgres-results.xml
+
+      - name: Refuse silently skipped PostgreSQL tests
+        run: |
+          python - <<'PY'
+          from xml.etree import ElementTree
+          cases = ElementTree.parse('postgres-results.xml').findall('.//testcase')
+          assert cases and all(case.find('skipped') is None for case in cases), 'PostgreSQL suite skipped'
+          for suite in ('test_postgres_parity', 'test_postgres_release_contract'):
+              assert any(case.get('classname', '').endswith(suite) for case in cases), 'PostgreSQL suite missing'
+          PY
+
+      - name: Upload PostgreSQL evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: postgres-test-results
+          path: postgres-results.xml
+          retention-days: 30
 
   # ─── Stage 2: Build & Push Images ───────────────────────────────────────────
   build:
-    needs: [test, test-postgres]
+    needs: [test, test-postgres, test-runtime-locks]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && vars.BULWARK_PUBLISH_IMAGES == 'true'
     permissions:
       contents: read
       packages: write
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      proxy-digest: ${{ steps.proxy.outputs.digest }}
+      admin-digest: ${{ steps.admin.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Determine version
         id: meta
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           else
             echo "version=sha-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
@@ -129,26 +295,45 @@ jobs:
           password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
       - name: Build & push proxy image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198f0a7a9c4e02 # v5.3.0
+        id: proxy
+        uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
         with:
           context: .
           file: Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            INSTALL_POSTGRES=true
+            INSTALL_ML=false
+            INSTALL_EMBEDDINGS=false
           push: true
+          sbom: true
+          provenance: mode=max
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PROXY }}:${{ steps.meta.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PROXY }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Verify PostgreSQL driver in exact proxy image
+        env:
+          PROXY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_PROXY }}@${{ steps.proxy.outputs.digest }}
+        run: |
+          docker pull "$PROXY_IMAGE"
+          docker run --rm --network=none --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges --entrypoint python3 "$PROXY_IMAGE" \
+            -c "import asyncpg; import asyncpg.protocol.protocol; assert asyncpg.__version__ == '0.31.0'"
+
       - name: Build & push admin image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198f0a7a9c4e02 # v5.3.0
+        id: admin
+        uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
         with:
           context: .
           file: docker/Dockerfile.admin
+          platforms: linux/amd64
           push: true
+          sbom: true
+          provenance: mode=max
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_ADMIN }}:${{ steps.meta.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_ADMIN }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -156,7 +341,7 @@ jobs:
   deploy-staging:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && vars.BULWARK_DEPLOY_STAGING == 'true'
     environment: staging
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -173,7 +358,12 @@ jobs:
           chmod 600 ~/.kube/config
 
       - name: Deploy with Helm
+        env:
+          PROXY_DIGEST: ${{ needs.build.outputs.proxy-digest }}
+          ADMIN_DIGEST: ${{ needs.build.outputs.admin-digest }}
         run: |
+          [[ "$PROXY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          [[ "$ADMIN_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
           # Decode environment-specific values
           echo "${{ secrets.HELM_VALUES_STAGING }}" | base64 -d > /tmp/values-staging.yaml
 
@@ -181,8 +371,11 @@ jobs:
             --namespace ${{ env.NAMESPACE }} \
             --create-namespace \
             --values /tmp/values-staging.yaml \
-            --set proxy.image.tag=${{ needs.build.outputs.version }} \
-            --set admin.image.tag=${{ needs.build.outputs.version }} \
+            --set-string proxy.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_PROXY }} \
+            --set-string admin.image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_ADMIN }} \
+            --set-string proxy.image.digest="$PROXY_DIGEST" \
+            --set-string admin.image.digest="$ADMIN_DIGEST" \
+            --atomic \
             --wait \
             --timeout 5m
 
@@ -207,10 +400,179 @@ jobs:
   deploy-production:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: read
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.BULWARK_DEPLOY_PRODUCTION == 'true'
     environment: production
+    timeout-minutes: 30
+    env:
+      PROXY_IMAGE: ${{ secrets.REGISTRY_URL || 'ghcr.io' }}/bulwark-gateway-proxy@${{ needs.build.outputs.proxy-digest }}
+      ADMIN_IMAGE: ${{ secrets.REGISTRY_URL || 'ghcr.io' }}/bulwark-gateway-admin@${{ needs.build.outputs.admin-digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked operator dependencies
+        run: |
+          python -m venv .operator-venv
+          echo "$PWD/.operator-venv/bin" >> "$GITHUB_PATH"
+          python tests/packaging_locks.py ci > "$RUNNER_TEMP/operator.lock"
+          .operator-venv/bin/python -m pip install --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/operator.lock"
+          .operator-venv/bin/python -m pip check
+          .operator-venv/bin/python tests/packaging_locks.py verify "$RUNNER_TEMP/operator.lock"
+
+      - name: Validate immutable build outputs
+        run: |
+          python - <<'PY'
+          import importlib
+          import os
+          import sys
+          sys.path.insert(0, 'scripts')
+          try:
+              importlib.import_module('verify-release').Images(
+                  proxy=os.environ['PROXY_IMAGE'], admin=os.environ['ADMIN_IMAGE'])
+          except ValueError:
+              raise SystemExit('Invalid immutable build outputs') from None
+          PY
+
+      - name: Install checksum-verified Trivy
+        # SHA-256 from GitHub's v0.74.0 release asset digest, not the mutable tag.
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 180 \
+            https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz \
+            -o "$RUNNER_TEMP/trivy.tar.gz"
+          printf '%s  %s\n' '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a' \
+            "$RUNNER_TEMP/trivy.tar.gz" | sha256sum --check --strict
+          mkdir "$RUNNER_TEMP/trivy-bin"
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP/trivy-bin" trivy
+
+      - name: Scan exact production digests before signing
+        env:
+          TRIVY_USERNAME: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+        run: |
+          python -I - <<'PY'
+          import importlib
+          import json
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          runner = Path(os.environ['RUNNER_TEMP']).resolve()
+          sys.path.insert(0, str(Path('scripts').resolve()))
+          validator = importlib.import_module('validation-candidate-release')
+          reports = runner / 'release-scans'
+          reports.mkdir(mode=0o700)
+          # Never discover checkout/home exclusions or inherit scanner policy overrides.
+          with tempfile.TemporaryDirectory(prefix='release-scan-', dir=runner) as directory:
+              clean = Path(directory)
+              config = clean / 'trivy.yaml'
+              config.write_text('{}\n', encoding='ascii')
+              ignore = clean / 'empty.ignore'
+              ignore.write_text('', encoding='ascii')
+              scan_env = {
+                  'PATH': '/usr/bin:/bin', 'HOME': directory, 'TMPDIR': directory,
+                  'TRIVY_USERNAME': os.environ['TRIVY_USERNAME'],
+                  'TRIVY_PASSWORD': os.environ['TRIVY_PASSWORD'],
+              }
+              for role in ('proxy', 'admin'):
+                  subprocess.run([
+                      str(runner / 'trivy-bin/trivy'), 'image',
+                      '--config', str(config), '--ignorefile', str(ignore),
+                      '--cache-dir', str(clean / 'cache'),
+                      '--image-src', 'remote', '--scanners', 'vuln',
+                      '--list-all-pkgs',
+                      '--ignore-unfixed=false', '--ignore-status', '',
+                      '--timeout', '10m', '--exit-code', '1',
+                      '--severity', 'UNKNOWN,HIGH,CRITICAL', '--format', 'json',
+                      '--output', str(reports / f'{role}-scan.json'),
+                      os.environ[f'{role.upper()}_IMAGE'],
+                  ], cwd=clean, env=scan_env, check=True, timeout=660)
+                  metadata_path = clean / 'cache/db/metadata.json'
+                  with metadata_path.open('rb') as stream:
+                      raw_metadata = stream.read(8193)
+                  if len(raw_metadata) > 8192:
+                      raise ValueError('Vulnerability database metadata exceeds budget')
+                  validator.validate_database_metadata(json.loads(raw_metadata))
+                  (reports / f'{role}-database.json').write_bytes(raw_metadata)
+                  # Convert the very same inventory, not a second tag/image lookup.
+                  subprocess.run([
+                      str(runner / 'trivy-bin/trivy'), 'convert',
+                      '--config', str(config), '--format', 'cyclonedx',
+                      '--output', str(reports / f'{role}.cdx.json'),
+                      str(reports / f'{role}-scan.json'),
+                  ], cwd=clean, env={'PATH': '/usr/bin:/bin', 'HOME': directory, 'TMPDIR': directory},
+                     check=True, timeout=60)
+          PY
+
+      - name: Sign scanned release with protected production key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.BULWARK_RELEASE_SIGNING_KEY }}
+          RELEASE_PUBLIC_KEY: ${{ vars.BULWARK_RELEASE_PUBLIC_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+          # Remove raw secrets from the child environment; only the signer sees the file.
+          private = os.environ.pop('RELEASE_SIGNING_KEY')
+          public = os.environ.pop('RELEASE_PUBLIC_KEY')
+          with tempfile.TemporaryDirectory(dir=os.environ['RUNNER_TEMP']) as directory:
+              key = Path(directory) / 'signing.key'
+              fd = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(fd, 'w') as stream:
+                  stream.write(private)
+              del private
+              trusted = Path(directory) / 'trusted.pub'
+              trusted.write_text(public, encoding='ascii')
+              child_env = dict(os.environ, BULWARK_RELEASE_SIGNING_KEY_FILE=str(key))
+              subprocess.run([
+                  sys.executable, 'scripts/sign-release.py', '--revision', os.environ['GITHUB_SHA'],
+                  '--proxy-image', os.environ['PROXY_IMAGE'], '--admin-image', os.environ['ADMIN_IMAGE'],
+                  '--artifacts', os.environ['RUNNER_TEMP'] + '/release-scans',
+                  '--public-key', str(trusted), '--output', os.environ['RUNNER_TEMP'] + '/signed-release',
+               ], env=child_env, check=True, timeout=60)
+          PY
+
+      - name: Verify signature and scans before cluster credentials
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.BULWARK_RELEASE_PUBLIC_KEY }}
+        run: |
+          printf '%s' "$RELEASE_PUBLIC_KEY" > "$RUNNER_TEMP/trusted-release.pub"
+          python scripts/verify-release.py \
+            --manifest "$RUNNER_TEMP/signed-release/release.json" \
+            --signature "$RUNNER_TEMP/signed-release/release.sig" \
+            --public-key "$RUNNER_TEMP/trusted-release.pub" \
+            --artifacts "$RUNNER_TEMP/release-scans" --expected-revision "$GITHUB_SHA" \
+            --expected-proxy-image "$PROXY_IMAGE" --expected-admin-image "$ADMIN_IMAGE" \
+            --helm-values "$RUNNER_TEMP/verified-images.json"
+
+      - name: Preserve signed release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signed-release-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/signed-release/release.json
+            ${{ runner.temp }}/signed-release/release.sig
+            ${{ runner.temp }}/release-scans/proxy-scan.json
+             ${{ runner.temp }}/release-scans/admin-scan.json
+             ${{ runner.temp }}/release-scans/proxy.cdx.json
+            ${{ runner.temp }}/release-scans/admin.cdx.json
+            ${{ runner.temp }}/release-scans/proxy-database.json
+            ${{ runner.temp }}/release-scans/admin-database.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Setup Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v3.5
@@ -218,26 +580,30 @@ jobs:
           version: "3.14.0"
 
       - name: Configure kubeconfig
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG_PROD }}
         run: |
+          umask 077
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_PROD }}" | base64 -d > ~/.kube/config
+          printf '%s' "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
       - name: Deploy with Helm
+        env:
+          HELM_VALUES_DATA: ${{ secrets.HELM_VALUES_PROD }}
         run: |
-          echo "${{ secrets.HELM_VALUES_PROD }}" | base64 -d > /tmp/values-prod.yaml
+          umask 077
+          trap 'rm -f "$RUNNER_TEMP/values-prod.yaml"' EXIT
+          printf '%s' "$HELM_VALUES_DATA" | base64 -d > "$RUNNER_TEMP/values-prod.yaml"
 
           helm upgrade --install ${{ env.HELM_RELEASE }} ./helm/bulwark-gateway \
             --namespace ${{ env.NAMESPACE }} \
             --create-namespace \
-            --values /tmp/values-prod.yaml \
-            --set proxy.image.tag=${{ needs.build.outputs.version }} \
-            --set admin.image.tag=${{ needs.build.outputs.version }} \
+            --values "$RUNNER_TEMP/values-prod.yaml" \
+            --values "$RUNNER_TEMP/verified-images.json" \
+            --atomic \
             --wait \
             --timeout 5m
-
-          # SECURITY FIX (VULN 4.4): Clean up decoded secrets
-          rm -f /tmp/values-prod.yaml
 
       - name: Post-deploy validation
         run: |
@@ -256,4 +622,8 @@ jobs:
       - name: Notify deployment
         if: success()
         run: |
-          echo "::notice::Production deployment successful — version ${{ needs.build.outputs.version }}"
+          echo "::notice::Production deployment successful for verified digests"
+
+      - name: Clean up production credentials
+        if: always()
+        run: rm -f ~/.kube/config "$RUNNER_TEMP/values-prod.yaml" "$RUNNER_TEMP/trusted-release.pub"

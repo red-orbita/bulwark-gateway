@@ -46,11 +46,9 @@ admin = [
     # than leaving it a lock-only dependency.
     "pyotp>=2.9,<3.0",
 ]
-# PostgreSQL backend for the admin store (enterprise / HA multi-replica). Select
-# it via BULWARK_ADMIN_DB_URL=postgresql://…; without this extra the admin runs
-# on the default SQLite backend. Declared here (mirrors requirements-admin.lock)
-# so the enterprise backend is an explicit, installable extra rather than an
-# undocumented lock-only dependency.
+# Optional PostgreSQL driver for admin and proxy persistence. Release containers
+# use hash locks, not this range: requirements-admin.lock for admin and
+# requirements.lock + requirements-postgres.lock for INSTALL_POSTGRES=true proxy.
 postgres = [
     "asyncpg>=0.29,<1.0",
 ]

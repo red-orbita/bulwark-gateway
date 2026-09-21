@@ -1,0 +1,28 @@
+# Candidate policy, not automatically loaded from the examples directory.
+tenant: example-corp
+agents:
+  - id: finance-assistant
+    sandbox_level: strict
+    allowed_tools: [read_knowledge_base]
+    allow_command_execution: false
+    allow_file_write: false
+    allow_network_access: false
+    attachments:
+      enabled: true
+      max_file_bytes: 8000
+      max_total_bytes: 32000
+      max_attachments: 4
+    backend_egress:
+      enabled: true
+      allowed_origins: ["https://llm.corp.example"]
+    input_dlp:
+      enabled: true
+      max_bytes: 32768
+      redact_email: true
+      redact_phone: false
+      # Literal classification markers, never real confidential documents/secrets.
+      blocked_terms: ["internal acquisition plan", "restricted finance report"]
+  - id: public-support
+    sandbox_level: strict
+    allowed_tools: [read_knowledge_base]
+    # No per-agent opt-in. Global DLP remains enforced if enabled by the operator.

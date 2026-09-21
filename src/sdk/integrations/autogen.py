@@ -3,9 +3,8 @@ AutoGen Integration — Wraps AutoGen agents with Bulwark security scanning.
 
 Provides a non-intrusive way to add security guardrails to AutoGen
 (and ag2) multi-agent conversations. Does NOT import autogen at module
-level — the wrappers are fully duck-typed, so they work with any object
-exposing ``generate_reply`` / ``a_generate_reply`` and are testable
-without the framework installed.
+level. Agent endpoints are duck-typed; message data follows the bounded eager
+contracts in docs/ADAPTER-CONTRACTS.md. Tests use doubles without the framework.
 
 Two integration styles are supported:
 
@@ -33,6 +32,12 @@ import logging
 from typing import Any
 
 from src.sdk.guard import Guard, SecurityError
+from src.sdk.integrations._structured import (
+    StructuredValue,
+    checked_text,
+    scan_structure,
+    scan_structure_async,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,92 +81,67 @@ class AutoGenGuard:
 
         Args:
             message: A string, an OpenAI-style ``{"content": ...}`` dict, or
-                any object with a ``.content`` attribute.
+                a supported passive record (see ADAPTER-CONTRACTS.md).
 
         Returns:
-            The (possibly redacted) message text, or None if there was no
-            scannable content.
+            Scalar text (possibly redacted), or selected text from a fully
+            inspected structure. Structured input redaction is rejected.
 
         Raises:
             SecurityError: If the message is blocked by input guardrails.
         """
-        text = _extract_message_text(message)
-        if not text:
-            return None
-        result = self._guard.scan_input_sync(
-            text, tenant_id=self._tenant_id, agent_id=self._agent_id
+        if type(message) is str:
+            StructuredValue(message)
+            try:
+                result = self._guard.scan_input_sync(message, tenant_id=self._tenant_id, agent_id=self._agent_id)
+                return checked_text(result, message, output=True)
+            except SecurityError:
+                raise
+            except Exception:
+                raise SecurityError("Adapter inspection failed") from None
+        message = scan_structure(
+            message, self._guard.scan_input_sync, tenant_id=self._tenant_id, agent_id=self._agent_id
         )
-        if result.verdict.value == "block":
-            raise SecurityError(
-                f"Input blocked: {result.events[0].description if result.events else 'policy violation'}",
-                result=result,
-            )
-        if result.verdict.value == "redact" and result.modified_content:
-            return result.modified_content
-        return text
+        return _extract_message_text(message)
 
     def scan_reply(self, reply: Any) -> Any:
         """Scan an agent reply (output side).
 
         Args:
-            reply: A string, a ``{"content": ...}`` dict, or an object with
-                a ``.content`` attribute.
+            reply: A supported eager value or passive record.
 
         Returns:
-            The reply, with content redacted in place if the output filter
-            requires it.
+            A detached reply snapshot, sanitized when needed. Ambiguous or object
+            redaction is rejected; the original is never partially mutated.
 
         Raises:
             SecurityError: If the reply is blocked by output filters.
         """
-        text = _extract_message_text(reply)
-        if not text:
-            return reply
-        result = self._guard.scan_output_sync(
-            text, tenant_id=self._tenant_id, agent_id=self._agent_id
+        return scan_structure(
+            reply, self._guard.scan_output_sync, output=True, tenant_id=self._tenant_id, agent_id=self._agent_id
         )
-        if result.verdict.value == "block":
-            raise SecurityError(
-                f"Output blocked: {result.events[0].description if result.events else 'policy violation'}",
-                result=result,
-            )
-        if result.verdict.value == "redact" and result.modified_content:
-            return _replace_message_text(reply, result.modified_content)
-        return reply
 
     async def scan_message_async(self, message: Any) -> str | None:
         """Async variant of :meth:`scan_message`."""
-        text = _extract_message_text(message)
-        if not text:
-            return None
-        result = await self._guard.scan_input(
-            text, tenant_id=self._tenant_id, agent_id=self._agent_id
+        if type(message) is str:
+            StructuredValue(message)
+            try:
+                result = await self._guard.scan_input(message, tenant_id=self._tenant_id, agent_id=self._agent_id)
+                return checked_text(result, message, output=True)
+            except SecurityError:
+                raise
+            except Exception:
+                raise SecurityError("Adapter inspection failed") from None
+        message = await scan_structure_async(
+            message, self._guard.scan_input, tenant_id=self._tenant_id, agent_id=self._agent_id
         )
-        if result.verdict.value == "block":
-            raise SecurityError(
-                f"Input blocked: {result.events[0].description if result.events else 'policy violation'}",
-                result=result,
-            )
-        if result.verdict.value == "redact" and result.modified_content:
-            return result.modified_content
-        return text
+        return _extract_message_text(message)
 
     async def scan_reply_async(self, reply: Any) -> Any:
         """Async variant of :meth:`scan_reply`."""
-        text = _extract_message_text(reply)
-        if not text:
-            return reply
-        result = await self._guard.scan_output(
-            text, tenant_id=self._tenant_id, agent_id=self._agent_id
+        return await scan_structure_async(
+            reply, self._guard.scan_output, output=True, tenant_id=self._tenant_id, agent_id=self._agent_id
         )
-        if result.verdict.value == "block":
-            raise SecurityError(
-                f"Output blocked: {result.events[0].description if result.events else 'policy violation'}",
-                result=result,
-            )
-        if result.verdict.value == "redact" and result.modified_content:
-            return _replace_message_text(reply, result.modified_content)
-        return reply
 
     # === Agent wrapping ===
 
@@ -169,7 +149,7 @@ class AutoGenGuard:
         """Patch an AutoGen agent so every reply is scanned.
 
         Intercepts ``generate_reply`` (and ``a_generate_reply`` if present),
-        scanning the last user message before generation and the produced
+        scanning all explicit messages before generation and the produced
         reply afterwards. The agent is mutated in place and also returned
         for convenience.
 
@@ -198,13 +178,14 @@ class AutoGenGuard:
         original_generate = agent.generate_reply
         guard_self = self
 
-        def guarded_generate_reply(
-            messages: Any = None, sender: Any = None, **kwargs: Any
-        ) -> Any:
-            # Scan the most recent inbound message (input guardrail)
-            last = _last_user_message(messages)
-            if last is not None:
-                guard_self.scan_message(last)  # raises SecurityError on block
+        def guarded_generate_reply(messages: Any = None, sender: Any = None, **kwargs: Any) -> Any:
+            _explicit_messages(messages)
+            messages, kwargs = scan_structure(
+                (messages, kwargs),
+                guard_self._guard.scan_input_sync,
+                tenant_id=self._tenant_id,
+                agent_id=self._agent_id,
+            )
             reply = original_generate(messages=messages, sender=sender, **kwargs)
             return guard_self.scan_reply(reply)
 
@@ -214,20 +195,15 @@ class AutoGenGuard:
         if hasattr(agent, "a_generate_reply") and callable(agent.a_generate_reply):
             original_a_generate = agent.a_generate_reply
 
-            async def guarded_a_generate_reply(
-                messages: Any = None, sender: Any = None, **kwargs: Any
-            ) -> Any:
-                last = _last_user_message(messages)
-                if last is not None:
-                    await guard_self.scan_message_async(last)
+            async def guarded_a_generate_reply(messages: Any = None, sender: Any = None, **kwargs: Any) -> Any:
+                _explicit_messages(messages)
+                messages, kwargs = await scan_structure_async(
+                    (messages, kwargs), guard_self._guard.scan_input, tenant_id=self._tenant_id, agent_id=self._agent_id
+                )
                 if asyncio.iscoroutinefunction(original_a_generate):
-                    reply = await original_a_generate(
-                        messages=messages, sender=sender, **kwargs
-                    )
+                    reply = await original_a_generate(messages=messages, sender=sender, **kwargs)
                 else:
-                    reply = original_a_generate(
-                        messages=messages, sender=sender, **kwargs
-                    )
+                    reply = await asyncio.to_thread(original_a_generate, messages=messages, sender=sender, **kwargs)
                 return await guard_self.scan_reply_async(reply)
 
             agent.a_generate_reply = guarded_a_generate_reply  # type: ignore[assignment]
@@ -241,60 +217,56 @@ class AutoGenGuard:
 
 def _extract_message_text(message: Any) -> str | None:
     """Extract text from an AutoGen message (str / dict / object)."""
+    tree = StructuredValue(message)
     if message is None:
         return None
-    if isinstance(message, str):
+    if type(message) is str:
         return message
-    if isinstance(message, dict):
+    if type(message) is dict:
         content = message.get("content")
-        if isinstance(content, str):
+        if type(content) is str:
             return content
         # Multimodal content: list of {"type": "text", "text": ...}
-        if isinstance(content, list):
+        if type(content) is list:
             parts = [
                 p.get("text", "")
                 for p in content
-                if isinstance(p, dict) and p.get("type") == "text"
+                if type(p) is dict and p.get("type") == "text" and type(p.get("text")) is str
             ]
             if parts:
                 return " ".join(parts)
-    if hasattr(message, "content"):
-        content = message.content
-        if isinstance(content, str):
-            return content
-    return None
+    return tree.text or None
 
 
 def _replace_message_text(message: Any, new_content: str) -> Any:
     """Replace the text content in an AutoGen message object/dict."""
-    if isinstance(message, str):
+    if type(message) is str:
         return new_content
-    if isinstance(message, dict):
-        if isinstance(message.get("content"), str):
-            message["content"] = new_content
-        return message
-    if hasattr(message, "content"):
-        try:
-            message.content = new_content
-        except AttributeError:
-            pass
-    return message
+    raise SecurityError("Structured redaction requires per-field inspection")
 
 
-def _last_user_message(messages: Any) -> Any:
-    """Return the most recent user message from an AutoGen messages list."""
-    if messages is None:
-        return None
-    if isinstance(messages, str):
-        return messages
-    if isinstance(messages, list) and messages:
-        # Prefer the last message whose role is 'user' (or unspecified).
-        for msg in reversed(messages):
-            if isinstance(msg, dict):
-                role = msg.get("role")
-                if role in (None, "user"):
-                    return msg
-            else:
-                return msg
-        return messages[-1]
-    return None
+def _explicit_messages(messages: Any) -> list:
+    """Implicit agent history cannot be inspected; require explicit bounded input."""
+    if type(messages) is str:
+        messages = [messages]
+    if type(messages) is not list or not 0 < len(messages) <= 128:
+        raise SecurityError("Explicit messages are required for guarded generation")
+    StructuredValue(messages)
+    for message in messages:
+        if type(message) is str:
+            continue
+        if type(message) is not dict or "content" not in message:
+            raise SecurityError("Explicit message content is required")
+        content = message["content"]
+        if type(content) is str:
+            continue
+        if (
+            type(content) is not list
+            or not content
+            or any(
+                type(block) is not dict or block.get("type") != "text" or type(block.get("text")) is not str
+                for block in content
+            )
+        ):
+            raise SecurityError("Only explicit text messages are supported")
+    return messages
