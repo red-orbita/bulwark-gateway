@@ -10,6 +10,9 @@ Known constraints remain public in [Limitations](LIMITATIONS.md).
 
 | Document | Description |
 |----------|-------------|
+| [Security Policy](../SECURITY.md) | Private vulnerability reporting and maintenance scope |
+| [Contributing](../CONTRIBUTING.md) | Development setup, testing and review process |
+| [Code of Conduct](../CODE_OF_CONDUCT.md) | Community standards and conduct contact process |
 | [Documentation Policy](DOCUMENTATION-POLICY.md) | Public guides, local-only records and publication checks |
 | [Release Verification](RELEASE-VERIFICATION.md) | Signed scan/SBOM artifacts, verification and production acceptance requirements |
 | [Release Packaging](PACKAGING.md) | Separate runtime locks, operator environment and build requirements |

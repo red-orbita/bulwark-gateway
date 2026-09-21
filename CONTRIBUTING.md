@@ -1,36 +1,51 @@
 # Contributing to Bulwark Gateway
 
+Participation follows our [Code of Conduct](CODE_OF_CONDUCT.md). For suspected
+vulnerabilities, use [private security reporting](SECURITY.md), not a public issue
+or pull request. Bug reports and feature proposals use the issue templates.
+
 ## Getting Started
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/<you>/bulwark-gateway.git`
 3. Create a branch: `git checkout -b feat/my-feature`
-4. Install dependencies: `pip install -e ".[dev]"` and `pre-commit install`
+4. Install the hash-locked CI dependency composition described below
 5. Make your changes
-6. Run checks: `make test && make lint && make type-check`
+6. Run the tests, lint and type checks described below
 7. Commit with conventional message: `feat: add new detection pattern`
 8. Push and open a Pull Request
 
 ## Development Setup
 
 ```bash
-python -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
-pre-commit install
+python tests/packaging_locks.py ci > .venv/ci-runtime.lock
+python tests/packaging_locks.py constraints > .venv/ci-runtime.constraints
+python -m pip install --only-binary=:all: --require-hashes \
+  -r .venv/ci-runtime.lock -c .venv/ci-runtime.constraints \
+  -r requirements-test.lock -r requirements-lint.lock \
+  -r docker/requirements-test-cp314.lock
+python -m pip check
 
 # Run tests
-pytest tests/ -q
+python -m pytest tests/ -q --ignore=tests/test_admin_integration.py \
+  --ignore=tests/test_postgres_parity.py --ignore=tests/test_postgres_release_contract.py
 
 # Run linter
-ruff check src/ admin/ tests/
+python -m ruff check src/ admin/ tests/
 
 # Run type checker
-mypy src/ --ignore-missing-imports
-
-# Local stack (proxy + admin + redis)
-docker-compose up -d
+python -m mypy src/ --ignore-missing-imports
+python -m mypy admin/ --ignore-missing-imports
 ```
+
+These tooling locks target Linux amd64 and Python 3.13; release containers use
+Python 3.14. Do not install the complete proxy and admin locks together. See
+[packaging](docs/PACKAGING.md) for the CI composition and separate runtime checks.
+Container, PostgreSQL and optional model tests need separately provisioned
+environments. Report skips explicitly; do not point destructive test fixtures at
+an existing database. Use [deployment guidance](docs/DEPLOYMENT.md) for local services.
 
 ## Code Style
 
@@ -55,7 +70,8 @@ chore: update dependencies
 
 ## Security Rules
 
-Before submitting code, review `.opencode/SECURE-CODING-STANDARDS.md`. Key rules:
+Before submitting code, review the public [security hardening guidance](docs/SECURITY-HARDENING.md)
+and [known limitations](docs/LIMITATIONS.md). Key rules:
 
 - Never use `eval()`, `exec()`, `pickle`, or dynamic code execution
 - Never hardcode secrets — use env vars with `*_FILE` support
@@ -68,14 +84,14 @@ Before submitting code, review `.opencode/SECURE-CODING-STANDARDS.md`. Key rules
 - All new features must have tests
 - Security-critical code requires positive (blocks attack) AND negative (allows legit) tests
 - Target: 85%+ coverage on new code
-- Run the full suite before submitting: `pytest tests/ -q`
+- Run the applicable suites before submitting and list any unexecuted checks
 
 ## Pull Request Process
 
 1. Ensure CI passes (tests, lint, type-check)
 2. Update CHANGELOG.md if adding user-facing changes
 3. Request review from a maintainer
-4. Squash commits on merge
+4. Leave merging and release approval to maintainers
 
 ## License
 

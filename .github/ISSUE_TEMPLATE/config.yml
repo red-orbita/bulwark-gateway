@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/red-orbita/bulwark-gateway/security/advisories/new
+    about: Do not disclose vulnerabilities or credentials in public issues.
+  - name: Documentation and troubleshooting
+    url: https://github.com/red-orbita/bulwark-gateway/blob/master/docs/INDEX.md
+    about: Read setup, operations and troubleshooting guides before opening an issue.
+  - name: Conduct contact process
+    url: https://github.com/red-orbita/bulwark-gateway/blob/master/CODE_OF_CONDUCT.md#reporting
+    about: Request maintainer contact without publishing sensitive incident details.

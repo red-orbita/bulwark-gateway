@@ -18,6 +18,7 @@ Intercepts, validates, and enforces policies on tool calls between users and LLM
 - [Documentation](#documentation)
 - [Project Structure](#project-structure)
 - [Development](#development)
+- [Community](#community)
 - [License](#license)
 
 ---
@@ -429,6 +430,14 @@ mypy src/
 ```
 
 ---
+
+## Community
+
+- [Contributing](CONTRIBUTING.md): development setup, tests and review process.
+- [Code of Conduct](CODE_OF_CONDUCT.md): participation standards and contact process.
+- [Security Policy](SECURITY.md): report vulnerabilities privately, not in public issues.
+- [Issue templates](https://github.com/red-orbita/bulwark-gateway/issues/new/choose):
+  sanitized bug reports and feature proposals.
 
 ## License
 
