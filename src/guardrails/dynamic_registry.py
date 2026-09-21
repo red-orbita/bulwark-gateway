@@ -71,7 +71,7 @@ KEY_VERSION = "bulwark:guardrails:version"
 class DynamicPatternRegistry:
     """Reads pattern overrides from Redis with local caching."""
 
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: Optional[str] = None, *, offline: bool = False):
         self._redis: Optional[redis.Redis] = None
         self._disabled: set[str] = set()
         self._custom: list[str] = []
@@ -81,7 +81,7 @@ class DynamicPatternRegistry:
         self._cached_version: int = -1
         self._lock = threading.Lock()
 
-        url = redis_url or getattr(settings, "redis_url", None)
+        url = None if offline else redis_url or getattr(settings, "redis_url", None)
         if url:
             try:
                 kwargs: dict = {"decode_responses": True, "socket_timeout": 1.0}

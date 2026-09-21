@@ -1,0 +1,9 @@
+{
+  "requests": 24,
+  "concurrency": 2,
+  "warmup": 2,
+  "seed": 42,
+  "backend_delay_ms": 1,
+  "request_timeout_seconds": 5,
+  "run_timeout_seconds": 30
+}

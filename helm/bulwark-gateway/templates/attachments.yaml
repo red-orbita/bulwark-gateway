@@ -1,0 +1,35 @@
+{{- include "bulwark-gateway.validateValues" . }}
+{{- if and .Values.proxy.attachments.service.enabled (eq .Values.proxy.attachments.service.storage "local-sqlite") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: attachment-storage-config
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.proxy.labels" . | nindent 4 }}
+data:
+  # No credentials: a fixed local path on the proxy-only encrypted block PVC.
+  database-url: "sqlite:////app/attachments/documents.db"
+{{- if not .Values.proxy.attachments.service.local.existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: proxy-attachments
+  namespace: {{ include "bulwark-gateway.namespace" . }}
+  labels:
+    {{- include "bulwark-gateway.proxy.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.proxy.attachments.service.local.accessMode }}
+  {{- with .Values.proxy.attachments.service.local.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.proxy.attachments.service.local.size | quote }}
+{{- end }}
+{{- end }}

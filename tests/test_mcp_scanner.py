@@ -9,7 +9,7 @@ Verifies, without any model/sidecar provisioning (pure regex):
   - Hidden-instruction / unicode-deception / param-injection detection
   - BLOCK only in blocking mode; WARN (non-blocking) otherwise
   - Clean tool definitions ALLOW
-  - Detector error fails open
+  - Detector errors fail closed in blocking mode
   - Measured detection corpus (100% detection / 0 FP) backing the GA promotion
   - Pipeline-lane wiring (blocking lane blocks; async lane never gates hot path)
   - GA readiness (maturity=GA, health True, never flagged degraded)
@@ -101,7 +101,7 @@ class TestMcpScannerDetection:
         assert len(result.events) >= 1
         ev = result.events[0]
         assert ev.source == "mcp_tool_scanner"
-        assert ev.tool_name == "get_weather"
+        assert ev.tool_name is None  # Tool names are untrusted payload, not telemetry.
         assert ev.metadata["rule_id"].startswith("BWK-MCP-")
 
     @pytest.mark.asyncio
@@ -140,19 +140,19 @@ class TestMcpScannerDetection:
         tools = [_openai_tool("get_weather", "Weather lookup.", params)]
         result = await scanner.scan("hello", _ctx(tool_definitions=tools))
         assert result.verdict in (Verdict.BLOCK, Verdict.WARN)
-        assert any(e.metadata.get("parameter") == "city" for e in result.events)
+        assert all("parameter" not in e.metadata for e in result.events)
 
     @pytest.mark.asyncio
-    async def test_non_dict_entries_ignored(self):
+    async def test_non_dict_entries_block(self):
         scanner = McpToolScanner(blocking=True)
         tools = ["not-a-dict", 42, _openai_tool("ok", "Clean description.")]
         result = await scanner.scan("hello", _ctx(tool_definitions=tools))
-        assert result.verdict == Verdict.ALLOW
+        assert result.verdict == Verdict.BLOCK
 
 
-class TestMcpScannerFailOpen:
+class TestMcpScannerFailure:
     @pytest.mark.asyncio
-    async def test_detector_error_fails_open(self):
+    async def test_detector_error_fails_closed(self):
         scanner = McpToolScanner(blocking=True)
         tools = [_openai_tool("get_weather", "clean")]
         with patch(
@@ -160,7 +160,7 @@ class TestMcpScannerFailOpen:
             side_effect=RuntimeError("boom"),
         ):
             result = await scanner.scan("hello", _ctx(tool_definitions=tools))
-        assert result.verdict == Verdict.ALLOW
+        assert result.verdict == Verdict.BLOCK
 
 
 # ---------------------------------------------------------------------------
@@ -408,3 +408,14 @@ class TestMcpScannerReadiness:
         pipeline.register(McpToolScanner(blocking=True))
         degraded = await pipeline.unhealthy_blocking_scanners()
         assert "mcp_tool_scanner" not in degraded
+
+
+async def test_runtime_events_never_export_tool_payload_secrets():
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    tools = [_openai_tool(secret, f"<!-- {secret} -->", {
+        "type": "object", "properties": {secret: {"type": "string", "default": f"<!-- {secret} -->"}},
+    })]
+    result = await McpToolScanner(blocking=True).scan("hello", _ctx(tools))
+    assert result.events
+    assert secret not in result.model_dump_json()
+    assert all(event.tool_name is None and "parameter" not in event.metadata for event in result.events)

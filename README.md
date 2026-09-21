@@ -136,6 +136,14 @@ classifier on every edge case — ML scanners are available as an optional layer
 Helm is the recommended path for managed clusters (AKS/EKS/GKE). Build and push
 the images to your registry, then point the chart at them.
 
+The current canonical build profile prepares a **Linux amd64 / Python 3.14 release
+candidate**, not an automatic production approval. Both Dockerfiles use the same
+digest-pinned minimal Wolfi runtime and verify target dependencies at build time.
+Use [Release Packaging](docs/PACKAGING.md) for supported variants and
+[Release Verification](docs/RELEASE-VERIFICATION.md) for scan, SBOM, signature and
+digest requirements before promotion. ML/embedding/SkillSpector build-time extras
+are not admitted by this candidate profile without separate reviewed packaging.
+
 `<REGISTRY>` is your container registry path, e.g. `myacr.azurecr.io`,
 `123456789012.dkr.ecr.eu-west-1.amazonaws.com`, or `ghcr.io/my-org`.
 

@@ -141,14 +141,14 @@ async def test_ssrf_block_does_not_trip_circuit():
     assert conn._circuit.can_execute() is True
 
 
-async def test_egress_guard_error_returns_none_for_public_host():
-    """Sanity: the guard passes a public host (DNS resolves off-box). Skipped if
-    the sandbox has no outbound DNS."""
+async def test_egress_guard_error_returns_none_for_public_host(monkeypatch):
+    """Public resolution is deterministic; never depend on outbound DNS in a unit test."""
+    import socket
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
     conn = _base("https://example.com")
-    try:
-        err = conn._egress_guard_error()
-    except Exception:  # pragma: no cover - environment without DNS
-        pytest.skip("no outbound DNS in sandbox")
+    err = conn._egress_guard_error()
     assert err is None
 
 

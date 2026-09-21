@@ -117,6 +117,18 @@ class LongContextScanner(InputScanner):
     async def health(self) -> bool:
         return self._guardrail is not None
 
+    def _incomplete(self, context: ScanContext) -> GuardrailResult:
+        """A failed deep scan is not evidence that the unscanned tail is safe."""
+        verdict = Verdict.BLOCK if self._blocking else Verdict.WARN
+        return GuardrailResult(verdict=verdict, events=[SecurityEvent(
+            tenant_id=context.tenant_id, agent_id=context.agent_id,
+            request_id=context.request_id, verdict=verdict,
+            category=ThreatCategory.POLICY_VIOLATION,
+            description="Long-context inspection could not complete",
+            source="long_context_scanner", severity="high" if self._blocking else "medium",
+            metadata={"reason": "scan_incomplete"},
+        )])
+
     async def scan(self, content: str, context: ScanContext) -> GuardrailResult:
         """Scan the long-context tail + many-shot density of ``content``.
 
@@ -127,8 +139,12 @@ class LongContextScanner(InputScanner):
             return GuardrailResult(verdict=Verdict.ALLOW)
 
         guardrail = self._guardrail
-        if guardrail is None:  # startup() not run (defensive) — fail-open
-            return GuardrailResult(verdict=Verdict.ALLOW)
+        if guardrail is None:
+            return self._incomplete(context)
+
+        if (len(content) > self._max_scan_bytes
+                or len(content.encode("utf-8")) > self._max_scan_bytes):
+            return self._incomplete(context)
 
         # Bound everything we look at, head-first (the head is already covered, but
         # the tail up to the cap is where the blind spot lives).
@@ -181,14 +197,14 @@ class LongContextScanner(InputScanner):
                     result = guardrail.inspect(
                         window, context.tenant_id, context.agent_id
                     )
-                except Exception as exc:  # pragma: no cover - guardrail is pure regex
-                    # Fail-open: the classic guardrail already covered the head, and
-                    # the async/blocking safe_scan wrapper handles hard failures.
+                except Exception:
                     logger.warning(
                         "long_context_scanner_inspect_error",
-                        extra={"error": str(exc)[:200]},
+                        extra={"request_id": context.request_id},
                     )
-                    break
+                    return self._incomplete(context)
+                if result.verdict == Verdict.BLOCK and not result.events:
+                    return self._incomplete(context)
                 for ev in result.events:
                     # The guardrail emits its own "oversized" WARN only above
                     # max_input_size; our windows stay below it, but drop it
@@ -225,6 +241,8 @@ class LongContextScanner(InputScanner):
                         )
                     )
                     if len(events) >= _MAX_EVENTS:
+                        if not worst_block:
+                            return self._incomplete(context)
                         break
                 if len(events) >= _MAX_EVENTS:
                     break

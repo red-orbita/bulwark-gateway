@@ -59,6 +59,7 @@ secrets:
 services:
   # ── Proxy (Hot Path) ─────────────────────────────────────
   proxy:
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile
@@ -159,7 +160,7 @@ services:
       admin:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -190,6 +191,7 @@ services:
 
   # ── Admin Portal ─────────────────────────────────────────
   admin:
+    platform: linux/amd64
     build:
       context: .
       dockerfile: docker/Dockerfile.admin
@@ -265,12 +267,8 @@ services:
       - enrichment_data:/app/shared/enrichment
       # Notification channels: admin owns this file (read-write).
       - notifications_data:/app/shared/notifications
-      - ./admin/main.py:/app/admin/main.py:ro
-      - ./admin/templates:/app/admin/templates:ro
-      - ./admin/routes:/app/admin/routes:ro
-      - ./admin/services:/app/admin/services:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/admin/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/admin/health')"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -307,7 +305,7 @@ services:
       sh -c "echo \"requirepass $$(cat /run/secrets/redis_password)\" > /tmp/redis-auth.conf &&
       exec redis-server /tmp/redis-auth.conf
       --maxmemory ${REDIS_MAXMEMORY:-64mb}
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --save 60 1000
       --appendonly yes
       --rename-command CONFIG ''

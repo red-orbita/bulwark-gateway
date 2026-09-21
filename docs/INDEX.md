@@ -4,8 +4,16 @@
 
 ## Quick Links
 
+Release requirements: [Release Verification](RELEASE-VERIFICATION.md) and
+[Release Packaging](PACKAGING.md). Implementation does not imply production approval.
+Known constraints remain public in [Limitations](LIMITATIONS.md).
+
 | Document | Description |
 |----------|-------------|
+| [Documentation Policy](DOCUMENTATION-POLICY.md) | Public guides, local-only records and publication checks |
+| [Release Verification](RELEASE-VERIFICATION.md) | Signed scan/SBOM artifacts, verification and production acceptance requirements |
+| [Release Packaging](PACKAGING.md) | Separate runtime locks, operator environment and build requirements |
+| [Network Flow Contracts](NETWORK-FLOW-CONTRACTS.md) | Scoped chart traffic rules and Redis security-state retention |
 | [Architecture](ARCHITECTURE.md) | System design, request flow, component interactions, design decisions |
 | [Deployment](DEPLOYMENT.md) | Kubernetes, Docker Compose, Redis, secrets management, TLS, ingress |
 | [CI/CD](CICD.md) | Pipeline templates: GitHub Actions, Jenkins, Azure DevOps, GitLab, Tekton |
@@ -15,6 +23,11 @@
 | [Notifications](NOTIFICATIONS.md) | Multi-channel alerting: Slack, Teams, Email, PagerDuty, etc. |
 | [Security Hardening](SECURITY-HARDENING.md) | Living security log: audits, remediations, OWASP LLM coverage, posture |
 | [Limitations](LIMITATIONS.md) | Accepted limitations & known gaps: vision OCR, multilingual, topic classifiers, WAF scope |
+| [Chatbot Attachments](CHATBOT-ATTACHMENTS.md) | Inline text-file inspection, rejection of uninspected images/documents, OCR limits |
+| [Document Extraction](DOCUMENT-EXTRACTION.md) | Isolated PNG/JPEG/PDF text conversion, native-tool prerequisites and processing limits |
+| [Chatbot Helm Settings](CHATBOT-HELM.md) | Opt-in attachment policy and deployment configuration |
+| [Async Attachments](ASYNC-ATTACHMENTS.md) | Scoped background processing, approval revisions, limits and readiness |
+| [Attachment API](ATTACHMENT-API.md) | Authenticated binary upload, status, deletion and approved chat references |
 | [API Reference](API-REFERENCE.md) | Proxy + Admin API endpoints, request/response formats |
 | [SOAR Playbooks](SOAR-PLAYBOOKS.md) | Runner-agnostic automation: signed event webhooks, service-account action API, 7 reference playbooks |
 | [Writing a Custom Scanner](CUSTOM-SCANNERS.md) | Build, register, and test a scanner for the scanner framework |

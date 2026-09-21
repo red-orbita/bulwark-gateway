@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import anyio
 import redis
 import structlog
 from fastapi import Request
@@ -28,6 +29,10 @@ from src.config import settings
 from src.redis_bootstrap import safe_key_segment
 
 logger = structlog.get_logger()
+_MAX_BUFFERED_REQUEST_BYTES = 10 * 1024 * 1024
+_REQUEST_BODY_TIMEOUT_SECONDS = 30
+_MAX_BUFFERED_RESPONSE_BYTES = 10 * 1024 * 1024
+_RESPONSE_BODY_TIMEOUT_SECONDS = 30
 
 class TenantQuotaConfig:
     """Quota configuration for a single tenant."""
@@ -349,11 +354,22 @@ class QuotaMiddleware(BaseHTTPMiddleware):
 
         # Store priority_weight in request state for future fair-queuing
         request.state.priority_weight = quota.priority_weight
+        is_attachment = path == "/v1/attachments" or path.startswith("/v1/attachments/")
+        if is_attachment:
+            # The upload route owns bounded streaming/deadline enforcement. Do
+            # not pre-buffer binary documents here for JSON/model inspection.
+            request.state.attachment_quota_bytes = quota.max_request_size_bytes
 
         # --- Check 1: Request size limit ---
-        if quota.max_request_size_bytes > 0:
+        body = b""
+        if not is_attachment and (quota.max_request_size_bytes > 0 or quota.allowed_models is not None):
+            limit = min(quota.max_request_size_bytes, _MAX_BUFFERED_REQUEST_BYTES) \
+                if quota.max_request_size_bytes > 0 else _MAX_BUFFERED_REQUEST_BYTES
             content_length = request.headers.get("content-length")
-            if content_length and int(content_length) > quota.max_request_size_bytes:
+            if content_length and (not content_length.isascii() or not content_length.isdecimal()
+                                   or len(content_length) > 20):
+                return JSONResponse(status_code=400, content={"error": {"code": "invalid_content_length"}})
+            if content_length and int(content_length) > limit:
                 return JSONResponse(
                     status_code=413,
                     content={
@@ -368,33 +384,31 @@ class QuotaMiddleware(BaseHTTPMiddleware):
                         }
                     },
                 )
-            # SECURITY (M-15 fix): Also check actual body size for chunked
-            # transfer encoding which omits Content-Length header.
-            if not content_length:
-                # Chunked or missing Content-Length — read and verify actual size
-                body = await request.body()
-                if len(body) > quota.max_request_size_bytes:
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "error": {
-                                "message": "Request payload too large (chunked)",
-                                "type": "quota_exceeded",
-                                "code": "payload_too_large",
-                                "detail": (
-                                    f"Max request size: {quota.max_request_size_bytes} bytes. "
-                                    f"Actual body: {len(body)} bytes."
-                                ),
-                            }
-                        },
-                    )
+            buffered = bytearray()
+            try:
+                with anyio.fail_after(_REQUEST_BODY_TIMEOUT_SECONDS):
+                    async for chunk in request.stream():
+                        if len(buffered) + len(chunk) > limit:
+                            return JSONResponse(status_code=413, content={"error": {
+                                "message": "Request payload too large", "code": "payload_too_large",
+                            }})
+                        buffered.extend(chunk)
+            except TimeoutError:
+                return JSONResponse(status_code=408, content={"error": {"code": "request_body_timeout"}})
+            except Exception:
+                return JSONResponse(status_code=400, content={"error": {"code": "invalid_request_body"}})
+            body = bytes(buffered)
+            # BaseHTTPMiddleware's cached request replays _body downstream. Do
+            # not replace receive or reserialize JSON: preserve the exact bytes.
+            request._body = body
 
         # --- Check 2: Allowed models ---
-        if quota.allowed_models is not None and path.startswith("/v"):
+        if quota.allowed_models is not None and path.startswith("/v") and not is_attachment:
             try:
-                body = await request.body()
                 if body:
                     payload = json.loads(body)
+                    if not isinstance(payload, dict):
+                        raise ValueError("Expected JSON object")
                     requested_model = payload.get("model", "")
                     if requested_model and requested_model not in quota.allowed_models:
                         return JSONResponse(
@@ -410,11 +424,11 @@ class QuotaMiddleware(BaseHTTPMiddleware):
                                 }
                             },
                         )
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass  # Non-JSON body or read error; let downstream handle
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                return JSONResponse(status_code=400, content={"error": {"code": "invalid_request_body"}})
 
         # --- Check 3: Token budget (pre-flight check) ---
-        if quota.max_tokens_per_day > 0:
+        if quota.max_tokens_per_day > 0 and not is_attachment:
             remaining_tokens = self._token_tracker.get_remaining(
                 tenant_id, quota.max_tokens_per_day
             )
@@ -474,9 +488,8 @@ class QuotaMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
 
             # --- Post-response: Track token usage ---
-            response = await self._track_token_usage(
-                response, tenant_id, quota
-            )
+            if not is_attachment:
+                response = await self._track_token_usage(response, tenant_id, quota)
 
             # --- Add quota headers to response ---
             response = self._add_quota_headers(response, tenant_id, quota)
@@ -509,16 +522,26 @@ class QuotaMiddleware(BaseHTTPMiddleware):
 
         # Read response body to extract token usage
         # Note: For streaming responses, token tracking happens at stream end
+        body_bytes = bytearray()
         try:
-            body_chunks = []
-            async for chunk in response.body_iterator:  # type: ignore[attr-defined]
-                if isinstance(chunk, bytes):
-                    body_chunks.append(chunk)
-                else:
-                    body_chunks.append(chunk.encode("utf-8"))
-
-            body_bytes = b"".join(body_chunks)
-            body_data = json.loads(body_bytes)
+            with anyio.fail_after(_RESPONSE_BODY_TIMEOUT_SECONDS):
+                async for chunk in response.body_iterator:  # type: ignore[attr-defined]
+                    chunk = chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                    if len(body_bytes) + len(chunk) > _MAX_BUFFERED_RESPONSE_BYTES:
+                        raise ValueError("Response byte budget")
+                    body_bytes.extend(chunk)
+                    await anyio.lowlevel.checkpoint()
+        except Exception:
+            logger.warning("quota_response_inspection_incomplete")
+            with anyio.CancelScope(shield=True):
+                with anyio.move_on_after(1):
+                    close = getattr(getattr(response, "body_iterator", None), "aclose", None)
+                    if close is not None:
+                        await close()
+            return JSONResponse(status_code=502, content={"error": "Response inspection incomplete"})
+        captured = bytes(body_bytes)
+        try:
+            body_data = json.loads(captured)
 
             # Extract token usage from OpenAI-compatible response
             usage = body_data.get("usage", {})
@@ -536,7 +559,7 @@ class QuotaMiddleware(BaseHTTPMiddleware):
                 )
 
                 return Response(
-                    content=body_bytes,
+                    content=captured,
                     status_code=response.status_code,
                     headers=headers,
                     media_type=response.media_type,
@@ -544,23 +567,16 @@ class QuotaMiddleware(BaseHTTPMiddleware):
 
             # No usage data — return response with body reconstructed
             return Response(
-                content=body_bytes,
+                content=captured,
                 status_code=response.status_code,
                 headers=dict(response.headers),
                 media_type=response.media_type,
             )
 
         except (json.JSONDecodeError, StopAsyncIteration, Exception):
-            # If we can't parse the response, don't block it
-            # Body may already be consumed; return what we have
-            if body_chunks:
-                return Response(
-                    content=b"".join(body_chunks),
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    media_type=response.media_type,
-                )
-            return response
+            # Only a completely received, bounded body may survive accounting errors.
+            return Response(content=captured, status_code=response.status_code,
+                            headers=dict(response.headers), media_type=response.media_type)
 
     def _add_quota_headers(
         self, response: Response, tenant_id: str, quota: TenantQuotaConfig

@@ -9,7 +9,15 @@ import time
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from ..models.auth import ChangePasswordRequest, LoginRequest, LoginResponse, TokenPayload, UserInfo, UserRole
+from ..models.auth import (
+    ChangePasswordRequest,
+    InitialPasswordChangeRequest,
+    LoginRequest,
+    LoginResponse,
+    TokenPayload,
+    UserInfo,
+    UserRole,
+)
 from ..services.audit_logger import get_audit_logger
 from ..services.auth_service import AuthService, get_current_user
 from ..services.user_store import get_user_store
@@ -340,7 +348,7 @@ async def change_password(req: ChangePasswordRequest, request: Request, user: To
 
 
 @router.post("/force-change-password")
-async def force_change_password(request: Request):
+async def force_change_password(req: InitialPasswordChangeRequest, request: Request):
     """Change password without token — only for users with force_password_change=true.
 
     Requires username + current_password verification (rate-limited).
@@ -348,13 +356,9 @@ async def force_change_password(request: Request):
     """
     ip = request.client.host if request.client else "unknown"
 
-    body = await request.json()
-    username = body.get("username", "")
-    current_password = body.get("current_password", "")
-    new_password = body.get("new_password", "")
-
-    if not username or not current_password or not new_password:
-        raise HTTPException(status_code=400, detail="username, current_password, and new_password required")
+    username = req.username
+    current_password = req.current_password
+    new_password = req.new_password
 
     # Rate limit by both IP and target username
     _check_login_rate_limit(ip, username)

@@ -822,6 +822,12 @@ MIGRATIONS: list[Migration] = [
             ALTER TABLE integration_link ADD COLUMN IF NOT EXISTS reconcile_state TEXT;
         """,
     ),
+    Migration(
+        version=14,
+        description="Track bootstrap secret separately from operator password",
+        sqlite_sql="ALTER TABLE users ADD COLUMN bootstrap_password_hash TEXT;",
+        postgresql_sql="ALTER TABLE users ADD COLUMN IF NOT EXISTS bootstrap_password_hash TEXT;",
+    ),
 ]
 
 
@@ -984,7 +990,12 @@ async def _apply_migration(engine: DatabaseEngine, migration: Migration, sql: st
             )
     else:
         # SQLite: use executescript (implicitly commits)
-        await engine.execute_script(sql)
+        # v14 may have committed its DDL before interruption, or UserStore may
+        # already have added the column to this same SQLite database.
+        columns = await engine.fetch_all("PRAGMA table_info(users)") if migration.version == 14 else []
+        already_added = migration.version == 14 and any(row["name"] == "bootstrap_password_hash" for row in columns)
+        if not already_added:
+            await engine.execute_script(sql)
 
         # Record migration
         elapsed_ms = int((_time.monotonic() - start) * 1000)

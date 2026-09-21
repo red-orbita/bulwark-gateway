@@ -683,7 +683,8 @@ class OutputFilter:
             encoded_events = self._check_encoded_secrets(modified, tenant_id, agent_id)
             if encoded_events:
                 events.extend(encoded_events)
-                verdict = Verdict.WARN  # Don't redact (can't reliably), but flag
+                if verdict == Verdict.ALLOW:
+                    verdict = Verdict.WARN  # Can't reliably redact the encoding.
 
         # 6. LLM02: Insecure output handling — dangerous executable content
         llm02_events = self._check_dangerous_output(modified, tenant_id, agent_id)
@@ -691,7 +692,7 @@ class OutputFilter:
             events.extend(llm02_events)
             if any(e.severity == "critical" for e in llm02_events):
                 verdict = Verdict.BLOCK
-            elif verdict != Verdict.BLOCK:
+            elif verdict == Verdict.ALLOW:
                 verdict = Verdict.WARN
 
         # 7. LLM09: Human review required — auto-execution risk

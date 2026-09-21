@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import List
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -100,6 +101,27 @@ class Settings(BaseSettings):
     # with stricter requirements (e.g. healthcare) can enable it globally here.
     redact_email: bool = False   # Redact email addresses in LLM output ([REDACTED:EMAIL])
     redact_phone: bool = False   # Redact phone numbers in LLM output ([REDACTED:PHONE])
+    input_dlp_enabled: bool = False  # Opt-in: block known secrets/PII before upstream delivery
+    input_dlp_max_bytes: int = 65536  # UTF-8 budget; oversized requests fail closed when enabled
+    audit_admission_required: bool = False  # Require durable evidence before each upstream attempt
+    audit_admission_timeout_ms: int = Field(default=250, ge=1, le=10000)
+    attachment_guard_enabled: bool = False
+    attachment_max_file_bytes: int = Field(default=16000, ge=1, le=65536)
+    attachment_max_total_bytes: int = Field(default=65536, ge=1, le=65536)
+    attachment_max_count: int = Field(default=5, ge=1, le=5)
+    attachment_extract_documents: bool = False
+    attachment_max_document_bytes: int = Field(default=2097152, ge=1, le=2097152)
+    attachment_extraction_work_dir: Path | None = None
+    attachment_extraction_languages: str = Field(
+        default="eng", pattern=r"^[a-z][a-z0-9_]{1,31}(\+[a-z][a-z0-9_]{1,31}){0,2}$",
+    )
+    attachment_parser_isolation_confirmed: bool = False
+    attachment_service_enabled: bool = False
+    attachment_service_db_url_file: Path | None = None
+    attachment_service_max_documents: int = Field(default=100, ge=1, le=10000)
+    attachment_service_max_bytes: int = Field(default=33554432, ge=1048576, le=1073741824)
+    attachment_service_max_per_tenant: int = Field(default=20, ge=1, le=1000)
+    attachment_service_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
 
     # Allowed-request visibility (opt-in). By default only BLOCK and WARN verdicts
     # are recorded as browsable events; legitimate ALLOW traffic is only counted.

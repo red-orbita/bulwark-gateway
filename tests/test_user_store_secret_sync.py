@@ -41,24 +41,29 @@ class FakeDB:
         q = self._norm(query)
         if q.startswith("SELECT COUNT(*)"):
             return {"cnt": len(self.users)}
-        if q.startswith("SELECT password_hash FROM users WHERE username"):
+        if q.startswith("SELECT password_hash, bootstrap_password_hash FROM users WHERE username"):
             user = self.users.get(params[0])
-            return {"password_hash": user["password_hash"]} if user else None
+            return dict(user) if user else None
         return None
 
     def sync_execute(self, query, params=()):  # noqa: ANN001
         q = self._norm(query)
         self.executed.append((q, params))
         if q.startswith("UPDATE users SET password_hash"):
-            new_hash, now, username = params
+            new_hash, bootstrap_hash, now, username, old = params
             user = self.users.get(username)
-            if user:
+            if user and user.get("bootstrap_password_hash") == old:
                 user["password_hash"] = new_hash
+                user["bootstrap_password_hash"] = bootstrap_hash
                 user["force_password_change"] = 1
                 user["updated_at"] = now
         elif q.startswith("INSERT INTO users"):
-            _id, username, ph, _role, _now, _now2 = params
-            self.users[username] = {"password_hash": ph, "force_password_change": 1}
+            _id, username, ph, _role, _now, _now2, bootstrap = params
+            self.users[username] = {"password_hash": ph, "force_password_change": 1, "bootstrap_password_hash": bootstrap}
+        elif q.startswith("UPDATE users SET bootstrap_password_hash"):
+            ph, username = params
+            if not self.users[username].get("bootstrap_password_hash"):
+                self.users[username]["bootstrap_password_hash"] = ph
 
     @property
     def update_count(self) -> int:
@@ -85,7 +90,7 @@ def test_rotation_detected_updates_hash_and_forces_change(store, monkeypatch):
         "admin": {"password_hash": _hash_password(old_pw), "force_password_change": 0},
     })
     _set_secret(monkeypatch, {"ADMIN_PASSWORD": new_pw})
-
+    db.users["admin"]["bootstrap_password_hash"] = _hash_password(old_pw)
     store._sync_passwords_pg(db)
 
     stored = db.users["admin"]["password_hash"]
@@ -169,10 +174,97 @@ def test_seed_dispatch_runs_sync_when_table_populated(store, monkeypatch):
         "admin": {"password_hash": _hash_password(old_pw), "force_password_change": 0},
     })
     _set_secret(monkeypatch, {"ADMIN_PASSWORD": new_pw})
-
+    db.users["admin"]["bootstrap_password_hash"] = _hash_password(old_pw)
     # Non-empty table -> _sync_seed_defaults must dispatch to _sync_passwords_pg
     store._sync_seed_defaults(db)
 
     assert db.update_count == 1
     assert _verify_password(new_pw, db.users["admin"]["password_hash"])
     assert db.users["admin"]["force_password_change"] == 1
+
+
+def test_operator_password_survives_unchanged_bootstrap_secret(store, monkeypatch):
+    seed, chosen = "BootstrapPassw0rd!", "OperatorChosenPassw0rd!"
+    db = FakeDB({"admin": {"password_hash": _hash_password(chosen),
+                           "bootstrap_password_hash": _hash_password(seed), "force_password_change": 0}})
+    _set_secret(monkeypatch, {"ADMIN_PASSWORD": seed})
+    store._sync_passwords_pg(db)
+    assert db.update_count == 0
+    assert _verify_password(chosen, db.users["admin"]["password_hash"])
+    assert db.users["admin"]["force_password_change"] == 0
+
+
+def test_legacy_unknown_seed_never_overwrites_operator_password(store, monkeypatch):
+    chosen, seed = "OperatorChosenPassw0rd!", "BootstrapPassw0rd!"
+    db = FakeDB({"admin": {"password_hash": _hash_password(chosen), "force_password_change": 0}})
+    _set_secret(monkeypatch, {"ADMIN_PASSWORD": seed})
+    store._sync_passwords_pg(db)
+    store._sync_passwords_pg(db)
+    assert db.update_count == 0
+    assert _verify_password(chosen, db.users["admin"]["password_hash"])
+    assert _verify_password(seed, db.users["admin"]["bootstrap_password_hash"])
+
+
+def test_sqlite_password_change_survives_restart_and_real_secret_rotation(tmp_path, monkeypatch):
+    from admin.services import user_store
+
+    monkeypatch.setattr(user_store, "_get_db_encryption_key", lambda: None)
+    _set_secret(monkeypatch, {"ADMIN_PASSWORD": "BootstrapPassw0rd!"})
+    path = str(tmp_path / "users.db")
+    first = user_store.UserStore(path)
+    first.initialize()
+    try:
+        account = first.get_user("admin")
+        first.change_password(account["id"], "OperatorChosenPassw0rd!")
+    finally:
+        first._conn.close()
+    second = user_store.UserStore(path)
+    second.initialize()
+    try:
+        assert second.verify_password("admin", "OperatorChosenPassw0rd!")
+        assert not second.verify_password("admin", "BootstrapPassw0rd!")
+        assert not second.get_user("admin")["force_password_change"]
+        _set_secret(monkeypatch, {"ADMIN_PASSWORD": "RotatedBootstrapPassw0rd!"})
+        second._sync_passwords()
+        assert second.verify_password("admin", "RotatedBootstrapPassw0rd!")
+        assert second.get_user("admin")["force_password_change"]
+    finally:
+        second._conn.close()
+
+
+@pytest.mark.parametrize("baseline", [None, "present"])
+def test_oversized_bootstrap_does_not_break_sync_or_change_login(store, monkeypatch, baseline):
+    chosen = _hash_password("OperatorPassw0rd!")
+    db = FakeDB({"admin": {"password_hash": chosen, "bootstrap_password_hash":
+                           _hash_password("OriginalBootstrap1!") if baseline else None, "force_password_change": 0}})
+    _set_secret(monkeypatch, {"ADMIN_PASSWORD": "\u00e9" * 40})
+    store._sync_passwords_pg(db)
+    assert db.update_count == 0 and db.users["admin"]["password_hash"] == chosen
+
+
+async def test_sqlite_v14_recovers_column_added_before_version_record(tmp_path):
+    from admin.services.migrations import run_migrations
+    from src.storage.database import create_engine
+
+    db = create_engine(f"sqlite:///{tmp_path / 'migration.db'}")
+    await db.init()
+    try:
+        await run_migrations(db)
+        await db.execute("DELETE FROM schema_migrations WHERE version = 14")
+        await run_migrations(db)
+        assert (await db.fetch_one("SELECT MAX(version) AS version FROM schema_migrations"))["version"] == 14
+        assert sum(row["name"] == "bootstrap_password_hash" for row in await db.fetch_all("PRAGMA table_info(users)")) == 1
+    finally:
+        await db.close()
+
+
+def test_bootstrap_hash_not_in_user_api_projection():
+    from datetime import datetime, timezone
+
+    from admin.routes.users import _user_to_response
+
+    user = {"id": "test", "username": "admin", "role": "admin", "active": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(), "password_hash": "login-private",
+            "bootstrap_password_hash": "bootstrap-private"}
+    response = _user_to_response(user).model_dump_json()
+    assert "private" not in response and "password_hash" not in response

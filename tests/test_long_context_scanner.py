@@ -114,20 +114,21 @@ async def test_empty_content_allows():
 
 
 @pytest.mark.asyncio
-async def test_not_started_fails_open():
-    """Before startup() the scanner fails open (ALLOW) rather than crashing."""
+async def test_not_started_fails_closed():
+    """A blocking scanner that was not initialized cannot approve the request."""
     scanner = LongContextScanner(blocking=True)
     result = await scanner.scan(_FILLER + _DEEP_PAYLOAD, _ctx())
-    assert result.verdict == Verdict.ALLOW
+    assert result.verdict == Verdict.BLOCK
 
 
 @pytest.mark.asyncio
 async def test_max_scan_bytes_cap_bounds_work():
-    """A payload beyond the configured cap is not examined (bounded work)."""
+    """A payload beyond the cap blocks without unbounded regex work."""
     scanner = LongContextScanner(blocking=True)
     # Shrink the cap so the deep payload sits beyond it.
     scanner._max_scan_bytes = 20_000
     await scanner.startup()
     content = _FILLER + _DEEP_PAYLOAD  # payload starts ~31 KB in, past the 20 KB cap
     result = await scanner.scan(content, _ctx())
-    assert result.verdict == Verdict.ALLOW
+    assert result.verdict == Verdict.BLOCK
+    assert result.events[0].metadata["reason"] == "scan_incomplete"

@@ -38,7 +38,6 @@ category, file, detail}``.
 from __future__ import annotations
 
 import bz2
-import gzip
 import io
 import logging
 import lzma
@@ -367,34 +366,40 @@ def _scan_safetensors(data: bytes, source: str) -> list[dict[str, Any]]:
                      "Informational: this format cannot execute code on load.")]
 
 
-def _scan_compressed(data: bytes, source: str, kind: str) -> list[dict[str, Any]]:
+def _scan_compressed(data: bytes, source: str, kind: str, depth: int = 0) -> list[dict[str, Any]]:
     """Inflate a bounded amount of a compressed stream and scan the result."""
     try:
-        if kind == "gzip":
-            raw = gzip.decompress(data)
+        if kind in ("gzip", "zlib"):
+            zdecoder = zlib.decompressobj(31 if kind == "gzip" else zlib.MAX_WBITS)
+            raw = zdecoder.decompress(data, _MAX_DECOMPRESS_BYTES + 1)
+            complete = zdecoder.eof and not zdecoder.unused_data
         elif kind == "bz2":
-            raw = bz2.decompress(data)
+            bdecoder = bz2.BZ2Decompressor()
+            raw = bdecoder.decompress(data, _MAX_DECOMPRESS_BYTES + 1)
+            complete = bdecoder.eof and not bdecoder.unused_data
         elif kind == "xz":
-            raw = lzma.decompress(data)
-        elif kind == "zlib":
-            raw = zlib.decompressobj().decompress(data, _MAX_DECOMPRESS_BYTES + 1)
+            # XZ only, not FORMAT_AUTO/ALONE: do not admit legacy LZMA streams
+            # or reinitialize a decoder (GHSA-5qpq-xqfv-j9pg).
+            xdecoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=64 * 1024 * 1024)
+            raw = xdecoder.decompress(data, _MAX_DECOMPRESS_BYTES + 1)
+            complete = xdecoder.eof and not xdecoder.unused_data
         else:
-            raw = b""
-    except Exception as e:
+            raise ValueError("Unsupported compression")
+    except Exception:
         return [_finding("BWK-ART-COMPRESSED-OPAQUE",
                          f"{kind}-compressed artifact could not be inflated for scanning",
-                         "medium", 45, source, str(e)[:120])]
+                          "medium", 45, source)]
 
     if len(raw) > _MAX_DECOMPRESS_BYTES:
         return [_finding("BWK-ART-DECOMPRESS-BOMB",
                          f"{kind} stream inflates beyond {_MAX_DECOMPRESS_BYTES} bytes — possible decompression bomb",
                          "medium", 60, source)]
-    if not raw:
+    if not raw or not complete:
         return [_finding("BWK-ART-COMPRESSED-OPAQUE",
-                         f"{kind}-compressed artifact (lz4/zstd/custom joblib not scannable with stdlib)",
+                          f"{kind}-compressed artifact is incomplete or contains trailing streams",
                          "medium", 45, source)]
     # Recurse on the decompressed payload (commonly a pickle for joblib).
-    return analyze_bytes(raw, source)
+    return analyze_bytes(raw, source, _depth=depth + 1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -421,7 +426,7 @@ def _detect_container(data: bytes) -> str:
     return "unknown"
 
 
-def analyze_bytes(data: bytes, source: str = "") -> list[dict[str, Any]]:
+def analyze_bytes(data: bytes, source: str = "", *, _depth: int = 0) -> list[dict[str, Any]]:
     """Detect the container of ``data`` and scan it for supply-chain risks."""
     if not data:
         return []
@@ -432,7 +437,10 @@ def analyze_bytes(data: bytes, source: str = "") -> list[dict[str, Any]]:
     if container == "hdf5":
         return _scan_hdf5(data, source)
     if container in ("gzip", "bz2", "xz", "zlib"):
-        return _scan_compressed(data, source, container)
+        if _depth >= 4:
+            return [_finding("BWK-ART-COMPRESSED-OPAQUE", "Compressed artifact nesting exceeds scan budget",
+                             "medium", 45, source)]
+        return _scan_compressed(data, source, container, _depth)
     if container == "numpy":
         # .npy: object arrays embed a pickle after the header; scan the tail.
         idx = data.find(b"\x80", 0, 4096)

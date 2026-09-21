@@ -75,6 +75,33 @@ models/**/snapshots/
 # --- Internal business/strategy docs (NEVER commit) ---
 MARKET-COMPARISON-*.md
 
+# --- Local-only planning and lab records (publication boundary) ---
+/debates/
+/docs/internal/
+/docs/IMPROVEMENT-PLAN.md
+/docs/RELEASE-ACCEPTANCE-LATEST.md
+/docs/SECURITY-STANDARDS-ADOPTION.md
+/docs/SECURITY-VERIFICATION-MATRIX.md
+/docs/ENTERPRISE-DELIVERY-STATUS.md
+/docs/INDEPENDENT-RELEASE-REVIEW.md
+/docs/KUBERNETES-CHART-RESULTS.md
+/docs/KUBERNETES-NETWORK-INTERVENTION.md
+/docs/KUBERNETES-REDIS-RECOVERY.md
+/docs/KUBERNETES-VALIDATION-STATUS.md
+/docs/LIVE-SIEM-VALIDATION.md
+/docs/LIVE-STORES-VALIDATION.md
+/docs/LOAD-CHARACTERIZATION.md
+/docs/LOCAL-CANDIDATE-PACKAGING.md
+/docs/MINIKUBE-NETPOL-RESULTS.md
+/docs/POST-REBOOT-RECOVERY.md
+/docs/PRODUCTION-VALIDATION.md
+/docs/PROXY-INDEPENDENT-REVIEW.md
+/docs/SECURITY-COVERAGE-HARDENING.md
+/docs/STORAGE-SANDBOX-VALIDATION.md
+/docs/PILOT-ACCEPTANCE.md
+/docs/CHATBOT-E2E-LAB.md
+# --- End local-only publication boundary ---
+
 # --- Logs ---
 *.log
 logs/
@@ -109,3 +136,7 @@ coverage.xml
 .coverage
 *.prof
 /tmp/
+# Isolated local agent verification artifacts on the data filesystem.
+/.evaluation-tmp/
+/.pytest-p8-regression/
+/.pytest-p8-tmp/

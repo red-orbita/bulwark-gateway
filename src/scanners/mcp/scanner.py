@@ -25,7 +25,7 @@ Maturity: **GA**. The detection is deterministic (regex over a bounded ``tools``
 array, not a probabilistic model), and its efficacy is measured — the corpus in
 ``tests/test_mcp_scanner.py`` asserts 100% detection across the TP1..TP4 rules and
 0 false positives on a benign toolset, and the pipeline-lane / readiness tests
-prove a blocking MCP scanner is boot-safe (never fails closed). GA scopes an
+prove a blocking MCP scanner needs no model provisioning at boot. GA scopes an
 honest claim: "the implemented TP1..TP4 tool-poisoning rules are production-proven",
 not "all conceivable MCP abuse is caught". It stays opt-in and defaults to
 WARN/async; blocking is the recommended production posture, not the default.
@@ -58,6 +58,7 @@ _MAX_EVENTS = 32
 # TP4 (description/behavior mismatch) is deceptive tool abuse.
 _RULE_CATEGORY = {
     "BWK-MCP-TP4": ThreatCategory.TOOL_ABUSE,
+    "BWK-MCP-SCAN-INCOMPLETE": ThreatCategory.POLICY_VIOLATION,
 }
 _DEFAULT_CATEGORY = ThreatCategory.PROMPT_INJECTION
 
@@ -76,12 +77,16 @@ def _normalize_tool_defs(raw: Any) -> list[dict[str, Any]]:
     forking the shared detector.
     """
     tools: list[dict[str, Any]] = []
-    if not isinstance(raw, list):
+    if raw is None:
         return tools
-    for entry in raw[:_MAX_TOOLS]:
+    if not isinstance(raw, list) or len(raw) > _MAX_TOOLS:
+        raise ValueError("Unsupported tool list or inspection limit exceeded")
+    for entry in raw:
         if not isinstance(entry, dict):
-            continue
+            raise ValueError("Unsupported tool definition")
         fn = entry.get("function")
+        if "function" in entry and not isinstance(fn, dict):
+            raise ValueError("Unsupported function definition")
         tools.append(fn if isinstance(fn, dict) else entry)
     return tools
 
@@ -117,31 +122,37 @@ class McpToolScanner(InputScanner):
         ``context.metadata["tool_definitions"]``. When absent (the common case —
         most chat requests carry no tools) this is a zero-cost ALLOW.
         """
-        tool_defs = _normalize_tool_defs(context.metadata.get("tool_definitions"))
-        if not tool_defs:
-            return GuardrailResult(verdict=Verdict.ALLOW)
-
         try:
+            tool_defs = _normalize_tool_defs(context.metadata.get("tool_definitions"))
+            if not tool_defs:
+                return GuardrailResult(verdict=Verdict.ALLOW)
             findings = analyze_manifest({"tools": tool_defs}, source="request")
-        except Exception as exc:  # pragma: no cover - defensive; detector is pure regex
-            # Fail-open on an unexpected detector error: the regex input guardrail
-            # and response-side tool-policy lanes still cover this request.
-            logger.warning("mcp_tool_scanner_error", extra={"error": str(exc)})
-            return GuardrailResult(verdict=Verdict.ALLOW)
+        except Exception:
+            logger.warning("mcp_tool_scanner_error", extra={"request_id": context.request_id})
+            verdict = Verdict.BLOCK if self._blocking else Verdict.WARN
+            return GuardrailResult(verdict=verdict, events=[SecurityEvent(
+                tenant_id=context.tenant_id, agent_id=context.agent_id,
+                request_id=context.request_id, verdict=verdict,
+                category=ThreatCategory.POLICY_VIOLATION,
+                description="MCP tool-definition inspection failed or exceeded limits",
+                source="mcp_tool_scanner", severity="high" if self._blocking else "medium",
+                metadata={"reason": "scan_incomplete"},
+            )])
 
         if not findings:
             return GuardrailResult(verdict=Verdict.ALLOW)
 
         events: list[SecurityEvent] = []
         worst_block = False
+        # Cap emitted events, not the verdict. Retain block-worthy evidence first.
+        findings = sorted(findings, key=lambda f: str(f.get("severity", "medium")).lower()
+                          not in _BLOCK_SEVERITIES)
         for finding in findings[:_MAX_EVENTS]:
             severity = str(finding.get("severity", "medium")).lower()
             is_block = severity in _BLOCK_SEVERITIES
             worst_block = worst_block or is_block
             rule_id = str(finding.get("rule_id", "BWK-MCP-TP"))
             category = _RULE_CATEGORY.get(rule_id, _DEFAULT_CATEGORY)
-            tool_name = finding.get("tool_name")
-            message = finding.get("message", "suspicious tool definition")
             # The event verdict mirrors the *enforced* outcome: a block-worthy
             # finding only carries BLOCK when the scanner is actually blocking —
             # otherwise it is WARN so the SIEM never records a block that did not
@@ -153,16 +164,13 @@ class McpToolScanner(InputScanner):
                     agent_id=context.agent_id,
                     verdict=Verdict.BLOCK if enforced_block else Verdict.WARN,
                     category=category,
-                    description=f"MCP tool poisoning [{rule_id}]: {message}",
+                    description=f"MCP tool-definition security finding [{rule_id}]",
                     source="mcp_tool_scanner",
                     severity=severity if severity in _VALID_SEVERITIES else "medium",
                     request_id=context.request_id,
-                    tool_name=tool_name if isinstance(tool_name, str) else None,
                     metadata={
                         "rule_id": rule_id,
                         "confidence": finding.get("confidence"),
-                        "parameter": finding.get("parameter"),
-                        "location": finding.get("file"),
                     },
                 )
             )

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -47,6 +48,27 @@ _MAX_NOTE_LEN = 2000
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_due_at(value: Optional[str]) -> Optional[str]:
+    """Validate before DB access; never infer an analyst's timezone or lose precision."""
+    if value is None:
+        return None
+    try:
+        if not isinstance(value, str) or len(value) > 64:
+            raise ValueError
+        value = value.strip()
+        if not value:
+            return None
+        if not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}"
+            r"(?:\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9]"
+            r"(?::[0-5][0-9](?:\.[0-9]{1,6})?)?)", value,
+        ):
+            raise ValueError
+        return datetime.fromisoformat(value).astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError):
+        raise ValueError("due_at must be an ISO-8601 datetime with an explicit timezone offset") from None
 
 
 def _new_task_id() -> str:
@@ -156,11 +178,11 @@ class TaskStore:
         title = (title or "").strip()[:_MAX_TITLE_LEN]
         if not title:
             raise ValueError("title is required")
+        due_at = _normalize_due_at(due_at)
         if await self._count_for_case(case_id) >= _MAX_TASKS_PER_CASE:
             raise ValueError("case has reached its task limit")
 
         assignee = (assignee or "").strip()[:_MAX_ASSIGNEE_LEN]
-        due_at = (due_at or "").strip() or None
         task_id = _new_task_id()
         order_index = await self._next_order_index(case_id)
         now = _iso_now()
@@ -192,10 +214,12 @@ class TaskStore:
         """Set a task's status/assignee/due date, appending an audit note per change.
 
         Returns ``None`` if the task does not exist. Raises ``ValueError`` for an
-        invalid status.
+        invalid status or due timestamp. None leaves the due date unchanged;
+        an empty/whitespace string clears it.
         """
         if status is not None and not self.valid_status(status):
             raise ValueError(f"invalid status: {status}")
+        due_norm = _normalize_due_at(due_at)
         task = await self.get(case_id, task_id)
         if task is None:
             return None
@@ -215,7 +239,6 @@ class TaskStore:
                 changes.append(f"assignee {new_assignee or '—'} → {assignee or '—'}")
                 new_assignee = assignee
         if due_at is not None:
-            due_norm = due_at.strip() or None
             if due_norm != new_due:
                 changes.append(f"due {new_due or '—'} → {due_norm or '—'}")
                 new_due = due_norm
