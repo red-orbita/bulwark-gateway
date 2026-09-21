@@ -1,6 +1,7 @@
 """Offline checks for the owned Kubernetes enforcement probe."""
 
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -31,11 +32,25 @@ def test_probe_uses_cached_image_and_bounded_restricted_pods():
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
 
 
-def test_both_runtime_images_pin_same_validated_minimal_runtime():
+def test_both_runtime_images_pin_same_minimal_runtime():
     root = Path(__file__).parents[1]
-    expected = "cgr.dev/chainguard/python@sha256:afe19d0e00ec069cad58d69310ba53bbc038a686e279646a47c6549df20d323f"
+    references = []
     for name in ("Dockerfile", "docker/Dockerfile.admin"):
-        assert f"FROM {expected} AS runtime" in (root / name).read_text()
+        matches = re.findall(r"^FROM (\S+) AS runtime$", (root / name).read_text(), re.MULTILINE)
+        assert len(matches) == 1
+        assert re.fullmatch(r"cgr\.dev/chainguard/python@sha256:[a-f0-9]{64}", matches[0])
+        references.append(matches[0])
+    assert references[0] == references[1], "Update proxy and admin base digests together"
+
+
+def test_dependabot_groups_both_container_directories():
+    root = Path(__file__).parents[1]
+    updates = yaml.safe_load((root / ".github/dependabot.yml").read_text())["updates"]
+    docker = [entry for entry in updates if entry["package-ecosystem"] == "docker"]
+    assert len(docker) == 1
+    assert set(docker[0]["directories"]) == {"/", "/docker"}
+    assert "directory" not in docker[0]
+    assert docker[0]["groups"]["container-bases"]["patterns"] == ["*"]
 
 
 def test_chart_agent_registry_uses_runtime_setting():

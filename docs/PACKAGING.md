@@ -63,6 +63,12 @@ final image. Missing/incompatible target dependencies fail the build. Lock copie
 ship under `/usr/share/bulwark/locks` for inventory; the verifier script alone cannot
 be rerun after build without provisioning its separate verification dependency.
 
+Update the runtime digest in both Dockerfiles together. Dependabot groups the
+root and `/docker` manifests into one container-base update. Offline tests enforce
+full SHA-256 pinning, a shared runtime reference and the target-interpreter build
+gate; they do not certify a particular digest. Each update still needs builds of
+both roles, vulnerability scans and the release verification described above.
+
 Compose and CI select `linux/amd64`; other architectures are not claimed supported
 by this candidate. Setting INSTALL_ML or INSTALL_EMBEDDINGS to anything other than
 false, or supplying a nonempty SKILLSPECTOR_COMMIT, fails explicitly. Optional
