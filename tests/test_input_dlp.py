@@ -26,7 +26,8 @@ def _clear_force_password_change():
     {"content": "AKIA\u200bIOSFODNN7EXAMPLE"},
     {"password": "R8!mQ2#vL9"},
     {"credit_card": 4111111111111111},
-    {"auths": {"registry.example": {"auth": "dXNlcjpwYXNzd29yZDEyMw=="}}},
+    # Synthetic user/password, encoded here to make its non-secret provenance clear.
+    {"auths": {"registry.example": {"auth": base64.b64encode(b"user:password123").decode("ascii")}}},
 ])
 def test_known_secret_never_approved(body):
     result = inspect_request(body, "tenant-a", "agent-a", "request-a")

@@ -232,14 +232,12 @@ def test_external_content_relationships_rejected(kind):
     b'<!ENTITY x SYSTEM "https://example.invalid/">',
 ])
 def test_dtd_entities_rejected_before_parser(monkeypatch, payload):
-    members = parts()
-    members["word/document.xml"] = payload + members["word/document.xml"]
-
     def forbidden(*args, **kwargs):
         pytest.fail("DTD/entity input reached ElementTree")
 
-    monkeypatch.setattr(dx.ET, "fromstring", forbidden)
-    reject(archive(members), "unsafe_xml")
+    monkeypatch.setattr(dx.ET, "XMLParser", forbidden)
+    with pytest.raises(dx.DocxError, match="^unsafe_xml$"):
+        dx._parse_xml(payload + xml(paragraph("public")), [0])
 
 
 @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"])
@@ -247,6 +245,78 @@ def test_encoding_cannot_bypass_dtd_gate(encoding):
     members = parts()
     members["word/document.xml"] = ("<!DOCTYPE x [<!ENTITY x 'private'>]>" + members["word/document.xml"].decode()).encode(encoding)
     reject(archive(members), "unsafe_xml")
+
+
+@pytest.mark.parametrize("declaration", [
+    '<!DOCTYPE root SYSTEM "file:///private-test-sentinel">',
+    '<!DOCTYPE root SYSTEM "https://example.invalid/private">',
+    '<!DOCTYPE root [<!ENTITY a "expanded"><!ENTITY b "&a;&a;&a;">]>',
+    '<!DOCTYPE root [<!ENTITY % external SYSTEM "file:///private-test-sentinel">%external;]>',
+])
+def test_accelerated_parser_reports_rejected_doctype(monkeypatch, declaration):
+    import builtins
+    import socket
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("XML parser attempted filesystem/network I/O")
+
+    monkeypatch.setattr(builtins, "open", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    budget = [0]
+    parser = dx.ET.XMLParser(target=dx._BoundedTree(budget))
+    with pytest.raises(dx.DocxError, match="^unsafe_xml$"):
+        parser.feed(declaration + "<root/>")
+        parser.close()
+    assert budget == [0]
+
+
+@pytest.mark.parametrize("payload", [
+    b'\xef\xbb\xbf<!DOCTYPE root><root/>',
+    '<!DOCTYPE root><root/>'.encode('utf-16-le'),
+    '<!DOCTYPE root><root/>'.encode('utf-32-be'),
+    b'<root>\x00</root>',
+    b'<?xml version="1.0" encoding="ISO-8859-1"?><root/>',
+])
+def test_unsafe_encoding_or_declaration_never_constructs_parser(monkeypatch, payload):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unsafe XML reached parser construction")
+
+    monkeypatch.setattr(dx.ET, "XMLParser", forbidden)
+    with pytest.raises(dx.DocxError, match="^unsafe_xml$"):
+        dx._parse_xml(payload, [0])
+
+
+def test_predefined_and_numeric_entities_remain_supported():
+    result = dx.extract_docx(archive(parts('<w:p><w:r><w:t>A &amp; B &#xE9;</w:t></w:r></w:p>')))
+    assert result.text == "A & B \u00e9"
+
+
+def test_pure_python_elementtree_still_rejects_before_parser_construction():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    program = '''
+import sys
+sys.modules['_elementtree'] = None
+from src.guardrails import docx_extraction as dx
+assert dx._parse_xml(b'<root>Public &amp; text</root>', [0]).text == 'Public & text'
+def forbidden(*args, **kwargs):
+    raise AssertionError('Unsafe XML reached fallback parser')
+dx.ET.XMLParser = forbidden
+for raw in (b'<!DOCTYPE root [<!ENTITY e "expanded">]><root>&e;</root>',
+            b'<!DOCTYPE root SYSTEM "file:///private"><root/>',
+            '<!DOCTYPE root><root/>'.encode('utf-16-le')):
+    try:
+        dx._parse_xml(raw, [0])
+    except dx.DocxError as error:
+        assert error.reason == 'unsafe_xml'
+    else:
+        raise AssertionError('Unsafe XML accepted')
+'''
+    subprocess.run([sys.executable, "-c", program], cwd=Path(__file__).parents[1],  # noqa: S603 - fixed test program
+                   check=True, timeout=15, capture_output=True)
 
 
 def test_xml_declaration_and_unicode():

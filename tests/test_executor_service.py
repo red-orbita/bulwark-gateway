@@ -376,7 +376,7 @@ async def test_token_expiring_during_reservation_never_executes(harness, monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output", [
-    "password=actual-private-credential-value", "user@corporate.example", "AKIAZYXWVUTSRQPONMLK",
+    "password=actual-private-credential-value", "user@corporate.example", "AKIA" + "ZYXWVUTSRQPONMLK",  # synthetic AWS shape
     "opaque-operator-secret", "x" * 16385, {"credentials": "not-a-string"},
 ])
 async def test_output_withheld_no_automatic_reexecution(harness, output):

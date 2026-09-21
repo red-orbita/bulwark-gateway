@@ -1,4 +1,8 @@
-"""Bounded OOXML text conversion, not a security verdict or DOCX forwarding gate."""
+"""Bounded OOXML conversion; no security verdict or DOCX forwarding gate.
+
+UTF-8/DTD preflight is the entity-processing security boundary; the tree target
+also rejects reported doctypes. Coverage: tests/test_docx_extraction.py.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ import io
 import posixpath
 import re
 import stat
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 import zipfile
 import zlib
 from typing import Literal
@@ -129,6 +133,11 @@ class _BoundedTree(ET.TreeBuilder):
     def pi(self, target: str, text: str | None = None) -> ET.Element:
         raise DocxError("unsupported_active_content")
 
+    def doctype(self, name: str, pubid: str | None, system: str | None) -> None:
+        # Additional rejection only: implementations may defer this exception
+        # or omit the callback for internal-only DTDs. Preflight is mandatory.
+        raise DocxError("unsafe_xml")
+
 
 def _parse_xml(raw: bytes, budget: list[int]) -> ET.Element:
     # UTF-8 only: reject NUL/UTF-16/32 before the lexical DTD/entity gate so an
@@ -141,7 +150,11 @@ def _parse_xml(raw: bytes, budget: list[int]) -> ET.Element:
         encoding = re.search(r"\bencoding\s*=\s*(['\"])(.*?)\1", declaration[0])
         if encoding and encoding[2].lower() not in {"utf-8", "utf8", "us-ascii"}:
             raise DocxError("unsafe_xml")
-    return ET.fromstring(text, parser=ET.XMLParser(target=_BoundedTree(budget)))  # noqa: S314 - gated above
+    # B314: UTF-8-only preflight above rejects DTD/entity declarations before parsing.
+    # Preserve bounded start callbacks rather than constructing an unbounded tree.
+    parser = ET.XMLParser(target=_BoundedTree(budget))  # noqa: S314  # nosec B314
+    parser.feed(text)
+    return parser.close()
 
 
 def _part_kind(name: str) -> tuple[str, str, str]:

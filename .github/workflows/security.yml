@@ -62,7 +62,7 @@ jobs:
             --output semgrep-results.sarif \
             --error \
             --severity ERROR \
-            src/ admin/ || true
+            src/ admin/
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
@@ -74,16 +74,12 @@ jobs:
             --config p/security-audit \
             --config .semgrep.yml \
             --text \
-            src/ admin/ || true
+            src/ admin/
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
-      # Blocking gate: only the repo's own curated rules (.semgrep.yml) at
-      # ERROR severity fail the build. These flag hard bans (eval/exec/pickle/
-      # marshal/yaml-unsafe-load/shell=True/os.system/redis-eval/...) that must
-      # never merge. The community rulesets (p/python, p/owasp-top-ten,
-      # p/security-audit) and WARNING-severity custom rules stay advisory above
-      # (they surface in the Security tab but are FP-prone / lower confidence).
+      # Community ERROR findings and scanner errors already fail above. Keep
+      # this explicit project-rules gate for the repo's hard security bans.
       - name: Semgrep project-rules gate (blocking)
         run: |
           semgrep scan \
@@ -129,8 +125,7 @@ jobs:
             --output bandit-results.sarif \
             --severity-level medium \
             --confidence-level medium \
-            --exclude "*/tests/*" \
-            || true
+            --exclude "*/tests/*"
 
       - name: Run Bandit (screen output)
         run: |
@@ -138,8 +133,7 @@ jobs:
             --format txt \
             --severity-level medium \
             --confidence-level medium \
-            --exclude "*/tests/*" \
-            || true
+            --exclude "*/tests/*"
 
       - name: Upload Bandit SARIF
         if: always()
@@ -216,17 +210,11 @@ jobs:
             --output pip-audit-admin.json \
             || true
 
-      - name: Check for HIGH/CRITICAL vulnerabilities (fail gate)
+      - name: Check for dependency vulnerabilities (fail gate)
         run: |
-          # Fail only on HIGH/CRITICAL (pip-audit uses --fix flag for severity filtering)
-          pip-audit -r requirements.lock --require-hashes=false 2>&1 | tee /tmp/audit-check.txt
-          if grep -qiE "(PYSEC|CVE)" /tmp/audit-check.txt; then
-            echo "::warning::Vulnerabilities found in proxy dependencies"
-          fi
-          pip-audit -r requirements-admin.lock --require-hashes=false 2>&1 | tee -a /tmp/audit-check.txt
-          if grep -qiE "(PYSEC|CVE)" /tmp/audit-check.txt; then
-            echo "::warning::Vulnerabilities found in admin dependencies"
-          fi
+          # pip-audit has no severity filter. Any finding or scanner error fails.
+          pip-audit -r requirements.lock
+          pip-audit -r requirements-admin.lock
 
       - name: Upload pip-audit results
         if: always()
@@ -455,49 +443,46 @@ jobs:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
       - name: Install truffleHog
+        if: ${{ !cancelled() }}
         run: |
-          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin v3.82.13
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trufflehog.tar.gz" \
+            https://github.com/trufflesecurity/trufflehog/releases/download/v3.82.13/trufflehog_3.82.13_linux_amd64.tar.gz
+          echo "ef33d3df50362e810855b6b0e055ab98096dbbf9c866470e08664a474436d2d2  $RUNNER_TEMP/trufflehog.tar.gz" | sha256sum --check --strict
+          sudo tar -xzf "$RUNNER_TEMP/trufflehog.tar.gz" -C /usr/local/bin trufflehog
 
       - name: truffleHog scan
+        if: ${{ !cancelled() }}
         run: |
+          # Raw results can contain live credentials: keep them off logs/artifacts.
           trufflehog git \
             file://. \
             --only-verified \
-            --json \
-            --output trufflehog-results.json \
-            || true
+            --json --fail > "$RUNNER_TEMP/trufflehog-results.json"
 
       - name: truffleHog scan (filesystem)
+        if: ${{ !cancelled() }}
         run: |
           trufflehog filesystem \
             . \
             --only-verified \
-            --json \
-            --output trufflehog-fs-results.json \
-            || true
+            --json --fail > "$RUNNER_TEMP/trufflehog-fs-results.json"
 
       - name: Check for verified secrets
         run: |
-          if [ -s trufflehog-results.json ] || [ -s trufflehog-fs-results.json ]; then
+          if [ -s "$RUNNER_TEMP/trufflehog-results.json" ] || [ -s "$RUNNER_TEMP/trufflehog-fs-results.json" ]; then
             echo "::error::Verified secrets found in repository!"
             echo "## Secret Scanning Results" >> $GITHUB_STEP_SUMMARY
             echo "**CRITICAL**: Verified secrets detected. Review truffleHog output." >> $GITHUB_STEP_SUMMARY
-            # Don't fail the build for unverified, only alert
+            exit 1
           else
             echo "No verified secrets found."
             echo "## Secret Scanning Results" >> $GITHUB_STEP_SUMMARY
             echo "No verified secrets detected." >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Upload secret scan results
+      - name: Remove raw secret scan results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: secret-scan-results
-          path: |
-            trufflehog-results.json
-            trufflehog-fs-results.json
-          retention-days: 30
+        run: rm -f "$RUNNER_TEMP/trufflehog-results.json" "$RUNNER_TEMP/trufflehog-fs-results.json"
 
   # ═══════════════════════════════════════════════════════════════════════════════
   # License Compliance
@@ -568,7 +553,7 @@ jobs:
   pr-summary:
     name: "PR Security Summary"
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request'
     needs:
       - sast-semgrep
       - sast-bandit
@@ -579,95 +564,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: scan-results
-
       - name: Generate PR comment
         id: comment
+        env:
+          SCAN_JOBS: ${{ toJSON(needs) }}
         run: |
-          echo "## Security Scan Summary" > pr-comment.md
-          echo "" >> pr-comment.md
-          echo "| Scanner | Status | Details |" >> pr-comment.md
-          echo "|---------|--------|---------|" >> pr-comment.md
-
-          # Count Semgrep findings
-          SEMGREP_COUNT=0
-          if [ -f scan-results/semgrep-results/semgrep-results.sarif ]; then
-            SEMGREP_COUNT=$(python3 -c "
-          import json, sys
-          try:
-              data = json.load(open('scan-results/semgrep-results/semgrep-results.sarif'))
-              results = data.get('runs', [{}])[0].get('results', [])
-              print(len(results))
-          except: print(0)
-          ")
-          fi
-
-          # Count Bandit findings
-          BANDIT_COUNT=0
-          if [ -f scan-results/bandit-results/bandit-results.sarif ]; then
-            BANDIT_COUNT=$(python3 -c "
-          import json, sys
-          try:
-              data = json.load(open('scan-results/bandit-results/bandit-results.sarif'))
-              results = data.get('runs', [{}])[0].get('results', [])
-              print(len(results))
-          except: print(0)
-          ")
-          fi
-
-          # Determine status icons
-          if [ "$SEMGREP_COUNT" -gt 0 ]; then
-            echo "| Semgrep (SAST) | :warning: | $SEMGREP_COUNT finding(s) |" >> pr-comment.md
-          else
-            echo "| Semgrep (SAST) | :white_check_mark: | No findings |" >> pr-comment.md
-          fi
-
-          if [ "$BANDIT_COUNT" -gt 0 ]; then
-            echo "| Bandit (SAST) | :warning: | $BANDIT_COUNT finding(s) |" >> pr-comment.md
-          else
-            echo "| Bandit (SAST) | :white_check_mark: | No findings |" >> pr-comment.md
-          fi
-
-          # pip-audit
-          if [ -f scan-results/pip-audit-results/pip-audit-proxy.json ]; then
-            VULN_COUNT=$(python3 -c "
+          python3 - <<'PY'
           import json
-          try:
-              data = json.load(open('scan-results/pip-audit-results/pip-audit-proxy.json'))
-              vulns = [d for d in data if d.get('vulns')]
-              print(sum(len(d['vulns']) for d in vulns))
-          except: print(0)
-          ")
-            if [ "$VULN_COUNT" -gt 0 ]; then
-              echo "| pip-audit (SCA) | :warning: | $VULN_COUNT vulnerability(ies) |" >> pr-comment.md
-            else
-              echo "| pip-audit (SCA) | :white_check_mark: | No vulnerabilities |" >> pr-comment.md
-            fi
-          else
-            echo "| pip-audit (SCA) | :white_check_mark: | No vulnerabilities |" >> pr-comment.md
-          fi
+          import os
+          from pathlib import Path
 
-          # Trivy
-          echo "| Trivy (Container) | :information_source: | See Security tab |" >> pr-comment.md
-
-          # Secrets
-          if [ -s scan-results/secret-scan-results/trufflehog-results.json ]; then
-            echo "| Secret Scanning | :rotating_light: | Verified secrets found! |" >> pr-comment.md
-          else
-            echo "| Secret Scanning | :white_check_mark: | No secrets detected |" >> pr-comment.md
-          fi
-
-          # License
-          echo "| License Compliance | :white_check_mark: | GPL-3.0 compatible |" >> pr-comment.md
-
-          echo "" >> pr-comment.md
-          echo "---" >> pr-comment.md
-          echo "*Full results available in the [Security tab](../security/code-scanning) and workflow artifacts.*" >> pr-comment.md
-          echo "" >> pr-comment.md
-          echo "> **Policy**: Only HIGH/CRITICAL findings block merge. Informational findings are tracked." >> pr-comment.md
+          jobs = json.loads(os.environ['SCAN_JOBS'])
+          lines = ['## Security Scan Summary', '', '| Check | Result |', '|---|---|']
+          for name, job in sorted(jobs.items()):
+              result = job['result']
+              lines.append(f'| {name} | {result} |')
+          lines.extend(['', 'A failed, cancelled or skipped check is not a clean scan.',
+                        'See workflow logs and Code Scanning for findings and scan scope.',
+                        'Raw secret values are not published as workflow artifacts.'])
+          Path('pr-comment.md').write_text('\n'.join(lines) + '\n')
+          PY
 
       - name: Post PR comment
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5

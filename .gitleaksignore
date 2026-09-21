@@ -1,0 +1,7 @@
+# Historical synthetic fixtures only, reviewed for PR #48; no real credentials.
+# Docker examples encode the deliberately invented user:password123 at registry.example.
+b33b3a0dcd89658d14c6a46305f4b3155038e65b:tests/test_adapter_structured_contracts.py:generic-api-key:439
+b33b3a0dcd89658d14c6a46305f4b3155038e65b:tests/test_adapter_structured_contracts.py:generic-api-key:450
+b33b3a0dcd89658d14c6a46305f4b3155038e65b:tests/test_input_dlp.py:generic-api-key:29
+# Deliberate descending-alphabet AWS-shaped test value, never issued by AWS.
+b33b3a0dcd89658d14c6a46305f4b3155038e65b:tests/test_executor_service.py:aws-access-token:379

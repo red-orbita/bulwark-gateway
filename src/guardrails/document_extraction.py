@@ -224,11 +224,15 @@ def _run(
         # sys.executable's virtualenv (which may live alongside repository secrets).
         mapped = [str(Path("/work") / Path(arg).relative_to(directory))
                   if arg.startswith(str(directory) + "/") else arg for arg in args]
+        # B108: /tmp is a NEW tmpfs inside --unshare-all, not a host temp path.
+        # Host document storage is a private mkdtemp directory bound at /work.
+        sandbox_tmp = "/tmp"  # noqa: S108  # nosec B108
         command = [
             _BWRAP, "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
             "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
             "--ro-bind", "/lib64", "/lib64", "--proc", "/proc", "--dev", "/dev",
-            "--tmpfs", "/tmp", "--bind", str(directory), "/work", "--chdir", "/work",  # noqa: S108 - private namespace
+            "--tmpfs", sandbox_tmp,
+            "--bind", str(directory), "/work", "--chdir", "/work",
         ]
         if Path("/etc/ld.so.cache").is_file():
             command.extend(["--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache"])

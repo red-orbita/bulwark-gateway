@@ -76,6 +76,23 @@ conservative container refusal, not proof of encryption. No decryption is attemp
 
 ## Limits
 
+### XML Security Boundary
+
+Every member is decoded as UTF-8 before parsing. NULs, unsupported encoding
+declarations, DOCTYPE and ENTITY declarations are rejected before constructing
+the XML parser. This preflight is mandatory: the target's additional `doctype`
+rejection is not an immediate Expat abort guarantee across implementations.
+The bounded TreeBuilder limits tree depth and aggregate node count; archive/input
+budgets remain separate protections. Neither these checks nor a scanner waiver
+replace maintaining a patched Python/Expat runtime.
+
+The scoped B314/Semgrep annotations document this specific guarded call, not a
+general exemption for XML parsing. Tests check both parser-construction rejection
+and valid predefined/numeric XML entities. B108 in the native extractor refers
+to a new `/tmp` tmpfs inside Bubblewrap's private namespace, not a predictable
+host file. Real credentials, arbitrary XML entry points and host temporary files
+remain subject to the default security rules.
+
 | Resource | Hard Limit |
 |----------|------------|
 | Already-decoded input | 2 MiB |
