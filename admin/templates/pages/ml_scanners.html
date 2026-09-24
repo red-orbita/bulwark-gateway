@@ -86,7 +86,10 @@
                     <span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded font-medium"
                           :class="on ? 'bg-emerald-500/10 text-emerald-400' : 'bg-gray-700/40 text-gray-500'"
                           :title="on ? 'Registered at boot' : 'Dormant (flag off)'">
-                        <i :data-lucide="on ? 'check-circle' : 'circle'" class="w-3 h-3"></i>
+                        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10" />
+                            <path x-show="on" d="m8 12 3 3 5-6" />
+                        </svg>
                         <span x-text="capabilityLabel(flag)"></span>
                     </span>
                 </template>

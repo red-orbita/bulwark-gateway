@@ -114,7 +114,11 @@
         <h3 class="text-sm font-semibold text-white mb-2">Connection Test Result</h3>
         <div class="p-3 rounded-lg text-sm" :class="pageTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
             <div class="flex items-start gap-2">
-                <i :data-lucide="pageTestResult?.success ? 'check-circle-2' : 'x-circle'" class="w-4 h-4 mt-0.5 shrink-0" :class="pageTestResult?.success ? 'text-green-400' : 'text-red-400'" aria-hidden="true"></i>
+                <svg class="w-4 h-4 mt-0.5 shrink-0" :class="pageTestResult?.success ? 'text-green-400' : 'text-red-400'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <path x-show="pageTestResult?.success" d="m8 12 3 3 5-6" />
+                    <path x-show="!pageTestResult?.success" d="m9 9 6 6m0-6-6 6" />
+                </svg>
                 <p x-text="pageTestResult?.success ? (pageTestResult?.detail || 'Connection successful') : (pageTestResult?.error || 'Connection failed')"></p>
             </div>
             <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (pageTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (pageTestResult?.platform || '-')"></p>
@@ -239,7 +243,11 @@
                 <!-- Test result INSIDE the modal -->
                 <div x-show="modalTestResult" class="p-3 rounded-lg text-sm" :class="modalTestResult?.success ? 'bg-green-900/30 border border-green-700' : 'bg-red-900/30 border border-red-700'">
                     <div class="flex items-start gap-2">
-                        <i :data-lucide="modalTestResult?.success ? 'check-circle-2' : 'x-circle'" class="w-4 h-4 mt-0.5 shrink-0" :class="modalTestResult?.success ? 'text-green-400' : 'text-red-400'" aria-hidden="true"></i>
+                        <svg class="w-4 h-4 mt-0.5 shrink-0" :class="modalTestResult?.success ? 'text-green-400' : 'text-red-400'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10" />
+                            <path x-show="modalTestResult?.success" d="m8 12 3 3 5-6" />
+                            <path x-show="!modalTestResult?.success" d="m9 9 6 6m0-6-6 6" />
+                        </svg>
                         <p x-text="modalTestResult?.success ? (modalTestResult?.detail || 'Connection successful') : (modalTestResult?.error || 'Connection failed')"></p>
                     </div>
                     <p class="text-xs text-gray-400 mt-1" x-text="'Latency: ' + (modalTestResult?.latency_ms || 0).toFixed(1) + 'ms | Platform: ' + (modalTestResult?.platform || '-')"></p>

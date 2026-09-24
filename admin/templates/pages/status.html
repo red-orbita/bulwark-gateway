@@ -19,7 +19,10 @@
     <!-- Overall Status Banner -->
     <div class="sg-card flex items-center gap-4" :class="overallHealthy ? '!border-green-500/30' : '!border-red-500/30'">
         <div class="w-12 h-12 rounded-xl flex items-center justify-center" :class="overallHealthy ? 'bg-green-500/10' : 'bg-red-500/10'">
-            <i :data-lucide="overallHealthy ? 'check-circle-2' : 'alert-triangle'" class="w-6 h-6" :class="overallHealthy ? 'text-green-400' : 'text-red-400'"></i>
+            <svg class="w-6 h-6" :class="overallHealthy ? 'text-green-400' : 'text-red-400'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <g x-show="overallHealthy"><circle cx="12" cy="12" r="10" /><path d="m8 12 3 3 5-6" /></g>
+                <path x-show="!overallHealthy" d="M12 3 2 21h20L12 3Zm0 5v6m0 2v2" />
+            </svg>
         </div>
         <div>
             <p class="text-lg font-semibold" :class="overallHealthy ? 'text-green-400' : 'text-red-400'" x-text="overallHealthy ? 'All Systems Operational' : 'Degraded Performance'"></p>
