@@ -18,7 +18,7 @@ COPY admin/ /app/admin/
 COPY config/ /app/config/
 COPY docker/verify_runtime.py /app/docker/
 
-FROM cgr.dev/chainguard/python@sha256:1206ffee8644e6338b3fc8b6e5dc384b03d91ad1df1d6b74fa4255544ac51ad2 AS runtime
+FROM cgr.dev/chainguard/python@sha256:cbffd42e59c20e3e2d6cf1a532212b0fa09516b687fb1cc206735edb7454b498 AS runtime
 COPY --from=builder --chown=65532:65532 /packages /opt/packages
 COPY --from=builder --chown=65532:65532 /app /app
 COPY --from=builder /locks /usr/share/bulwark/locks
