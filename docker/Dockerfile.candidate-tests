@@ -1,6 +1,6 @@
 # Isolated regression environment, never a release image. Named contexts contain
 # source tests/scripts only, no workspace root or operator data.
-FROM python:3.13-slim-trixie@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS tooling
+FROM python:3.14-slim-trixie@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS tooling
 WORKDIR /build
 COPY requirements.lock requirements-admin.lock requirements-test.lock ./
 COPY --from=testsrc /packaging_locks.py /build/tests/packaging_locks.py
@@ -8,7 +8,7 @@ COPY --from=testlocks /requirements-test-cp314.lock /build/native-test.lock
 RUN python tests/packaging_locks.py ci > /build/ci.lock && \
     python -m pip install --no-cache-dir --target /packages --python-version 3.14 \
       --only-binary=:all: --require-hashes -r ci.lock -r requirements-test.lock -r native-test.lock
-FROM cgr.dev/chainguard/python@sha256:1206ffee8644e6338b3fc8b6e5dc384b03d91ad1df1d6b74fa4255544ac51ad2
+FROM cgr.dev/chainguard/python@sha256:1c4deeea85db49ab5f6bcd9e7fc0bf3fd8439e99f7bde45330f40400685eb394
 COPY --from=tooling /packages /usr/lib/python3.14/site-packages
 COPY src /app/src
 COPY admin /app/admin
