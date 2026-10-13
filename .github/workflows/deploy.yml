@@ -131,7 +131,7 @@ jobs:
 
       - name: Upload test evidence including skips
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: unit-test-results
           path: |
@@ -256,7 +256,7 @@ jobs:
 
       - name: Upload PostgreSQL evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: postgres-test-results
           path: postgres-results.xml
@@ -559,7 +559,7 @@ jobs:
             --helm-values "$RUNNER_TEMP/verified-images.json"
 
       - name: Preserve signed release evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: signed-release-${{ github.sha }}
           path: |
