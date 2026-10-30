@@ -16,6 +16,7 @@ Known constraints remain public in [Limitations](LIMITATIONS.md).
 | [Documentation Policy](DOCUMENTATION-POLICY.md) | Public guides, local-only records and publication checks |
 | [Release Verification](RELEASE-VERIFICATION.md) | Signed scan/SBOM artifacts, verification and production acceptance requirements |
 | [Release Packaging](PACKAGING.md) | Separate runtime locks, operator environment and build requirements |
+| [Runtime Base](RUNTIME-BASE.md) | Maintained Python 3.14 Wolfi closure, signed snapshot and refresh gates |
 | [Network Flow Contracts](NETWORK-FLOW-CONTRACTS.md) | Scoped chart traffic rules and Redis security-state retention |
 | [Architecture](ARCHITECTURE.md) | System design, request flow, component interactions, design decisions |
 | [Deployment](DEPLOYMENT.md) | Kubernetes, Docker Compose, Redis, secrets management, TLS, ingress |

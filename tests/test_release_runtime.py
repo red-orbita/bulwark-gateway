@@ -27,8 +27,10 @@ def verifier(monkeypatch):
         import_module=lambda name: None, util=SimpleNamespace(find_spec=lambda name: None),
         metadata=SimpleNamespace(version=lambda name: "1.0")))
     monkeypatch.setattr(module, "verify_dependencies", lambda *args: None)
+    monkeypatch.setattr(module, "verify_os_packages", lambda: 30)
     original = Path.exists
-    monkeypatch.setattr(Path, "exists", lambda path: False if str(path).startswith(("/bin/", "/usr/bin/", "/sbin/"))
+    monkeypatch.setattr(Path, "exists", lambda path: False if str(path) == "/app/admin"
+                        or str(path).startswith(("/bin/", "/usr/bin/", "/sbin/"))
                         else original(path))
     return module
 

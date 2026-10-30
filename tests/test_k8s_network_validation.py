@@ -38,8 +38,12 @@ def test_both_runtime_images_pin_same_minimal_runtime():
     for name in ("Dockerfile", "docker/Dockerfile.admin"):
         matches = re.findall(r"^FROM (\S+) AS runtime$", (root / name).read_text(), re.MULTILINE)
         assert len(matches) == 1
-        assert re.fullmatch(r"cgr\.dev/chainguard/python@sha256:[a-f0-9]{64}", matches[0])
-        references.append(matches[0])
+        assert matches[0] == "scratch"
+        source = (root / name).read_text()
+        references.append(re.findall(r"^FROM (cgr\.dev/chainguard/wolfi-base@sha256:[a-f0-9]{64}) AS runtime-root$",
+                                     source, re.MULTILINE)[0])
+        assert "COPY --from=runtime-root /rootfs/ /" in source
+        assert "docker/wolfi-runtime.lock" in source
     assert references[0] == references[1], "Update proxy and admin base digests together"
 
 

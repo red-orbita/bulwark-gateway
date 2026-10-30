@@ -39,6 +39,9 @@ docker/
 !docker/proxy_launcher.py
 !docker/verify_runtime.py
 !docker/requirements-runtime-check.lock
+!docker/fetch_runtime.py
+!docker/wolfi-runtime.lock
+!docker/wolfi-APKINDEX.tar.gz
 
 # --- Secrets (injected at runtime via mounts) ---
 secrets/

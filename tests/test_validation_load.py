@@ -83,6 +83,7 @@ async def test_http_measurement_errors_are_not_retried(runner, mode):
 
 @pytest.mark.asyncio
 async def test_failed_startup_cleans_private_credentials_and_owned_resources(runner, tmp_path, monkeypatch):
+    import shutil
     from unittest.mock import MagicMock
 
     (tmp_path / "shared").mkdir()
@@ -90,8 +91,14 @@ async def test_failed_startup_cleans_private_credentials_and_owned_resources(run
     monkeypatch.setattr(runner, "resource_snapshot", lambda *args, **kwargs: {
         "root_free_bytes": 10 * runner.GIB, "workspace_free_bytes": 10 * runner.GIB,
         "host_available_bytes": 4 * runner.GIB, "cgroup_headroom_bytes": 2 * runner.GIB})
-    real_root = runner.ROOT
-    # Source hashes read the real checkout; only the evidence parent is redirected.
+    # Keep hashing real source, but never require/create a host evidence directory.
+    for name in ("scripts/validation-load.py", "scripts/chatbot-e2e-lab.py", "src/evaluation/load_harness.py",
+                 "src/main.py", "src/routes/proxy.py", "src/guardrails/input_guardrail.py"):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(runner.ROOT / name, target)
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    real_root = tmp_path
     monkeypatch.setattr(runner.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "shared"))
     sock = MagicMock()
     sock.getsockname.return_value = ("127.0.0.1", 12345)

@@ -11,6 +11,26 @@ import sys
 from pathlib import Path
 
 
+def verify_os_packages(directory: Path = Path("/usr/share/bulwark")) -> int:
+    """Reject unreviewed transitive packages; preserve the real APK inventory."""
+    expected = set()
+    for line in (directory / "wolfi-runtime.lock").read_text(encoding="ascii").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(r"[a-f0-9]{64}  (.+)-([0-9][^-]*-r[0-9]+)\.apk", line)
+        if not match or (match[1], match[2]) in expected:
+            raise ValueError("Invalid OS package lock")
+        expected.add((match[1], match[2]))
+    actual = set()
+    for block in Path("/lib/apk/db/installed").read_text(encoding="utf-8").split("\n\n"):
+        fields = dict(line.split(":", 1) for line in block.splitlines() if line.startswith(("P:", "V:")))
+        if "P" in fields and "V" in fields:
+            actual.add((fields["P"], fields["V"]))
+    if not expected or actual != expected:
+        raise ValueError("Installed OS package closure mismatch")
+    return len(actual)
+
+
 def verify_dependencies(packages: dict[str, str], extras: dict[str, set[str]]) -> None:
     # Trusted read-only build mount, absent from the final filesystem.
     sys.path.insert(0, "/verification")
@@ -53,6 +73,7 @@ def verify(role: str, directory: Path = Path("/usr/share/bulwark/locks")) -> dic
         raise ValueError("Unsupported role")
     if sys.version_info[:2] != (3, 14) or platform.machine() != "x86_64" or os.getuid() != 65532:
         raise ValueError("Unsupported release runtime")
+    os_packages = verify_os_packages()
     expected_files = {"requirements-admin.lock"} if role == "admin" else {"requirements.lock"}
     files = {p.name for p in directory.iterdir()}
     postgres = role == "proxy" and "requirements-postgres.lock" in files
@@ -94,10 +115,14 @@ def verify(role: str, directory: Path = Path("/usr/share/bulwark/locks")) -> dic
             raise ValueError("Unexpected PostgreSQL driver")
     for name in modules:
         importlib.import_module(name)
-    for binary in ("/bin/sh", "/usr/bin/sh", "/bin/bash", "/usr/bin/bash", "/sbin/apk", "/usr/bin/apt"):
+    for binary in ("/bin/sh", "/usr/bin/sh", "/bin/bash", "/usr/bin/bash", "/sbin/apk", "/usr/bin/apk",
+                   "/usr/bin/apt"):
         if Path(binary).exists():
             raise ValueError("Unexpected shell or package manager executable")
+    if importlib.util.find_spec("pip") is not None:
+        raise ValueError("Unexpected importable package installer")
     return {"role": role, "python": platform.python_version(), "locked_packages": len(packages),
+            "os_locked_packages": os_packages,
             "native_imports": modules, "target_dependency_closure": True,
             "postgres": postgres or role == "admin", "production_approved": False}
 

@@ -61,7 +61,7 @@ jobs:
 
       - name: Lint
         # This job never publishes artifacts to a registry or deploys services.
-        run: python -m ruff check src/ tests/ admin/
+        run: python -m ruff check src/ tests/ admin/ docker/fetch_runtime.py
 
       - name: Type check
         run: |
@@ -123,7 +123,7 @@ jobs:
           python - <<'PY'
           from xml.etree import ElementTree
           cases = ElementTree.parse('test-results.xml').findall('.//testcase')
-          for suite in ('test_release_verification', 'test_release_signing', 'test_delivery_workflow', 'test_packaging_locks', 'test_documentation_publication', 'test_release_sbom_schema', 'test_release_scan_policy', 'test_anyio_tls_idna', 'test_ci_tool_locks'):
+          for suite in ('test_release_verification', 'test_release_signing', 'test_delivery_workflow', 'test_packaging_locks', 'test_documentation_publication', 'test_release_sbom_schema', 'test_release_scan_policy', 'test_anyio_tls_idna', 'test_ci_tool_locks', 'test_wolfi_runtime', 'test_runtime_security_floors'):
               selected = [case for case in cases if case.get('classname', '').endswith(suite)]
               if not selected or any(case.find('skipped') is not None for case in selected):
                   raise SystemExit('Release security suite missing or skipped')

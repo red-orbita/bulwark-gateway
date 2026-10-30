@@ -78,8 +78,9 @@ updates:
     groups:
       container-bases:
         patterns: ["*"]
-    # The builder selects cp314 wheels explicitly; the pinned Wolfi runtime is
-    # Python 3.14. Review builder/runtime updates together and retain the target
+    # The builder selects cp314 wheels explicitly; docker/wolfi-runtime.lock owns
+    # the runtime package closure. Dependabot updates builder images, not that lock.
+    # Review builder/runtime updates together and retain the target
     # dependency/import gate. No automatic interpreter-major migration.
     ignore:
       - dependency-name: "python"

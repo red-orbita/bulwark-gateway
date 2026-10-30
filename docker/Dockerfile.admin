@@ -18,15 +18,28 @@ COPY admin/ /app/admin/
 COPY config/ /app/config/
 COPY docker/verify_runtime.py /app/docker/
 
-FROM cgr.dev/chainguard/python@sha256:1206ffee8644e6338b3fc8b6e5dc384b03d91ad1df1d6b74fa4255544ac51ad2 AS runtime
+FROM builder AS runtime-download
+COPY docker/fetch_runtime.py docker/wolfi-runtime.lock docker/wolfi-APKINDEX.tar.gz /runtime-build/
+RUN python /runtime-build/fetch_runtime.py /runtime-build/wolfi-runtime.lock /apks
+
+FROM cgr.dev/chainguard/wolfi-base@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73 AS runtime-root
+COPY --from=runtime-download /apks /apks/x86_64
+RUN --network=none mkdir -p /rootfs/etc/apk/keys && cp /etc/apk/keys/*.pub /rootfs/etc/apk/keys/ && \
+    apk --root /rootfs --initdb --no-network --no-cache --no-scripts \
+    --keys-dir /etc/apk/keys --repositories-file /dev/null --repository /apks add $(cat /apks/x86_64/packages.txt)
+
+FROM scratch AS runtime
+COPY --from=runtime-root /rootfs/ /
+COPY docker/wolfi-runtime.lock /usr/share/bulwark/wolfi-runtime.lock
 COPY --from=builder --chown=65532:65532 /packages /opt/packages
 COPY --from=builder --chown=65532:65532 /app /app
 COPY --from=builder /locks /usr/share/bulwark/locks
 ENV PYTHONPATH=/opt/packages PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PATH=/usr/bin:/bin SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 WORKDIR /app
 USER 65532:65532
 LABEL org.opencontainers.image.title="bulwark-gateway-admin" \
-      org.opencontainers.image.base.name="cgr.dev/chainguard/python" \
+      org.opencontainers.image.base.name="scratch" \
       org.bulwark.release.profile="python314-amd64-rc"
 RUN --mount=type=bind,from=builder,source=/verification,target=/verification ["python3", "/app/docker/verify_runtime.py", "admin"]
 EXPOSE 8090
