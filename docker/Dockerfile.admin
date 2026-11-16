@@ -1,6 +1,6 @@
 # Bulwark admin release-candidate profile: Linux amd64, CPython 3.14, non-root.
 # Keep the established build path; no unpinned optional source installs.
-FROM python:3.13-slim-trixie@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS builder
+FROM python:3.15-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS builder
 WORKDIR /build
 COPY requirements-admin.lock ./
 COPY docker/requirements-runtime-check.lock ./
@@ -18,7 +18,7 @@ COPY admin/ /app/admin/
 COPY config/ /app/config/
 COPY docker/verify_runtime.py /app/docker/
 
-FROM cgr.dev/chainguard/python@sha256:1206ffee8644e6338b3fc8b6e5dc384b03d91ad1df1d6b74fa4255544ac51ad2 AS runtime
+FROM cgr.dev/chainguard/python@sha256:b969ffa5d847b5acd28bd18b12d5b6631cb69c8289f03b309e19b68608724dc6 AS runtime
 COPY --from=builder --chown=65532:65532 /packages /opt/packages
 COPY --from=builder --chown=65532:65532 /app /app
 COPY --from=builder /locks /usr/share/bulwark/locks
